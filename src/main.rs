@@ -1,0 +1,637 @@
+mod agents;
+mod artifacts;
+mod config;
+mod env;
+mod job;
+mod metrics;
+mod regrade;
+mod registry;
+mod task;
+mod trial;
+
+use crate::config::{AgentConfig, DatasetConfig, JobConfig, SourceTrial, TaskRef, TrialConfig};
+use crate::task::{Artifact, Task};
+use anyhow::{Context, Result, bail};
+use clap::{Args, Parser, Subcommand};
+use serde_json::Value;
+use std::collections::BTreeMap;
+use std::path::PathBuf;
+
+/// hbench: run agent benchmarks on upstream-format tasks in Docker.
+#[derive(Parser)]
+#[command(version)]
+struct Cli {
+    #[command(subcommand)]
+    cmd: Cmd,
+}
+
+#[derive(Subcommand)]
+enum Cmd {
+    /// Run a job (alias of `jobs start`).
+    Run(Box<RunArgs>),
+    /// Jobs: start, resume, summary, regrade.
+    Jobs {
+        #[command(subcommand)]
+        cmd: JobsCmd,
+    },
+    /// Single trials.
+    Trials {
+        #[command(subcommand)]
+        cmd: TrialsCmd,
+    },
+    /// Registry datasets.
+    Datasets {
+        #[command(subcommand)]
+        cmd: DatasetsCmd,
+    },
+    /// Task authoring helpers.
+    Tasks {
+        #[command(subcommand)]
+        cmd: TasksCmd,
+    },
+    /// List built-in agents.
+    Agents,
+}
+
+#[derive(Subcommand)]
+enum JobsCmd {
+    /// Start a job.
+    Start(Box<RunArgs>),
+    /// Resume a job: finished trials are kept, the rest (and filtered error types) rerun.
+    Resume {
+        #[arg(short = 'p', long = "job-path")]
+        path: PathBuf,
+        /// Remove trials with these error types before resuming (repeatable).
+        #[arg(short = 'f', long = "filter-error-type", default_values_t = vec!["CancelledError".to_string()])]
+        filter_error_types: Vec<String>,
+    },
+    /// Print a job's stats.
+    Summary {
+        #[arg(short = 'p', long = "job-path")]
+        path: PathBuf,
+    },
+    /// Re-run (separate) verification against a finished job's recorded outputs.
+    Regrade {
+        /// Source job dir whose trials are regraded.
+        #[arg(long)]
+        source: PathBuf,
+        /// Task dir or dir of tasks providing the (new) verifiers; matched by task name.
+        #[arg(short = 'p', long = "path")]
+        path: PathBuf,
+        #[arg(long, default_value = "jobs")]
+        jobs_dir: PathBuf,
+        #[arg(long)]
+        job_name: Option<String>,
+        #[arg(short = 'n', long = "n-concurrent", default_value_t = 4)]
+        n_concurrent: usize,
+    },
+}
+
+#[derive(Subcommand)]
+enum TrialsCmd {
+    /// Run one trial: `-p task` or `-c trial.yaml`.
+    Start {
+        #[arg(short = 'c', long = "config")]
+        config: Option<PathBuf>,
+        #[arg(short = 'p', long = "path")]
+        path: Option<PathBuf>,
+        #[arg(short = 'a', long = "agent", default_value = "oracle")]
+        agent: String,
+        #[arg(short = 'm', long = "model")]
+        model: Option<String>,
+        #[arg(long = "ak", value_parser = parse_kv)]
+        agent_kwargs: Vec<(String, String)>,
+        #[arg(long = "ae", value_parser = parse_kv)]
+        agent_env: Vec<(String, String)>,
+        #[arg(long, default_value = "trials")]
+        trials_dir: PathBuf,
+    },
+}
+
+#[derive(Subcommand)]
+enum DatasetsCmd {
+    /// List datasets in the registry.
+    List(RegistryArgs),
+    /// Download a registry dataset's tasks into the cache (or --output-dir).
+    Download {
+        dataset: String,
+        #[command(flatten)]
+        registry: RegistryArgs,
+        #[arg(short = 'o', long)]
+        output_dir: Option<PathBuf>,
+    },
+}
+
+#[derive(Subcommand)]
+enum TasksCmd {
+    /// Create a new task skeleton.
+    Init {
+        name: String,
+        #[arg(short = 'p', long = "path", default_value = ".")]
+        dir: PathBuf,
+    },
+    /// Validate task dirs (config, files, test scripts).
+    Check {
+        #[arg(short = 'p', long = "path")]
+        path: PathBuf,
+    },
+}
+
+#[derive(Args)]
+struct RegistryArgs {
+    #[arg(long)]
+    registry_url: Option<String>,
+    /// Local registry.json instead of --registry-url.
+    #[arg(long)]
+    registry_path: Option<PathBuf>,
+}
+
+#[derive(Args)]
+struct RunArgs {
+    /// upstream job config (YAML or JSON). CLI flags override it.
+    #[arg(short = 'c', long = "config")]
+    config: Option<PathBuf>,
+    /// Local task dir, or a dir of task dirs.
+    #[arg(short = 'p', long = "path")]
+    path: Option<PathBuf>,
+    /// Registry dataset, name[@version].
+    #[arg(short = 'd', long = "dataset")]
+    dataset: Option<String>,
+    #[command(flatten)]
+    registry: RegistryArgs,
+    #[arg(short = 'a', long = "agent")]
+    agent: Option<String>,
+    /// Model(s); one agent config per model.
+    #[arg(short = 'm', long = "model")]
+    models: Vec<String>,
+    /// Agent kwarg KEY=VALUE (JSON values allowed), repeatable.
+    #[arg(long = "ak", alias = "agent-kwarg", value_parser = parse_kv)]
+    agent_kwargs: Vec<(String, String)>,
+    /// Agent env var KEY=VALUE, repeatable.
+    #[arg(long = "ae", alias = "agent-env", value_parser = parse_kv)]
+    agent_env: Vec<(String, String)>,
+    /// Environment (container) env var KEY=VALUE, repeatable.
+    #[arg(long = "ee", alias = "environment-env", value_parser = parse_kv)]
+    env_env: Vec<(String, String)>,
+    /// Verifier env var KEY=VALUE, repeatable.
+    #[arg(long = "ve", alias = "verifier-env", value_parser = parse_kv)]
+    verifier_env: Vec<(String, String)>,
+    #[arg(short = 'k', long = "n-attempts")]
+    n_attempts: Option<usize>,
+    #[arg(short = 'n', long = "n-concurrent")]
+    n_concurrent: Option<usize>,
+    /// Per-agent cap on concurrent agent runs.
+    #[arg(long)]
+    n_concurrent_agent: Option<usize>,
+    #[arg(short = 'i', long = "include-task-name")]
+    include: Vec<String>,
+    #[arg(short = 'x', long = "exclude-task-name")]
+    exclude: Vec<String>,
+    #[arg(short = 'l', long = "n-tasks")]
+    n_tasks: Option<usize>,
+    #[arg(long)]
+    jobs_dir: Option<PathBuf>,
+    #[arg(long)]
+    job_name: Option<String>,
+    #[arg(long)]
+    timeout_multiplier: Option<f64>,
+    #[arg(long)]
+    agent_timeout_multiplier: Option<f64>,
+    #[arg(long)]
+    verifier_timeout_multiplier: Option<f64>,
+    #[arg(long)]
+    agent_setup_timeout_multiplier: Option<f64>,
+    #[arg(long)]
+    environment_build_timeout_multiplier: Option<f64>,
+    #[arg(long)]
+    max_retries: Option<u32>,
+    #[arg(long = "retry-include")]
+    retry_include: Vec<String>,
+    #[arg(long = "retry-exclude")]
+    retry_exclude: Vec<String>,
+    #[arg(long)]
+    force_build: bool,
+    /// Keep images/volumes after trials.
+    #[arg(long)]
+    no_delete: bool,
+    /// Stop (don't remove) containers after trials.
+    #[arg(long)]
+    keep_containers: bool,
+    #[arg(long)]
+    disable_verification: bool,
+    #[arg(long)]
+    install_only: bool,
+    #[arg(long)]
+    override_cpus: Option<u32>,
+    #[arg(long)]
+    override_memory_mb: Option<u64>,
+    #[arg(long)]
+    override_gpus: Option<u32>,
+    /// Extra host allowed during network-restricted tasks (repeatable).
+    #[arg(long)]
+    extra_allowed_host: Vec<String>,
+    /// Artifact path to collect (repeatable).
+    #[arg(long)]
+    artifact: Vec<String>,
+    #[arg(long)]
+    extra_instruction: Vec<String>,
+    #[arg(long)]
+    extra_instruction_path: Vec<PathBuf>,
+    /// Skill dir uploaded to /hbench/skills (repeatable).
+    #[arg(long)]
+    skill: Vec<String>,
+    #[arg(long)]
+    quiet: bool,
+}
+
+fn parse_kv(s: &str) -> Result<(String, String), String> {
+    s.split_once('=').map(|(k, v)| (k.to_string(), v.to_string())).ok_or_else(|| format!("expected KEY=VALUE, got {s:?}"))
+}
+
+/// fnmatch-style glob: `*`, `?`, `[seq]`, `[!seq]` (case-sensitive like Python on POSIX).
+pub fn glob_match(pat: &str, s: &str) -> bool {
+    let mut re = String::from("^");
+    let mut chars = pat.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '*' => re.push_str(".*"),
+            '?' => re.push('.'),
+            '[' => {
+                let mut class = String::new();
+                let mut closed = false;
+                if chars.peek() == Some(&'!') {
+                    chars.next();
+                    class.push('^');
+                }
+                for c2 in chars.by_ref() {
+                    if c2 == ']' && !class.is_empty() && class != "^" {
+                        closed = true;
+                        break;
+                    }
+                    if c2 == '\\' || c2 == '[' || c2 == ']' {
+                        class.push('\\');
+                    }
+                    class.push(c2);
+                }
+                if closed {
+                    re.push('[');
+                    re.push_str(&class);
+                    re.push(']');
+                } else {
+                    re.push_str(&regex::escape(&format!("[{}", class.replace('^', "!"))));
+                }
+            }
+            c => re.push_str(&regex::escape(&c.to_string())),
+        }
+    }
+    re.push('$');
+    regex::Regex::new(&re).is_ok_and(|r| r.is_match(s))
+}
+
+/// KEY=VALUE where VALUE may be JSON (numbers, bools, objects); else a string.
+fn kwarg_value(v: &str) -> Value {
+    serde_json::from_str(v).unwrap_or_else(|_| Value::String(v.to_string()))
+}
+
+fn build_job_config(a: &RunArgs) -> Result<JobConfig> {
+    let mut cfg = match &a.config {
+        Some(p) => JobConfig::load(p)?,
+        None => JobConfig::default(),
+    };
+    if let Some(p) = &a.path {
+        let p = p.canonicalize().with_context(|| format!("path {}", p.display()))?;
+        if Task::is_task_dir(&p) {
+            cfg.tasks.push(TaskRef::local(p, None));
+        } else {
+            cfg.datasets.push(DatasetConfig { path: Some(p), ..Default::default() });
+        }
+    }
+    if let Some(d) = &a.dataset {
+        let (name, version) = match d.split_once('@') {
+            Some((n, v)) => (n.to_string(), Some(v.to_string())),
+            None => (d.clone(), None),
+        };
+        cfg.datasets.push(DatasetConfig {
+            name: Some(name),
+            version,
+            registry_url: a.registry.registry_url.clone(),
+            registry_path: a.registry.registry_path.clone(),
+            ..Default::default()
+        });
+    }
+    // CLI task filters apply to every dataset (upstream semantics).
+    for d in cfg.datasets.iter_mut() {
+        if !a.include.is_empty() {
+            d.task_names = Some(a.include.clone());
+        }
+        if !a.exclude.is_empty() {
+            d.exclude_task_names = Some(a.exclude.clone());
+        }
+        if a.n_tasks.is_some() {
+            d.n_tasks = a.n_tasks;
+        }
+    }
+    if a.agent.is_some() || !a.models.is_empty() || !a.agent_kwargs.is_empty() || !a.agent_env.is_empty() || a.n_concurrent_agent.is_some() || !a.skill.is_empty() {
+        let base = cfg.agents.first().cloned().unwrap_or_default();
+        let base = AgentConfig { name: a.agent.clone().or(base.name), ..base };
+        let models: Vec<Option<String>> = if a.models.is_empty() { vec![base.model_name.clone()] } else { a.models.iter().cloned().map(Some).collect() };
+        cfg.agents = models
+            .into_iter()
+            .map(|m| {
+                let mut c = AgentConfig { model_name: m, ..base.clone() };
+                for (k, v) in &a.agent_kwargs {
+                    c.kwargs.insert(k.clone(), kwarg_value(v));
+                }
+                c.env.extend(a.agent_env.iter().cloned());
+                if a.n_concurrent_agent.is_some() {
+                    c.n_concurrent = a.n_concurrent_agent;
+                }
+                c.skills.extend(a.skill.iter().cloned());
+                c
+            })
+            .collect();
+    }
+    macro_rules! set {
+        ($field:expr, $v:expr) => {
+            if let Some(v) = $v {
+                $field = v;
+            }
+        };
+    }
+    set!(cfg.n_attempts, a.n_attempts);
+    set!(cfg.n_concurrent_trials, a.n_concurrent);
+    set!(cfg.jobs_dir, a.jobs_dir.clone());
+    set!(cfg.job_name, a.job_name.clone());
+    set!(cfg.timeout_multiplier, a.timeout_multiplier);
+    set!(cfg.retry.max_retries, a.max_retries);
+    cfg.agent_timeout_multiplier = a.agent_timeout_multiplier.or(cfg.agent_timeout_multiplier);
+    cfg.verifier_timeout_multiplier = a.verifier_timeout_multiplier.or(cfg.verifier_timeout_multiplier);
+    cfg.agent_setup_timeout_multiplier = a.agent_setup_timeout_multiplier.or(cfg.agent_setup_timeout_multiplier);
+    cfg.environment_build_timeout_multiplier = a.environment_build_timeout_multiplier.or(cfg.environment_build_timeout_multiplier);
+    if !a.retry_include.is_empty() {
+        cfg.retry.include_exceptions = Some(a.retry_include.iter().cloned().collect());
+    }
+    if !a.retry_exclude.is_empty() {
+        cfg.retry.exclude_exceptions = Some(a.retry_exclude.iter().cloned().collect());
+    }
+    cfg.environment.force_build |= a.force_build;
+    if a.no_delete {
+        cfg.environment.delete = false;
+    }
+    cfg.environment.keep_containers |= a.keep_containers;
+    cfg.environment.override_cpus = a.override_cpus.or(cfg.environment.override_cpus);
+    cfg.environment.override_memory_mb = a.override_memory_mb.or(cfg.environment.override_memory_mb);
+    cfg.environment.override_gpus = a.override_gpus.or(cfg.environment.override_gpus);
+    cfg.environment.extra_allowed_hosts.extend(a.extra_allowed_host.iter().cloned());
+    cfg.environment.env.extend(a.env_env.iter().cloned());
+    cfg.verifier.env.extend(a.verifier_env.iter().cloned());
+    cfg.verifier.disable |= a.disable_verification;
+    cfg.install_only |= a.install_only;
+    cfg.quiet |= a.quiet;
+    cfg.artifacts.extend(a.artifact.iter().cloned().map(Artifact::Path));
+    cfg.extra_instructions.extend(a.extra_instruction.iter().cloned());
+    cfg.extra_instruction_paths.extend(a.extra_instruction_path.iter().cloned());
+    if cfg.tasks.is_empty() && cfg.datasets.is_empty() {
+        bail!("nothing to run: pass -p <task or dataset dir>, -d <dataset>, or -c <job config>");
+    }
+    cfg.validate()?;
+    Ok(cfg)
+}
+
+fn preflight_agents(cfg: &JobConfig) -> Result<()> {
+    let known = agents::agent_names();
+    for a in &cfg.agents {
+        if !known.contains(&a.name()) {
+            bail!("Unknown agent {:?}. Known agents: {}", a.name(), known.join(", "));
+        }
+    }
+    Ok(())
+}
+
+async fn run_with_ctrl_c(cfg: JobConfig, trials: Option<Vec<TrialConfig>>, filter: &[String]) -> Result<()> {
+    env::preflight().await?;
+    let (tx, rx) = tokio::sync::watch::channel(false);
+    tokio::spawn(async move {
+        if tokio::signal::ctrl_c().await.is_ok() {
+            eprintln!("\ncancelling: tearing down containers (Ctrl-C again to force quit)...");
+            let _ = tx.send(true);
+            if tokio::signal::ctrl_c().await.is_ok() {
+                std::process::exit(130);
+            }
+        }
+    });
+    let job_dir = cfg.job_dir();
+    let jr = job::run_job(cfg, trials, filter, rx).await?;
+    job::print_summary(&jr, &job_dir);
+    Ok(())
+}
+
+fn task_template(name: &str) -> [(&'static str, String); 5] {
+    [
+        (
+            "task.toml",
+            format!(
+                "schema_version = \"1.4\"\n\n[task]\nname = \"{name}\"\nversion = \"1.0.0\"\n\n[metadata]\ndifficulty = \"easy\"\ncategory = \"programming\"\ntags = []\n\n\
+                 [verifier]\ntimeout_sec = 120.0\n\n[agent]\ntimeout_sec = 600.0\n\n[environment]\nbuild_timeout_sec = 600.0\ncpus = 1\nmemory_mb = 2048\n"
+            ),
+        ),
+        ("instruction.md", "Create a file called hello.txt with \"Hello, world!\" as the content.\n".into()),
+        ("environment/Dockerfile", "FROM ubuntu:24.04\n\nWORKDIR /app\n".into()),
+        (
+            "tests/test.sh",
+            "#!/bin/bash\n\nif [ \"$(cat /app/hello.txt 2>/dev/null)\" = \"Hello, world!\" ]; then\n  echo 1 > /logs/verifier/reward.txt\nelse\n  echo 0 > /logs/verifier/reward.txt\nfi\n".into(),
+        ),
+        ("solution/solve.sh", "#!/bin/bash\n\necho \"Hello, world!\" > hello.txt\n".into()),
+    ]
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    match Cli::parse().cmd {
+        Cmd::Run(a) | Cmd::Jobs { cmd: JobsCmd::Start(a) } => {
+            let cfg = build_job_config(&a)?;
+            preflight_agents(&cfg)?;
+            if cfg.job_dir().join("config.json").exists() {
+                bail!("job {} already exists; use `hbench jobs resume -p {}`", cfg.job_name, cfg.job_dir().display());
+            }
+            run_with_ctrl_c(cfg, None, &[]).await
+        }
+        Cmd::Jobs { cmd: JobsCmd::Resume { path, filter_error_types } } => {
+            let cfg = job::load_config(&path)?;
+            preflight_agents(&cfg)?;
+            run_with_ctrl_c(cfg, None, &filter_error_types).await
+        }
+        Cmd::Jobs { cmd: JobsCmd::Summary { path } } => {
+            let s = std::fs::read_to_string(path.join("result.json")).context("reading result.json")?;
+            job::print_summary(&serde_json::from_str(&s)?, &path);
+            Ok(())
+        }
+        Cmd::Jobs { cmd: JobsCmd::Regrade { source, path, jobs_dir, job_name, n_concurrent } } => {
+            let path = path.canonicalize()?;
+            let task_dirs: Vec<PathBuf> = if Task::is_task_dir(&path) {
+                vec![path.clone()]
+            } else {
+                let mut v: Vec<PathBuf> = std::fs::read_dir(&path)?.flatten().map(|e| e.path()).filter(|p| Task::is_task_dir(p)).collect();
+                v.sort();
+                v
+            };
+            let mut by_name: BTreeMap<String, PathBuf> = BTreeMap::new();
+            for d in task_dirs {
+                let t = Task::load(&d)?;
+                if let Some(why) = regrade::check_task_regradable(&t) {
+                    bail!(why);
+                }
+                by_name.insert(t.name(), d);
+            }
+            let source = source.canonicalize()?;
+            let mut cfg = JobConfig { jobs_dir, n_concurrent_trials: n_concurrent, ..Default::default() };
+            if let Some(n) = job_name {
+                cfg.job_name = n;
+            }
+            let mut trials = vec![];
+            for e in std::fs::read_dir(&source)?.flatten() {
+                let Some(r) = std::fs::read_to_string(e.path().join("result.json")).ok().and_then(|s| serde_json::from_str::<trial::TrialResult>(&s).ok()) else { continue };
+                let Some(dir) = by_name.get(&r.task_name) else { continue };
+                let tref = TaskRef { path: Some(dir.clone()), source: r.source.clone(), ..Default::default() };
+                trials.push(TrialConfig {
+                    task: tref.clone(),
+                    trial_name: job::trial_name(&tref),
+                    trials_dir: cfg.job_dir(),
+                    agent: r.config.agent.clone(),
+                    source_trial: Some(SourceTrial { action: "regrade".into(), kind: "local".into(), trial_id: Some(r.id.to_string()), path: Some(e.path()) }),
+                    ..serde_json::from_value(serde_json::json!({"task": {"path": dir}, "trial_name": "x", "trials_dir": "x"}))?
+                });
+            }
+            if trials.is_empty() {
+                bail!("no trials in {} match the provided tasks by name", source.display());
+            }
+            cfg.tasks = by_name.values().map(|p| TaskRef::local(p.clone(), None)).collect();
+            run_with_ctrl_c(cfg, Some(trials), &[]).await
+        }
+        Cmd::Trials { cmd: TrialsCmd::Start { config, path, agent, model, agent_kwargs, agent_env, trials_dir } } => {
+            let mut tc: TrialConfig = match config {
+                Some(c) => {
+                    let raw = std::fs::read_to_string(&c)?;
+                    serde_yaml_ng::from_str(&raw).with_context(|| format!("parsing {}", c.display()))?
+                }
+                None => {
+                    let p = path.context("pass -p <task dir> or -c <trial.yaml>")?.canonicalize()?;
+                    let tref = TaskRef::local(p, None);
+                    let mut a = AgentConfig { name: Some(agent), model_name: model, ..Default::default() };
+                    a.kwargs = agent_kwargs.iter().map(|(k, v)| (k.clone(), kwarg_value(v))).collect();
+                    a.env = agent_env.into_iter().collect();
+                    serde_json::from_value(serde_json::json!({"task": tref, "trial_name": job::trial_name(&tref), "trials_dir": trials_dir, "agent": a}))?
+                }
+            };
+            if tc.trial_name.is_empty() {
+                tc.trial_name = job::trial_name(&tc.task);
+            }
+            tc.task.validate()?;
+            registry::download(std::slice::from_ref(&tc.task))?;
+            env::preflight().await?;
+            let task = std::sync::Arc::new(Task::load(&registry::local_path(&tc.task))?);
+            let (_tx, rx) = tokio::sync::watch::channel(false);
+            let r = trial::Trial::new(tc, task, None)?.run(rx).await;
+            println!("{}", serde_json::to_string_pretty(&serde_json::json!({
+                "trial_name": r.trial_name, "rewards": r.reward(), "exception": r.exception_info.as_ref().map(|e| &e.exception_type), "trial_uri": r.trial_uri
+            }))?);
+            Ok(())
+        }
+        Cmd::Datasets { cmd: DatasetsCmd::List(r) } => {
+            for d in registry::load(r.registry_url.as_deref(), r.registry_path.as_deref())? {
+                println!("{}@{}  ({} tasks)  {}", d.name, d.version, d.tasks.len(), d.description);
+            }
+            Ok(())
+        }
+        Cmd::Datasets { cmd: DatasetsCmd::Download { dataset, registry: r, output_dir } } => {
+            let (name, version) = match dataset.split_once('@') {
+                Some((n, v)) => (n.to_string(), Some(v.to_string())),
+                None => (dataset.clone(), None),
+            };
+            let d = DatasetConfig { name: Some(name), version, registry_url: r.registry_url, registry_path: r.registry_path, download_dir: output_dir, ..Default::default() };
+            let tasks = registry::dataset_tasks(&d, false)?;
+            registry::download(&tasks)?;
+            for t in &tasks {
+                println!("{}", registry::local_path(t).display());
+            }
+            Ok(())
+        }
+        Cmd::Tasks { cmd: TasksCmd::Init { name, dir } } => {
+            let root = dir.join(name.rsplit('/').next().unwrap());
+            if root.exists() {
+                bail!("{} already exists", root.display());
+            }
+            for (rel, content) in task_template(&name) {
+                let p = root.join(rel);
+                std::fs::create_dir_all(p.parent().unwrap())?;
+                std::fs::write(&p, content)?;
+                if rel.ends_with(".sh") {
+                    use std::os::unix::fs::PermissionsExt;
+                    std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755))?;
+                }
+            }
+            println!("created {}", root.display());
+            Ok(())
+        }
+        Cmd::Tasks { cmd: TasksCmd::Check { path } } => {
+            let dirs: Vec<PathBuf> = if Task::is_task_dir(&path) {
+                vec![path]
+            } else {
+                let mut v: Vec<PathBuf> = std::fs::read_dir(&path)?.flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect();
+                v.sort();
+                v
+            };
+            let mut bad = 0;
+            for d in dirs {
+                match Task::load(&d).and_then(|t| t.validate_tests().map(|_| t)) {
+                    Ok(t) => println!("ok    {}", t.name()),
+                    Err(e) => {
+                        bad += 1;
+                        println!("FAIL  {}: {e:#}", d.display());
+                    }
+                }
+            }
+            if bad > 0 {
+                bail!("{bad} invalid task(s)");
+            }
+            Ok(())
+        }
+        Cmd::Agents => {
+            for n in agents::agent_names() {
+                println!("{n}");
+            }
+            Ok(())
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn globs() {
+        let g = glob_match;
+        assert!(g("*", "anything") && g("hello-*", "hello-world") && g("h?llo", "hello") && g("*-c-*", "polyglot-c-py"));
+        assert!(!g("hello", "hello-world") && !g("*x", "abc") && !g("a?", "a"));
+        assert!(g("[ab]*", "beta") && !g("[!ab]*", "beta") && g("x.y", "x.y") && !g("x.y", "xzy"));
+    }
+
+    #[test]
+    fn cli_builds_job_config() {
+        let dir = std::env::temp_dir().join(format!("hbench-cli-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cli = Cli::parse_from([
+            "hbench", "run", "-p", dir.to_str().unwrap(), "-a", "claude-code", "-m", "anthropic/a", "-m", "anthropic/b", "--ak", "max_turns=5", "--ae", "X=1", "-k", "3", "-i", "t*",
+            "--no-delete", "--artifact", "/app/x",
+        ]);
+        let Cmd::Run(a) = cli.cmd else { panic!() };
+        let c = build_job_config(&a).unwrap();
+        assert_eq!(c.agents.len(), 2);
+        assert_eq!(c.agents[1].model_name.as_deref(), Some("anthropic/b"));
+        assert_eq!(c.agents[0].kwargs["max_turns"], 5);
+        assert_eq!(c.agents[0].env["X"], "1");
+        assert_eq!((c.n_attempts, c.environment.delete), (3, false));
+        assert_eq!(c.datasets[0].task_names.as_ref().unwrap(), &["t*"]);
+        assert_eq!(c.artifacts, vec![Artifact::Path("/app/x".into())]);
+    }
+}

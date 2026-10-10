@@ -1,0 +1,10 @@
+[agent]
+user = "agent"
+[verifier]
+user = "root"
+[verifier.env]
+EXPECT = "${HBENCH_FIXTURE_UNSET:-from-default}"
+[environment]
+workdir = "/work"
+[environment.env]
+TASK_FOO = "bar"

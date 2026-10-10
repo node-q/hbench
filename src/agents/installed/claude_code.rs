@@ -1,0 +1,367 @@
+//! Claude Code (port of upstream's agents/installed/claude_code.py).
+
+use super::{connection, ensure_system_dependencies, exec_agent, exec_error, filter_jsonl_events, parse_version, upload_text};
+use crate::agents::model_connection::Spec;
+use crate::agents::{Agent, AgentArgs, AgentContext, AgentCtx, ModelUsage};
+use crate::env::quote;
+use anyhow::{Result, bail};
+use serde_json::{Value, json};
+use std::collections::BTreeMap;
+
+const SETTINGS_DIR: &str = "/tmp/claude-code-settings";
+const SETTINGS_PATH: &str = "/tmp/claude-code-settings/settings.json";
+const SPEC: Spec = Spec {
+    default_provider: Some("anthropic"),
+    api_key_envs: &["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"],
+    base_url_envs: &["ANTHROPIC_BASE_URL"],
+    passthrough: false,
+};
+
+pub struct ClaudeCode {
+    args: AgentArgs,
+    version: Option<String>,
+    settings: Option<Value>,
+}
+
+fn truthy(v: Option<String>) -> bool {
+    matches!(v.as_deref().map(str::trim).map(str::to_lowercase).as_deref(), Some("1" | "true" | "yes"))
+}
+
+impl ClaudeCode {
+    pub fn new(args: AgentArgs) -> Result<ClaudeCode> {
+        let settings = match args.kwargs.get("config") {
+            None | Some(Value::Null) => None,
+            Some(Value::Object(o)) => Some(Value::Object(o.clone())),
+            Some(Value::String(p)) => {
+                let raw = std::fs::read_to_string(p).map_err(|e| anyhow::anyhow!("Agent config file not found: {p}: {e}"))?;
+                let v: Value = serde_json::from_str(&raw).map_err(|e| anyhow::anyhow!("Invalid Claude Code settings file {p}: {e}"))?;
+                if !v.is_object() {
+                    bail!("Invalid Claude Code settings file {p}: expected a JSON object");
+                }
+                Some(v)
+            }
+            Some(_) => bail!("Invalid value for 'config': expected a local file path or JSON object"),
+        };
+        let a = ClaudeCode { version: args.version_kw(), args, settings };
+        a.cli_flags()?; // validate options eagerly, like upstream
+        Ok(a)
+    }
+
+    fn opt(&self, kw: &str, fallback_env: Option<&str>) -> Option<String> {
+        self.args.kw(kw).or_else(|| fallback_env.and_then(|e| self.args.get_env(e)))
+    }
+
+    /// ClaudeCodeOptions -> CLI flags.
+    fn cli_flags(&self) -> Result<String> {
+        let mut f = vec![];
+        let permission = self.args.kw("permission_mode").unwrap_or_else(|| "bypassPermissions".into());
+        if !["default", "acceptEdits", "plan", "auto", "dontAsk", "bypassPermissions"].contains(&permission.as_str()) {
+            bail!("Invalid value for 'permission_mode': '{permission}'");
+        }
+        f.push(format!("--permission-mode={permission}"));
+        if let Some(v) = self.opt("max_turns", Some("CLAUDE_CODE_MAX_TURNS")) {
+            let n: i64 = v.parse().map_err(|_| anyhow::anyhow!("Invalid value for 'max_turns': cannot parse '{v}' as int"))?;
+            f.push(format!("--max-turns {n}"));
+        }
+        if let Some(v) = self.opt("reasoning_effort", Some("CLAUDE_CODE_EFFORT_LEVEL")) {
+            if !["low", "medium", "high", "xhigh", "max"].contains(&v.as_str()) {
+                bail!("Invalid value for 'reasoning_effort': '{v}'");
+            }
+            f.push(format!("--effort {v}"));
+        }
+        if let Some(v) = self.args.kw("thinking_display") {
+            if !["summarized", "omitted"].contains(&v.as_str()) {
+                bail!("Invalid value for 'thinking_display': '{v}'");
+            }
+            f.push(format!("--thinking-display {v}"));
+        }
+        for (kw, flag) in [("max_budget_usd", "--max-budget-usd"), ("fallback_model", "--fallback-model"), ("append_system_prompt", "--append-system-prompt"), ("allowed_tools", "--allowedTools")] {
+            if let Some(v) = self.args.kw(kw) {
+                f.push(format!("{flag} {}", quote(&v)));
+            }
+        }
+        let mut disallowed: Vec<String> = self.args.kw("disallowed_tools").into_iter().collect();
+        if self.args.kw_bool("disable_web_search").unwrap_or(false) {
+            disallowed.extend(["WebSearch".into(), "WebFetch".into()]);
+        }
+        if !disallowed.is_empty() {
+            f.push(format!("--disallowedTools {}", quote(&disallowed.join(","))));
+        }
+        Ok(f.join(" "))
+    }
+
+    fn use_bedrock(&self) -> bool {
+        self.args.get_env("AWS_BEARER_TOKEN_BEDROCK").is_some() || truthy(self.args.get_env("CLAUDE_CODE_USE_BEDROCK"))
+    }
+
+    fn resolved_model(&self) -> Option<String> {
+        let m = self.args.model_name.clone()?;
+        if self.use_bedrock() {
+            return Some(m.split_once('/').map(|(_, n)| n.to_string()).unwrap_or(m));
+        }
+        if connection(&self.args, SPEC).configured_base_url.is_some() {
+            return Some(m);
+        }
+        Some(m.rsplit('/').next().unwrap().to_string())
+    }
+
+    /// upstream's `_resolve_auth_env`: API key (default) or subscription OAuth token, or Bedrock.
+    fn auth_env(&self) -> Result<BTreeMap<String, String>> {
+        let bedrock = self.use_bedrock();
+        let force_oauth = truthy(self.args.get_env("CLAUDE_FORCE_OAUTH"));
+        let oauth = self.args.get_env("CLAUDE_CODE_OAUTH_TOKEN").map(|s| s.trim().to_string()).unwrap_or_default();
+        if force_oauth && oauth.is_empty() {
+            bail!("CLAUDE_FORCE_OAUTH is set but CLAUDE_CODE_OAUTH_TOKEN is not. Run `claude setup-token` to get one, or unset CLAUDE_FORCE_OAUTH.");
+        }
+        let conn = connection(&self.args, SPEC);
+        let mut env = BTreeMap::new();
+        if !(force_oauth || bedrock) {
+            env.insert("ANTHROPIC_API_KEY".into(), conn.api_key.clone().unwrap_or_default());
+        }
+        if !bedrock {
+            env.insert("ANTHROPIC_BASE_URL".into(), conn.configured_base_url.clone().unwrap_or_default());
+        }
+        env.insert("CLAUDE_CODE_OAUTH_TOKEN".into(), oauth);
+        if bedrock {
+            env.insert("CLAUDE_CODE_USE_BEDROCK".into(), "1".into());
+            for k in ["AWS_BEARER_TOKEN_BEDROCK", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_PROFILE", "ANTHROPIC_SMALL_FAST_MODEL_AWS_REGION"] {
+                env.insert(k.into(), self.args.get_env(k).unwrap_or_default());
+            }
+            env.insert("AWS_REGION".into(), self.args.get_env("AWS_REGION").unwrap_or_else(|| "us-east-1".into()));
+            if self.args.get_env("DISABLE_PROMPT_CACHING").as_deref().map(str::trim) == Some("1") {
+                env.insert("DISABLE_PROMPT_CACHING".into(), "1".into());
+            }
+        }
+        env.retain(|_, v| !v.is_empty());
+        Ok(env)
+    }
+
+    fn skills_dir(&self) -> Option<String> {
+        self.args.task.config.environment.skills_dir.clone().or_else(|| (!self.args.skills.is_empty()).then(|| "/hbench/skills".into()))
+    }
+
+    fn mcp_command(&self) -> Option<String> {
+        if self.args.mcp_servers.is_empty() {
+            return None;
+        }
+        let mut servers = serde_json::Map::new();
+        for s in &self.args.mcp_servers {
+            let v = if s.transport() == "stdio" {
+                json!({"type": "stdio", "command": s.command, "args": s.args})
+            } else {
+                let t = if s.transport() == "streamable-http" { "http" } else { s.transport() };
+                json!({"type": t, "url": s.url})
+            };
+            servers.insert(s.name.clone(), v);
+        }
+        let body = serde_json::to_string_pretty(&json!({"mcpServers": servers})).unwrap();
+        Some(format!("echo {} > $CLAUDE_CONFIG_DIR/.claude.json", quote(&body)))
+    }
+}
+
+/// Usage from the final stream-json `result` event (cost is authoritative there).
+pub fn parse_stream_result(text: &str) -> Option<AgentContext> {
+    let v: Value = text.lines().rev().filter_map(|l| serde_json::from_str::<Value>(l.trim()).ok()).find(|v| v["type"] == "result")?;
+    let u = &v["usage"];
+    let n = |o: &Value, k: &str| o[k].as_i64().unwrap_or(0);
+    let cache_read = n(u, "cache_read_input_tokens");
+    let mut model_usage = BTreeMap::new();
+    if let Some(mu) = v["modelUsage"].as_object() {
+        for (model, m) in mu {
+            model_usage.insert(
+                model.clone(),
+                ModelUsage {
+                    n_input_tokens: n(m, "inputTokens") + n(m, "cacheReadInputTokens") + n(m, "cacheCreationInputTokens"),
+                    n_cache_tokens: n(m, "cacheReadInputTokens"),
+                    n_output_tokens: n(m, "outputTokens"),
+                    cost_usd: m["costUSD"].as_f64(),
+                },
+            );
+        }
+    }
+    Some(AgentContext {
+        n_input_tokens: Some(n(u, "input_tokens") + n(u, "cache_creation_input_tokens") + cache_read),
+        n_cache_tokens: Some(cache_read),
+        n_output_tokens: Some(n(u, "output_tokens")),
+        cost_usd: v["total_cost_usd"].as_f64(),
+        model_usage: (!model_usage.is_empty()).then_some(model_usage),
+        rollout_details: None,
+        metadata: Some(json!({"num_turns": v["num_turns"], "is_error": v["is_error"], "duration_ms": v["duration_ms"], "subtype": v["subtype"], "session_id": v["session_id"]})),
+    })
+}
+
+#[async_trait::async_trait]
+impl Agent for ClaudeCode {
+    fn name(&self) -> &str {
+        "claude-code"
+    }
+    fn version(&self) -> Option<String> {
+        self.version.clone()
+    }
+    fn supports_resume(&self) -> bool {
+        true
+    }
+
+    async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
+        cx.env.exec_root("[ -d /installed-agent ] || mkdir -p /installed-agent", None).await?;
+        let check = match &self.version {
+            None => cx.exec("export PATH=\"$HOME/.local/bin:$PATH\"; command -v claude >/dev/null 2>&1", &BTreeMap::new(), None).await?.code == 0,
+            Some(v) => {
+                let r = cx.exec("export PATH=\"$HOME/.local/bin:$PATH\"; claude --version", &BTreeMap::new(), None).await?;
+                r.code == 0 && parse_version(&r.stdout) == *v
+            }
+        };
+        if !check {
+            ensure_system_dependencies(cx, &["curl", "bash", "nodejs", "npm", "procps"]).await?;
+            let npm_v = self.version.as_ref().map(|v| format!("@{v}")).unwrap_or_default();
+            let sh_v = self.version.as_ref().map(|v| format!(" {v}")).unwrap_or_default();
+            exec_agent(
+                cx,
+                &format!(
+                    "set -euo pipefail; if command -v apk &> /dev/null; then  npm install -g @anthropic-ai/claude-code{npm_v}; \
+                     else  curl -fsSL https://downloads.claude.ai/claude-code-releases/bootstrap.sh | bash -s --{sh_v}; fi && \
+                     echo 'export PATH=\"$HOME/.local/bin:$PATH\"' >> ~/.bashrc && export PATH=\"$HOME/.local/bin:$PATH\" && claude --version"
+                ),
+                &BTreeMap::new(),
+            )
+            .await
+            .map_err(|e| anyhow::anyhow!("Agent install failed: {e:#}"))?;
+        }
+        if self.version.is_none() {
+            let r = cx.exec("export PATH=\"$HOME/.local/bin:$PATH\"; claude --version", &BTreeMap::new(), None).await?;
+            if r.code == 0 && !r.stdout.trim().is_empty() {
+                self.version = Some(parse_version(&r.stdout));
+            }
+        }
+        Ok(())
+    }
+
+    async fn run(&mut self, instruction: &str, cx: &AgentCtx<'_>, _ctx: &mut AgentContext, resume: bool) -> Result<()> {
+        let instruction = self.args.render_instruction(instruction)?;
+        let mut env = self.auth_env()?;
+        if let Some(v) = std::env::var("CLAUDE_CODE_MAX_OUTPUT_TOKENS").ok().filter(|v| !v.is_empty()) {
+            env.insert("CLAUDE_CODE_MAX_OUTPUT_TOKENS".into(), v);
+        }
+        if let Some(m) = self.resolved_model().or_else(|| self.args.get_env("ANTHROPIC_MODEL")) {
+            env.insert("ANTHROPIC_MODEL".into(), m);
+        }
+        if env.contains_key("ANTHROPIC_BASE_URL")
+            && let Some(m) = env.get("ANTHROPIC_MODEL").cloned()
+        {
+            for k in ["ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL", "CLAUDE_CODE_SUBAGENT_MODEL"] {
+                env.insert(k.into(), m.clone());
+            }
+        }
+        if std::env::var("CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING").is_ok_and(|v| v.trim() == "1") {
+            env.insert("CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING".into(), "1".into());
+        }
+        env.insert("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC".into(), "1".into());
+        env.insert("IS_SANDBOX".into(), "1".into()); // allows bypassPermissions as root
+        if let Some(v) = self.opt("max_thinking_tokens", Some("MAX_THINKING_TOKENS")) {
+            env.insert("MAX_THINKING_TOKENS".into(), v);
+        }
+        env.insert("CLAUDE_CONFIG_DIR".into(), "/logs/agent/sessions".into());
+
+        let mut setup = "mkdir -p $CLAUDE_CONFIG_DIR/debug $CLAUDE_CONFIG_DIR/projects/-app $CLAUDE_CONFIG_DIR/shell-snapshots \
+            $CLAUDE_CONFIG_DIR/statsig $CLAUDE_CONFIG_DIR/todos $CLAUDE_CONFIG_DIR/skills && \
+            if [ -d ~/.claude/skills ]; then cp -r ~/.claude/skills/. $CLAUDE_CONFIG_DIR/skills/ 2>/dev/null || true; fi"
+            .to_string();
+        if self.settings.is_some() {
+            setup += &format!(" && mkdir -p {SETTINGS_DIR}");
+        }
+        if let Some(d) = self.skills_dir() {
+            setup += &format!(" && (cp -r {}/* $CLAUDE_CONFIG_DIR/skills/ 2>/dev/null || true)", quote(&d));
+        }
+        if let Some(m) = self.args.kw("memory_dir") {
+            setup += &format!(" && (mkdir -p $CLAUDE_CONFIG_DIR/projects/-app/memory && cp -r {}/* $CLAUDE_CONFIG_DIR/projects/-app/memory/ 2>/dev/null || true)", quote(&m));
+        }
+        if let Some(m) = self.mcp_command() {
+            setup += &format!(" && {m}");
+        }
+        exec_agent(cx, &setup, &env).await?;
+
+        if let Some(s) = &self.settings {
+            upload_text(cx, SETTINGS_PATH, &serde_json::to_string_pretty(s)?).await?;
+        }
+        let flags = self.cli_flags()?;
+        let settings_flag = if self.settings.is_some() { format!("--settings {SETTINGS_PATH} ") } else { String::new() };
+        let resume_flag = if resume { "--continue " } else { "" };
+        let var = format!("hbench_claude_code_instruction_{}", uuid::Uuid::new_v4().simple());
+        let upper = var.to_uppercase();
+        let mut run_env = env.clone();
+        run_env.insert(upper.clone(), instruction);
+        let cmd = format!(
+            "export PATH=\"$HOME/.local/bin:$PATH\"; {var}=\"${upper}\"; unset {upper}; printf \"%s\" \"${var}\" | \
+             claude --verbose --output-format=stream-json {settings_flag}{flags} {resume_flag}--print 2>&1 | tee /logs/agent/claude-code.txt"
+        );
+        let r = cx.exec(&format!("set -o pipefail; {cmd}"), &run_env, None).await?;
+        if self.settings.is_some() {
+            let _ = cx.exec(&format!("rm -rf {SETTINGS_DIR}"), &env, None).await;
+        }
+        if r.code != 0 {
+            // Classify only harness-emitted events: model text and tool output can echo error phrases.
+            let evidence = filter_jsonl_events(&r.stdout, |e| {
+                e["type"] == "error" || (e["type"] == "result" && (e["is_error"] == true || e["subtype"].as_str().is_some_and(|s| s.starts_with("error"))))
+            });
+            return Err(exec_error(&cmd, &r, Some(&format!("{evidence}\n{}", r.stderr))));
+        }
+        Ok(())
+    }
+
+    fn populate_context_post_run(&self, logs_dir: &std::path::Path, ctx: &mut AgentContext) {
+        if let Some(c) = std::fs::read_to_string(logs_dir.join("claude-code.txt")).ok().and_then(|t| parse_stream_result(&t)) {
+            *ctx = c;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    fn agent(kwargs: Value, env: &[(&str, &str)], model: Option<&str>) -> Result<ClaudeCode> {
+        let dir = std::env::temp_dir().join(format!("hbench-cc-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(dir.join("environment")).unwrap();
+        std::fs::write(dir.join("task.toml"), "[environment]\ndocker_image='x'\n").unwrap();
+        std::fs::write(dir.join("instruction.md"), "x").unwrap();
+        let task = Arc::new(crate::task::Task::load(&dir).unwrap());
+        ClaudeCode::new(AgentArgs {
+            model_name: model.map(String::from),
+            kwargs: serde_json::from_value(kwargs).unwrap(),
+            extra_env: env.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect(),
+            mcp_servers: vec![],
+            skills: vec![],
+            logs_dir: dir.clone(),
+            task,
+        })
+    }
+
+    #[test]
+    fn flags_and_auth() {
+        let a = agent(json!({"max_turns": 5, "reasoning_effort": "high", "disable_web_search": true, "allowed_tools": "Bash,Edit"}), &[("ANTHROPIC_API_KEY", "sk")], Some("anthropic/claude-opus-5-5")).unwrap();
+        let f = a.cli_flags().unwrap();
+        assert!(f.contains("--permission-mode=bypassPermissions") && f.contains("--max-turns 5") && f.contains("--effort high"));
+        assert!(f.contains("--disallowedTools WebSearch,WebFetch") && f.contains("--allowedTools Bash,Edit"));
+        assert_eq!(a.resolved_model().unwrap(), "claude-opus-5-5");
+        assert_eq!(a.auth_env().unwrap()["ANTHROPIC_API_KEY"], "sk");
+        assert!(agent(json!({"reasoning_effort": "huge"}), &[], None).is_err());
+        let o = agent(json!({}), &[("CLAUDE_CODE_OAUTH_TOKEN", "oat"), ("CLAUDE_FORCE_OAUTH", "1"), ("ANTHROPIC_API_KEY", "sk")], None).unwrap();
+        let e = o.auth_env().unwrap();
+        assert_eq!(e.get("CLAUDE_CODE_OAUTH_TOKEN").map(String::as_str), Some("oat"));
+        assert!(!e.contains_key("ANTHROPIC_API_KEY"));
+        let b = agent(json!({}), &[("CLAUDE_CODE_USE_BEDROCK", "1")], Some("bedrock/us.anthropic.claude")).unwrap();
+        assert_eq!(b.auth_env().unwrap()["AWS_REGION"], "us-east-1");
+        assert_eq!(b.resolved_model().unwrap(), "us.anthropic.claude");
+    }
+
+    #[test]
+    fn stream_result_usage() {
+        let text = "{\"type\":\"system\"}\n{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"num_turns\":3,\"total_cost_usd\":0.25,\
+            \"usage\":{\"input_tokens\":10,\"cache_creation_input_tokens\":5,\"cache_read_input_tokens\":100,\"output_tokens\":7},\
+            \"modelUsage\":{\"claude-x\":{\"inputTokens\":10,\"outputTokens\":7,\"cacheReadInputTokens\":100,\"cacheCreationInputTokens\":5,\"costUSD\":0.25}}}\n";
+        let c = parse_stream_result(text).unwrap();
+        assert_eq!((c.n_input_tokens, c.n_cache_tokens, c.n_output_tokens, c.cost_usd), (Some(115), Some(100), Some(7), Some(0.25)));
+        assert_eq!(c.model_usage.unwrap()["claude-x"].n_input_tokens, 115);
+    }
+}
