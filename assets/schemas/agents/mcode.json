@@ -1,0 +1,106 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Agent CLI version to install. Omit for latest.",
+      "title": "Version"
+    },
+    "prompt_template_path": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Jinja2 template path; must include {{ instruction }}.",
+      "title": "Prompt Template Path"
+    },
+    "config": {
+      "default": null,
+      "description": "Native config file path or inline JSON.",
+      "title": "Config"
+    },
+    "max_steps": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Maximum agent steps.",
+      "title": "Max Steps"
+    },
+    "api_format": {
+      "anyOf": [
+        {
+          "enum": [
+            "anthropic-messages",
+            "openai-completions"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Provider API format.",
+      "title": "Api Format"
+    },
+    "context_window": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Model context window tokens.",
+      "title": "Context Window"
+    },
+    "max_output_tokens": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Maximum output tokens.",
+      "title": "Max Output Tokens"
+    },
+    "permission_mode": {
+      "default": "full",
+      "description": "MCode permission mode.",
+      "enum": [
+        "ask",
+        "smart",
+        "full",
+        "off"
+      ],
+      "title": "Permission Mode",
+      "type": "string"
+    }
+  },
+  "title": "MCodeOptions",
+  "type": "object"
+}

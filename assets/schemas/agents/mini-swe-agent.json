@@ -1,0 +1,133 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Agent CLI version to install. Omit for latest.",
+      "title": "Version"
+    },
+    "prompt_template_path": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Jinja2 template path; must include {{ instruction }}.",
+      "title": "Prompt Template Path"
+    },
+    "config": {
+      "default": null,
+      "description": "Native config file path or inline JSON.",
+      "title": "Config"
+    },
+    "cost_limit": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": "0",
+      "description": "Cost limit.",
+      "title": "Cost Limit"
+    },
+    "reasoning_effort": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Model reasoning effort.",
+      "title": "Reasoning Effort"
+    },
+    "max_tokens": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Maximum completion tokens.",
+      "title": "Max Tokens"
+    },
+    "config_file": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Path to a mini-swe-agent YAML config.",
+      "title": "Config File"
+    },
+    "litellm_model_registry_file": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Path to a LiteLLM model registry JSON file.",
+      "title": "Litellm Model Registry File"
+    },
+    "litellm_model_registry": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Inline LiteLLM model registry.",
+      "title": "Litellm Model Registry"
+    },
+    "session_id_headers": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "HTTP headers that receive the session ID.",
+      "title": "Session Id Headers"
+    }
+  },
+  "title": "MiniSweAgentOptions",
+  "type": "object"
+}

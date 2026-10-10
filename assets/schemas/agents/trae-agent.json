@@ -1,0 +1,68 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Agent CLI version to install. Omit for latest.",
+      "title": "Version"
+    },
+    "prompt_template_path": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Jinja2 template path; must include {{ instruction }}.",
+      "title": "Prompt Template Path"
+    },
+    "config": {
+      "default": null,
+      "description": "Native config file path or inline JSON.",
+      "title": "Config"
+    },
+    "max_steps": {
+      "default": 200,
+      "description": "Maximum agent steps.",
+      "title": "Max Steps",
+      "type": "integer"
+    },
+    "temperature": {
+      "default": "0.7",
+      "description": "Model temperature.",
+      "title": "Temperature",
+      "type": "string"
+    },
+    "max_tokens": {
+      "default": 16384,
+      "description": "Maximum output tokens.",
+      "title": "Max Tokens",
+      "type": "integer"
+    },
+    "top_p": {
+      "default": "0.95",
+      "description": "Model top-p.",
+      "title": "Top P",
+      "type": "string"
+    },
+    "top_k": {
+      "default": 20,
+      "description": "Model top-k.",
+      "title": "Top K",
+      "type": "integer"
+    }
+  },
+  "title": "TraeAgentOptions",
+  "type": "object"
+}

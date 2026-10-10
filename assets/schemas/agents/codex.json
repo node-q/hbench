@@ -1,0 +1,109 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Agent CLI version to install. Omit for latest.",
+      "title": "Version"
+    },
+    "prompt_template_path": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Jinja2 template path; must include {{ instruction }}.",
+      "title": "Prompt Template Path"
+    },
+    "config": {
+      "default": null,
+      "description": "Native config file path or inline JSON.",
+      "title": "Config"
+    },
+    "reasoning_effort": {
+      "anyOf": [
+        {
+          "enum": [
+            "none",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Model reasoning effort.",
+      "title": "Reasoning Effort"
+    },
+    "reasoning_summary": {
+      "anyOf": [
+        {
+          "enum": [
+            "auto",
+            "concise",
+            "detailed",
+            "none"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "How model reasoning is summarized.",
+      "title": "Reasoning Summary"
+    },
+    "web_search": {
+      "anyOf": [
+        {
+          "enum": [
+            "disabled",
+            "cached",
+            "live"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Web search mode.",
+      "title": "Web Search"
+    },
+    "disable_web_search": {
+      "default": false,
+      "description": "Same as web_search=disabled.",
+      "title": "Disable Web Search",
+      "type": "boolean"
+    },
+    "dangerously_bypass_hook_trust": {
+      "default": false,
+      "description": "Run enabled Codex hooks without persisted trust; use only with vetted hook sources.",
+      "title": "Dangerously Bypass Hook Trust",
+      "type": "boolean"
+    }
+  },
+  "title": "CodexOptions",
+  "type": "object"
+}

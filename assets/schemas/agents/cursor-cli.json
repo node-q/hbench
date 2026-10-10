@@ -1,0 +1,157 @@
+{
+  "$defs": {
+    "CursorModelPricingMap": {
+      "additionalProperties": {
+        "$ref": "#/$defs/CursorTokenPricing"
+      },
+      "description": "Model-slug → per-million USD rates map for the ``pricing`` kwarg.",
+      "title": "CursorModelPricingMap",
+      "type": "object"
+    },
+    "CursorTokenPricing": {
+      "additionalProperties": false,
+      "description": "Per-million-token USD rates for cost estimation.\n\nPass via ``--ak pricing='...'`` or ``agents[].kwargs.pricing``.\n``cache_read`` / ``cache_write`` default to ``input`` when omitted.",
+      "properties": {
+        "input": {
+          "description": "USD per 1M input tokens",
+          "minimum": 0,
+          "title": "Input",
+          "type": "number"
+        },
+        "output": {
+          "description": "USD per 1M output tokens",
+          "minimum": 0,
+          "title": "Output",
+          "type": "number"
+        },
+        "cache_read": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "USD per 1M cache-read tokens",
+          "title": "Cache Read"
+        },
+        "cache_write": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "USD per 1M cache-write tokens",
+          "title": "Cache Write"
+        }
+      },
+      "required": [
+        "input",
+        "output"
+      ],
+      "title": "CursorTokenPricing",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Agent CLI version to install. Omit for latest.",
+      "title": "Version"
+    },
+    "prompt_template_path": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Jinja2 template path; must include {{ instruction }}.",
+      "title": "Prompt Template Path"
+    },
+    "config": {
+      "default": null,
+      "description": "Native config file path or inline JSON.",
+      "title": "Config"
+    },
+    "mode": {
+      "anyOf": [
+        {
+          "enum": [
+            "plan",
+            "ask"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Cursor CLI mode.",
+      "title": "Mode"
+    },
+    "pricing": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/CursorTokenPricing"
+        },
+        {
+          "$ref": "#/$defs/CursorModelPricingMap"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Per-million USD token rates or a model→rates map.",
+      "title": "Pricing"
+    },
+    "reasoning_effort": {
+      "anyOf": [
+        {
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Model reasoning effort.",
+      "title": "Reasoning Effort"
+    }
+  },
+  "title": "CursorCliOptions",
+  "type": "object"
+}

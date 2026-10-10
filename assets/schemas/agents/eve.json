@@ -1,0 +1,93 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Agent CLI version to install. Omit for latest.",
+      "title": "Version"
+    },
+    "prompt_template_path": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Jinja2 template path; must include {{ instruction }}.",
+      "title": "Prompt Template Path"
+    },
+    "config": {
+      "default": null,
+      "description": "Native config file path or inline JSON.",
+      "title": "Config"
+    },
+    "path": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "format": "path",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Local Eve project directory.",
+      "title": "Path"
+    },
+    "install_command": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Override Eve project install command.",
+      "title": "Install Command"
+    },
+    "auto_env": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "boolean"
+        }
+      ],
+      "default": true,
+      "description": "Auto-forward inferred provider env vars.",
+      "title": "Auto Env"
+    },
+    "port": {
+      "default": 3024,
+      "description": "Eve HTTP session port.",
+      "title": "Port",
+      "type": "integer"
+    },
+    "startup_timeout_ms": {
+      "default": 60000,
+      "description": "Eve startup timeout in milliseconds.",
+      "title": "Startup Timeout Ms",
+      "type": "integer"
+    }
+  },
+  "title": "EveOptions",
+  "type": "object"
+}

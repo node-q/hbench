@@ -1,0 +1,111 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Agent CLI version to install. Omit for latest.",
+      "title": "Version"
+    },
+    "prompt_template_path": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Jinja2 template path; must include {{ instruction }}.",
+      "title": "Prompt Template Path"
+    },
+    "config": {
+      "default": null,
+      "description": "Native config file path or inline JSON.",
+      "title": "Config"
+    },
+    "reasoning_effort": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Model reasoning effort.",
+      "title": "Reasoning Effort"
+    },
+    "load_skills": {
+      "default": true,
+      "description": "Load skills from skill paths.",
+      "title": "Load Skills",
+      "type": "boolean"
+    },
+    "skill_paths": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Custom skill paths to load.",
+      "title": "Skill Paths"
+    },
+    "collect_token_ids": {
+      "default": false,
+      "description": "Request token IDs from the LLM backend.",
+      "title": "Collect Token Ids",
+      "type": "boolean"
+    },
+    "max_iterations": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Maximum agent iterations per run.",
+      "title": "Max Iterations"
+    },
+    "temperature": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "LLM sampling temperature.",
+      "title": "Temperature"
+    },
+    "python_version": {
+      "default": "3.12",
+      "description": "Python version for the SDK venv.",
+      "title": "Python Version",
+      "type": "string"
+    }
+  },
+  "title": "OpenHandsSDKOptions",
+  "type": "object"
+}

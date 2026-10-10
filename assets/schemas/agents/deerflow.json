@@ -1,0 +1,136 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Agent CLI version to install. Omit for latest.",
+      "title": "Version"
+    },
+    "prompt_template_path": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Jinja2 template path; must include {{ instruction }}.",
+      "title": "Prompt Template Path"
+    },
+    "config": {
+      "default": null,
+      "description": "Native config file path or inline JSON.",
+      "title": "Config"
+    },
+    "disable_web_search": {
+      "default": false,
+      "description": "Leave web tools out of the default tool set.",
+      "title": "Disable Web Search",
+      "type": "boolean"
+    },
+    "repo_url": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "DeerFlow git repository URL.",
+      "title": "Repo Url"
+    },
+    "repo_ref": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": "7a6c4a994a86583d2a3c056ee9d0f157d4f030c2",
+      "description": "DeerFlow git ref to install.",
+      "title": "Repo Ref"
+    },
+    "openrouter_base_url": {
+      "default": "https://openrouter.ai/api/v1",
+      "description": "OpenRouter-compatible base URL.",
+      "title": "Openrouter Base Url",
+      "type": "string"
+    },
+    "workdir": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Task workdir for DeerFlow identity mounts.",
+      "title": "Workdir"
+    },
+    "config_path": {
+      "anyOf": [
+        {
+          "format": "path",
+          "type": "string"
+        },
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Deprecated alias of config.",
+      "title": "Config Path"
+    },
+    "subagent": {
+      "default": false,
+      "description": "Enable DeerFlow subagent delegation.",
+      "title": "Subagent",
+      "type": "boolean"
+    },
+    "thinking": {
+      "default": true,
+      "description": "Enable DeerFlow thinking.",
+      "title": "Thinking",
+      "type": "boolean"
+    },
+    "plan_mode": {
+      "default": false,
+      "description": "Enable DeerFlow plan mode.",
+      "title": "Plan Mode",
+      "type": "boolean"
+    },
+    "summarize": {
+      "default": false,
+      "description": "Enable context summarization.",
+      "title": "Summarize",
+      "type": "boolean"
+    },
+    "recursion_limit": {
+      "default": 1000,
+      "description": "Maximum graph steps.",
+      "title": "Recursion Limit",
+      "type": "integer"
+    }
+  },
+  "title": "DeerFlowOptions",
+  "type": "object"
+}

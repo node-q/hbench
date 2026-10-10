@@ -1,0 +1,109 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Agent CLI version to install. Omit for latest.",
+      "title": "Version"
+    },
+    "prompt_template_path": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Jinja2 template path; must include {{ instruction }}.",
+      "title": "Prompt Template Path"
+    },
+    "config": {
+      "default": null,
+      "description": "Native config file path or inline JSON.",
+      "title": "Config"
+    },
+    "disable_web_search": {
+      "default": false,
+      "description": "Deny the web tool group.",
+      "title": "Disable Web Search",
+      "type": "boolean"
+    },
+    "openclaw_agent_id": {
+      "default": "main",
+      "description": "OpenClaw session agent id.",
+      "title": "Openclaw Agent Id",
+      "type": "string"
+    },
+    "thinking": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "OpenClaw thinking level.",
+      "title": "Thinking"
+    },
+    "timeout": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "OpenClaw CLI timeout seconds.",
+      "title": "Timeout"
+    },
+    "openclaw_config": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Inline OpenClaw config overlay.",
+      "title": "Openclaw Config"
+    },
+    "session_to_trajectory": {
+      "default": true,
+      "description": "Prefer openclaw.session.jsonl for trajectory generation.",
+      "title": "Session To Trajectory",
+      "type": "boolean"
+    },
+    "failover_retries": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Non-negative rate-limit profile rotations.",
+      "title": "Failover Retries"
+    }
+  },
+  "title": "OpenClawOptions",
+  "type": "object"
+}

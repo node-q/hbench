@@ -1,0 +1,76 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "signature": {
+      "default": "instruction, file_tree -> solution",
+      "description": "dspy signature. Must define exactly two input fields.",
+      "title": "Signature",
+      "type": "string"
+    },
+    "max_iterations": {
+      "default": 20,
+      "description": "Maximum RLM iterations.",
+      "title": "Max Iterations",
+      "type": "integer"
+    },
+    "max_llm_calls": {
+      "default": 50,
+      "description": "Maximum LLM calls.",
+      "title": "Max Llm Calls",
+      "type": "integer"
+    },
+    "max_output_chars": {
+      "default": 10000,
+      "description": "Maximum tool/output characters.",
+      "title": "Max Output Chars",
+      "type": "integer"
+    },
+    "verbose": {
+      "default": false,
+      "description": "Enable verbose RLM logging.",
+      "title": "Verbose",
+      "type": "boolean"
+    },
+    "tool_timeout_sec": {
+      "default": 30,
+      "description": "Timeout for environment tool calls.",
+      "title": "Tool Timeout Sec",
+      "type": "integer"
+    },
+    "working_dir": {
+      "default": "/",
+      "description": "Working directory inside the environment.",
+      "title": "Working Dir",
+      "type": "string"
+    },
+    "extra_tools": {
+      "anyOf": [
+        {
+          "items": {},
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Extra tool callables appended to the RLM tool list.",
+      "title": "Extra Tools"
+    },
+    "sub_model_name": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Model name for the RLM sub-LM.",
+      "title": "Sub Model Name"
+    }
+  },
+  "title": "DspyRlmOptions",
+  "type": "object"
+}

@@ -1,0 +1,206 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Agent CLI version to install. Omit for latest.",
+      "title": "Version"
+    },
+    "prompt_template_path": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Jinja2 template path; must include {{ instruction }}.",
+      "title": "Prompt Template Path"
+    },
+    "config": {
+      "default": null,
+      "description": "Native config file path or inline JSON.",
+      "title": "Config"
+    },
+    "max_turns": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Maximum agent turns.",
+      "title": "Max Turns"
+    },
+    "reasoning_effort": {
+      "anyOf": [
+        {
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Model reasoning effort.",
+      "title": "Reasoning Effort"
+    },
+    "thinking_display": {
+      "anyOf": [
+        {
+          "enum": [
+            "summarized",
+            "omitted"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "How thinking is displayed.",
+      "title": "Thinking Display"
+    },
+    "max_budget_usd": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Maximum spend in USD.",
+      "title": "Max Budget Usd"
+    },
+    "fallback_model": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Fallback model name.",
+      "title": "Fallback Model"
+    },
+    "append_system_prompt": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Text appended to the system prompt.",
+      "title": "Append System Prompt"
+    },
+    "allowed_tools": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Comma-separated allowed tools.",
+      "title": "Allowed Tools"
+    },
+    "disallowed_tools": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Comma-separated disallowed tools.",
+      "title": "Disallowed Tools"
+    },
+    "disable_web_search": {
+      "default": false,
+      "description": "Disallow the WebSearch and WebFetch tools.",
+      "title": "Disable Web Search",
+      "type": "boolean"
+    },
+    "permission_mode": {
+      "anyOf": [
+        {
+          "enum": [
+            "default",
+            "acceptEdits",
+            "plan",
+            "auto",
+            "dontAsk",
+            "bypassPermissions"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": "bypassPermissions",
+      "description": "Permission mode.",
+      "title": "Permission Mode"
+    },
+    "max_thinking_tokens": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Maximum thinking tokens.",
+      "title": "Max Thinking Tokens"
+    },
+    "memory_dir": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Host directory uploaded as Claude memory.",
+      "title": "Memory Dir"
+    }
+  },
+  "title": "ClaudeCodeOptions",
+  "type": "object"
+}

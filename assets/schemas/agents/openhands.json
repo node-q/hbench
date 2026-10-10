@@ -1,0 +1,237 @@
+{
+  "$defs": {
+    "TrajectoryConfig": {
+      "additionalProperties": false,
+      "description": "Configuration options for trajectory recording and formatting.\n\nAttributes:\n    raw_content: If True, dump raw LLM responses into trajectory without\n        parsing into tool_calls. Useful for SFT data export. (default: False)\n    linear_history: If True, split trajectory into separate files when context\n        summarization occurs, ensuring each trajectory represents a continuous linear\n        history sent to the LLM. When False, keep all steps from the main agent\n        in a single trajectory file despite chat history resets. (default: False)",
+      "properties": {
+        "raw_content": {
+          "title": "Raw Content",
+          "type": "boolean"
+        },
+        "linear_history": {
+          "title": "Linear History",
+          "type": "boolean"
+        }
+      },
+      "title": "TrajectoryConfig",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Agent CLI version to install. Omit for latest.",
+      "title": "Version"
+    },
+    "prompt_template_path": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Jinja2 template path; must include {{ instruction }}.",
+      "title": "Prompt Template Path"
+    },
+    "config": {
+      "default": null,
+      "description": "Native config file path or inline JSON.",
+      "title": "Config"
+    },
+    "disable_tool_calls": {
+      "default": false,
+      "description": "Disable native function calling.",
+      "title": "Disable Tool Calls",
+      "type": "boolean"
+    },
+    "reasoning_effort": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "LLM reasoning effort.",
+      "title": "Reasoning Effort"
+    },
+    "temperature": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "LLM temperature.",
+      "title": "Temperature"
+    },
+    "max_iterations": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Maximum agent iterations.",
+      "title": "Max Iterations"
+    },
+    "caching_prompt": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Enable prompt caching.",
+      "title": "Caching Prompt"
+    },
+    "top_p": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "LLM top-p.",
+      "title": "Top P"
+    },
+    "num_retries": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "LLM request retries.",
+      "title": "Num Retries"
+    },
+    "max_budget_per_task": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Maximum spend per task.",
+      "title": "Max Budget Per Task"
+    },
+    "drop_params": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Drop unsupported LLM params.",
+      "title": "Drop Params"
+    },
+    "disable_vision": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Disable vision inputs.",
+      "title": "Disable Vision"
+    },
+    "trajectory_config": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/TrajectoryConfig"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Trajectory recording options."
+    },
+    "api_base": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Override LLM base URL.",
+      "title": "Api Base"
+    },
+    "model_info": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Model token-limit metadata.",
+      "title": "Model Info"
+    },
+    "python_version": {
+      "default": "3.13",
+      "description": "Python version for the OpenHands venv.",
+      "title": "Python Version",
+      "type": "string"
+    },
+    "git_version": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Install OpenHands from this git ref.",
+      "title": "Git Version"
+    }
+  },
+  "title": "OpenHandsOptions",
+  "type": "object"
+}

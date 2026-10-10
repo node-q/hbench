@@ -1,0 +1,271 @@
+{
+  "$defs": {
+    "LLMBackend": {
+      "description": "Enum for available LLM backends.",
+      "enum": [
+        "litellm",
+        "tinker"
+      ],
+      "title": "LLMBackend",
+      "type": "string"
+    },
+    "TrajectoryConfig": {
+      "additionalProperties": false,
+      "description": "Configuration options for trajectory recording and formatting.\n\nAttributes:\n    raw_content: If True, dump raw LLM responses into trajectory without\n        parsing into tool_calls. Useful for SFT data export. (default: False)\n    linear_history: If True, split trajectory into separate files when context\n        summarization occurs, ensuring each trajectory represents a continuous linear\n        history sent to the LLM. When False, keep all steps from the main agent\n        in a single trajectory file despite chat history resets. (default: False)",
+      "properties": {
+        "raw_content": {
+          "title": "Raw Content",
+          "type": "boolean"
+        },
+        "linear_history": {
+          "title": "Linear History",
+          "type": "boolean"
+        }
+      },
+      "title": "TrajectoryConfig",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "max_turns": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Maximum agent turns. Omit for no practical limit.",
+      "title": "Max Turns"
+    },
+    "parser_name": {
+      "default": "json",
+      "description": "Response parser (json or xml).",
+      "title": "Parser Name",
+      "type": "string"
+    },
+    "api_base": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "LLM API base URL.",
+      "title": "Api Base"
+    },
+    "temperature": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Sampling temperature. Omit to use the backend default.",
+      "title": "Temperature"
+    },
+    "reasoning_effort": {
+      "anyOf": [
+        {
+          "enum": [
+            "none",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+            "default"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Reasoning effort level.",
+      "title": "Reasoning Effort"
+    },
+    "collect_rollout_details": {
+      "default": false,
+      "description": "Collect token IDs and logprobs.",
+      "title": "Collect Rollout Details",
+      "type": "boolean"
+    },
+    "session_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Agent session ID.",
+      "title": "Session Id"
+    },
+    "enable_summarize": {
+      "default": true,
+      "description": "Enable context summarization.",
+      "title": "Enable Summarize",
+      "type": "boolean"
+    },
+    "proactive_summarization_threshold": {
+      "default": 8000,
+      "description": "Free-token threshold for proactive summarization. 0 disables it.",
+      "title": "Proactive Summarization Threshold",
+      "type": "integer"
+    },
+    "max_thinking_tokens": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Max thinking tokens (min 1024).",
+      "title": "Max Thinking Tokens"
+    },
+    "model_info": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "LiteLLM model info for custom models.",
+      "title": "Model Info"
+    },
+    "trajectory_config": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/TrajectoryConfig"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Trajectory options (raw_content, linear_history)."
+    },
+    "tmux_pane_width": {
+      "default": 160,
+      "description": "Starting tmux pane width.",
+      "title": "Tmux Pane Width",
+      "type": "integer"
+    },
+    "tmux_pane_height": {
+      "default": 40,
+      "description": "Starting tmux pane height.",
+      "title": "Tmux Pane Height",
+      "type": "integer"
+    },
+    "store_all_messages": {
+      "default": false,
+      "description": "Store full chat messages in trial metadata.",
+      "title": "Store All Messages",
+      "type": "boolean"
+    },
+    "record_terminal_session": {
+      "default": true,
+      "description": "Capture asciinema terminal recordings.",
+      "title": "Record Terminal Session",
+      "type": "boolean"
+    },
+    "interleaved_thinking": {
+      "default": false,
+      "description": "Include reasoning in subsequent chat turns.",
+      "title": "Interleaved Thinking",
+      "type": "boolean"
+    },
+    "suppress_max_turns_warning": {
+      "default": false,
+      "description": "Suppress the max_turns limit warning.",
+      "title": "Suppress Max Turns Warning",
+      "type": "boolean"
+    },
+    "use_responses_api": {
+      "default": false,
+      "description": "Use the OpenAI Responses API.",
+      "title": "Use Responses Api",
+      "type": "boolean"
+    },
+    "llm_backend": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/LLMBackend"
+        },
+        {
+          "type": "string"
+        }
+      ],
+      "default": "litellm",
+      "description": "LLM backend (litellm or tinker).",
+      "title": "Llm Backend"
+    },
+    "llm_kwargs": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Extra LLM constructor kwargs.",
+      "title": "Llm Kwargs"
+    },
+    "llm_call_kwargs": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Extra LLM call kwargs (e.g. extra_body).",
+      "title": "Llm Call Kwargs"
+    },
+    "session_id_headers": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "HTTP headers that receive the session ID.",
+      "title": "Session Id Headers"
+    }
+  },
+  "title": "Terminus2Options",
+  "type": "object"
+}

@@ -1,0 +1,104 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Agent CLI version to install. Omit for latest.",
+      "title": "Version"
+    },
+    "prompt_template_path": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Jinja2 template path; must include {{ instruction }}.",
+      "title": "Prompt Template Path"
+    },
+    "config": {
+      "default": null,
+      "description": "Native config file path or inline JSON.",
+      "title": "Config"
+    },
+    "llm_type": {
+      "default": "nim",
+      "description": "LLM provider type.",
+      "enum": [
+        "nim",
+        "openai",
+        "azure_openai",
+        "aws_bedrock",
+        "litellm",
+        "huggingface_inference",
+        "dynamo"
+      ],
+      "title": "Llm Type",
+      "type": "string"
+    },
+    "config_file": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Host path to a NAT YAML config.",
+      "title": "Config File"
+    },
+    "workflow_package": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "pip-installable custom workflow package.",
+      "title": "Workflow Package"
+    },
+    "nat_repo": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Git URL for nvidia-nat.",
+      "title": "Nat Repo"
+    },
+    "verbose": {
+      "default": "warning",
+      "description": "NAT log level.",
+      "enum": [
+        "debug",
+        "info",
+        "warning",
+        "error"
+      ],
+      "title": "Verbose",
+      "type": "string"
+    }
+  },
+  "title": "NemoAgentOptions",
+  "type": "object"
+}

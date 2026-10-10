@@ -1,0 +1,279 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "max_turns": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Maximum agent turns. Omit for no practical limit.",
+      "title": "Max Turns"
+    },
+    "temperature": {
+      "default": 0.7,
+      "description": "Sampling temperature.",
+      "title": "Temperature",
+      "type": "number"
+    },
+    "api_base": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "LLM API base URL.",
+      "title": "Api Base"
+    },
+    "reasoning_effort": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Reasoning effort level.",
+      "title": "Reasoning Effort"
+    },
+    "max_thinking_tokens": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Max thinking tokens.",
+      "title": "Max Thinking Tokens"
+    },
+    "model_info": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "LiteLLM model info for custom models.",
+      "title": "Model Info"
+    },
+    "collect_rollout_details": {
+      "default": false,
+      "description": "Collect token IDs and logprobs.",
+      "title": "Collect Rollout Details",
+      "type": "boolean"
+    },
+    "session_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Agent session ID.",
+      "title": "Session Id"
+    },
+    "use_responses_api": {
+      "default": false,
+      "description": "Use the OpenAI Responses API.",
+      "title": "Use Responses Api",
+      "type": "boolean"
+    },
+    "llm_kwargs": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Extra LLM constructor kwargs.",
+      "title": "Llm Kwargs"
+    },
+    "llm_call_kwargs": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Extra LLM call kwargs.",
+      "title": "Llm Call Kwargs"
+    },
+    "desktop_width": {
+      "default": 1024,
+      "description": "Desktop width in pixels.",
+      "title": "Desktop Width",
+      "type": "integer"
+    },
+    "desktop_height": {
+      "default": 900,
+      "description": "Desktop height in pixels.",
+      "title": "Desktop Height",
+      "type": "integer"
+    },
+    "window_width": {
+      "default": 1024,
+      "description": "Browser window width in pixels.",
+      "title": "Window Width",
+      "type": "integer"
+    },
+    "window_height": {
+      "default": 900,
+      "description": "Browser window height in pixels.",
+      "title": "Window Height",
+      "type": "integer"
+    },
+    "window_x": {
+      "default": 0,
+      "description": "Browser window X offset.",
+      "title": "Window X",
+      "type": "integer"
+    },
+    "window_y": {
+      "default": 0,
+      "description": "Browser window Y offset.",
+      "title": "Window Y",
+      "type": "integer"
+    },
+    "runtime_readiness_timeout_sec": {
+      "default": 120,
+      "description": "Seconds to wait for the desktop runtime.",
+      "title": "Runtime Readiness Timeout Sec",
+      "type": "integer"
+    },
+    "runtime_request_timeout_sec": {
+      "default": 120,
+      "description": "Seconds for runtime HTTP requests.",
+      "title": "Runtime Request Timeout Sec",
+      "type": "integer"
+    },
+    "runtime_action_timeout_sec": {
+      "default": 60.0,
+      "description": "Seconds for a single desktop action.",
+      "title": "Runtime Action Timeout Sec",
+      "type": "number"
+    },
+    "enable_episode_logging": {
+      "default": true,
+      "description": "Write per-episode prompt/response logs.",
+      "title": "Enable Episode Logging",
+      "type": "boolean"
+    },
+    "start_url": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "URL to open before the first turn.",
+      "title": "Start Url"
+    },
+    "env_io_dir": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Environment-side directory for screenshots and answers.",
+      "title": "Env Io Dir"
+    },
+    "extra_tools": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Opt-in tools (e.g. bash).",
+      "title": "Extra Tools"
+    },
+    "enable_images": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Send screenshots to the model. Omit to infer from model metadata.",
+      "title": "Enable Images"
+    },
+    "provider": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Force a provider flavor (generic/anthropic/bedrock/gemini/openai).",
+      "title": "Provider"
+    },
+    "aws_region_name": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "AWS region for the Bedrock provider.",
+      "title": "Aws Region Name"
+    },
+    "gemini_auto_ack_safety": {
+      "default": false,
+      "description": "Auto-acknowledge Gemini safety prompts.",
+      "title": "Gemini Auto Ack Safety",
+      "type": "boolean"
+    }
+  },
+  "title": "Computer1Options",
+  "type": "object"
+}

@@ -10,6 +10,7 @@ mod metrics;
 mod migrate;
 mod regrade;
 mod registry;
+mod schemas;
 mod sweeps;
 mod task;
 mod tools;
@@ -57,8 +58,11 @@ enum Cmd {
         #[command(subcommand)]
         cmd: TasksCmd,
     },
-    /// List built-in agents.
-    Agents,
+    /// Built-in agents: list, or print an agent's options schema.
+    Agents {
+        #[command(subcommand)]
+        cmd: Option<AgentsCmd>,
+    },
     /// Cache management.
     Cache {
         #[command(subcommand)]
@@ -131,6 +135,20 @@ enum TracesCmd {
 }
 
 #[derive(Subcommand)]
+enum AgentsCmd {
+    List {
+        #[arg(long)]
+        json: bool,
+    },
+    /// The user-facing kwargs an agent accepts (upstream's options schema).
+    Schema {
+        name: String,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
 enum CacheCmd {
     /// Remove ~/.cache/hbench and hbench-built docker images.
     Clean {
@@ -181,6 +199,8 @@ enum JobsCmd {
 
 #[derive(Subcommand)]
 enum TrialsCmd {
+    /// Print the trial config JSON schema.
+    Schema,
     /// Resume a finished trial's agent session in the local agent CLI (claude-code, muse-code).
     Handoff { trial_dir: PathBuf },
     /// Run one trial: `-p task` or `-c trial.yaml`.
@@ -224,6 +244,8 @@ enum TasksCmd {
         #[arg(short = 'p', long = "path", default_value = ".")]
         dir: PathBuf,
     },
+    /// Print the task.toml JSON schema.
+    Schema,
     /// Start a task's environment and attach a shell (solution + tests uploaded by default).
     StartEnv {
         #[arg(short = 'p', long = "path")]
@@ -804,10 +826,31 @@ async fn main() -> Result<()> {
             use std::os::unix::process::CommandExt;
             Err(std::process::Command::new(&cmd[0]).args(&cmd[1..]).exec().into())
         }
-        Cmd::Agents => {
+        Cmd::Agents { cmd: None | Some(AgentsCmd::List { json: false }) } => {
             for n in agents::agent_names() {
                 println!("{n}");
             }
+            Ok(())
+        }
+        Cmd::Agents { cmd: Some(AgentsCmd::List { json: true }) } => {
+            println!("{}", serde_json::to_string_pretty(&agents::agent_names())?);
+            Ok(())
+        }
+        Cmd::Agents { cmd: Some(AgentsCmd::Schema { name, json }) } => {
+            let Some(s) = schemas::agent(&name) else { bail!("Agent '{name}' does not declare an options_model") };
+            if json {
+                println!("{s}");
+            } else {
+                print!("{}", schemas::options_table(&name, &serde_json::from_str(s)?));
+            }
+            Ok(())
+        }
+        Cmd::Tasks { cmd: TasksCmd::Schema } => {
+            println!("{}", schemas::TASK);
+            Ok(())
+        }
+        Cmd::Trials { cmd: TrialsCmd::Schema } => {
+            println!("{}", schemas::TRIAL);
             Ok(())
         }
         Cmd::View { jobs_dir, port, host } => viewer::serve(&jobs_dir, &host, port),

@@ -1,0 +1,109 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Agent CLI version to install. Omit for latest.",
+      "title": "Version"
+    },
+    "prompt_template_path": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Jinja2 template path; must include {{ instruction }}.",
+      "title": "Prompt Template Path"
+    },
+    "config": {
+      "default": null,
+      "description": "Native config file path or inline JSON.",
+      "title": "Config"
+    },
+    "timeout_ms": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Per-task wall-clock limit in milliseconds.",
+      "title": "Timeout Ms"
+    },
+    "guidelines_filename": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Guidelines filename passed to Junie.",
+      "title": "Guidelines Filename"
+    },
+    "output_format": {
+      "anyOf": [
+        {
+          "enum": [
+            "text",
+            "json"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Junie output format.",
+      "title": "Output Format"
+    },
+    "channel": {
+      "default": "stable",
+      "description": "Junie release channel.",
+      "enum": [
+        "stable",
+        "eap"
+      ],
+      "title": "Channel",
+      "type": "string"
+    },
+    "brave": {
+      "default": true,
+      "description": "Run without approval prompts.",
+      "title": "Brave",
+      "type": "boolean"
+    },
+    "share_anonymous_statistics": {
+      "default": false,
+      "description": "Answer Junie's anonymous-statistics prompt.",
+      "title": "Share Anonymous Statistics",
+      "type": "boolean"
+    },
+    "json_output": {
+      "default": false,
+      "description": "Also write Junie's structured JSON result.",
+      "title": "Json Output",
+      "type": "boolean"
+    }
+  },
+  "title": "JunieOptions",
+  "type": "object"
+}
