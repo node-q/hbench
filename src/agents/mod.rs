@@ -65,7 +65,6 @@ pub struct AgentCtx<'a> {
     pub overlay: BTreeMap<String, String>,
     /// Host dir mirrored to /logs/agent.
     pub logs_dir: PathBuf,
-    pub task: &'a Task,
     pub step: Option<String>,
 }
 

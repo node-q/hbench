@@ -60,7 +60,7 @@ pub async fn start_env(path: &Path, all: bool, interactive: bool, agent: Option<
             eprintln!("setting up agent {} ...", a.name());
             let mut ag = agents::create(&a, tmp.join("agent"), task.clone(), None)?;
             let overlay = ag.extra_env().map(Ok).unwrap_or_else(|| resolve_env_vars(&a.env))?;
-            let cx = AgentCtx { env: &env, user: task.config.agent.user.as_ref().map(|u| u.to_string()), overlay, logs_dir: tmp.join("agent"), task: &task, step: None };
+            let cx = AgentCtx { env: &env, user: task.config.agent.user.as_ref().map(|u| u.to_string()), overlay, logs_dir: tmp.join("agent"), step: None };
             ag.setup(&cx).await?;
             eprintln!("agent setup complete");
         }

@@ -231,9 +231,6 @@ impl Trial {
         Ok(Trial { cfg, task, dir, log, agent: None, env: None, env_stopped: false, result, agent_permit, shared_verifier_dirty: false, user_agent: None, bridge: None, agent_env: None })
     }
 
-    pub fn dir(&self) -> &Path {
-        &self.dir
-    }
 
     fn secs(&self, base: f64, max: Option<f64>, mult: Option<f64>) -> Duration {
         let b = max.map_or(base, |m| base.min(m));
@@ -333,7 +330,7 @@ impl Trial {
     }
 
     fn ctx_with(&self, user: Option<String>, step: Option<&StepConfig>, overlay: BTreeMap<String, String>, logs: &str) -> Result<AgentCtx<'_>> {
-        Ok(AgentCtx { env: self.env(), user, overlay, logs_dir: self.dir.join(logs), task: &self.task, step: step.map(|s| s.name.clone()) })
+        Ok(AgentCtx { env: self.env(), user, overlay, logs_dir: self.dir.join(logs), step: step.map(|s| s.name.clone()) })
     }
 
     /// Simulated-user execs see user env < bridge (target ACP) env < target env.
@@ -503,7 +500,9 @@ impl Trial {
             }
         };
         self.result.agent_setup = Some(t.finish());
-        self.result.agent_info.version = self.agent.as_ref().unwrap().version().unwrap_or_else(|| "unknown".into());
+        let a = self.agent.as_ref().unwrap();
+        self.result.agent_info.version = a.version().unwrap_or_else(|| "unknown".into());
+        self.log.line(&format!("agent {} setup done (version {})", a.name(), self.result.agent_info.version));
         r?;
         if self.cfg.install_only {
             return Ok(());
@@ -994,9 +993,6 @@ impl Trial {
     }
     pub fn trial_dir(&self) -> PathBuf {
         self.dir.clone()
-    }
-    pub fn log(&self) -> &TrialLog {
-        &self.log
     }
     /// Separate-verifier helper for regrades.
     pub async fn regrade_verify(&self, step: Option<&StepConfig>, artifacts_dir: &Path) -> Result<Rewards> {

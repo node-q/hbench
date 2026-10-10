@@ -197,7 +197,7 @@ pub fn print_preview(diffs: &[TrialDiff], sources: &[Source]) {
     println!("Reuse: {}/{n}  Regrade: {}/{n}  Rerun: {}/{n}", count(Action::Reuse), count(Action::Regrade), count(Action::Rerun), n = diffs.len());
     for d in diffs {
         let src = d.source.map(|i| sources[i].dir.file_name().unwrap().to_string_lossy().into_owned()).unwrap_or_default();
-        println!("  {:<8} {:<40} {src} ({})", format!("{:?}", d.action).to_lowercase(), d.task_name, d.reason);
+        println!("  {:<8} {:<40} {:<20} {src} ({})", format!("{:?}", d.action).to_lowercase(), d.task_name, d.target_trial_name, d.reason);
     }
     let down = diffs.iter().filter(|d| d.downgraded).count();
     if down > 0 {
