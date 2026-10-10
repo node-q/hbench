@@ -100,6 +100,11 @@ pub trait Agent: Send + Sync {
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()>;
     /// `resume`: continue the previous step's session (multi-step + resume_trajectory).
     async fn run(&mut self, instruction: &str, cx: &AgentCtx<'_>, ctx: &mut AgentContext, resume: bool) -> Result<()>;
+    /// The agent's (possibly normalized) env overlay applied to its setup/run execs;
+    /// None = the configured `agent.env` as-is (upstream's `extra_env` property).
+    fn extra_env(&self) -> Option<BTreeMap<String, String>> {
+        None
+    }
     /// ACP server launch command (target agents behind the simulated-user bridge). None = unsupported.
     fn acp_command(&self) -> Option<Vec<String>> {
         None
@@ -207,6 +212,7 @@ pub fn create(cfg: &AgentConfig, logs_dir: PathBuf, task: Arc<Task>, load_trajec
         load_trajectory,
     };
     Ok(match cfg.name() {
+        n if n.starts_with("acp:") => installed::acp::create_from_agent_name(n, args)?,
         "oracle" => Box::new(oracle::Oracle::new(args)),
         "nop" => Box::new(nop::Nop),
         "terminus" | "terminus-2" | "terminus-1" => Box::new(terminus2::Terminus2::new(args)?),

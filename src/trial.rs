@@ -193,6 +193,8 @@ pub struct Trial {
     shared_verifier_dirty: bool,
     user_agent: Option<AgentBox>,
     bridge: Option<crate::bridge::Bridge>,
+    /// The agent's own env overlay (captured at creation; agents may normalize `agent.env`).
+    agent_env: Option<BTreeMap<String, String>>,
 }
 
 impl Trial {
@@ -226,7 +228,7 @@ impl Trial {
             verifier: None,
             step_results: None,
         };
-        Ok(Trial { cfg, task, dir, log, agent: None, env: None, env_stopped: false, result, agent_permit, shared_verifier_dirty: false, user_agent: None, bridge: None })
+        Ok(Trial { cfg, task, dir, log, agent: None, env: None, env_stopped: false, result, agent_permit, shared_verifier_dirty: false, user_agent: None, bridge: None, agent_env: None })
     }
 
     pub fn dir(&self) -> &Path {
@@ -320,7 +322,14 @@ impl Trial {
     }
 
     fn agent_ctx(&self, user: Option<String>, step: Option<&StepConfig>) -> Result<AgentCtx<'_>> {
-        self.ctx_with(user, step, resolve_env_vars(&self.cfg.agent.env)?, "agent")
+        self.ctx_with(user, step, self.target_env()?, "agent")
+    }
+
+    fn target_env(&self) -> Result<BTreeMap<String, String>> {
+        match &self.agent_env {
+            Some(e) => Ok(e.clone()),
+            None => resolve_env_vars(&self.cfg.agent.env),
+        }
     }
 
     fn ctx_with(&self, user: Option<String>, step: Option<&StepConfig>, overlay: BTreeMap<String, String>, logs: &str) -> Result<AgentCtx<'_>> {
@@ -336,7 +345,7 @@ impl Trial {
         if let Some(a) = &self.agent {
             e.extend(a.acp_env());
         }
-        e.extend(resolve_env_vars(&self.cfg.agent.env)?);
+        e.extend(self.target_env()?);
         Ok(e)
     }
 
@@ -415,6 +424,7 @@ impl Trial {
             self.user_agent = Some(agents::create(&u.agent, self.dir.join("user-agent"), task.clone(), None)?);
             self.bridge = Some(crate::bridge::Bridge::new(&u.bridge)?);
         }
+        self.agent_env = agent.extra_env();
         self.agent = Some(agent);
         if task.has_steps() && self.cfg.agent.resume_trajectory && task.steps().len() > 1 && !self.agent.as_ref().unwrap().supports_resume() {
             bail!("Agent '{}' does not support resume; cannot honor agent.resume_trajectory", self.cfg.agent.name());

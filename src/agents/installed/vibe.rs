@@ -1,6 +1,6 @@
 //! Mistral Vibe (port of upstream's agents/installed/vibe.py).
 
-use super::{classify, ensure_system_dependencies, exec_agent, exec_error};
+use super::{ensure_system_dependencies, exec_agent, exec_error};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::{kind_err, quote};
 use anyhow::{Result, anyhow, bail};
@@ -96,23 +96,7 @@ fn vibe_patterns() -> &'static [(Regex, &'static str)] {
 
 /// Base ERROR_PATTERNS + Vibe's, last match wins.
 fn vibe_classify(output: &str) -> &'static str {
-    let mut best: Option<(usize, &'static str)> = None;
-    for (re, kind) in vibe_patterns() {
-        for m in re.find_iter(output) {
-            if best.is_none_or(|(end, _)| m.end() > end) {
-                best = Some((m.end(), kind));
-            }
-        }
-    }
-    match best {
-        None => classify(output),
-        // ponytail: base patterns are private to mod.rs; a base match after the last Vibe match wins.
-        // A base match straddling that point (or ending exactly at it) is missed; expose base match ends if that matters.
-        Some((end, kind)) => match classify(&output[end..]) {
-            "NonZeroAgentExitCodeError" => kind,
-            base => base,
-        },
-    }
+    super::classify_with(output, vibe_patterns())
 }
 
 impl Vibe {
@@ -479,7 +463,7 @@ mod tests {
         std::fs::write(dir.join("task.toml"), "[environment]\ndocker_image='x'\n").unwrap();
         std::fs::write(dir.join("instruction.md"), "x").unwrap();
         let task = Arc::new(crate::task::Task::load(&dir).unwrap());
-        Vibe::new(AgentArgs {
+        Vibe::new(AgentArgs { load_trajectory: None,
             model_name: model.map(String::from),
             kwargs: serde_json::from_value(kwargs).unwrap(),
             extra_env: env.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect(),

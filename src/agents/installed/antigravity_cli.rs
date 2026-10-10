@@ -1,6 +1,6 @@
 //! antigravity-cli (port of upstream's agents/installed/antigravity_cli.py + antigravity_base_url.py).
 
-use super::{classify, ensure_system_dependencies, exec_error};
+use super::{ensure_system_dependencies, exec_error};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::{ExecResult, kind_err, quote};
 use anyhow::{Result, anyhow, bail};
@@ -104,18 +104,7 @@ fn agy_patterns() -> &'static [(Regex, &'static str)] {
 
 /// Base ERROR_PATTERNS + agy patterns, last match wins (base wins ties: it comes first in the list).
 pub fn classify_agy(output: &str) -> &'static str {
-    let mut best: Option<(usize, &'static str)> = None;
-    for (re, kind) in agy_patterns() {
-        for m in re.find_iter(output) {
-            if best.is_none_or(|(end, _)| m.end() > end) {
-                best = Some((m.end(), kind));
-            }
-        }
-    }
-    let Some((end, kind)) = best else { return classify(output) };
-    // ponytail: a base match "after" the marker is detected on the suffix; a base match straddling the
-    // marker's line end would be missed (needs a [\s\S] pattern spanning lines). Expose base patterns if it matters.
-    if classify(&output[end..]) != "NonZeroAgentExitCodeError" { classify(output) } else { kind }
+    super::classify_with(output, agy_patterns())
 }
 
 fn agy_error(cmd: &str, r: &ExecResult) -> anyhow::Error {
@@ -509,6 +498,10 @@ pub fn usage_from_logs(logs_dir: &Path) -> Option<Totals> {
 
 #[async_trait::async_trait]
 impl Agent for AntigravityCli {
+    /// upstream's sanitized `_extra_env` (empty auth values dropped, alias renamed, keys stripped under ADC).
+    fn extra_env(&self) -> Option<BTreeMap<String, String>> {
+        Some(self.args.extra_env.clone())
+    }
     fn name(&self) -> &str {
         "antigravity-cli"
     }
@@ -594,7 +587,7 @@ mod tests {
         std::fs::write(dir.join("task.toml"), "[environment]\ndocker_image='x'\n").unwrap();
         std::fs::write(dir.join("instruction.md"), "x").unwrap();
         let task = Arc::new(crate::task::Task::load(&dir).unwrap());
-        AgentArgs {
+        AgentArgs { load_trajectory: None,
             model_name: model.map(String::from),
             kwargs: serde_json::from_value(kwargs).unwrap(),
             extra_env: env.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect(),

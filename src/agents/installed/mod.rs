@@ -251,10 +251,16 @@ fn error_patterns() -> &'static [(Regex, &'static str)] {
 
 /// Classify failed command output into a upstream error type name.
 pub fn classify(output: &str) -> &'static str {
+    classify_with(output, &[])
+}
+
+/// `classify` with agent-specific patterns appended after the base list (upstream's
+/// `ERROR_PATTERNS = [*base, ...]`): last match end wins, earlier pattern wins ties.
+pub fn classify_with(output: &str, extra: &[(Regex, &'static str)]) -> &'static str {
     // A soft Claude divert continues the run; don't call it a safety refusal.
     let skip_asr = output.contains("model_refusal_fallback") && !output.contains("model_refusal_no_fallback");
     let mut best: Option<(usize, &'static str)> = None;
-    for (re, kind) in error_patterns() {
+    for (re, kind) in error_patterns().iter().chain(extra.iter()) {
         if skip_asr && *kind == "AgentSafetyRefusalError" {
             continue;
         }
