@@ -7,6 +7,7 @@ mod atif;
 mod config;
 mod diff;
 mod env;
+mod exec;
 mod job;
 mod metrics;
 mod migrate;
@@ -113,6 +114,12 @@ enum Cmd {
     Analyze(Box<analyze::AnalyzeArgs>),
     /// Check task quality against a rubric (task dir or dir of tasks).
     Check(Box<analyze::CheckArgs>),
+    /// Compile paths into tasks and run a job.
+    ///
+    /// Experimental: flags and behavior may change.
+    ///
+    /// Verification: use --print-config to inspect auto-inferred artifacts, --artifact to override them, or --disable-verification to skip existence-only checks.
+    Exec(Box<exec::ExecArgs>),
 }
 
 #[derive(Args)]
@@ -766,6 +773,7 @@ fn run_init(a: InitArgs) -> Result<()> {
 #[tokio::main]
 async fn main() -> Result<()> {
     match Cli::parse().cmd {
+        Cmd::Exec(a) => exec::run(*a).await,
         Cmd::Run(a) | Cmd::Jobs { cmd: JobsCmd::Start(a) } => {
             let mut cfg = build_job_config(&a)?;
             preflight_agents(&cfg)?;

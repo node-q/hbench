@@ -1,0 +1,1601 @@
+### ["-i", "Write out/report.md", "--job-name", "J", "--tasks-dir", "td"]
+{
+  "map": {
+    "compile": {
+      "task_name_prefix": "J",
+      "output_dir": "td",
+      "instructions": [
+        {
+          "text": "Write out/report.md"
+        }
+      ],
+      "artifacts": [
+        "/app/out/report.md"
+      ],
+      "environments": [
+        {}
+      ],
+      "verifiers": [
+        {
+          "auto_verifier": {
+            "required_artifacts": [
+              "/app/out/report.md"
+            ]
+          }
+        }
+      ]
+    },
+    "job": {
+      "job_name": "J",
+      "jobs_dir": "jobs"
+    }
+  }
+}
+### ["-i", "Write out/report.md", "--job-name", "J", "--tasks-dir", "./td/", "--agent-timeout", "12"]
+{
+  "map": {
+    "compile": {
+      "task_name_prefix": "J",
+      "output_dir": "td",
+      "instructions": [
+        {
+          "text": "Write out/report.md"
+        }
+      ],
+      "artifacts": [
+        "/app/out/report.md"
+      ],
+      "environments": [
+        {}
+      ],
+      "verifiers": [
+        {
+          "auto_verifier": {
+            "required_artifacts": [
+              "/app/out/report.md"
+            ]
+          }
+        }
+      ]
+    },
+    "job": {
+      "job_name": "J",
+      "jobs_dir": "jobs",
+      "agents": [
+        {
+          "name": "oracle",
+          "override_timeout_sec": 12.0
+        }
+      ]
+    }
+  }
+}
+### ["--prompt", "Write out/report.md", "--job-name", "J", "--tasks-dir", "td", "--disable-verification"]
+{
+  "map": {
+    "compile": {
+      "task_name_prefix": "J",
+      "output_dir": "td",
+      "instructions": [
+        {
+          "text": "Write out/report.md"
+        }
+      ],
+      "artifacts": [
+        "/app/out/report.md"
+      ],
+      "environments": [
+        {}
+      ]
+    },
+    "job": {
+      "job_name": "J",
+      "jobs_dir": "jobs",
+      "verifier": {
+        "disable": true
+      }
+    }
+  }
+}
+### ["-i", "Write out/report.md", "--job-name", "J", "--tasks-dir", "td", "-e", "docker"]
+{
+  "map": {
+    "compile": {
+      "task_name_prefix": "J",
+      "output_dir": "td",
+      "instructions": [
+        {
+          "text": "Write out/report.md"
+        }
+      ],
+      "artifacts": [
+        "/app/out/report.md"
+      ],
+      "environments": [
+        {}
+      ],
+      "verifiers": [
+        {
+          "auto_verifier": {
+            "required_artifacts": [
+              "/app/out/report.md"
+            ]
+          }
+        }
+      ]
+    },
+    "job": {
+      "job_name": "J",
+      "jobs_dir": "jobs"
+    }
+  }
+}
+### ["-i", "Write out/report.md", "--job-name", "J", "--tasks-dir", "td", "-e", "daytona", "-n", "8", "-r", "0", "-q", "--jobs-dir", "jobs/"]
+{
+  "map": {
+    "compile": {
+      "task_name_prefix": "J",
+      "output_dir": "td",
+      "instructions": [
+        {
+          "text": "Write out/report.md"
+        }
+      ],
+      "artifacts": [
+        "/app/out/report.md"
+      ],
+      "environments": [
+        {}
+      ],
+      "verifiers": [
+        {
+          "auto_verifier": {
+            "required_artifacts": [
+              "/app/out/report.md"
+            ]
+          }
+        }
+      ]
+    },
+    "job": {
+      "job_name": "J",
+      "jobs_dir": "jobs",
+      "n_concurrent_trials": 8,
+      "quiet": true,
+      "environment": {
+        "type": "daytona"
+      }
+    }
+  }
+}
+### ["-i", "Write out/report.md", "--job-name", "J", "--tasks-dir", "td", "-e", "mymod:Env"]
+{
+  "map": {
+    "compile": {
+      "task_name_prefix": "J",
+      "output_dir": "td",
+      "instructions": [
+        {
+          "text": "Write out/report.md"
+        }
+      ],
+      "artifacts": [
+        "/app/out/report.md"
+      ],
+      "environments": [
+        {}
+      ],
+      "verifiers": [
+        {
+          "auto_verifier": {
+            "required_artifacts": [
+              "/app/out/report.md"
+            ]
+          }
+        }
+      ]
+    },
+    "job": {
+      "job_name": "J",
+      "jobs_dir": "jobs",
+      "environment": {
+        "import_path": "mymod:Env"
+      }
+    }
+  }
+}
+### ["-i", "no files here", "--job-name", "J", "--tasks-dir", "td"]
+{
+  "map": {
+    "compile": {
+      "task_name_prefix": "J",
+      "output_dir": "td",
+      "instructions": [
+        {
+          "text": "no files here"
+        }
+      ],
+      "environments": [
+        {}
+      ]
+    },
+    "job": {
+      "job_name": "J",
+      "jobs_dir": "jobs",
+      "verifier": {
+        "disable": true
+      }
+    }
+  }
+}
+### ["-i", "Save ./a/../b.txt, then /abs/x.json and ../up.csv; also .env.local, D.C. U.S. e.g. v1.2 foo.min.js!", "--job-name", "J", "--tasks-dir", "td", "--workdir", "work"]
+{
+  "map": {
+    "compile": {
+      "task_name_prefix": "J",
+      "output_dir": "td",
+      "instructions": [
+        {
+          "text": "Save ./a/../b.txt, then /abs/x.json and ../up.csv; also .env.local, D.C. U.S. e.g. v1.2 foo.min.js!"
+        }
+      ],
+      "artifacts": [
+        "/abs/x.json",
+        "/up.csv",
+        "/work/.env.local",
+        "/work/foo.min.js"
+      ],
+      "environments": [
+        {
+          "workdir": "work"
+        }
+      ],
+      "verifiers": [
+        {
+          "auto_verifier": {
+            "required_artifacts": [
+              "/abs/x.json",
+              "/up.csv",
+              "/work/.env.local",
+              "/work/foo.min.js"
+            ]
+          }
+        }
+      ]
+    },
+    "job": {
+      "job_name": "J",
+      "jobs_dir": "jobs"
+    }
+  }
+}
+### ["-i", "Write result.json, reports/summary.txt, /tmp/output.PNG, ../out/data.csv, docs/README.md, and .env.local.", "--job-name", "J", "--tasks-dir", "td", "--workdir", "/workspace/"]
+{
+  "map": {
+    "compile": {
+      "task_name_prefix": "J",
+      "output_dir": "td",
+      "instructions": [
+        {
+          "text": "Write result.json, reports/summary.txt, /tmp/output.PNG, ../out/data.csv, docs/README.md, and .env.local."
+        }
+      ],
+      "artifacts": [
+        "/workspace/result.json",
+        "/workspace/reports/summary.txt",
+        "/tmp/output.PNG",
+        "/out/data.csv",
+        "/workspace/docs/README.md",
+        "/workspace/.env.local"
+      ],
+      "environments": [
+        {
+          "workdir": "/workspace/"
+        }
+      ],
+      "verifiers": [
+        {
+          "auto_verifier": {
+            "required_artifacts": [
+              "/workspace/result.json",
+              "/workspace/reports/summary.txt",
+              "/tmp/output.PNG",
+              "/out/data.csv",
+              "/workspace/docs/README.md",
+              "/workspace/.env.local"
+            ]
+          }
+        }
+      ]
+    },
+    "job": {
+      "job_name": "J",
+      "jobs_dir": "jobs"
+    }
+  }
+}
+### ["-i", "x", "-f", "out.txt", "-f", "/abs/y.md", "--reward-artifact", "score.json", "--job-name", "J", "--tasks-dir", "td", "--image", "python:3", "--workdir", "/w"]
+{
+  "map": {
+    "compile": {
+      "task_name_prefix": "J",
+      "output_dir": "td",
+      "instructions": [
+        {
+          "text": "x"
+        }
+      ],
+      "artifacts": [
+        "out.txt",
+        "/abs/y.md",
+        "/w/score.json"
+      ],
+      "environments": [
+        {
+          "docker_image": "python:3",
+          "workdir": "/w"
+        }
+      ],
+      "verifiers": [
+        {
+          "auto_verifier": {
+            "required_artifacts": [
+              "out.txt",
+              "/abs/y.md",
+              "/w/score.json"
+            ],
+            "reward_artifact": "/w/score.json"
+          }
+        }
+      ]
+    },
+    "job": {
+      "job_name": "J",
+      "jobs_dir": "jobs"
+    }
+  }
+}
+### ["-i", "x to s.json", "--reward-artifact", "s.json", "--job-name", "J", "--tasks-dir", "td"]
+{
+  "map": {
+    "compile": {
+      "task_name_prefix": "J",
+      "output_dir": "td",
+      "instructions": [
+        {
+          "text": "x to s.json"
+        }
+      ],
+      "artifacts": [
+        "/app/s.json"
+      ],
+      "environments": [
+        {}
+      ],
+      "verifiers": [
+        {
+          "auto_verifier": {
+            "required_artifacts": [
+              "/app/s.json"
+            ],
+            "reward_artifact": "/app/s.json"
+          }
+        }
+      ]
+    },
+    "job": {
+      "job_name": "J",
+      "jobs_dir": "jobs"
+    }
+  }
+}
+### ["-i", "x", "-a", "claude-code", "-m", "m1", "-m", "m2", "--ak", "k=1", "--ak", "s= str ", "--ak", "b=True", "--ak", "n=None", "--ak", "j={\"x\": [1, 2.5]}", "--agent-kwarg", "f=1.0", "--ae", "Z=1", "--agent-env", "A= b ", "--job-name", "J", "--tasks-dir", "td", "-k", "3"]
+{
+  "map": {
+    "compile": {
+      "task_name_prefix": "J",
+      "output_dir": "td",
+      "instructions": [
+        {
+          "text": "x"
+        }
+      ],
+      "environments": [
+        {}
+      ]
+    },
+    "job": {
+      "job_name": "J",
+      "jobs_dir": "jobs",
+      "n_attempts": 3,
+      "verifier": {
+        "disable": true
+      },
+      "agents": [
+        {
+          "name": "claude-code",
+          "model_name": "m1",
+          "kwargs": {
+            "k": 1,
+            "s": "str",
+            "b": true,
+            "n": null,
+            "j": {
+              "x": [
+                1,
+                2.5
+              ]
+            },
+            "f": 1.0
+          },
+          "env": {
+            "Z": "1",
+            "A": "b"
+          }
+        },
+        {
+          "name": "claude-code",
+          "model_name": "m2",
+          "kwargs": {
+            "k": 1,
+            "s": "str",
+            "b": true,
+            "n": null,
+            "j": {
+              "x": [
+                1,
+                2.5
+              ]
+            },
+            "f": 1.0
+          },
+          "env": {
+            "Z": "1",
+            "A": "b"
+          }
+        }
+      ]
+    }
+  }
+}
+### ["-i", "x", "-a", "codex", "--job-name", "J", "--tasks-dir", "td"]
+{
+  "map": {
+    "compile": {
+      "task_name_prefix": "J",
+      "output_dir": "td",
+      "instructions": [
+        {
+          "text": "x"
+        }
+      ],
+      "environments": [
+        {}
+      ]
+    },
+    "job": {
+      "job_name": "J",
+      "jobs_dir": "jobs",
+      "verifier": {
+        "disable": true
+      },
+      "agents": [
+        {
+          "name": "codex"
+        }
+      ]
+    }
+  }
+}
+### ["-i", "x", "-p", "{ROOT}/in/*", "--job-name", "J", "--tasks-dir", "td"]
+{
+  "map": {
+    "compile": {
+      "task_name_prefix": "J",
+      "output_dir": "td",
+      "instructions": [
+        {
+          "text": "x"
+        }
+      ],
+      "environments": [
+        {
+          "paths": [
+            "{ROOT}/in/a"
+          ]
+        },
+        {
+          "paths": [
+            "{ROOT}/in/b"
+          ]
+        },
+        {
+          "paths": [
+            "{ROOT}/in/c.md"
+          ]
+        }
+      ]
+    },
+    "job": {
+      "job_name": "J",
+      "jobs_dir": "jobs",
+      "verifier": {
+        "disable": true
+      }
+    }
+  }
+}
+### ["-i", "x", "-p", "{ROOT}/in", "--job-name", "J", "--tasks-dir", "td", "-l", "1"]
+{
+  "map": {
+    "compile": {
+      "task_name_prefix": "J",
+      "output_dir": "td",
+      "instructions": [
+        {
+          "text": "x"
+        }
+      ],
+      "environments": [
+        {
+          "paths": [
+            "{ROOT}/in/.dot"
+          ]
+        }
+      ]
+    },
+    "job": {
+      "job_name": "J",
+      "jobs_dir": "jobs",
+      "verifier": {
+        "disable": true
+      }
+    }
+  }
+}
+### ["-i", "x", "-p", "{ROOT}//in//", "--job-name", "J", "--tasks-dir", "td"]
+{
+  "map": {
+    "compile": {
+      "task_name_prefix": "J",
+      "output_dir": "td",
+      "instructions": [
+        {
+          "text": "x"
+        }
+      ],
+      "environments": [
+        {
+          "paths": [
+            "{ROOT}/in/.dot"
+          ]
+        },
+        {
+          "paths": [
+            "{ROOT}/in/a"
+          ]
+        },
+        {
+          "paths": [
+            "{ROOT}/in/b"
+          ]
+        }
+      ]
+    },
+    "job": {
+      "job_name": "J",
+      "jobs_dir": "jobs",
+      "verifier": {
+        "disable": true
+      }
+    }
+  }
+}
+### ["-i", "x", "-p", "{ROOT}/in", "--no-scan", "--job-name", "J", "--tasks-dir", "td"]
+{
+  "map": {
+    "compile": {
+      "task_name_prefix": "J",
+      "output_dir": "td",
+      "instructions": [
+        {
+          "text": "x"
+        }
+      ],
+      "environments": [
+        {
+          "paths": [
+            "{ROOT}/in"
+          ]
+        }
+      ]
+    },
+    "job": {
+      "job_name": "J",
+      "jobs_dir": "jobs",
+      "verifier": {
+        "disable": true
+      }
+    }
+  }
+}
+### ["-i", "x", "-p", "{ROOT}/in", "--scan", "--no-scan", "--job-name", "J", "--tasks-dir", "td"]
+{
+  "map": {
+    "compile": {
+      "task_name_prefix": "J",
+      "output_dir": "td",
+      "instructions": [
+        {
+          "text": "x"
+        }
+      ],
+      "environments": [
+        {
+          "paths": [
+            "{ROOT}/in"
+          ]
+        }
+      ]
+    },
+    "job": {
+      "job_name": "J",
+      "jobs_dir": "jobs",
+      "verifier": {
+        "disable": true
+      }
+    }
+  }
+}
+### ["-i", "x", "-p", "{ROOT}/in/a/x.txt", "-p", "{ROOT}/in/b", "--job-name", "J", "--tasks-dir", "td"]
+{
+  "map": {
+    "compile": {
+      "task_name_prefix": "J",
+      "output_dir": "td",
+      "instructions": [
+        {
+          "text": "x"
+        }
+      ],
+      "environments": [
+        {
+          "paths": [
+            "{ROOT}/in/a/x.txt",
+            "{ROOT}/in/b"
+          ]
+        }
+      ]
+    },
+    "job": {
+      "job_name": "J",
+      "jobs_dir": "jobs",
+      "verifier": {
+        "disable": true
+      }
+    }
+  }
+}
+### ["-i", "x", "--scan", "-p", "{ROOT}/in", "-p", "{ROOT}/in/*", "--job-name", "J", "--tasks-dir", "td"]
+{
+  "map": {
+    "compile": {
+      "task_name_prefix": "J",
+      "output_dir": "td",
+      "instructions": [
+        {
+          "text": "x"
+        }
+      ],
+      "environments": [
+        {
+          "paths": [
+            "{ROOT}/in/.dot"
+          ]
+        },
+        {
+          "paths": [
+            "{ROOT}/in/a"
+          ]
+        },
+        {
+          "paths": [
+            "{ROOT}/in/b"
+          ]
+        },
+        {
+          "paths": [
+            "{ROOT}/in/c.md"
+          ]
+        }
+      ]
+    },
+    "job": {
+      "job_name": "J",
+      "jobs_dir": "jobs",
+      "verifier": {
+        "disable": true
+      }
+    }
+  }
+}
+### ["-i", "x", "--scan", "-p", "{ROOT}/in", "-p", "{ROOT}/in/*", "-l", "2", "--job-name", "J", "--tasks-dir", "td"]
+{
+  "map": {
+    "compile": {
+      "task_name_prefix": "J",
+      "output_dir": "td",
+      "instructions": [
+        {
+          "text": "x"
+        }
+      ],
+      "environments": [
+        {
+          "paths": [
+            "{ROOT}/in/.dot"
+          ]
+        },
+        {
+          "paths": [
+            "{ROOT}/in/a"
+          ]
+        }
+      ]
+    },
+    "job": {
+      "job_name": "J",
+      "jobs_dir": "jobs",
+      "verifier": {
+        "disable": true
+      }
+    }
+  }
+}
+### ["-i", "x", "--scan", "-p", "{ROOT}/in/a/x.txt", "--job-name", "J", "--tasks-dir", "td"]
+{
+  "map": {
+    "compile": {
+      "task_name_prefix": "J",
+      "output_dir": "td",
+      "instructions": [
+        {
+          "text": "x"
+        }
+      ],
+      "environments": [
+        {
+          "paths": [
+            "{ROOT}/in/a/x.txt"
+          ]
+        }
+      ]
+    },
+    "job": {
+      "job_name": "J",
+      "jobs_dir": "jobs",
+      "verifier": {
+        "disable": true
+      }
+    }
+  }
+}
+### ["-i", "x", "-p", "{ROOT}/in/**/*.txt", "--job-name", "J", "--tasks-dir", "td"]
+{
+  "map": {
+    "compile": {
+      "task_name_prefix": "J",
+      "output_dir": "td",
+      "instructions": [
+        {
+          "text": "x"
+        }
+      ],
+      "environments": [
+        {
+          "paths": [
+            "{ROOT}/in/a/x.txt"
+          ]
+        },
+        {
+          "paths": [
+            "{ROOT}/in/b/y.txt"
+          ]
+        }
+      ]
+    },
+    "job": {
+      "job_name": "J",
+      "jobs_dir": "jobs",
+      "verifier": {
+        "disable": true
+      }
+    }
+  }
+}
+### ["-i", "x", "-p", "{ROOT}/in/**", "--job-name", "J", "--tasks-dir", "td"]
+{
+  "map": {
+    "compile": {
+      "task_name_prefix": "J",
+      "output_dir": "td",
+      "instructions": [
+        {
+          "text": "x"
+        }
+      ],
+      "environments": [
+        {
+          "paths": [
+            "{ROOT}/in"
+          ]
+        },
+        {
+          "paths": [
+            "{ROOT}/in/a"
+          ]
+        },
+        {
+          "paths": [
+            "{ROOT}/in/a/x.txt"
+          ]
+        },
+        {
+          "paths": [
+            "{ROOT}/in/b"
+          ]
+        },
+        {
+          "paths": [
+            "{ROOT}/in/b/y.txt"
+          ]
+        },
+        {
+          "paths": [
+            "{ROOT}/in/c.md"
+          ]
+        }
+      ]
+    },
+    "job": {
+      "job_name": "J",
+      "jobs_dir": "jobs",
+      "verifier": {
+        "disable": true
+      }
+    }
+  }
+}
+### ["-i", "x", "-p", "{ROOT}/in/[ab]", "--job-name", "J", "--tasks-dir", "td"]
+{
+  "map": {
+    "compile": {
+      "task_name_prefix": "J",
+      "output_dir": "td",
+      "instructions": [
+        {
+          "text": "x"
+        }
+      ],
+      "environments": [
+        {
+          "paths": [
+            "{ROOT}/in/a"
+          ]
+        },
+        {
+          "paths": [
+            "{ROOT}/in/b"
+          ]
+        }
+      ]
+    },
+    "job": {
+      "job_name": "J",
+      "jobs_dir": "jobs",
+      "verifier": {
+        "disable": true
+      }
+    }
+  }
+}
+### ["-i", "x", "-p", "{ROOT}/in/.*", "--job-name", "J", "--tasks-dir", "td"]
+{
+  "map": {
+    "compile": {
+      "task_name_prefix": "J",
+      "output_dir": "td",
+      "instructions": [
+        {
+          "text": "x"
+        }
+      ],
+      "environments": [
+        {
+          "paths": [
+            "{ROOT}/in/.dot"
+          ]
+        }
+      ]
+    },
+    "job": {
+      "job_name": "J",
+      "jobs_dir": "jobs",
+      "verifier": {
+        "disable": true
+      }
+    }
+  }
+}
+### ["-i", "x", "-p", "{ROOT}/in/./b/", "--scan", "--job-name", "J", "--tasks-dir", "td"]
+ERROR Error: Path directory has no subdirectories to scan: {ROOT}/in/./b/
+### ["-i", "x", "-p", "{ROOT}/nope", "--scan"]
+ERROR Error: Path does not exist: {ROOT}/nope
+### ["-i", "x", "-p", "{ROOT}/zz*"]
+ERROR Error: Path pattern did not match anything: {ROOT}/zz*
+### ["--instruction-path", "{ROOT}/./inst.md", "--job-name", "J", "--tasks-dir", "td"]
+{
+  "map": {
+    "compile": {
+      "task_name_prefix": "J",
+      "output_dir": "td",
+      "instructions": [
+        {
+          "path": "{ROOT}/inst.md"
+        }
+      ],
+      "environments": [
+        {}
+      ]
+    },
+    "job": {
+      "job_name": "J",
+      "jobs_dir": "jobs",
+      "verifier": {
+        "disable": true
+      }
+    }
+  }
+}
+### ["--task-template", "{ROOT}/tpl", "--job-name", "J", "--tasks-dir", "td"]
+{
+  "map": {
+    "compile": {
+      "task_name_prefix": "J",
+      "output_dir": "td",
+      "task_template": "{ROOT}/tpl",
+      "environments": [
+        {}
+      ]
+    },
+    "job": {
+      "job_name": "J",
+      "jobs_dir": "jobs"
+    }
+  }
+}
+### ["-i", "x", "--task-template", "{ROOT}/tpl", "--disable-verification", "--job-name", "J", "--tasks-dir", "td"]
+{
+  "map": {
+    "compile": {
+      "task_name_prefix": "J",
+      "output_dir": "td",
+      "instructions": [
+        {
+          "text": "x"
+        }
+      ],
+      "task_template": "{ROOT}/tpl",
+      "environments": [
+        {}
+      ]
+    },
+    "job": {
+      "job_name": "J",
+      "jobs_dir": "jobs",
+      "verifier": {
+        "disable": true
+      }
+    }
+  }
+}
+### ["--task-template", "{ROOT}/tpl_noinst"]
+ERROR Error: --task-template must contain instruction.md when no --instruction or --instruction-path is provided.
+### ["--task-template", "{ROOT}/missing", "--job-name", "J", "--tasks-dir", "td"]
+{
+  "map": {
+    "compile": {
+      "task_name_prefix": "J",
+      "output_dir": "td",
+      "task_template": "{ROOT}/missing",
+      "environments": [
+        {}
+      ]
+    },
+    "job": {
+      "job_name": "J",
+      "jobs_dir": "jobs",
+      "verifier": {
+        "disable": true
+      }
+    }
+  }
+}
+### ["-i", "make a.md", "--job-name", "J", "--tasks-dir", "td", "--ri", "combine into final.md", "--reduce-job-name", "R"]
+{
+  "map": {
+    "compile": {
+      "task_name_prefix": "J",
+      "output_dir": "td",
+      "instructions": [
+        {
+          "text": "make a.md"
+        }
+      ],
+      "artifacts": [
+        "/app/a.md"
+      ],
+      "environments": [
+        {}
+      ],
+      "verifiers": [
+        {
+          "auto_verifier": {
+            "required_artifacts": [
+              "/app/a.md"
+            ]
+          }
+        }
+      ]
+    },
+    "job": {
+      "job_name": "J",
+      "jobs_dir": "jobs"
+    }
+  },
+  "reduce": {
+    "task": {
+      "output_dir": "td",
+      "instruction": {
+        "text": "combine into final.md"
+      },
+      "artifacts": [
+        "/app/final.md"
+      ],
+      "verifier": {
+        "auto_verifier": {
+          "required_artifacts": [
+            "/app/final.md"
+          ]
+        }
+      }
+    },
+    "job": {
+      "job_name": "R",
+      "jobs_dir": "jobs"
+    }
+  }
+}
+### ["-i", "make a.md", "--job-name", "J", "--tasks-dir", "td", "--reduce-prompt", "combine", "--reduce-agent", "claude-code", "--reduce-job-name", "R", "--reduce-image", "img", "--reduce-workdir", "/r", "--rk", "3", "-a", "codex", "-m", "m1", "-m", "m2", "-n", "2", "-r", "1", "-e", "modal"]
+{
+  "map": {
+    "compile": {
+      "task_name_prefix": "J",
+      "output_dir": "td",
+      "instructions": [
+        {
+          "text": "make a.md"
+        }
+      ],
+      "artifacts": [
+        "/app/a.md"
+      ],
+      "environments": [
+        {}
+      ],
+      "verifiers": [
+        {
+          "auto_verifier": {
+            "required_artifacts": [
+              "/app/a.md"
+            ]
+          }
+        }
+      ]
+    },
+    "job": {
+      "job_name": "J",
+      "jobs_dir": "jobs",
+      "n_concurrent_trials": 2,
+      "retry": {
+        "max_retries": 1
+      },
+      "environment": {
+        "type": "modal"
+      },
+      "agents": [
+        {
+          "name": "codex",
+          "model_name": "m1"
+        },
+        {
+          "name": "codex",
+          "model_name": "m2"
+        }
+      ]
+    }
+  },
+  "reduce": {
+    "task": {
+      "output_dir": "td",
+      "instruction": {
+        "text": "combine"
+      },
+      "environment": {
+        "docker_image": "img",
+        "workdir": "/r"
+      }
+    },
+    "job": {
+      "job_name": "R",
+      "jobs_dir": "jobs",
+      "n_attempts": 3,
+      "n_concurrent_trials": 2,
+      "retry": {
+        "max_retries": 1
+      },
+      "environment": {
+        "type": "modal"
+      },
+      "verifier": {
+        "disable": true
+      },
+      "agents": [
+        {
+          "name": "claude-code",
+          "model_name": "m1"
+        },
+        {
+          "name": "claude-code",
+          "model_name": "m2"
+        }
+      ]
+    }
+  }
+}
+### ["-i", "make a.md", "--job-name", "J", "--tasks-dir", "td", "--reduce-instruction", "combine", "--reduce-model", "x", "--reduce-ae", "K=V", "--reduce-ak", "a=[1,2]", "--reduce-job-name", "R", "-a", "codex", "-m", "m1", "-m", "m2", "--ae", "Z=1"]
+{
+  "map": {
+    "compile": {
+      "task_name_prefix": "J",
+      "output_dir": "td",
+      "instructions": [
+        {
+          "text": "make a.md"
+        }
+      ],
+      "artifacts": [
+        "/app/a.md"
+      ],
+      "environments": [
+        {}
+      ],
+      "verifiers": [
+        {
+          "auto_verifier": {
+            "required_artifacts": [
+              "/app/a.md"
+            ]
+          }
+        }
+      ]
+    },
+    "job": {
+      "job_name": "J",
+      "jobs_dir": "jobs",
+      "agents": [
+        {
+          "name": "codex",
+          "model_name": "m1",
+          "env": {
+            "Z": "1"
+          }
+        },
+        {
+          "name": "codex",
+          "model_name": "m2",
+          "env": {
+            "Z": "1"
+          }
+        }
+      ]
+    }
+  },
+  "reduce": {
+    "task": {
+      "output_dir": "td",
+      "instruction": {
+        "text": "combine"
+      }
+    },
+    "job": {
+      "job_name": "R",
+      "jobs_dir": "jobs",
+      "verifier": {
+        "disable": true
+      },
+      "agents": [
+        {
+          "name": "codex",
+          "model_name": "x",
+          "kwargs": {
+            "a": [
+              1,
+              2
+            ]
+          },
+          "env": {
+            "K": "V"
+          }
+        }
+      ]
+    }
+  }
+}
+### ["-i", "make a.md", "--job-name", "J", "--tasks-dir", "td", "--ri", "combine", "--reduce-model", "x", "--reduce-model", "y", "--reduce-model", "z", "--reduce-job-name", "R", "-a", "codex", "-m", "m1", "-m", "m2", "--agent-timeout", "3"]
+{
+  "map": {
+    "compile": {
+      "task_name_prefix": "J",
+      "output_dir": "td",
+      "instructions": [
+        {
+          "text": "make a.md"
+        }
+      ],
+      "artifacts": [
+        "/app/a.md"
+      ],
+      "environments": [
+        {}
+      ],
+      "verifiers": [
+        {
+          "auto_verifier": {
+            "required_artifacts": [
+              "/app/a.md"
+            ]
+          }
+        }
+      ]
+    },
+    "job": {
+      "job_name": "J",
+      "jobs_dir": "jobs",
+      "agents": [
+        {
+          "name": "codex",
+          "model_name": "m1",
+          "override_timeout_sec": 3.0
+        },
+        {
+          "name": "codex",
+          "model_name": "m2",
+          "override_timeout_sec": 3.0
+        }
+      ]
+    }
+  },
+  "reduce": {
+    "task": {
+      "output_dir": "td",
+      "instruction": {
+        "text": "combine"
+      }
+    },
+    "job": {
+      "job_name": "R",
+      "jobs_dir": "jobs",
+      "verifier": {
+        "disable": true
+      },
+      "agents": [
+        {
+          "name": "codex",
+          "model_name": "x",
+          "override_timeout_sec": 3.0
+        },
+        {
+          "name": "codex",
+          "model_name": "y",
+          "override_timeout_sec": 3.0
+        },
+        {
+          "name": "codex",
+          "model_name": "z",
+          "override_timeout_sec": 3.0
+        }
+      ]
+    }
+  }
+}
+### ["-i", "make a.md", "--job-name", "J", "--tasks-dir", "td", "--reduce-instruction-path", "{ROOT}/inst.md", "--reduce-artifact", "z.md", "--reduce-reward-artifact", "/r/s.json", "--reduce-task-template", "{ROOT}/tpl", "--reduce-job-name", "R"]
+{
+  "map": {
+    "compile": {
+      "task_name_prefix": "J",
+      "output_dir": "td",
+      "instructions": [
+        {
+          "text": "make a.md"
+        }
+      ],
+      "artifacts": [
+        "/app/a.md"
+      ],
+      "environments": [
+        {}
+      ],
+      "verifiers": [
+        {
+          "auto_verifier": {
+            "required_artifacts": [
+              "/app/a.md"
+            ]
+          }
+        }
+      ]
+    },
+    "job": {
+      "job_name": "J",
+      "jobs_dir": "jobs"
+    }
+  },
+  "reduce": {
+    "task": {
+      "output_dir": "td",
+      "task_template": "{ROOT}/tpl",
+      "instruction": {
+        "path": "{ROOT}/inst.md"
+      },
+      "artifacts": [
+        "z.md",
+        "/r/s.json"
+      ],
+      "verifier": {
+        "auto_verifier": {
+          "required_artifacts": [
+            "z.md",
+            "/r/s.json"
+          ],
+          "reward_artifact": "/r/s.json"
+        }
+      }
+    },
+    "job": {
+      "job_name": "R",
+      "jobs_dir": "jobs"
+    }
+  }
+}
+### ["-i", "make a.md", "--job-name", "J", "--tasks-dir", "td", "--ri", "write out.md", "--disable-verification", "--n-reduce-attempts", "2", "--reduce-job-name", "R"]
+{
+  "map": {
+    "compile": {
+      "task_name_prefix": "J",
+      "output_dir": "td",
+      "instructions": [
+        {
+          "text": "make a.md"
+        }
+      ],
+      "artifacts": [
+        "/app/a.md"
+      ],
+      "environments": [
+        {}
+      ]
+    },
+    "job": {
+      "job_name": "J",
+      "jobs_dir": "jobs",
+      "verifier": {
+        "disable": true
+      }
+    }
+  },
+  "reduce": {
+    "task": {
+      "output_dir": "td",
+      "instruction": {
+        "text": "write out.md"
+      },
+      "artifacts": [
+        "/app/out.md"
+      ]
+    },
+    "job": {
+      "job_name": "R",
+      "jobs_dir": "jobs",
+      "n_attempts": 2,
+      "verifier": {
+        "disable": true
+      }
+    }
+  }
+}
+### ["-i", "make a.md", "--job-name", "J", "--tasks-dir", "td", "--reduce-job-name", "R"]
+ERROR Error: Reducer requires --reduce-instruction/--reduce-prompt or --reduce-instruction-path.
+### ["-i", "make a.md", "--ri", "a", "--reduce-instruction-path", "{ROOT}/inst.md"]
+ERROR Error: --reduce-instruction and --reduce-instruction-path are mutually exclusive.
+### ["-i", "x", "--instruction-path", "{ROOT}/inst.md"]
+ERROR Error: --instruction and --instruction-path are mutually exclusive.
+### ["-m", "m1"]
+ERROR Error: Pass --instruction/--prompt, --instruction-path, or --task-template.
+### ["-i", "x", "-m", "m1"]
+ERROR Error: --agent is required when passing agent-specific flags.
+### ["-i", "x", "-l", "2"]
+ERROR Error: --limit only applies to scanned paths.
+### ["-i", "x", "--scan"]
+ERROR Error: --scan requires at least one --path.
+### ["-i", "x", "--reward-artifact", "s.json", "--disable-verification"]
+ERROR Error: --reward-artifact cannot be used with --disable-verification.
+### ["-i", "x", "--ri", "y"]
+ERROR Error: 1 validation error for ExecConfig Value error, reduce requires map.compile.artifacts so prior map artifacts can be used as implicit reducer inputs.
+### ["-i", "x", "-c", "{ROOT}/cfg.yaml"]
+ERROR Error: --config cannot be combined with flags mode options.
+### ["-c", "{ROOT}/cfg.yaml", "-q"]
+ERROR Error: --config cannot be combined with flags mode options.
+### ["-i", "make a.md", "--job-name", "J", "--tasks-dir", "td", "--ri", "y", "--disable-verification", "--reduce-reward-artifact", "s.json"]
+ERROR Error: --reduce-reward-artifact cannot be used with --disable-verification.
+### ["-i", "x", "--ak", "bad"]
+ERROR Error: --agent is required when passing agent-specific flags.
+### ["-i", "x", "-a", "a", "--ae", "bad"]
+ERROR Error: Invalid env var format: bad. Expected KEY=VALUE
+### ["-i", "x", "-a", "a", "--ak", "bad"]
+ERROR Error: Invalid kwarg format: bad. Expected key=value
+### ["-i", "", "--job-name", "J", "--tasks-dir", "td"]
+ERROR Error: 1 validation error for CompileInstruction text String should have at least 1 character
+### ["-i", "x", "-k", "0", "--job-name", "J", "--tasks-dir", "td"]
+ERROR Error: 1 validation error for ExecJobConfig n_attempts Input should be greater than or equal to 1
+### ["-c", "{ROOT}/cfg.yaml"]
+{
+  "map": {
+    "compile": {
+      "output_dir": "out/x",
+      "instructions": [
+        {
+          "text": "do it"
+        },
+        {
+          "path": "inst.md"
+        }
+      ],
+      "artifacts": [
+        "/app/a.md",
+        {
+          "source": "/app/b",
+          "destination": "bb"
+        }
+      ],
+      "environments": [
+        {
+          "paths": [
+            "in/a"
+          ]
+        },
+        {
+          "docker_image": "python:3.12"
+        },
+        {}
+      ],
+      "verifiers": [
+        {
+          "auto_verifier": {
+            "reward_artifact": "/app/r.json"
+          }
+        }
+      ]
+    },
+    "job": {
+      "n_attempts": 2,
+      "retry": {
+        "max_retries": 2
+      },
+      "environment": {
+        "type": "docker",
+        "force_build": true
+      },
+      "metrics": [
+        {
+          "type": "sum"
+        }
+      ],
+      "agents": [
+        {
+          "name": "codex",
+          "model_name": "m",
+          "kwargs": {
+            "b": 1,
+            "a": 2
+          },
+          "env": {
+            "Z": "1",
+            "A": "2"
+          }
+        }
+      ]
+    }
+  },
+  "reduce": {
+    "task": {
+      "output_dir": "rout",
+      "instruction": {
+        "text": "combine"
+      },
+      "environment": {
+        "workdir": "/r"
+      }
+    }
+  }
+}
+### ["-c", "{ROOT}/cfg.json"]
+{
+  "map": {
+    "compile": {
+      "task_name_prefix": "p",
+      "output_dir": "o",
+      "instructions": [
+        {
+          "text": "x"
+        }
+      ],
+      "task_template": "t"
+    },
+    "job": {
+      "jobs_dir": "jj",
+      "verifier": {
+        "disable": true
+      }
+    }
+  }
+}
+### ["-c", "{ROOT}/cfg.toml"]
+{
+  "map": {
+    "compile": {
+      "output_dir": "o",
+      "instructions": [
+        {
+          "text": "x"
+        }
+      ],
+      "artifacts": [
+        "/a"
+      ]
+    },
+    "job": {
+      "n_concurrent_trials": 2,
+      "quiet": true,
+      "agents": [
+        {
+          "name": "claude-code",
+          "override_timeout_sec": 5.0
+        }
+      ]
+    }
+  },
+  "reduce": {
+    "task": {
+      "task_name": "agg",
+      "output_dir": "r",
+      "instruction": {
+        "path": "inst.md"
+      }
+    }
+  }
+}
+### ["-c", "{ROOT}/cfg_noart.yaml"]
+ERROR Error: 1 validation error for ExecConfig Value error, reduce requires map.compile.artifacts so prior map artifacts can be used as implicit reducer inputs.
+### ["-c", "{ROOT}/cfg.ini"]
+ERROR Error: Unsupported exec config file format: .ini. Use .yaml, .yml, .json, or .toml.

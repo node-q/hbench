@@ -1,0 +1,544 @@
+## cross_product
+TASK my-job-0001
+DIR environment
+DIR environment/a
+== environment/a/x.txt 0o644
+hi
+== instruction.md 0o644
+Write out/report.md
+== task.toml 0o644
+schema_version = "1.4"
+artifacts = [ "/app/out/report.md", "/app/r.json",]
+
+[metadata]
+
+[verifier]
+timeout_sec = 600.0
+collect = []
+
+[verifier.env]
+
+[agent]
+
+[environment]
+network_mode = "public"
+build_timeout_sec = 600.0
+docker_image = "ubuntu:latest"
+os = "linux"
+mcp_servers = []
+workdir = "/app"
+
+[environment.env]
+
+[solution.env]
+DIR tests
+== tests/promote_reward_artifact.py 0o644
+<asset promote_reward_artifact.py>
+== tests/required-artifacts.txt 0o644
+/app/out/report.md
+/app/r.json
+== tests/reward-artifact.txt 0o644
+/app/r.json
+== tests/test.sh 0o755
+<asset auto-verify-artifacts.sh>
+TASK my-job-0002
+DIR environment
+== environment/c.md 0o644
+c
+== environment/y.txt 0o644
+yo
+== instruction.md 0o644
+Write out/report.md
+== task.toml 0o644
+schema_version = "1.4"
+artifacts = [ "/app/out/report.md", "/app/r.json",]
+
+[metadata]
+
+[verifier]
+timeout_sec = 600.0
+collect = []
+
+[verifier.env]
+
+[agent]
+
+[environment]
+network_mode = "public"
+build_timeout_sec = 600.0
+docker_image = "python:3.12"
+os = "linux"
+mcp_servers = []
+workdir = "/w"
+
+[environment.env]
+
+[solution.env]
+DIR tests
+== tests/promote_reward_artifact.py 0o644
+<asset promote_reward_artifact.py>
+== tests/required-artifacts.txt 0o644
+/app/out/report.md
+/app/r.json
+== tests/reward-artifact.txt 0o644
+/app/r.json
+== tests/test.sh 0o755
+<asset auto-verify-artifacts.sh>
+## dict_artifacts
+TASK ds-0001
+DIR environment
+== instruction.md 0o644
+a
+== task.toml 0o644
+schema_version = "1.4"
+[[artifacts]]
+source = "/app/r.json"
+destination = "x"
+exclude = []
+
+[[artifacts]]
+source = "/app/o"
+exclude = []
+service = "db"
+
+[metadata]
+
+[verifier]
+timeout_sec = 600.0
+collect = []
+
+[verifier.env]
+
+[agent]
+
+[environment]
+network_mode = "public"
+build_timeout_sec = 600.0
+docker_image = "ubuntu:latest"
+os = "linux"
+mcp_servers = []
+workdir = "/app"
+
+[environment.env]
+
+[solution.env]
+DIR tests
+== tests/required-artifacts.txt 0o644
+/app/r.json
+/app/o
+== tests/test.sh 0o755
+<asset auto-verify-artifacts.sh>
+TASK ds-0002
+DIR environment
+== instruction.md 0o644
+From a file.
+== task.toml 0o644
+schema_version = "1.4"
+[[artifacts]]
+source = "/app/r.json"
+destination = "x"
+exclude = []
+
+[[artifacts]]
+source = "/app/o"
+exclude = []
+service = "db"
+
+[metadata]
+
+[verifier]
+timeout_sec = 600.0
+collect = []
+
+[verifier.env]
+
+[agent]
+
+[environment]
+network_mode = "public"
+build_timeout_sec = 600.0
+docker_image = "ubuntu:latest"
+os = "linux"
+mcp_servers = []
+workdir = "/app"
+
+[environment.env]
+
+[solution.env]
+DIR tests
+== tests/required-artifacts.txt 0o644
+/app/r.json
+/app/o
+== tests/test.sh 0o755
+<asset auto-verify-artifacts.sh>
+## template_replaced_env
+TASK task-0001
+== README.md 0o644
+Template readme.
+DIR environment
+== environment/Dockerfile 0o644
+FROM ubuntu:24.04
+== instruction.md 0o644
+Override.
+== task.toml 0o644
+schema_version = "1.2"
+source = "src-x"
+artifacts = [ "/app/a.md",]
+
+[task]
+name = "org/name"
+description = ""
+keywords = [ "k1",]
+[[task.authors]]
+name = "A"
+email = "a@x"
+
+[[task.authors]]
+name = "B"
+
+[metadata]
+difficulty = "hard"
+weird = "q\"uo'te \\ back\ttab"
+both = "it's \"x\""
+uni = "café 中"
+tags = [ "a", "b",]
+num = 3
+flt = 1e-7
+big = 1e+20
+flag = true
+empty = []
+"spaced key" = 1
+
+[metadata.nested]
+list = [ 1.5, 2,]
+
+[metadata.nested.inner]
+deep = 1
+
+[verifier]
+timeout_sec = 60.0
+[[verifier.collect]]
+command = "dump"
+service = "main"
+timeout_sec = 60.0
+
+[verifier.env]
+A = "1"
+
+[agent]
+timeout_sec = 300.0
+user = 1000
+
+[environment]
+network_mode = "public"
+build_timeout_sec = 600.0
+docker_image = "img"
+os = "linux"
+mcp_servers = []
+workdir = "/app"
+
+[environment.env]
+
+[solution.env]
+S = "v"
+DIR tests
+== tests/test.sh 0o755
+#!/bin/bash
+exit 0
+## template_kept_env
+TASK task-0001
+== README.md 0o644
+Template readme.
+DIR environment
+== environment/Dockerfile 0o644
+FROM ubuntu:24.04
+== instruction.md 0o644
+Template instruction.
+== task.toml 0o644
+schema_version = "1.2"
+source = "src-x"
+artifacts = []
+
+[task]
+name = "org/name"
+description = ""
+keywords = [ "k1",]
+[[task.authors]]
+name = "A"
+email = "a@x"
+
+[[task.authors]]
+name = "B"
+
+[metadata]
+difficulty = "hard"
+weird = "q\"uo'te \\ back\ttab"
+both = "it's \"x\""
+uni = "café 中"
+tags = [ "a", "b",]
+num = 3
+flt = 1e-7
+big = 1e+20
+flag = true
+empty = []
+"spaced key" = 1
+
+[metadata.nested]
+list = [ 1.5, 2,]
+
+[metadata.nested.inner]
+deep = 1
+
+[verifier]
+timeout_sec = 60.0
+[[verifier.collect]]
+command = "dump"
+service = "main"
+timeout_sec = 60.0
+
+[verifier.env]
+A = "1"
+
+[agent]
+timeout_sec = 300.0
+user = 1000
+
+[environment]
+network_mode = "no-network"
+build_timeout_sec = 600.0
+os = "linux"
+cpus = 2
+memory_mb = 2048
+storage_mb = 100
+[[environment.mcp_servers]]
+name = "s"
+transport = "streamable-http"
+url = "http://x"
+args = []
+
+[environment.env]
+
+[environment.healthcheck]
+command = "true"
+interval_sec = 5.0
+timeout_sec = 30.0
+start_period_sec = 0.0
+start_interval_sec = 5.0
+retries = 5
+
+[solution.env]
+S = "v"
+DIR tests
+== tests/test.sh 0o755
+#!/bin/bash
+exit 0
+## template_steps
+TASK task-0001
+DIR environment
+== environment/Dockerfile 0o644
+FROM python:3.12
+DIR steps
+DIR steps/one
+== steps/one/instruction.md 0o644
+one
+DIR steps/two
+== steps/two/instruction.md 0o644
+two
+== task.toml 0o644
+schema_version = "1.4"
+multi_step_reward_strategy = "final"
+artifacts = [ "/logs/x",]
+
+[[steps]]
+name = "one"
+min_reward = 1.0
+[[steps.artifacts]]
+source = "/app/o"
+exclude = [ "*.tmp",]
+
+
+[steps.agent]
+timeout_sec = 10.0
+[steps.verifier]
+timeout_sec = 600.0
+collect = []
+[[steps]]
+name = "two"
+artifacts = []
+
+[steps.verifier]
+timeout_sec = 600.0
+collect = []
+[steps.min_reward]
+a = 1.0
+b = 0.5
+[steps.healthcheck]
+command = "ok"
+interval_sec = 1.0
+timeout_sec = 30.0
+start_period_sec = 0.0
+start_interval_sec = 5.0
+retries = 3
+
+[metadata]
+
+[verifier]
+timeout_sec = 600.0
+collect = []
+
+[verifier.env]
+
+[agent]
+
+[environment]
+network_mode = "public"
+build_timeout_sec = 600.0
+docker_image = "z"
+os = "linux"
+mcp_servers = []
+
+[environment.env]
+
+[solution.env]
+DIR tests
+== tests/test.sh 0o755
+#!/bin/bash
+echo 1
+## schemas
+TASK task-0001
+DIR environment
+== instruction.md 0o644
+Write /app/ré.json
+== task.toml 0o644
+schema_version = "1.4"
+artifacts = []
+
+[metadata]
+
+[verifier]
+timeout_sec = 600.0
+collect = []
+
+[verifier.env]
+
+[agent]
+
+[environment]
+network_mode = "public"
+build_timeout_sec = 600.0
+docker_image = "ubuntu:latest"
+os = "linux"
+mcp_servers = []
+workdir = "/app"
+
+[environment.env]
+
+[solution.env]
+DIR tests
+== tests/artifact-schema-checks.json 0o644
+[
+  {
+    "artifact_path": "/app/r\u00e9.json",
+    "schema_path": "/tests/schemas/schema-0001.json"
+  }
+]
+== tests/required-artifacts.txt 0o644
+/app/ré.json
+DIR tests/schemas
+== tests/schemas/schema-0001.json 0o644
+{"type": "object"}
+== tests/test.sh 0o755
+<asset auto-verify-artifacts-with-schemas.sh>
+== tests/validate_artifact_schemas.py 0o644
+<asset validate_artifact_schemas.py>
+## separate_verifier
+TASK task-0001
+DIR environment
+== instruction.md 0o644
+Sep.
+== task.toml 0o644
+schema_version = "1.3"
+artifacts = []
+
+[metadata]
+
+[verifier]
+timeout_sec = 600.0
+environment_mode = "separate"
+collect = []
+
+[verifier.env]
+
+[agent]
+
+[environment]
+network_mode = "public"
+build_timeout_sec = 600.0
+os = "linux"
+mcp_servers = []
+
+[environment.env]
+
+[solution.env]
+DIR tests
+== tests/Dockerfile 0o644
+FROM ubuntu:latest
+## template_missing_test_script
+ERROR Compiled task has a tests/ directory but no OS-compatible verifier script for its shared verifier environment.
+## recursive_glob
+TASK task-0001
+DIR environment
+DIR environment/a
+== environment/a/x.txt 0o644
+hi
+DIR environment/b
+== environment/b/.hidden 0o644
+h
+== environment/b/y.txt 0o644
+yo
+== environment/c.md 0o644
+c
+DIR environment/in
+DIR environment/in/a
+== environment/in/a/x.txt 0o644
+hi
+DIR environment/in/b
+== environment/in/b/.hidden 0o644
+h
+== environment/in/b/y.txt 0o644
+yo
+== environment/in/c.md 0o644
+c
+== environment/x.txt 0o644
+hi
+== environment/y.txt 0o644
+yo
+== instruction.md 0o644
+x
+== task.toml 0o644
+schema_version = "1.4"
+artifacts = []
+
+[metadata]
+
+[verifier]
+timeout_sec = 600.0
+collect = []
+
+[verifier.env]
+
+[agent]
+
+[environment]
+network_mode = "public"
+build_timeout_sec = 600.0
+docker_image = "ubuntu:latest"
+os = "linux"
+mcp_servers = []
+workdir = "/app"
+
+[environment.env]
+
+[solution.env]
+## no_match
+ERROR Input path pattern did not match anything: {ROOT}/nope*
