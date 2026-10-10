@@ -1,6 +1,7 @@
 mod agents;
 mod artifacts;
 mod bridge;
+mod atif;
 mod config;
 mod diff;
 mod env;
@@ -10,7 +11,9 @@ mod regrade;
 mod registry;
 mod sweeps;
 mod task;
+mod traces;
 mod trial;
+mod viewer;
 
 use crate::config::{AgentConfig, DatasetConfig, JobConfig, SourceTrial, TaskRef, TrialConfig};
 use crate::task::{Artifact, Task};
@@ -59,6 +62,20 @@ enum Cmd {
         #[command(subcommand)]
         cmd: SweepsCmd,
     },
+    /// Web results viewer for a jobs dir.
+    View {
+        #[arg(short = 'p', long = "path", default_value = "jobs")]
+        jobs_dir: PathBuf,
+        #[arg(long, default_value_t = 8080)]
+        port: u16,
+        #[arg(long, default_value = "127.0.0.1")]
+        host: String,
+    },
+    /// Trace export.
+    Traces {
+        #[command(subcommand)]
+        cmd: TracesCmd,
+    },
 }
 
 #[derive(Subcommand)]
@@ -76,6 +93,33 @@ enum SweepsCmd {
         /// JSON object {task_name: hint}; runs one job per task.
         #[arg(long)]
         hints_file: Option<PathBuf>,
+    },
+}
+
+#[derive(Subcommand)]
+enum TracesCmd {
+    /// Export ATIF trajectories as conversation rows (JSONL; upstream's HF trace schema).
+    Export {
+        /// Trial dir, or a root containing trials recursively.
+        #[arg(short = 'p', long = "path")]
+        path: PathBuf,
+        /// Output .jsonl (default: stdout).
+        #[arg(short = 'o', long = "output")]
+        output: Option<PathBuf>,
+        #[arg(long)]
+        no_recursive: bool,
+        /// all | last
+        #[arg(long, default_value = "all")]
+        episodes: String,
+        #[arg(long, value_parser = ["success", "failure", "all"])]
+        filter: Option<String>,
+        /// Also emit a ShareGPT `conversations_sharegpt` column.
+        #[arg(long)]
+        sharegpt: bool,
+        #[arg(long)]
+        instruction_metadata: bool,
+        #[arg(long)]
+        verifier_metadata: bool,
     },
 }
 
@@ -671,6 +715,18 @@ async fn main() -> Result<()> {
                 println!("{n}");
             }
             Ok(())
+        }
+        Cmd::View { jobs_dir, port, host } => viewer::serve(&jobs_dir, &host, port),
+        Cmd::Traces { cmd: TracesCmd::Export { path, output, no_recursive, episodes, filter, sharegpt, instruction_metadata, verifier_metadata } } => {
+            let o = traces::ExportOpts {
+                recursive: !no_recursive,
+                episodes,
+                success_filter: filter.filter(|f| f != "all"),
+                sharegpt,
+                include_instruction: instruction_metadata,
+                include_verifier_output: verifier_metadata,
+            };
+            traces::run(&path, output.as_deref(), &o)
         }
     }
 }

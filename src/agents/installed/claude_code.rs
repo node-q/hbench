@@ -491,6 +491,17 @@ impl Agent for ClaudeCode {
         if let Some(c) = std::fs::read_to_string(logs_dir.join("claude-code.txt")).ok().and_then(|t| parse_stream_result(&t)) {
             *ctx = c;
         }
+        // upstream: write the ATIF trajectory and take totals from its final metrics.
+        if let Some(t) = crate::atif::claude_code_trajectory(logs_dir) {
+            let _ = std::fs::write(logs_dir.join("trajectory.json"), serde_json::to_string_pretty(&t).unwrap_or_default());
+            let fm = &t["final_metrics"];
+            if fm.is_object() {
+                ctx.cost_usd = fm["total_cost_usd"].as_f64().or(ctx.cost_usd);
+                ctx.n_input_tokens = Some(fm["total_prompt_tokens"].as_i64().unwrap_or(0));
+                ctx.n_cache_tokens = Some(fm["total_cached_tokens"].as_i64().unwrap_or(0));
+                ctx.n_output_tokens = Some(fm["total_completion_tokens"].as_i64().unwrap_or(0));
+            }
+        }
     }
 }
 
