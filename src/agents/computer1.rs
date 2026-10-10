@@ -1930,7 +1930,7 @@ mod tests {
         assert_eq!(text_only_message(&msgs[5])["content"], json!([{"type": "text", "text": ""}]));
         let bash = json!({"status": "error", "return_code": 1, "stdout": "out\n", "stderr": "", "stdout_truncated": true});
         assert_eq!(format_bash_observation(&bash), "bash result: status=error exit_code=1\n--- stdout ---\nout\n[stdout truncated]\n--- stderr ---\n(empty)");
-        assert_eq!(py_repr(&json!({"status": "recovered", "recovered": true, "x": null})), "{'recovered': True, 'status': 'recovered', 'x': None}");
+        assert_eq!(py_repr(&json!({"status": "recovered", "recovered": true, "x": null})), "{'status': 'recovered', 'recovered': True, 'x': None}");
     }
 
     // ----- loop with mocks -----
@@ -1994,7 +1994,7 @@ mod tests {
         std::fs::write(task_dir.join("instruction.md"), "x").unwrap();
         let logs = root.join("trial/agent");
         std::fs::create_dir_all(&logs).unwrap();
-        let args = AgentArgs {
+        let args = AgentArgs { load_trajectory: None,
             model_name: Some("openai/gpt-5.4".into()),
             kwargs: serde_json::from_value(kwargs).unwrap(),
             extra_env: BTreeMap::new(),

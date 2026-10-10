@@ -94,41 +94,19 @@ pub struct ModelInfo {
     pub adaptive_thinking: bool,
 }
 
-const fn mi(max_in: i64, max_out: i64, ic: f64, oc: f64, cr: f64, cw: f64, adaptive: bool) -> ModelInfo {
-    ModelInfo { max_input_tokens: Some(max_in), max_output_tokens: Some(max_out), input_cost: ic, output_cost: oc, cache_read_cost: cr, cache_write_cost: cw, adaptive_thinking: adaptive }
-}
-
-/// LiteLLM 1.92 `model_prices_and_context_window.json`, only for models upstream's tests use.
-/// ponytail: unknown models get no pricing (cost None) and the 1M fallback context limit, as in upstream.
+/// LiteLLM's `model_cost` entry (the table pinned to upstream's LiteLLM version).
+/// ponytail: unknown models get no pricing (cost 0/None) and the 1M fallback context limit, as in upstream.
 fn builtin_info(name: &str) -> Option<ModelInfo> {
-    Some(match name {
-        "claude-sonnet-4-5" | "claude-sonnet-4-5-20250929" => mi(200_000, 64_000, 3e-6, 1.5e-5, 3e-7, 3.75e-6, false),
-        "claude-sonnet-4-20250514" => mi(1_000_000, 64_000, 3e-6, 1.5e-5, 3e-7, 3.75e-6, false),
-        "claude-sonnet-4-6" => mi(1_000_000, 64_000, 3e-6, 1.5e-5, 3e-7, 3.75e-6, true),
-        "claude-sonnet-5" => mi(1_000_000, 128_000, 2e-6, 1e-5, 2e-7, 2.5e-6, true),
-        "claude-opus-4-1" | "claude-opus-4-1-20250805" => mi(200_000, 32_000, 1.5e-5, 7.5e-5, 1.5e-6, 1.875e-5, false),
-        "claude-opus-4-5" => mi(200_000, 64_000, 5e-6, 2.5e-5, 5e-7, 6.25e-6, false),
-        "claude-opus-4-6" | "claude-opus-4-7" | "claude-opus-4-8" => mi(1_000_000, 128_000, 5e-6, 2.5e-5, 5e-7, 6.25e-6, true),
-        "claude-haiku-4-5" | "claude-haiku-4-5-20251001" => mi(200_000, 64_000, 1e-6, 5e-6, 1e-7, 1.25e-6, false),
-        "claude-fable-5" => mi(1_000_000, 128_000, 1e-5, 5e-5, 1e-6, 1.25e-5, true),
-        "gpt-4o" => mi(128_000, 16_384, 2.5e-6, 1e-5, 1.25e-6, 0.0, false),
-        "gpt-4o-mini" => mi(128_000, 16_384, 1.5e-7, 6e-7, 7.5e-8, 0.0, false),
-        "gpt-4.1" => mi(1_047_576, 32_768, 2e-6, 8e-6, 5e-7, 0.0, false),
-        "gpt-4" => mi(8_192, 4_096, 3e-5, 6e-5, 0.0, 0.0, false),
-        "gpt-3.5-turbo" => mi(16_385, 4_096, 5e-7, 1.5e-6, 0.0, 0.0, false),
-        "o3" => mi(200_000, 100_000, 2e-6, 8e-6, 5e-7, 0.0, false),
-        "gpt-5" | "gpt-5.1" => mi(272_000, 128_000, 1.25e-6, 1e-5, 1.25e-7, 0.0, false),
-        "gpt-5-mini" => mi(272_000, 128_000, 2.5e-7, 2e-6, 2.5e-8, 0.0, false),
-        "gpt-5-nano" => mi(272_000, 128_000, 5e-8, 4e-7, 5e-9, 0.0, false),
-        "gpt-5.2" | "gpt-5.3-codex" => mi(272_000, 128_000, 1.75e-6, 1.4e-5, 1.75e-7, 0.0, false),
-        "gpt-5.4" => mi(1_050_000, 128_000, 2.5e-6, 1.5e-5, 2.5e-7, 0.0, false),
-        "gpt-5.5" => mi(1_050_000, 128_000, 5e-6, 3e-5, 5e-7, 0.0, false),
-        "xai/grok-4" => mi(256_000, 256_000, 3e-6, 1.5e-5, 0.0, 0.0, false),
-        "deepseek/deepseek-chat" => mi(131_072, 8_192, 2.8e-7, 4.2e-7, 2.8e-8, 0.0, false),
-        "deepseek/deepseek-v4-flash" => mi(1_000_000, 8_192, 1.4e-7, 2.8e-7, 2.8e-9, 0.0, false),
-        "gemini/gemini-2.5-pro" => mi(1_048_576, 65_535, 1.25e-6, 1e-5, 1.25e-7, 0.0, false),
-        "gemini/gemini-2.5-flash" => mi(1_048_576, 65_535, 3e-7, 2.5e-6, 3e-8, 0.0, false),
-        _ => return None,
+    let m = crate::agents::pricing::model_cost(name)?;
+    let f = |k: &str| m.get(k).and_then(|v| v.as_f64().or_else(|| v.as_str()?.parse().ok()));
+    Some(ModelInfo {
+        max_input_tokens: f("max_input_tokens").or_else(|| f("max_tokens")).map(|x| x as i64),
+        max_output_tokens: f("max_output_tokens").map(|x| x as i64),
+        input_cost: f("input_cost_per_token").unwrap_or(0.0),
+        output_cost: f("output_cost_per_token").unwrap_or(0.0),
+        cache_read_cost: f("cache_read_input_token_cost").unwrap_or(0.0),
+        cache_write_cost: f("cache_creation_input_token_cost").unwrap_or(0.0),
+        adaptive_thinking: m.get("supports_adaptive_thinking").and_then(|v| v.as_bool()).unwrap_or(false),
     })
 }
 
@@ -320,9 +298,50 @@ pub trait Llm: Send + Sync {
     }
 }
 
-/// ponytail: ~4 chars/token (no tokenizer crate); LiteLLM's token_counter uses tiktoken.
+/// ponytail: rough estimate for mock LLMs in tests; real clients use `token_counter`.
 pub fn approx_tokens(messages: &[Value]) -> i64 {
     3 + messages.iter().map(|m| 4 + (content_text(&m["content"]).chars().count() as i64 + 3) / 4).sum::<i64>()
+}
+
+/// LiteLLM 1.93 `token_counter(model, messages)` (tiktoken path). Provider-prefixed / non-OpenAI
+/// names fall back to gpt-3.5-turbo's cl100k_base, as `_fix_model_name` does; bare OpenAI chat
+/// models use their own encoding. ponytail: bare pre-claude-3 names use LiteLLM's bundled Claude
+/// HF tokenizer there; cl100k_base here.
+pub fn token_counter(model: &str, messages: &[Value]) -> i64 {
+    let bare_openai = !model.contains('/') && ["gpt-", "o1", "o3", "o4", "chatgpt"].iter().any(|p| model.starts_with(p));
+    let o200k = bare_openai && (model.contains("gpt-4o") || ["gpt-4.1", "gpt-4.5", "gpt-5", "o1", "o3", "o4", "chatgpt-4o"].iter().any(|p| model.starts_with(p)));
+    let bpe = if o200k { tiktoken_rs::o200k_base_singleton() } else { tiktoken_rs::cl100k_base_singleton() };
+    let count = |s: &str| bpe.encode_ordinary(s).len() as i64;
+    let mut n = 0;
+    for m in messages.iter().filter_map(Value::as_object) {
+        n += 3; // tokens_per_message
+        for (k, v) in m {
+            match v {
+                Value::Null => {}
+                Value::Array(calls) if k == "tool_calls" => {
+                    n += calls.iter().map(|c| count(&match &c["function"]["arguments"] { Value::String(s) => s.clone(), Value::Null => String::new(), o => o.to_string() })).sum::<i64>();
+                }
+                Value::String(s) => {
+                    n += count(s);
+                    if k == "name" {
+                        n += 1; // tokens_per_name
+                    }
+                }
+                Value::Array(parts) if k == "content" => {
+                    for p in parts {
+                        n += match (p.as_str(), p["type"].as_str()) {
+                            (Some(s), _) => count(s),
+                            (None, Some("text")) => count(p["text"].as_str().unwrap_or("")),
+                            (None, Some("thinking")) => count(p["thinking"].as_str().unwrap_or("")),
+                            _ => 0,
+                        };
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    n + 3 // every reply is primed with <|start|>assistant<|message|>
 }
 
 /// Text of a string or content-part list.
@@ -788,6 +807,9 @@ impl Llm for LiteLlm {
     fn context_limit(&self) -> i64 {
         self.info.and_then(|i| i.max_input_tokens).unwrap_or(1_000_000)
     }
+    fn count_tokens(&self, messages: &[Value]) -> i64 {
+        token_counter(&self.cfg.model_name, messages)
+    }
     fn output_limit(&self) -> Option<i64> {
         self.info.and_then(|i| i.max_output_tokens)
     }
@@ -1163,5 +1185,17 @@ mod tests {
         assert_eq!(c.messages[1], json!({"role": "assistant", "content": "a", "reasoning_content": "think"}));
         assert_eq!(c.rollout_details(), vec![json!({"completion_token_ids": [[1], [1]], "logprobs": [[-0.1], [-0.1]]})]);
         assert!(approx_tokens(&c.messages) > 0);
+        // LiteLLM: 3 per message + role + content tokens + 3 priming (cl100k for prefixed names).
+        let msgs = vec![json!({"role": "user", "content": "hello world"}), json!({"role": "assistant", "content": "hi"})];
+        assert_eq!(token_counter("anthropic/claude-sonnet-4-5", &msgs), 3 + 1 + 2 + 3 + 1 + 1 + 3);
+        assert_eq!(token_counter("anthropic/claude-sonnet-4-5", &[]), 3);
+        // Reference values from litellm 1.93 token_counter.
+        let m2 = vec![
+            json!({"role": "system", "content": "You are an AI assistant tasked with solving command-line tasks in a Linux environment."}),
+            json!({"role": "user", "content": "Task: create /app/hello.txt\n$ ls -la\ntotal 8\ndrwxr-xr-x 2 root root 4096 ."}),
+        ];
+        for m in ["anthropic/claude-sonnet-4-5", "gpt-4o", "openai/gpt-5"] {
+            assert_eq!(token_counter(m, &m2), 59, "{m}");
+        }
     }
 }

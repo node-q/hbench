@@ -2212,7 +2212,7 @@ mod tests {
         std::fs::create_dir_all(dir.join("environment")).unwrap();
         std::fs::write(dir.join("task.toml"), "[environment]\ndocker_image='x'\n").unwrap();
         std::fs::write(dir.join("instruction.md"), "x").unwrap();
-        AgentArgs {
+        AgentArgs { load_trajectory: None,
             model_name: Some("openai/gpt-4o".into()),
             kwargs: serde_json::from_value(kwargs).unwrap(),
             extra_env: BTreeMap::new(),

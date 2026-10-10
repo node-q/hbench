@@ -271,7 +271,7 @@ class RLM:
         std::fs::create_dir_all(task_dir.join("environment")).unwrap();
         std::fs::write(task_dir.join("task.toml"), "[environment]\ndocker_image='x'\n").unwrap();
         std::fs::write(task_dir.join("instruction.md"), "x").unwrap();
-        let args = AgentArgs {
+        let args = AgentArgs { load_trajectory: None,
             model_name: Some("openai/gpt-4o".into()),
             kwargs,
             extra_env: BTreeMap::from([("PYTHONPATH".to_string(), root.join("pkg").display().to_string())]),
