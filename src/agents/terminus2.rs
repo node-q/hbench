@@ -27,7 +27,7 @@ const VERSION: &str = "2.0.0";
 // ---------------------------------------------------------------------------------------------
 
 /// Python `str.format` with named fields (`{{` / `}}` escapes).
-fn py_format(tpl: &str, vars: &[(&str, &str)]) -> String {
+pub(crate) fn py_format(tpl: &str, vars: &[(&str, &str)]) -> String {
     let mut out = String::with_capacity(tpl.len());
     let mut it = tpl.chars().peekable();
     while let Some(c) = it.next() {
@@ -47,7 +47,7 @@ fn py_format(tpl: &str, vars: &[(&str, &str)]) -> String {
 }
 
 /// Python float `str()`.
-fn pyf(f: f64) -> String {
+pub(crate) fn pyf(f: f64) -> String {
     if f.is_finite() && f.fract() == 0.0 && f.abs() < 1e16 { format!("{f:.1}") } else { format!("{f}") }
 }
 
@@ -106,12 +106,12 @@ fn re(p: &str) -> Regex {
     Regex::new(p).expect("static regex")
 }
 
-fn now() -> Option<String> {
+pub(crate) fn now() -> Option<String> {
     Some(chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.6f+00:00").to_string())
 }
 
 /// Keep the first and last `max_bytes/2` bytes (upstream's `_limit_output_length`).
-fn limit_output_length(output: &str, max_bytes: usize) -> String {
+pub(crate) fn limit_output_length(output: &str, max_bytes: usize) -> String {
     if output.len() <= max_bytes {
         return output.to_string();
     }

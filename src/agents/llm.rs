@@ -312,6 +312,12 @@ pub trait Llm: Send + Sync {
     fn count_tokens(&self, messages: &[Value]) -> i64 {
         approx_tokens(messages)
     }
+    /// One chat-completions request over raw (possibly multimodal) messages, no retries:
+    /// computer-1's `Computer1Chat` path. Default: `call` with the last message as the prompt.
+    async fn complete(&self, messages: Vec<Value>, kw: &Map<String, Value>) -> Result<LlmResponse, LlmError> {
+        let (last, history) = messages.split_last().map(|(l, h)| (content_text(&l["content"]), h.to_vec())).unwrap_or_default();
+        self.call(&last, &history, kw, None).await
+    }
 }
 
 /// ponytail: ~4 chars/token (no tokenizer crate); LiteLLM's token_counter uses tiktoken.
@@ -622,6 +628,11 @@ impl LiteLlm {
 
     /// LiteLLM `completion_kwargs` for one call (before provider translation).
     pub fn params(&self, messages: Vec<Value>, kw: &Map<String, Value>) -> Map<String, Value> {
+        self.build_params(messages, kw, true)
+    }
+
+    /// `full`: `LiteLLM.call`'s extras (rollout details, session id); computer-1's chat omits them.
+    fn build_params(&self, messages: Vec<Value>, kw: &Map<String, Value>, full: bool) -> Map<String, Value> {
         let mut p = self.cfg.llm_kwargs.clone();
         p.insert("messages".into(), Value::Array(messages));
         if let Some(e) = &self.cfg.reasoning_effort {
@@ -630,7 +641,7 @@ impl LiteLlm {
         if let Some(t) = self.cfg.temperature {
             p.insert("temperature".into(), json!(t));
         }
-        if self.cfg.collect_rollout_details {
+        if full && self.cfg.collect_rollout_details {
             p.insert("logprobs".into(), json!(true));
             obj(&mut p, "extra_body").insert("return_token_ids".into(), json!(true));
         }
@@ -645,7 +656,7 @@ impl LiteLlm {
         if let Some(b) = self.cfg.max_thinking_tokens.filter(|_| is_claude(&self.cfg.model_name)) {
             p.insert("thinking".into(), json!({"type": "enabled", "budget_tokens": b.max(1024)}));
         }
-        if let Some(s) = &self.cfg.session_id {
+        if let Some(s) = self.cfg.session_id.as_ref().filter(|_| full) {
             obj(&mut p, "extra_body").insert("session_id".into(), json!(s));
             obj(&mut p, "extra_headers").insert("X-Session-ID".into(), json!(s));
         }
@@ -684,6 +695,10 @@ impl LiteLlm {
             p.remove("thinking");
             if p.get("temperature").is_some_and(|t| openai_rejects_temperature(&self.ep, t)) {
                 p.remove("temperature");
+            }
+            // drop_params: only OpenAI accepts the prompt-cache routing key.
+            if !matches!(self.ep.provider.as_str(), "openai" | "azure") {
+                p.remove("prompt_cache_key");
             }
             body.extend(p);
         }
@@ -775,6 +790,19 @@ impl Llm for LiteLlm {
     }
     fn output_limit(&self) -> Option<i64> {
         self.info.and_then(|i| i.max_output_tokens)
+    }
+    async fn complete(&self, messages: Vec<Value>, kw: &Map<String, Value>) -> Result<LlmResponse, LlmError> {
+        let mut p = self.build_params(messages, kw, false);
+        // Fable/Mythos think adaptively; an explicit budget is rejected.
+        let m = self.cfg.model_name.to_lowercase();
+        if m.contains("fable") || m.contains("mythos") {
+            p.remove("thinking");
+        }
+        let v = send(&self.ep.url, &self.request(p)).await?;
+        match self.ep.api {
+            Api::Anthropic => parse_anthropic(&v, self.info.as_ref(), &self.cfg.model_name),
+            _ => parse_chat(&v, self.info.as_ref(), &self.cfg.model_name, false),
+        }
     }
 }
 
@@ -1069,6 +1097,39 @@ mod tests {
         assert_eq!((l.context_limit(), l.output_limit()), (32768, Some(4096)));
         assert!(LiteLlm::new(LlmConfig { model_name: "hosted_vllm/llama".into(), api_base: Some("http://h".into()), ..Default::default() }, &env(&[])).is_err());
         assert!(LiteLlm::new(LlmConfig { model_name: "hosted_vllm/a/b".into(), ..Default::default() }, &env(&[])).is_err());
+    }
+
+    /// The curl transport end to end: config escaping, auth header, status classification, parsing.
+    #[tokio::test]
+    async fn curl_transport_round_trip() {
+        if std::process::Command::new("curl").arg("--version").output().is_err() {
+            return;
+        }
+        let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let port = server.server_addr().to_ip().unwrap().port();
+        let handle = std::thread::spawn(move || {
+            let rq = server.recv().unwrap();
+            rq.respond(tiny_http::Response::from_string(r#"{"error": "slow down"}"#).with_status_code(429)).unwrap();
+            let mut rq = server.recv().unwrap();
+            let path = rq.url().to_string();
+            let mut body = String::new();
+            std::io::Read::read_to_string(rq.as_reader(), &mut body).unwrap();
+            let auth = rq.headers().iter().find(|h| h.field.equiv("authorization")).map(|h| h.value.to_string()).unwrap_or_default();
+            let sent: Value = serde_json::from_str(&body).unwrap();
+            let content = format!("{path}|{auth}|{}", sent["messages"][0]["content"].as_str().unwrap());
+            let resp = json!({"model": "gpt-4o-x", "choices": [{"finish_reason": "stop", "message": {"content": content}}], "usage": {"prompt_tokens": 3, "completion_tokens": 1}});
+            rq.respond(tiny_http::Response::from_string(resp.to_string())).unwrap();
+        });
+        let cfg = LlmConfig { model_name: "openai/gpt-4o".into(), api_base: Some(format!("http://127.0.0.1:{port}/v1")), ..Default::default() };
+        let l = llm(cfg, &[("OPENAI_API_KEY", "sk-\"q\\")]);
+        let e = l.call_once("x", &[], &Map::new(), None).await.unwrap_err();
+        assert_eq!(e.kind(), "RateLimitError");
+        let r = l.call_once("he said \"hi\" \\ ok", &[], &Map::new(), None).await.unwrap();
+        assert_eq!(r.content, "/v1/chat/completions|Bearer sk-\"q\\|he said \"hi\" \\ ok");
+        assert_eq!((r.model_name.as_deref(), r.usage.unwrap().prompt_tokens), (Some("gpt-4o-x"), 3));
+        handle.join().unwrap();
+        let e = send(&format!("http://127.0.0.1:{port}/v1/chat/completions"), &Request { headers: vec![], body: json!({}), timeout: Duration::from_secs(5) }).await.unwrap_err();
+        assert_eq!(e.kind(), "APIConnectionError"); // server gone
     }
 
     struct Fixed(&'static str);
