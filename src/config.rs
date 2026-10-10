@@ -123,6 +123,27 @@ impl AgentConfig {
     }
 }
 
+/// Simulated user: an agent that drives the target agent through a bridge.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct UserAgentConfig {
+    #[serde(flatten)]
+    pub agent: AgentConfig,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_persona_path: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_prompt_template_path: Option<PathBuf>,
+    pub bridge: BridgeConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct BridgeConfig {
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_path: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub kwargs: BTreeMap<String, Value>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct EnvConfig {
@@ -352,6 +373,8 @@ pub struct TrialConfig {
     pub environment_build_timeout_multiplier: Option<f64>,
     #[serde(default)]
     pub agent: AgentConfig,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_agent: Option<UserAgentConfig>,
     #[serde(default)]
     pub environment: EnvConfig,
     #[serde(default)]
@@ -395,6 +418,8 @@ pub struct JobConfig {
     pub verifier: VerifierRunConfig,
     pub metrics: Vec<MetricConfig>,
     pub agents: Vec<AgentConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user_agent: Option<UserAgentConfig>,
     pub datasets: Vec<DatasetConfig>,
     pub tasks: Vec<TaskRef>,
     pub artifacts: Vec<Artifact>,
@@ -430,6 +455,7 @@ impl Default for JobConfig {
             verifier: VerifierRunConfig::default(),
             metrics: vec![],
             agents: vec![AgentConfig::default()],
+            user_agent: None,
             datasets: vec![],
             tasks: vec![],
             artifacts: vec![],
@@ -492,6 +518,14 @@ impl JobConfig {
         }
         for t in &self.tasks {
             t.validate()?;
+        }
+        if let Some(u) = &self.user_agent {
+            if u.bridge.kind != "acp" {
+                bail!("Unsupported bridge kind: {}", u.bridge.kind);
+            }
+            if self.agents.iter().any(|a| a.load_trajectory.is_some()) {
+                bail!("agent.load_trajectory cannot be combined with user_agent.");
+            }
         }
         for d in &self.datasets {
             if d.repo.is_some() || d.reference.is_some() || d.name.as_deref().is_some_and(|n| n.contains('/')) {

@@ -350,6 +350,32 @@ pub async fn upload_text(cx: &AgentCtx<'_>, path: &str, content: &str) -> Result
     exec_root(cx, &format!("{chown}chmod 600 {q}"), &BTreeMap::new()).await.map(|_| ())
 }
 
+/// Shell snippet ensuring a Node >= 20 toolchain is active (nvm-installs Node 22 if needed).
+pub fn ensure_acp_node_command() -> String {
+    "if [ -s \"$HOME/.nvm/nvm.sh\" ]; then . \"$HOME/.nvm/nvm.sh\"; fi; \
+     _hb_node_major=\"$(node --version 2>/dev/null | sed \"s/^v//\" | cut -d. -f1 || true)\"; \
+     if [ \"${_hb_node_major:-0}\" -lt 20 ]; then \
+       curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.2/install.sh | bash && \
+       export NVM_DIR=\"$HOME/.nvm\" && . \"$NVM_DIR/nvm.sh\" && nvm install 22; \
+     fi"
+    .to_string()
+}
+
+/// Executable wrapper at `dest` running `target` with `interpreter` (keeps npm shims on their node).
+pub fn pinned_bin_wrapper_command(interpreter: &str, target: &str, dest: &str) -> String {
+    let (i, t, d) = (quote(interpreter), quote(target), quote(dest));
+    format!(
+        "_hb_tgt=\"$(readlink -f {t} 2>/dev/null || echo {t})\"; _hb_dst=\"$(readlink -f {d} 2>/dev/null || echo {d})\"; \
+         if [ \"$_hb_tgt\" != \"$_hb_dst\" ]; then rm -f {d} && printf '#!/bin/sh\\nexec \"%s\" \"%s\" \"$@\"\\n' {i} {t} > {d} && chmod 755 {d}; fi"
+    )
+}
+
+/// Symlink `source` -> `dest` without ever creating a cycle.
+pub fn safe_bin_symlink_command(source: &str, dest: &str) -> String {
+    let (s, d) = (quote(source), quote(dest));
+    format!("_hb_real=\"$(readlink -f {s} 2>/dev/null || echo {s})\" && if [ \"$_hb_real\" != {d} ]; then ln -sf \"$_hb_real\" {d}; fi")
+}
+
 /// First x.y.z in `stdout`, else the trimmed text (upstream's parse_version).
 pub fn parse_version(stdout: &str) -> String {
     static RE: OnceLock<Regex> = OnceLock::new();

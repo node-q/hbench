@@ -172,6 +172,7 @@ pub fn build_trial_configs(cfg: &JobConfig, tasks: &[TaskRef], job_id: uuid::Uui
                     agent_setup_timeout_multiplier: cfg.agent_setup_timeout_multiplier,
                     environment_build_timeout_multiplier: cfg.environment_build_timeout_multiplier,
                     agent: a.clone(),
+                    user_agent: cfg.user_agent.clone(),
                     environment: cfg.environment.clone(),
                     verifier: {
                         let mut v = cfg.verifier.clone();

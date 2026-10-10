@@ -1,5 +1,6 @@
 mod agents;
 mod artifacts;
+mod bridge;
 mod config;
 mod diff;
 mod env;

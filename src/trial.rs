@@ -191,6 +191,8 @@ pub struct Trial {
     result: TrialResult,
     agent_permit: Option<Arc<Semaphore>>,
     shared_verifier_dirty: bool,
+    user_agent: Option<AgentBox>,
+    bridge: Option<crate::bridge::Bridge>,
 }
 
 impl Trial {
@@ -224,7 +226,7 @@ impl Trial {
             verifier: None,
             step_results: None,
         };
-        Ok(Trial { cfg, task, dir, log, agent: None, env: None, env_stopped: false, result, agent_permit, shared_verifier_dirty: false })
+        Ok(Trial { cfg, task, dir, log, agent: None, env: None, env_stopped: false, result, agent_permit, shared_verifier_dirty: false, user_agent: None, bridge: None })
     }
 
     pub fn dir(&self) -> &Path {
@@ -318,14 +320,24 @@ impl Trial {
     }
 
     fn agent_ctx(&self, user: Option<String>, step: Option<&StepConfig>) -> Result<AgentCtx<'_>> {
-        Ok(AgentCtx {
-            env: self.env(),
-            user,
-            overlay: resolve_env_vars(&self.cfg.agent.env)?,
-            logs_dir: self.dir.join("agent"),
-            task: &self.task,
-            step: step.map(|s| s.name.clone()),
-        })
+        self.ctx_with(user, step, resolve_env_vars(&self.cfg.agent.env)?, "agent")
+    }
+
+    fn ctx_with(&self, user: Option<String>, step: Option<&StepConfig>, overlay: BTreeMap<String, String>, logs: &str) -> Result<AgentCtx<'_>> {
+        Ok(AgentCtx { env: self.env(), user, overlay, logs_dir: self.dir.join(logs), task: &self.task, step: step.map(|s| s.name.clone()) })
+    }
+
+    /// Simulated-user execs see user env < bridge (target ACP) env < target env.
+    fn bridge_overlay(&self) -> Result<BTreeMap<String, String>> {
+        let mut e = match &self.cfg.user_agent {
+            Some(u) => resolve_env_vars(&u.agent.env)?,
+            None => BTreeMap::new(),
+        };
+        if let Some(a) = &self.agent {
+            e.extend(a.acp_env());
+        }
+        e.extend(resolve_env_vars(&self.cfg.agent.env)?);
+        Ok(e)
     }
 
     /// Run to completion. Never fails: errors land in exception_info.
@@ -335,6 +347,11 @@ impl Trial {
             self.record(&e);
             // Recover what we can for debugging, then tear down.
             if self.env.is_some() && !self.env_stopped {
+                if self.bridge.is_some()
+                    && let Ok(o) = self.bridge_overlay()
+                {
+                    self.close_bridge(self.agent_user(None), o).await;
+                }
                 let _ = self.download_agent_logs(&self.dir.join("agent")).await;
             }
         }
@@ -380,6 +397,24 @@ impl Trial {
                 bail!("Agent '{}' does not support loading {} trajectory; cannot honor {}", self.cfg.agent.name(), if atif { "an ATIF" } else { "a native" }, p.display());
             }
         }
+        if let Some(u) = self.cfg.user_agent.clone() {
+            if task.has_steps() {
+                bail!("User-agent bridge trials are not supported for multi-step tasks.");
+            }
+            if self.cfg.agent.load_trajectory.is_some() {
+                bail!("agent.load_trajectory cannot be combined with user_agent.");
+            }
+            if agent.acp_command().is_none() {
+                bail!("Agent '{}' does not support the '{}' bridge.", self.cfg.agent.name(), u.bridge.kind);
+            }
+            let (tv, uv) = (self.cfg.agent.kwargs.get("version"), u.agent.kwargs.get("version"));
+            if u.agent.name() == self.cfg.agent.name() && uv.is_some() && uv != tv {
+                bail!("user_agent pins {}@{} but the target agent is {}@{}: both roles share one container install.", u.agent.name(), uv.unwrap(), self.cfg.agent.name(), tv.map(|v| v.to_string()).unwrap_or("latest".into()));
+            }
+            std::fs::create_dir_all(self.dir.join("user-agent"))?;
+            self.user_agent = Some(agents::create(&u.agent, self.dir.join("user-agent"), task.clone(), None)?);
+            self.bridge = Some(crate::bridge::Bridge::new(&u.bridge)?);
+        }
         self.agent = Some(agent);
         if task.has_steps() && self.cfg.agent.resume_trajectory && task.steps().len() > 1 && !self.agent.as_ref().unwrap().supports_resume() {
             bail!("Agent '{}' does not support resume; cannot honor agent.resume_trajectory", self.cfg.agent.name());
@@ -396,7 +431,10 @@ impl Trial {
             }
         }
         let baseline = self.net_plan(steps[0])?.agent_env_baseline;
-        let spec = self.env_spec(crate::env::sanitize(&self.cfg.trial_name, false), task.env_dir(), task.config.environment.clone(), baseline, phases, true)?;
+        let mut spec = self.env_spec(crate::env::sanitize(&self.cfg.trial_name, false), task.env_dir(), task.config.environment.clone(), baseline, phases, true)?;
+        if self.user_agent.is_some() {
+            spec.log_dirs.push("/logs/user-agent");
+        }
         let env = DockerEnv::new(spec, self.log.clone()).await?;
         self.env = Some(env);
 
@@ -416,15 +454,44 @@ impl Trial {
             None,
             self.cfg.agent_setup_timeout_multiplier,
         );
+        let timeout_err = |what: &str| kind_err("AgentSetupTimeoutError", format!("{what} timed out after {} seconds", setup_timeout.as_secs_f64()));
+        if let Some(mut ua) = self.user_agent.take() {
+            let overlay = resolve_env_vars(&self.cfg.user_agent.as_ref().unwrap().agent.env)?;
+            let r = match self.ctx_with(user.clone(), None, overlay, "user-agent") {
+                Err(e) => Err(e),
+                Ok(cx) => tokio::time::timeout(setup_timeout, ua.setup(&cx)).await.unwrap_or_else(|_| Err(timeout_err("Simulated-user setup"))),
+            };
+            self.user_agent = Some(ua);
+            if let Err(e) = r {
+                self.result.agent_setup = Some(t.finish());
+                return Err(e);
+            }
+        }
         let mut agent = self.agent.take().unwrap();
-        let r = match self.agent_ctx(user, steps[0]) {
+        let r = match self.agent_ctx(user.clone(), steps[0]) {
             Err(e) => Err(e),
             Ok(cx) => match tokio::time::timeout(setup_timeout, agent.setup(&cx)).await {
                 Ok(r) => r,
-                Err(_) => Err(kind_err("AgentSetupTimeoutError", format!("Agent setup timed out after {} seconds", setup_timeout.as_secs_f64()))),
+                Err(_) => Err(timeout_err("Agent setup")),
             },
         };
         self.agent = Some(agent);
+        let r = match (r, self.bridge.take()) {
+            (Ok(()), Some(mut bridge)) => {
+                let mut agent = self.agent.take().unwrap();
+                let r = match self.bridge_overlay().and_then(|o| self.ctx_with(user.clone(), None, o, "agent")) {
+                    Err(e) => Err(e),
+                    Ok(cx) => tokio::time::timeout(setup_timeout, bridge.setup(&cx, &mut agent)).await.unwrap_or_else(|_| Err(timeout_err("Bridge setup"))),
+                };
+                self.agent = Some(agent);
+                self.bridge = Some(bridge);
+                r
+            }
+            (r, b) => {
+                self.bridge = b;
+                r
+            }
+        };
         self.result.agent_setup = Some(t.finish());
         self.result.agent_info.version = self.agent.as_ref().unwrap().version().unwrap_or_else(|| "unknown".into());
         r?;
@@ -493,6 +560,13 @@ impl Trial {
         if switch && let Err(e) = self.env().set_network_policy(&plan.agent_phase).await {
             return (ctx, t.finish(), Err(e));
         }
+        if self.user_agent.is_some() {
+            let r = self.run_simulated_user(instruction, &mut ctx, timeout).await;
+            if switch && let Err(e) = self.env().set_network_policy(&plan.agent_env_baseline).await {
+                return (ctx, t.finish(), Err(e));
+            }
+            return (ctx, t.finish(), r);
+        }
         let mut agent = self.agent.take().expect("agent created");
         let r = match self.agent_ctx(self.agent_user(step), step) {
             Err(e) => Err(e),
@@ -514,6 +588,51 @@ impl Trial {
         (ctx, t.finish(), r)
     }
 
+    /// The user agent drives the target over the bridge; the bridge is closed (export + teardown) afterwards.
+    async fn run_simulated_user(&mut self, instruction: &str, ctx: &mut AgentContext, timeout: Option<Duration>) -> Result<()> {
+        let u = self.cfg.user_agent.clone().unwrap();
+        let prompt = crate::bridge::render_user_prompt(
+            instruction,
+            self.bridge.as_ref().unwrap().prompt(),
+            u.user_prompt_template_path.as_deref(),
+            u.user_persona_path.as_deref(),
+        )?;
+        let user = self.agent_user(None);
+        let overlay = self.bridge_overlay()?;
+        let mut ua = self.user_agent.take().unwrap();
+        let r = match self.ctx_with(user.clone(), None, overlay.clone(), "user-agent") {
+            Err(e) => Err(e),
+            Ok(cx) => {
+                let run = ua.run(&prompt, &cx, ctx, false);
+                match timeout {
+                    Some(d) => tokio::time::timeout(d, run)
+                        .await
+                        .unwrap_or_else(|_| Err(kind_err("AgentTimeoutError", format!("Agent execution timed out after {} seconds", d.as_secs_f64())))),
+                    None => run.await,
+                }
+            }
+        };
+        self.user_agent = Some(ua);
+        self.close_bridge(user, overlay).await;
+        r
+    }
+
+    async fn close_bridge(&mut self, user: Option<String>, overlay: BTreeMap<String, String>) {
+        let Some(bridge) = self.bridge.take() else { return };
+        let mut agent = self.agent.take().unwrap();
+        if let Ok(cx) = self.ctx_with(user, None, overlay, "agent") {
+            if bridge.ready
+                && let Err(e) = bridge.export(&cx, &self.dir.join("agent")).await
+            {
+                self.log.line(&format!("bridge trajectory export failed: {e:#}"));
+            }
+            if let Err(e) = agent.acp_teardown(&cx).await {
+                self.log.line(&format!("bridge teardown failed: {e:#}"));
+            }
+        }
+        self.agent = Some(agent);
+    }
+
     async fn download_agent_logs(&self, target: &Path) -> Result<()> {
         let env = self.env();
         let a = &self.cfg.agent;
@@ -531,7 +650,24 @@ impl Trial {
     async fn sync_agent_output(&mut self, ctx: &mut AgentContext) {
         let agent_dir = self.dir.join("agent");
         let _ = self.download_agent_logs(&agent_dir).await;
-        if ctx.is_empty()
+        if let Some(ua) = &self.user_agent {
+            let ud = self.dir.join("user-agent");
+            let _ = self.env().download_dir(MAIN, "/logs/user-agent", &ud).await;
+            if ctx.is_empty() {
+                ua.populate_context_post_run(&ud, ctx);
+            }
+            let usage = std::fs::read_to_string(agent_dir.join(crate::bridge::TRAJECTORY_FILENAME))
+                .ok()
+                .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+                .and_then(|v| crate::bridge::extract_target_usage(&v));
+            if let Some(u) = usage {
+                let mut m = ctx.metadata.take().unwrap_or_else(|| serde_json::json!({}));
+                if m.get("acp_target_usage").is_none() {
+                    m["acp_target_usage"] = u;
+                }
+                ctx.metadata = Some(m);
+            }
+        } else if ctx.is_empty()
             && let Some(a) = &self.agent
         {
             a.populate_context_post_run(&agent_dir, ctx);

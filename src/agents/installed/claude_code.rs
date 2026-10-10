@@ -1,6 +1,9 @@
 //! Claude Code (port of upstream's agents/installed/claude_code.py).
 
-use super::{connection, ensure_system_dependencies, exec_agent, exec_error, filter_jsonl_events, parse_version, upload_text};
+use super::{
+    connection, ensure_acp_node_command, ensure_system_dependencies, exec_agent, exec_error, exec_root, filter_jsonl_events, parse_version, pinned_bin_wrapper_command,
+    safe_bin_symlink_command, upload_text,
+};
 use crate::agents::model_connection::Spec;
 use crate::agents::{Agent, AgentArgs, AgentContext, AgentCtx, ModelUsage};
 use crate::env::quote;
@@ -8,6 +11,8 @@ use anyhow::{Result, bail};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
+/// Zed ACP adapter version (bridges ACP <-> the Claude Agent SDK), as pinned by upstream.
+const CLAUDE_CODE_ACP_VERSION: &str = "0.16.2";
 const SETTINGS_DIR: &str = "/tmp/claude-code-settings";
 const SETTINGS_PATH: &str = "/tmp/claude-code-settings/settings.json";
 const SPEC: Spec = Spec {
@@ -23,6 +28,8 @@ pub struct ClaudeCode {
     settings: Option<Value>,
     /// load_trajectory is consumed by the first run only.
     loaded: bool,
+    /// Native claude binary the ACP adapter must use (set by acp_install).
+    acp_claude_executable: Option<String>,
 }
 
 fn truthy(v: Option<String>) -> bool {
@@ -44,7 +51,7 @@ impl ClaudeCode {
             }
             Some(_) => bail!("Invalid value for 'config': expected a local file path or JSON object"),
         };
-        let a = ClaudeCode { version: args.version_kw(), args, settings, loaded: false };
+        let a = ClaudeCode { version: args.version_kw(), args, settings, loaded: false, acp_claude_executable: None };
         a.cli_flags()?; // validate options eagerly, like upstream
         Ok(a)
     }
@@ -291,6 +298,70 @@ impl Agent for ClaudeCode {
     }
     fn supports_load(&self, _atif: bool) -> bool {
         true
+    }
+
+    fn acp_command(&self) -> Option<Vec<String>> {
+        let mut c = vec!["env".to_string(), "-u".into(), "CLAUDECODE".into()];
+        if let Some(m) = self.resolved_model() {
+            c.push(format!("ANTHROPIC_MODEL={m}"));
+            let lower = m.to_lowercase();
+            if let Some(tier) = ["opus", "sonnet", "haiku"].iter().find(|t| lower.contains(*t)) {
+                c.push(format!("ANTHROPIC_DEFAULT_{}_MODEL={m}", tier.to_uppercase()));
+            }
+        }
+        c.push("CLAUDE_CONFIG_DIR=/logs/agent/sessions".into());
+        if let Some(exe) = &self.acp_claude_executable {
+            c.push(format!("CLAUDE_CODE_EXECUTABLE={exe}"));
+        }
+        if let Some(e) = self.opt("reasoning_effort", Some("CLAUDE_CODE_EFFORT_LEVEL")) {
+            c.push(format!("CLAUDE_CODE_EFFORT_LEVEL={e}"));
+        }
+        if let Some(t) = self.opt("max_thinking_tokens", Some("MAX_THINKING_TOKENS")) {
+            c.push(format!("MAX_THINKING_TOKENS={t}"));
+        }
+        c.push("claude-code-acp".into());
+        Some(c)
+    }
+
+    fn acp_env(&self) -> BTreeMap<String, String> {
+        self.auth_env().unwrap_or_default()
+    }
+
+    async fn acp_install(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
+        let sessions = "/logs/agent/sessions";
+        // The adapter force-selects a model per session; settings.json is its only pre-session channel.
+        let settings = match self.resolved_model() {
+            Some(m) => format!("printf '%s' {} > {sessions}/settings.json; ", quote(&json!({"model": m}).to_string())),
+            None => String::new(),
+        };
+        let r = exec_agent(
+            cx,
+            &format!(
+                "set -euo pipefail; mkdir -p {sessions}; {settings}_hb_system_node=\"$(command -v node 2>/dev/null || true)\"; \
+                 _hb_claude=\"$(command -v claude 2>/dev/null || true)\"; \
+                 if [ -z \"$_hb_claude\" ] && [ -x \"$HOME/.local/bin/claude\" ]; then _hb_claude=\"$HOME/.local/bin/claude\"; fi; \
+                 {} && npm install -g @zed-industries/claude-code-acp@{CLAUDE_CODE_ACP_VERSION} && \
+                 echo \"${{_hb_system_node:-none}}:$(command -v node):$(command -v claude-code-acp):${{_hb_claude:-none}}\"",
+                ensure_acp_node_command()
+            ),
+            &BTreeMap::new(),
+        )
+        .await?;
+        let last = r.stdout.trim().lines().last().unwrap_or_default().to_string();
+        let parts: Vec<&str> = last.split(':').collect();
+        let [system_node, node, adapter, claude] = parts.as_slice() else { bail!("Could not locate node/claude-code-acp binaries for ACP mode (got {last:?})") };
+        if node.is_empty() || adapter.is_empty() {
+            bail!("Could not locate node/claude-code-acp binaries for ACP mode (got {last:?})");
+        }
+        if claude.is_empty() || *claude == "none" {
+            bail!("Could not locate the native claude binary for ACP mode (got {last:?})");
+        }
+        self.acp_claude_executable = Some(claude.to_string());
+        let mut link = pinned_bin_wrapper_command(node, adapter, "/usr/local/bin/claude-code-acp");
+        if *system_node == "none" {
+            link += &format!(" && {}", safe_bin_symlink_command(node, "/usr/local/bin/node"));
+        }
+        exec_root(cx, &link, &BTreeMap::new()).await.map(|_| ())
     }
 
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()> {

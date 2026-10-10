@@ -100,6 +100,20 @@ pub trait Agent: Send + Sync {
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()>;
     /// `resume`: continue the previous step's session (multi-step + resume_trajectory).
     async fn run(&mut self, instruction: &str, cx: &AgentCtx<'_>, ctx: &mut AgentContext, resume: bool) -> Result<()>;
+    /// ACP server launch command (target agents behind the simulated-user bridge). None = unsupported.
+    fn acp_command(&self) -> Option<Vec<String>> {
+        None
+    }
+    /// Host-derived env the ACP server needs.
+    fn acp_env(&self) -> BTreeMap<String, String> {
+        BTreeMap::new()
+    }
+    async fn acp_install(&mut self, _cx: &AgentCtx<'_>) -> Result<()> {
+        Ok(())
+    }
+    async fn acp_teardown(&mut self, _cx: &AgentCtx<'_>) -> Result<()> {
+        Ok(())
+    }
     /// Fill usage from downloaded logs when run() left the context empty.
     fn populate_context_post_run(&self, _logs_dir: &std::path::Path, _ctx: &mut AgentContext) {}
 }
