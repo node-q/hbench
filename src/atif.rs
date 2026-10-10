@@ -797,7 +797,7 @@ mod tests {
             {"type": "text", "text": "hi"}
         ]));
         assert_eq!(r.as_deref(), Some("routed reasoning\n\na\n\nb"));
-        assert_eq!(text, "{\"source\": {\"x\": 1}, \"type\": \"image\"}\n\nhi");
+        assert_eq!(text, "{\"type\": \"image\", \"source\": {\"x\": 1}}\n\nhi");
         assert!(tools.is_empty());
         assert!(build_metrics(Some(&json!({"input_tokens": null, "output_tokens": 3}))).unwrap().prompt_tokens == Some(0));
     }
