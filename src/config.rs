@@ -8,14 +8,8 @@ use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-fn is_false(b: &bool) -> bool {
-    !*b
-}
 fn one() -> f64 {
     1.0
-}
-fn yes() -> bool {
-    true
 }
 
 /// `env` accepts a mapping or upstream's legacy list of `KEY=VALUE` strings.
@@ -75,25 +69,20 @@ fn templatize<S: serde::Serializer>(env: &BTreeMap<String, String>, s: S) -> Res
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct AgentConfig {
+    /// None means oracle (upstream's validator), serialized as "oracle".
+    #[serde(serialize_with = "ser_agent_name")]
     pub name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub import_path: Option<String>,
     pub model_name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub n_concurrent: Option<usize>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub concurrency_group: Option<String>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub skills: Vec<String>,
     pub override_timeout_sec: Option<f64>,
     pub override_setup_timeout_sec: Option<f64>,
     pub max_timeout_sec: Option<f64>,
-    #[serde(skip_serializing_if = "is_false")]
     pub resume_trajectory: bool,
     /// Seed the agent's session from a native (.jsonl) or ATIF (.json) trajectory.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub load_trajectory: Option<String>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub extra_allowed_hosts: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub include_logs: Vec<String>,
@@ -102,8 +91,11 @@ pub struct AgentConfig {
     pub kwargs: BTreeMap<String, Value>,
     #[serde(deserialize_with = "env_map", serialize_with = "templatize", skip_serializing_if = "BTreeMap::is_empty")]
     pub env: BTreeMap<String, String>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub mcp_servers: Vec<McpServer>,
+}
+
+fn ser_agent_name<S: serde::Serializer>(n: &Option<String>, s: S) -> Result<S::Ok, S::Error> {
+    s.serialize_str(n.as_deref().unwrap_or("oracle"))
 }
 
 impl AgentConfig {
@@ -128,9 +120,9 @@ impl AgentConfig {
 pub struct UserAgentConfig {
     #[serde(flatten)]
     pub agent: AgentConfig,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub user_persona_path: Option<PathBuf>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub user_prompt_template_path: Option<PathBuf>,
     pub bridge: BridgeConfig,
 }
@@ -138,50 +130,63 @@ pub struct UserAgentConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct BridgeConfig {
     pub kind: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub prompt_path: Option<PathBuf>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(default)]
     pub kwargs: BTreeMap<String, Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct EnvConfig {
-    #[serde(rename = "type")]
+    /// None means docker (upstream's validator), serialized as "docker".
+    #[serde(rename = "type", serialize_with = "ser_env_type")]
     pub kind: Option<String>,
+    pub import_path: Option<String>,
     pub force_build: bool,
-    #[serde(default = "yes")]
     pub delete: bool,
-    /// Keep containers after the trial (docker `stop` instead of `down`).
-    #[serde(skip_serializing_if = "is_false")]
-    pub keep_containers: bool,
+    pub stream: bool,
+    pub cpu_enforcement_policy: String,
+    pub memory_enforcement_policy: String,
     pub override_cpus: Option<u32>,
     pub override_memory_mb: Option<u64>,
     pub override_storage_mb: Option<u64>,
     pub override_gpus: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    pub override_tpu: Option<Value>,
     pub mounts: Option<Vec<Value>>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub extra_docker_compose: Vec<PathBuf>,
     #[serde(deserialize_with = "env_map", serialize_with = "templatize", skip_serializing_if = "BTreeMap::is_empty")]
     pub env: BTreeMap<String, String>,
-    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    /// Docker kwargs; `keep_containers: true` stops instead of removing containers.
     pub kwargs: BTreeMap<String, Value>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub extra_allowed_hosts: Vec<String>,
+}
+
+fn ser_env_type<S: serde::Serializer>(k: &Option<String>, s: S) -> Result<S::Ok, S::Error> {
+    s.serialize_str(k.as_deref().unwrap_or("docker"))
+}
+
+impl EnvConfig {
+    pub fn keep_containers(&self) -> bool {
+        self.kwargs.get("keep_containers").is_some_and(|v| v == true || v == "true")
+    }
 }
 
 impl Default for EnvConfig {
     fn default() -> Self {
         EnvConfig {
             kind: None,
+            import_path: None,
             force_build: false,
             delete: true,
-            keep_containers: false,
+            stream: false,
+            cpu_enforcement_policy: "auto".into(),
+            memory_enforcement_policy: "auto".into(),
             override_cpus: None,
             override_memory_mb: None,
             override_storage_mb: None,
             override_gpus: None,
+            override_tpu: None,
             mounts: None,
             extra_docker_compose: vec![],
             env: BTreeMap::new(),
@@ -202,6 +207,10 @@ pub struct VerifierRunConfig {
     pub exclude_logs: Vec<String>,
     #[serde(deserialize_with = "env_map", serialize_with = "templatize", skip_serializing_if = "BTreeMap::is_empty")]
     pub env: BTreeMap<String, String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub import_path: Option<String>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub kwargs: BTreeMap<String, Value>,
     pub disable: bool,
 }
 
@@ -210,18 +219,12 @@ pub struct VerifierRunConfig {
 #[serde(default)]
 pub struct TaskRef {
     pub path: Option<PathBuf>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub git_url: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub git_commit_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(rename = "ref")]
     pub reference: Option<String>,
-    #[serde(skip_serializing_if = "is_false")]
     pub overwrite: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub download_dir: Option<PathBuf>,
     pub source: Option<String>,
 }
@@ -254,16 +257,12 @@ pub struct DatasetConfig {
     pub path: Option<PathBuf>,
     pub name: Option<String>,
     pub version: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(rename = "ref")]
     pub reference: Option<String>,
     pub registry_url: Option<String>,
     pub registry_path: Option<PathBuf>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub repo: Option<String>,
-    #[serde(skip_serializing_if = "is_false")]
     pub overwrite: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub download_dir: Option<PathBuf>,
     pub task_names: Option<Vec<String>>,
     pub exclude_task_names: Option<Vec<String>>,
@@ -359,7 +358,7 @@ pub struct TrialConfig {
     pub task: TaskRef,
     pub trial_name: String,
     pub trials_dir: PathBuf,
-    #[serde(default, skip_serializing_if = "is_false")]
+    #[serde(default)]
     pub install_only: bool,
     #[serde(default = "one")]
     pub timeout_multiplier: f64,
@@ -373,21 +372,21 @@ pub struct TrialConfig {
     pub environment_build_timeout_multiplier: Option<f64>,
     #[serde(default)]
     pub agent: AgentConfig,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub user_agent: Option<UserAgentConfig>,
     #[serde(default)]
     pub environment: EnvConfig,
     #[serde(default)]
     pub verifier: VerifierRunConfig,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub artifacts: Vec<Artifact>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub extra_instruction_paths: Vec<PathBuf>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub extra_instructions: Vec<String>,
     #[serde(default)]
     pub job_id: Option<uuid::Uuid>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub source_trial: Option<SourceTrial>,
 }
 
@@ -403,7 +402,6 @@ pub struct JobConfig {
     pub job_name: String,
     pub jobs_dir: PathBuf,
     pub n_attempts: usize,
-    #[serde(skip_serializing_if = "is_false")]
     pub install_only: bool,
     pub timeout_multiplier: f64,
     pub agent_timeout_multiplier: Option<f64>,
@@ -418,14 +416,12 @@ pub struct JobConfig {
     pub verifier: VerifierRunConfig,
     pub metrics: Vec<MetricConfig>,
     pub agents: Vec<AgentConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub user_agent: Option<UserAgentConfig>,
     pub datasets: Vec<DatasetConfig>,
     pub tasks: Vec<TaskRef>,
     pub artifacts: Vec<Artifact>,
     pub extra_instruction_paths: Vec<PathBuf>,
     pub extra_instructions: Vec<String>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub source_jobs: Vec<SourceJob>,
 }
 
@@ -549,6 +545,65 @@ impl JobConfig {
     }
 }
 
+/// Pydantic's `exclude_defaults`: drop fields equal to their defaults, recursing into nested
+/// models and into list elements whose element type has a default (upstream writes config.json so).
+fn prune_defaults(v: &mut Value, d: &Value) {
+    let (Value::Object(m), Value::Object(dm)) = (v, d) else { return };
+    let elem_default = |k: &str| -> Option<Value> {
+        match k {
+            "tasks" => serde_json::to_value(TaskRef::default()).ok(),
+            "datasets" => serde_json::to_value(DatasetConfig::default()).ok(),
+            "agents" => serde_json::to_value(AgentConfig::default()).ok(),
+            "metrics" => Some(serde_json::json!({"type": "mean", "kwargs": {}})),
+            _ => None,
+        }
+    };
+    let keys: Vec<String> = m.keys().cloned().collect();
+    for k in keys {
+        let Some(dv) = dm.get(&k) else {
+            if let (Some(ed), Some(Value::Array(items))) = (elem_default(&k), m.get_mut(&k)) {
+                items.iter_mut().for_each(|i| prune_defaults(i, &ed));
+            }
+            continue;
+        };
+        if m[&k] == *dv {
+            m.remove(&k);
+            continue;
+        }
+        match (m.get_mut(&k).unwrap(), elem_default(&k)) {
+            (Value::Array(items), Some(ed)) => items.iter_mut().for_each(|i| prune_defaults(i, &ed)),
+            (Value::Object(_), _) if dv.is_object() => prune_defaults(m.get_mut(&k).unwrap(), dv),
+            (Value::Object(_), _) if k == "user_agent" || k == "source_trial" => {
+                if let Ok(ad) = serde_json::to_value(AgentConfig::default()) {
+                    prune_defaults(m.get_mut(&k).unwrap(), &ad);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+impl TrialConfig {
+    /// config.json as upstream writes it (`exclude_defaults=True`).
+    pub fn config_json(&self) -> Value {
+        let mut v = serde_json::to_value(self).unwrap_or_default();
+        let d: TrialConfig = serde_json::from_value(serde_json::json!({"task": {}, "trial_name": "", "trials_dir": "trials"})).expect("default trial config");
+        prune_defaults(&mut v, &serde_json::to_value(d).unwrap_or_default());
+        v
+    }
+}
+
+impl JobConfig {
+    /// config.json as upstream writes it (`exclude_defaults=True`; job_name is always kept).
+    pub fn config_json(&self) -> Value {
+        let mut v = serde_json::to_value(self).unwrap_or_default();
+        let mut d = serde_json::to_value(JobConfig::default()).unwrap_or_default();
+        d.as_object_mut().map(|o| o.remove("job_name"));
+        prune_defaults(&mut v, &d);
+        v
+    }
+}
+
 /// upstream moved `orchestrator.{n_concurrent_trials,quiet,retry}` to the top level.
 fn migrate_legacy(v: &mut Value) {
     let Some(obj) = v.as_object_mut() else { return };
@@ -613,6 +668,22 @@ mod tests {
         assert_eq!(v["env"]["OTHER_TOKEN"], "abcd****jkl");
         assert_eq!(v["env"]["MAX_TOKENS"], "100");
         assert_eq!(v["env"]["REGION"], "us");
+    }
+
+    #[test]
+    fn config_json_excludes_defaults_like_hbench() {
+        let t: TrialConfig = serde_json::from_value(serde_json::json!({"task": {"path": "/t/hello-world"}, "trial_name": "hello-world__x", "trials_dir": "/j", "job_id": "04eeb23d-d3b1-4af2-8b96-5fd962b43b6e"})).unwrap();
+        assert_eq!(t.config_json(), serde_json::json!({"task": {"path": "/t/hello-world"}, "trial_name": "hello-world__x", "trials_dir": "/j", "job_id": "04eeb23d-d3b1-4af2-8b96-5fd962b43b6e"}));
+        let full = serde_json::to_value(&t).unwrap();
+        for k in ["install_only", "user_agent", "artifacts", "source_trial", "extra_instructions"] {
+            assert!(full.get(k).is_some(), "{k} must be serialized in result.json config");
+        }
+        assert_eq!(full["agent"]["name"], "oracle");
+        assert_eq!(full["environment"]["type"], "docker");
+        let j: JobConfig = serde_json::from_value(serde_json::json!({"job_name": "j", "jobs_dir": "/x", "agents": [{"name": "oracle"}], "tasks": [{"path": "/t/a"}], "environment": {"type": "docker", "delete": true}})).unwrap();
+        assert_eq!(j.config_json(), serde_json::json!({"job_name": "j", "jobs_dir": "/x", "tasks": [{"path": "/t/a"}]}));
+        let j2: JobConfig = serde_json::from_value(serde_json::json!({"job_name": "j", "agents": [{"name": "claude-code", "model_name": "m"}], "n_attempts": 3})).unwrap();
+        assert_eq!(j2.config_json(), serde_json::json!({"job_name": "j", "n_attempts": 3, "agents": [{"name": "claude-code", "model_name": "m"}]}));
     }
 
     #[test]

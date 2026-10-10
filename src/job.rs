@@ -205,7 +205,7 @@ pub async fn run_job(cfg: JobConfig, trial_configs: Option<Vec<TrialConfig>>, fi
         Some(prev) => prev.id,
         None => uuid::Uuid::new_v4(),
     };
-    std::fs::write(job_dir.join("config.json"), serde_json::to_string_pretty(&cfg)?)?;
+    std::fs::write(job_dir.join("config.json"), serde_json::to_string_pretty(&cfg.config_json())?)?;
     let log = crate::env::TrialLog::create(&job_dir.join("job.log"))?;
     log.line(&format!("job {} started ({} agent config(s))", cfg.job_name, cfg.agents.len()));
 

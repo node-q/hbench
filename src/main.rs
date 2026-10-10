@@ -531,7 +531,9 @@ fn build_job_config(a: &RunArgs) -> Result<JobConfig> {
     if a.no_delete {
         cfg.environment.delete = false;
     }
-    cfg.environment.keep_containers |= a.keep_containers;
+    if a.keep_containers {
+        cfg.environment.kwargs.insert("keep_containers".into(), Value::Bool(true));
+    }
     cfg.environment.override_cpus = a.override_cpus.or(cfg.environment.override_cpus);
     cfg.environment.override_memory_mb = a.override_memory_mb.or(cfg.environment.override_memory_mb);
     cfg.environment.override_gpus = a.override_gpus.or(cfg.environment.override_gpus);

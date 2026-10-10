@@ -203,7 +203,7 @@ impl Trial {
         for d in ["agent", "verifier", "artifacts"] {
             std::fs::create_dir_all(dir.join(d))?;
         }
-        std::fs::write(dir.join("config.json"), serde_json::to_string_pretty(&cfg)?)?;
+        std::fs::write(dir.join("config.json"), serde_json::to_string_pretty(&cfg.config_json())?)?;
         std::fs::write(dir.join("lock.json"), serde_json::to_string_pretty(&trial_lock(&cfg))?)?;
         let log = TrialLog::create(&dir.join("trial.log"))?;
         let result = TrialResult {
@@ -299,7 +299,7 @@ impl Trial {
             baseline,
             phase_policies: phases,
             upload_env_dir: true,
-            keep_containers: e.keep_containers,
+            keep_containers: e.keep_containers(),
             delete: e.delete,
             log_dirs: if agent_env { LOG_DIRS.to_vec() } else { vec!["/logs/verifier"] },
         })
