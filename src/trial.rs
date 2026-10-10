@@ -1023,18 +1023,51 @@ impl Trial {
     }
 }
 
-/// Reproducibility record of the resolved run input (upstream's lock.json, simplified).
+/// Pydantic `exclude_none`: drop null-valued keys recursively.
+fn exclude_none(v: Value) -> Value {
+    match v {
+        Value::Object(m) => Value::Object(m.into_iter().filter(|(_, x)| !x.is_null()).map(|(k, x)| (k, exclude_none(x))).collect()),
+        Value::Array(a) => Value::Array(a.into_iter().map(exclude_none).collect()),
+        x => x,
+    }
+}
+
+fn sha256_prefixed(b: &[u8]) -> String {
+    format!("sha256:{}", crate::task::hex(&<sha2::Sha256 as sha2::Digest>::digest(b)))
+}
+
+/// upstream's TrialLock (lock.json), dumped with `exclude_none`.
 pub fn trial_lock(c: &TrialConfig) -> Value {
     let local = crate::registry::local_path(&c.task);
-    let digest = |p: &Path| crate::task::hash_dir(p).map(|h| format!("sha256:{h}")).unwrap_or_default();
-    let file_digest = |p: &Path| std::fs::read(p).map(|b| format!("sha256:{}", crate::task::hex(&sha2::Digest::finalize(<sha2::Sha256 as sha2::Digest>::new_with_prefix(&b))))).unwrap_or_default();
-    serde_json::json!({
+    let task = Task::load(&local).ok();
+    let name = local.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let file_digest = |p: &Path| std::fs::read(p).map(|b| sha256_prefixed(&b)).unwrap_or_default();
+    let extra: Vec<Value> = c
+        .extra_instruction_paths
+        .iter()
+        .map(|p| serde_json::json!({"path": p, "digest": file_digest(p)}))
+        .chain(c.extra_instructions.iter().map(|t| serde_json::json!({"digest": sha256_prefixed(t.as_bytes())})))
+        .collect();
+    let mut verifier = serde_json::to_value(&c.verifier).unwrap_or_default();
+    if let Some(t) = &task
+        && !t.has_steps()
+    {
+        verifier["environment_mode"] = serde_json::to_value(t.verifier_mode(None)).unwrap_or_default();
+    }
+    let skills: Vec<Value> = c
+        .agent
+        .skills
+        .iter()
+        .map(|s| serde_json::json!({"name": Path::new(s).file_name().map(|n| n.to_string_lossy().into_owned()), "source": s, "digest": crate::task::content_digest(Path::new(s))}))
+        .collect();
+    let user_agent = c.user_agent.as_ref();
+    exclude_none(serde_json::json!({
         "schema_version": 2,
         "task": {
-            "name": Task::load(&local).map(|t| t.name()).unwrap_or_default(),
-            "version": Task::load(&local).ok().and_then(|t| t.config.task.and_then(|p| p.version)),
+            "name": name,
+            "version": task.as_ref().and_then(|t| t.config.task.as_ref().and_then(|p| p.version.clone())),
             "type": if c.task.git_url.is_some() { "git" } else { "local" },
-            "digest": digest(&local),
+            "digest": crate::task::content_digest(&local),
             "source": c.task.source,
             "path": c.task.path,
             "git_url": c.task.git_url,
@@ -1046,16 +1079,21 @@ pub fn trial_lock(c: &TrialConfig) -> Value {
         "verifier_timeout_multiplier": c.verifier_timeout_multiplier,
         "agent_setup_timeout_multiplier": c.agent_setup_timeout_multiplier,
         "environment_build_timeout_multiplier": c.environment_build_timeout_multiplier,
-        "extra_instructions": c.extra_instruction_paths.iter().map(|p| serde_json::json!({"path": p, "digest": file_digest(p)}))
-            .chain(c.extra_instructions.iter().map(|s| serde_json::json!({"digest": format!("sha256:{}", crate::task::hex(&<sha2::Sha256 as sha2::Digest>::digest(s.as_bytes())))})))
-            .collect::<Vec<_>>(),
+        "extra_instructions": if extra.is_empty() { Value::Null } else { Value::Array(extra) },
         "agent": c.agent,
-        "skills": c.agent.skills.iter().map(|s| serde_json::json!({"name": Path::new(s).file_name().map(|n| n.to_string_lossy().into_owned()), "source": s, "digest": digest(Path::new(s))})).collect::<Vec<_>>(),
+        "user_agent": user_agent,
+        "user_persona": user_agent.and_then(|u| u.user_persona_path.as_ref()).map(|p| serde_json::json!({"path": p, "digest": file_digest(p)})),
+        "user_prompt_template": user_agent.and_then(|u| u.user_prompt_template_path.as_ref()).map(|p| serde_json::json!({"path": p, "digest": file_digest(p)})),
+        "bridge_prompt": user_agent.and_then(|u| u.bridge.prompt_path.as_ref()).map(|p| serde_json::json!({"path": p, "digest": file_digest(p)})),
+        "bridge_inputs": {},
+        "skills": skills,
         "environment": c.environment,
-        "extra_docker_compose": c.environment.extra_docker_compose.iter().map(|p| serde_json::json!({"path": p, "digest": file_digest(p)})).collect::<Vec<_>>(),
-        "verifier": c.verifier,
+        "extra_docker_compose": if c.environment.extra_docker_compose.is_empty() { Value::Null } else {
+            Value::Array(c.environment.extra_docker_compose.iter().map(|p| serde_json::json!({"path": p, "digest": file_digest(p)})).collect())
+        },
+        "verifier": verifier,
         "source_trial": c.source_trial,
-    })
+    }))
 }
 
 async fn cancellable<T>(mut cancel: watch::Receiver<bool>, fut: impl Future<Output = Result<T>>) -> Result<T> {

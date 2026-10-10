@@ -614,6 +614,12 @@ pub fn strip_canary(text: &str) -> String {
     lines[i..].join("\n")
 }
 
+/// upstream's task digest (`Packager.compute_content_hash`), `sha256:`-prefixed.
+/// ponytail: interim; replaced by the exact port (gitignore filtering) from the authoring module.
+pub fn content_digest(dir: &Path) -> String {
+    hash_dir(dir).map(|h| format!("sha256:{h}")).unwrap_or_default()
+}
+
 /// Stable sha256 over relative paths + contents of every file under `dir`.
 pub fn hash_dir(dir: &Path) -> Result<String> {
     let mut files = Vec::new();
