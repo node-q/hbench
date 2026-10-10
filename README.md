@@ -19,9 +19,11 @@ $B trials handoff jobs/<job>/<trial>                           # resume the sess
 $B sweeps run -c job.yaml --max-sweeps 3                       # drop solved tasks each sweep
 $B view -p jobs                                                # web results viewer
 $B traces export -p jobs/<job> -o traces.jsonl                 # upstream trace rows (ATIF episodes)
-$B datasets list | download <name@ver>
-$B tasks init <name> | check -p <dir> | start-env -p <task> | migrate -i <tb1 tasks> -o <out>
-$B agents        $B cache clean
+$B datasets list | download <name@ver> | init | add | remove
+$B init <org/name> [--steps N]   $B add|remove|sync ...             # task/dataset authoring (dataset.toml)
+$B tasks init|check|start-env|migrate|schema                      # start-env: shell into a task's env
+$B analyze jobs/<job> | <trial>    $B check <tasks>                 # agent-run trajectory analysis / task QA
+$B agents list | schema <agent>    $B trials schema    $B cache clean
 ```
 
 Docker: hbench uses whatever `docker` points at (`DOCKER_CONTEXT`/`DOCKER_HOST`). Remote ssh daemons work because
@@ -80,9 +82,8 @@ cost. Error types and the retry policy (`--max-retries`, include/exclude) match 
 These require external services:
 
 - Cloud sandboxes (Daytona, Modal, E2B, ...).
-- upstream Hub (publish/upload/package registry).
+- upstream Hub (publish/upload/package registry, `org/name@ref` packages).
 - Windows containers.
-- LLM-powered `analyze`/`check`/`summarize`.
 
 Benchmark adapters aren't needed: they produce upstream task dirs, which hbench runs directly, and converted datasets
 are in the registry.
@@ -94,3 +95,6 @@ are in the registry.
   users/env, no-network, compose sidecars, and prebuilt images, and checks for leaked containers.
 - `scripts/conformance.sh`: runs upstream's own `examples/tasks` with the outcomes upstream's runtime tests expect. That
   includes the network-policy matrix, verifier-mode matrix, multi-step, sidecar artifacts, and extra allowed hosts.
+- `scripts/parity.py <hbench_job> <hbench_job>`: diffs a real upstream job with an hbench job on the same tasks. It
+  compares rewards, exceptions, the `result.json` key structure, the trial file layout, and artifact manifests.
+- `scripts/install-matrix.sh`: installs every installed agent into a real container (`install_only`).
