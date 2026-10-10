@@ -246,7 +246,7 @@ pub(super) mod opts {
         std::fs::write(dir.join("task.toml"), "[environment]\ndocker_image='x'\n").unwrap();
         std::fs::write(dir.join("instruction.md"), "x").unwrap();
         let task = std::sync::Arc::new(crate::task::Task::load(&dir).unwrap());
-        AgentArgs {
+        AgentArgs { load_trajectory: None,
             model_name: model.map(String::from),
             kwargs: serde_json::from_value(kwargs).unwrap(),
             extra_env: env.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect(),

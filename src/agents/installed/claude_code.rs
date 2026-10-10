@@ -387,7 +387,7 @@ impl Agent for ClaudeCode {
                 &BTreeMap::new(),
             )
             .await
-            .map_err(|e| anyhow::anyhow!("Agent install failed: {e:#}"))?;
+            .map_err(|e| e.context("Agent install failed"))?;
         }
         if self.version.is_none() {
             let r = cx.exec("export PATH=\"$HOME/.local/bin:$PATH\"; claude --version", &BTreeMap::new(), None).await?;
