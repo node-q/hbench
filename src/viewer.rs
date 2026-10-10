@@ -366,9 +366,20 @@ function treeHtml(list, prefix, id) {
   }).join('') + `</div><div id="${id}"><p class="muted">Select a file.</p></div></div>`;
 }
 
+// `hbench analyze` writes analysis.json into the trial dir: summary text + per-criterion checks.
+function analysisHtml(raw) {
+  let a;
+  try { a = JSON.parse(raw); } catch (e) { return pre(raw); }
+  const texts = Object.entries(a).filter(([, v]) => typeof v === 'string').map(([k, v]) => `<p><b>${esc(k)}</b>: ${esc(v)}</p>`).join('');
+  const checks = Object.entries(a).filter(([, v]) => v && typeof v === 'object' && !Array.isArray(v))
+    .map(([k, v]) => sect(esc(k), table([['Criterion', ([c]) => esc(c)], ['Outcome', ([, x]) => esc(x && typeof x === 'object' ? (x.outcome ?? x.result ?? '') : x)],
+      ['Explanation', ([, x]) => esc(x && typeof x === 'object' ? (x.explanation ?? '') : '')]], Object.entries(v)), true)).join('');
+  return texts + checks + sect('analysis.json', pre(pretty(a)));
+}
+
 async function trialView(job, trial) {
   const base = `/api/jobs/${enc(job)}/trials/${enc(trial)}`;
-  const [r, log, exc] = await Promise.all([api(base), txt(base + '/files/trial.log'), txt(base + '/files/exception.txt')]);
+  const [r, log, exc, an] = await Promise.all([api(base), txt(base + '/files/trial.log'), txt(base + '/files/exception.txt'), txt(base + '/files/analysis.json')]);
   const steps = (r.step_results || []).map(s => s.step_name);
   const span = t => t && t.started_at && t.finished_at ? dur((new Date(t.finished_at) - new Date(t.started_at)) / 1000) : '';
   const rw = rs => rs ? Object.entries(rs).map(([k, v]) => `${esc(k)}=${esc(num(v))}`).join(' ') : '';
@@ -389,6 +400,7 @@ async function trialView(job, trial) {
   }
   h += `<p>Showing: <select id="step"><option value="">trial root</option>${steps.map(s => `<option${s === steps[steps.length - 1] ? ' selected' : ''}>${esc(s)}</option>`).join('')}</select></p><div id="scoped">Loading...</div>` +
     (ex || exc ? sect('Exception', (ex ? pre(ex.exception_message, 'err') + sect('traceback', pre(ex.exception_traceback)) : '') + (exc ? sect('exception.txt', pre(exc)) : ''), true) : '') +
+    (an ? sect('Analysis', analysisHtml(an), true) : '') +
     sect('trial.log', pre(log)) + sect('result.json', pre(pretty(r)));
   app.innerHTML = h;
   const sel = document.getElementById('step');
