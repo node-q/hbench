@@ -52,7 +52,7 @@ fn pyf(f: f64) -> String {
 }
 
 /// Python `repr()` of a str.
-fn pyrepr(s: &str) -> String {
+pub(crate) fn pyrepr(s: &str) -> String {
     let q = if s.contains('\'') && !s.contains('"') { '"' } else { '\'' };
     let mut out = String::from(q);
     for c in s.chars() {
@@ -1091,20 +1091,35 @@ const KNOWN_OPTIONS: [&str; 24] = [
 ];
 
 /// Pydantic-style (lax) kwarg coercion, collecting errors.
-struct Kw<'a> {
+pub(crate) struct Kw<'a> {
     m: &'a BTreeMap<String, Value>,
     errors: Vec<String>,
 }
 
-impl Kw<'_> {
-    fn get(&self, k: &str) -> Option<&Value> {
+impl<'a> Kw<'a> {
+    /// Starts with an "Unknown option" error for every key not in `known`.
+    pub(crate) fn new(m: &'a BTreeMap<String, Value>, known: &[&str]) -> Kw<'a> {
+        let errors = m.keys().filter(|k| !known.contains(&k.as_str())).map(|k| format!("Unknown option '{k}'.")).collect();
+        Kw { m, errors }
+    }
+    /// upstream's "Invalid kwargs" error, if any option failed.
+    pub(crate) fn finish(self, agent: &str) -> Result<()> {
+        if self.errors.is_empty() {
+            return Ok(());
+        }
+        bail!(
+            "Invalid kwargs for agent '{agent}':\n{}\nSee hbench agent schema {agent} for available options.",
+            self.errors.iter().map(|e| format!("  {e}")).collect::<Vec<_>>().join("\n")
+        )
+    }
+    pub(crate) fn get(&self, k: &str) -> Option<&Value> {
         self.m.get(k).filter(|v| !v.is_null())
     }
     fn bad<T>(&mut self, k: &str, what: &str) -> Option<T> {
         self.errors.push(format!("{k}: Input should be a valid {what}"));
         None
     }
-    fn int(&mut self, k: &str) -> Option<i64> {
+    pub(crate) fn int(&mut self, k: &str) -> Option<i64> {
         let v = self.get(k)?.clone();
         let r = match &v {
             Value::Number(n) => n.as_i64().or_else(|| n.as_f64().filter(|f| f.fract() == 0.0).map(|f| f as i64)),
@@ -1114,7 +1129,7 @@ impl Kw<'_> {
         };
         r.or_else(|| self.bad(k, "integer"))
     }
-    fn float(&mut self, k: &str) -> Option<f64> {
+    pub(crate) fn float(&mut self, k: &str) -> Option<f64> {
         let r = match self.get(k)? {
             Value::Number(n) => n.as_f64(),
             Value::String(s) => s.trim().parse().ok(),
@@ -1122,7 +1137,7 @@ impl Kw<'_> {
         };
         r.or_else(|| self.bad(k, "number"))
     }
-    fn boolean(&mut self, k: &str, default: bool) -> bool {
+    pub(crate) fn boolean(&mut self, k: &str, default: bool) -> bool {
         let r = match self.get(k) {
             None => return default,
             Some(Value::Bool(b)) => Some(*b),
@@ -1140,14 +1155,14 @@ impl Kw<'_> {
         };
         r.or_else(|| self.bad(k, "boolean")).unwrap_or(default)
     }
-    fn string(&mut self, k: &str) -> Option<String> {
+    pub(crate) fn string(&mut self, k: &str) -> Option<String> {
         match self.get(k)? {
             Value::String(s) => Some(s.clone()),
             Value::Number(n) => Some(n.to_string()),
             _ => self.bad(k, "string"),
         }
     }
-    fn object(&mut self, k: &str) -> Option<Map<String, Value>> {
+    pub(crate) fn object(&mut self, k: &str) -> Option<Map<String, Value>> {
         match self.get(k)? {
             Value::Object(o) => Some(o.clone()),
             _ => self.bad(k, "dictionary"),
@@ -1157,10 +1172,9 @@ impl Kw<'_> {
 
 impl Options {
     fn parse(kwargs: &BTreeMap<String, Value>) -> Result<Options> {
-        let mut kw = Kw { m: kwargs, errors: vec![] };
-        for k in kwargs.keys().filter(|k| !KNOWN_OPTIONS.contains(&k.as_str()) && *k != "max_episodes") {
-            kw.errors.push(format!("Unknown option '{k}'."));
-        }
+        let mut known = KNOWN_OPTIONS.to_vec();
+        known.push("max_episodes");
+        let mut kw = Kw::new(kwargs, &known);
         // Precedence: max_turns > max_episodes > episodes (deprecated).
         let max_episodes = kw.int("max_turns").or_else(|| kw.int("max_episodes")).or_else(|| kw.int("episodes"));
         let parser_name = kw.string("parser_name").unwrap_or_else(|| "json".into());
@@ -1205,12 +1219,7 @@ impl Options {
             session_id_headers,
         };
         kw.boolean("suppress_max_turns_warning", false);
-        if !kw.errors.is_empty() {
-            bail!(
-                "Invalid kwargs for agent '{NAME}':\n{}\nSee hbench agent schema {NAME} for available options.",
-                kw.errors.iter().map(|e| format!("  {e}")).collect::<Vec<_>>().join("\n")
-            );
-        }
+        kw.finish(NAME)?;
         let parser = ParserKind::from_name(&parser_name)?;
         match llm_backend.as_str() {
             "litellm" => {}
@@ -1430,21 +1439,6 @@ impl Terminus2 {
         Ok(Some(xml))
     }
 
-    fn mcp_info(&self) -> String {
-        if self.args.mcp_servers.is_empty() {
-            return String::new();
-        }
-        let mut s = String::from("\n\nMCP Servers:\nThe following MCP servers are available for this task.\n");
-        for m in &self.args.mcp_servers {
-            if m.transport() == "stdio" {
-                s += &format!("- {}: stdio transport, command: {} {}\n", m.name, m.command.as_deref().unwrap_or("None"), m.args.join(" "));
-            } else {
-                s += &format!("- {}: {} transport, url: {}\n", m.name, m.transport(), m.url.as_deref().unwrap_or("None"));
-            }
-        }
-        s
-    }
-
     /// The agent run against any shell (AgentCtx in production, a mock in tests).
     pub async fn run_with(&mut self, instruction: &str, sh: &dyn Shell, ctx: &mut AgentContext) -> Result<()> {
         self.reset_per_run_state();
@@ -1460,7 +1454,7 @@ impl Terminus2 {
 
     async fn run_inner(&mut self, instruction: &str, sh: &dyn Shell, ctx: &mut AgentContext) -> Result<()> {
         let terminal_state = limit_output_length(&self.tmux()?.get_incremental_output(sh).await?, 10_000);
-        let mut augmented = format!("{instruction}{}", self.mcp_info());
+        let mut augmented = format!("{instruction}{}", mcp_info(&self.args.mcp_servers));
         if let Some(skills) = self.build_skills_section(sh).await? {
             augmented += &skills;
         }
@@ -1983,6 +1977,22 @@ so ask everything you need to know.",
         let file = if linear && idx > 0 { format!("trajectory.cont-{idx}.json") } else { "trajectory.json".into() };
         write_trajectory(&self.args.logs_dir.join(file), &t);
     }
+}
+
+/// MCP servers appended to the instruction (Terminus-2 and dspy-rlm).
+pub(crate) fn mcp_info(servers: &[crate::task::McpServer]) -> String {
+    if servers.is_empty() {
+        return String::new();
+    }
+    let mut s = String::from("\n\nMCP Servers:\nThe following MCP servers are available for this task.\n");
+    for m in servers {
+        if m.transport() == "stdio" {
+            s += &format!("- {}: stdio transport, command: {} {}\n", m.name, m.command.as_deref().unwrap_or("None"), m.args.join(" "));
+        } else {
+            s += &format!("- {}: {} transport, url: {}\n", m.name, m.transport(), m.url.as_deref().unwrap_or("None"));
+        }
+    }
+    s
 }
 
 fn parse_skill_frontmatter(content: &str) -> Option<(String, String)> {
