@@ -387,7 +387,7 @@ mod tests {
     fn reasoning() {
         let a = agent(json!({"reasoning_effort": "none", "completion_kwargs": {"parallel_tool_calls": false, "timeout": 300}}), &[], "openai/gpt-5").unwrap();
         let (k, inject, active) = a.reasoning_options().unwrap();
-        assert_eq!(k.as_deref(), Some(r#"{"parallel_tool_calls": false, "reasoning_effort": "none", "timeout": 300}"#));
+        assert_eq!(k.as_deref(), Some(r#"{"parallel_tool_calls": false, "timeout": 300, "reasoning_effort": "none"}"#));
         assert!(!inject && !active);
         let a = agent(json!({"reasoning_effort": "medium"}), &[], "openai/gpt-5").unwrap();
         assert_eq!(a.reasoning_options().unwrap(), (None, true, true));
