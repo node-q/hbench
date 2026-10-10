@@ -93,6 +93,10 @@ pub trait Agent: Send + Sync {
     fn supports_resume(&self) -> bool {
         false
     }
+    /// Can seed a session from a native (`atif=false`) or ATIF (`atif=true`) trajectory.
+    fn supports_load(&self, _atif: bool) -> bool {
+        false
+    }
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()>;
     /// `resume`: continue the previous step's session (multi-step + resume_trajectory).
     async fn run(&mut self, instruction: &str, cx: &AgentCtx<'_>, ctx: &mut AgentContext, resume: bool) -> Result<()>;
@@ -110,6 +114,8 @@ pub struct AgentArgs {
     pub skills: Vec<String>,
     pub logs_dir: PathBuf,
     pub task: Arc<Task>,
+    /// Trajectory to seed the first run's session from (native .jsonl or ATIF .json).
+    pub load_trajectory: Option<PathBuf>,
 }
 
 impl AgentArgs {
@@ -171,7 +177,7 @@ pub fn agent_names() -> Vec<&'static str> {
     v
 }
 
-pub fn create(cfg: &AgentConfig, logs_dir: PathBuf, task: Arc<Task>) -> Result<AgentBox> {
+pub fn create(cfg: &AgentConfig, logs_dir: PathBuf, task: Arc<Task>, load_trajectory: Option<PathBuf>) -> Result<AgentBox> {
     let args = AgentArgs {
         model_name: cfg.model_name.clone(),
         kwargs: cfg.kwargs.clone(),
@@ -184,6 +190,7 @@ pub fn create(cfg: &AgentConfig, logs_dir: PathBuf, task: Arc<Task>) -> Result<A
         skills: cfg.skills.clone(),
         logs_dir,
         task,
+        load_trajectory,
     };
     Ok(match cfg.name() {
         "oracle" => Box::new(oracle::Oracle::new(args)),

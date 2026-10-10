@@ -21,6 +21,8 @@ pub struct ClaudeCode {
     args: AgentArgs,
     version: Option<String>,
     settings: Option<Value>,
+    /// load_trajectory is consumed by the first run only.
+    loaded: bool,
 }
 
 fn truthy(v: Option<String>) -> bool {
@@ -42,7 +44,7 @@ impl ClaudeCode {
             }
             Some(_) => bail!("Invalid value for 'config': expected a local file path or JSON object"),
         };
-        let a = ClaudeCode { version: args.version_kw(), args, settings };
+        let a = ClaudeCode { version: args.version_kw(), args, settings, loaded: false };
         a.cli_flags()?; // validate options eagerly, like upstream
         Ok(a)
     }
@@ -159,6 +161,92 @@ impl ClaudeCode {
     }
 }
 
+fn session_text(m: &Value) -> String {
+    match m {
+        Value::String(s) => s.clone(),
+        Value::Array(parts) => parts
+            .iter()
+            .map(|p| if p["type"] == "text" && p["text"].as_str().is_some_and(|t| !t.is_empty()) { p["text"].as_str().unwrap().to_string() } else { "[image omitted]".into() })
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => String::new(),
+    }
+}
+
+/// Render an ATIF trajectory as a native Claude Code session (the user/assistant event chain
+/// threaded by uuid/parentUuid so `claude --resume <id>` picks it up), like upstream.
+pub fn atif_to_native(traj: &Value, session_id: &str) -> String {
+    let version = traj["agent"]["version"].as_str();
+    let default_model = traj["agent"]["model_name"].clone();
+    let mut parent: Option<String> = None;
+    let mut last_ts = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
+    let mut events: Vec<Value> = vec![];
+    let mut base = |kind: &str, ts: &str| {
+        let id = uuid::Uuid::new_v4().to_string();
+        let mut e = json!({"parentUuid": parent, "isSidechain": false, "type": kind, "uuid": id, "timestamp": ts,
+            "sessionId": session_id, "userType": "external", "cwd": "/app", "gitBranch": ""});
+        if let Some(v) = version {
+            e["version"] = json!(v);
+        }
+        parent = Some(id);
+        e
+    };
+    for step in traj["steps"].as_array().into_iter().flatten() {
+        if step["source"] == "system" {
+            continue;
+        }
+        let ts = step["timestamp"].as_str().map(String::from).unwrap_or_else(|| last_ts.clone());
+        last_ts = ts.clone();
+        if step["source"] == "user" {
+            let mut e = base("user", &ts);
+            e["message"] = json!({"role": "user", "content": session_text(&step["message"])});
+            events.push(e);
+            continue;
+        }
+        let mut content = vec![];
+        let text = session_text(&step["message"]);
+        if !text.is_empty() {
+            content.push(json!({"type": "text", "text": text}));
+        }
+        let calls: Vec<&Value> = step["tool_calls"].as_array().into_iter().flatten().collect();
+        for c in &calls {
+            content.push(json!({"type": "tool_use", "id": c["tool_call_id"], "name": c["function_name"], "input": c["arguments"]}));
+        }
+        if !content.is_empty() {
+            let m = &step["metrics"];
+            let mut e = base("assistant", &ts);
+            e["message"] = json!({
+                "model": if step["model_name"].is_null() { default_model.clone() } else { step["model_name"].clone() },
+                "id": format!("msg_{}", uuid::Uuid::new_v4().simple()), "type": "message", "role": "assistant", "content": content,
+                "stop_reason": null, "stop_sequence": null,
+                "usage": {"input_tokens": m["prompt_tokens"].as_i64().unwrap_or(0), "output_tokens": m["completion_tokens"].as_i64().unwrap_or(0)},
+            });
+            events.push(e);
+        }
+        let results: Vec<&Value> = step["observation"]["results"].as_array().into_iter().flatten().collect();
+        let blocks: Vec<Value> = calls
+            .iter()
+            .map(|c| {
+                let r = results.iter().find(|r| !r["source_call_id"].is_null() && r["source_call_id"] == c["tool_call_id"]);
+                let content = match r {
+                    Some(r) => {
+                        let raw = &r["extra"]["tool_result_metadata"]["raw_tool_result"];
+                        if raw.is_object() && raw.get("content").is_some() { raw["content"].clone() } else { json!(session_text(&r["content"])) }
+                    }
+                    None => json!("[no output recorded]"),
+                };
+                json!({"tool_use_id": c["tool_call_id"], "type": "tool_result", "content": content})
+            })
+            .collect();
+        if !blocks.is_empty() {
+            let mut e = base("user", &ts);
+            e["message"] = json!({"role": "user", "content": blocks});
+            events.push(e);
+        }
+    }
+    events.iter().map(|e| e.to_string() + "\n").collect()
+}
+
 /// Usage from the final stream-json `result` event (cost is authoritative there).
 pub fn parse_stream_result(text: &str) -> Option<AgentContext> {
     let v: Value = text.lines().rev().filter_map(|l| serde_json::from_str::<Value>(l.trim()).ok()).find(|v| v["type"] == "result")?;
@@ -199,6 +287,9 @@ impl Agent for ClaudeCode {
         self.version.clone()
     }
     fn supports_resume(&self) -> bool {
+        true
+    }
+    fn supports_load(&self, _atif: bool) -> bool {
         true
     }
 
@@ -285,7 +376,24 @@ impl Agent for ClaudeCode {
         }
         let flags = self.cli_flags()?;
         let settings_flag = if self.settings.is_some() { format!("--settings {SETTINGS_PATH} ") } else { String::new() };
-        let resume_flag = if resume { "--continue " } else { "" };
+        let mut resume_flag = if resume { "--continue ".to_string() } else { String::new() };
+        if let Some(src) = self.args.load_trajectory.clone().filter(|_| !self.loaded) {
+            self.loaded = true;
+            let (name, content) = if src.extension().is_some_and(|e| e == "json") {
+                let traj: Value = serde_json::from_str(&std::fs::read_to_string(&src)?)?;
+                let sid = traj["session_id"].as_str().filter(|s| uuid::Uuid::parse_str(s).is_ok()).map(String::from).unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+                (format!("{sid}.jsonl"), atif_to_native(&traj, &sid))
+            } else {
+                let stem = src.file_stem().unwrap_or_default().to_string_lossy().into_owned();
+                if src.extension().is_none_or(|e| e != "jsonl") || uuid::Uuid::parse_str(&stem).is_err() {
+                    bail!("Claude Code load_trajectory must be a native session file named <session-id>.jsonl or an ATIF trajectory .json file; got {:?}", src.file_name().unwrap_or_default());
+                }
+                (format!("{stem}.jsonl"), std::fs::read_to_string(&src)?)
+            };
+            let target = format!("/logs/agent/sessions/projects/-app/{name}");
+            upload_text(cx, &target, &content).await?;
+            resume_flag = format!("--resume {} ", name.trim_end_matches(".jsonl"));
+        }
         let var = format!("hbench_claude_code_instruction_{}", uuid::Uuid::new_v4().simple());
         let upper = var.to_uppercase();
         let mut run_env = env.clone();
@@ -334,6 +442,7 @@ mod tests {
             skills: vec![],
             logs_dir: dir.clone(),
             task,
+            load_trajectory: None,
         })
     }
 
@@ -353,6 +462,26 @@ mod tests {
         let b = agent(json!({}), &[("CLAUDE_CODE_USE_BEDROCK", "1")], Some("bedrock/us.anthropic.claude")).unwrap();
         assert_eq!(b.auth_env().unwrap()["AWS_REGION"], "us-east-1");
         assert_eq!(b.resolved_model().unwrap(), "us.anthropic.claude");
+    }
+
+    #[test]
+    fn atif_round_trip_shape() {
+        let traj = json!({"schema_version": "ATIF-v1.4", "session_id": "not-a-uuid", "agent": {"name": "x", "version": "2.0.0", "model_name": "m"},
+            "steps": [
+                {"step_id": 1, "source": "system", "message": "sys"},
+                {"step_id": 2, "source": "user", "message": "create a file"},
+                {"step_id": 3, "source": "agent", "message": "ok", "tool_calls": [{"tool_call_id": "t1", "function_name": "Bash", "arguments": {"command": "touch x"}}],
+                 "observation": {"results": [{"source_call_id": "t1", "content": "done"}]}, "metrics": {"prompt_tokens": 5, "completion_tokens": 2}}
+            ]});
+        let out = atif_to_native(&traj, "sid");
+        let ev: Vec<Value> = out.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+        assert_eq!(ev.len(), 3);
+        assert_eq!((ev[0]["type"].as_str(), ev[1]["type"].as_str(), ev[2]["type"].as_str()), (Some("user"), Some("assistant"), Some("user")));
+        assert!(ev[0]["parentUuid"].is_null() && ev[1]["parentUuid"] == ev[0]["uuid"] && ev[2]["parentUuid"] == ev[1]["uuid"]);
+        assert_eq!(ev[1]["message"]["content"][1]["name"], "Bash");
+        assert_eq!(ev[1]["message"]["usage"]["input_tokens"], 5);
+        assert_eq!(ev[2]["message"]["content"][0]["content"], "done");
+        assert_eq!(ev[0]["version"], "2.0.0");
     }
 
     #[test]

@@ -372,7 +372,15 @@ impl Trial {
             return crate::regrade::run(self).await;
         }
         let task = self.task.clone();
-        self.agent = Some(agents::create(&self.cfg.agent, self.dir.join("agent"), task.clone())?);
+        let load = self.resolve_load_trajectory()?;
+        let agent = agents::create(&self.cfg.agent, self.dir.join("agent"), task.clone(), load.clone())?;
+        if let Some(p) = &load {
+            let atif = p.extension().is_some_and(|e| e == "json");
+            if !agent.supports_load(atif) {
+                bail!("Agent '{}' does not support loading {} trajectory; cannot honor {}", self.cfg.agent.name(), if atif { "an ATIF" } else { "a native" }, p.display());
+            }
+        }
+        self.agent = Some(agent);
         if task.has_steps() && self.cfg.agent.resume_trajectory && task.steps().len() > 1 && !self.agent.as_ref().unwrap().supports_resume() {
             bail!("Agent '{}' does not support resume; cannot honor agent.resume_trajectory", self.cfg.agent.name());
         }
@@ -424,6 +432,32 @@ impl Trial {
             return Ok(());
         }
         if task.has_steps() { self.run_multi_step().await } else { self.run_single_step().await }
+    }
+
+    /// Run-level `agent.load_trajectory` wins over a task-shipped trajectory.json (not for oracle/nop).
+    fn resolve_load_trajectory(&self) -> Result<Option<PathBuf>> {
+        if let Some(p) = &self.cfg.agent.load_trajectory {
+            let p = PathBuf::from(p);
+            if !p.is_file() {
+                bail!("agent.load_trajectory file not found: {}", p.display());
+            }
+            return Ok(Some(p));
+        }
+        if matches!(self.cfg.agent.name(), "oracle" | "nop") {
+            return Ok(None);
+        }
+        let p = match self.task.steps().first() {
+            Some(s) => self.task.step_dir(&s.name).join("trajectory.json"),
+            None => self.task.dir.join("trajectory.json"),
+        };
+        if !p.is_file() {
+            return Ok(None);
+        }
+        let v: Value = serde_json::from_str(&std::fs::read_to_string(&p)?).map_err(|e| anyhow::anyhow!("Task trajectory is not a valid ATIF document ({}): {e}", p.display()))?;
+        if !v["steps"].is_array() || !v["schema_version"].is_string() {
+            bail!("Task trajectory is not a valid ATIF document ({}): needs schema_version and steps", p.display());
+        }
+        Ok(Some(p))
     }
 
     /// Upload `agent.skills` dirs to /hbench/skills/<name>.

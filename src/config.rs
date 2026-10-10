@@ -90,6 +90,9 @@ pub struct AgentConfig {
     pub max_timeout_sec: Option<f64>,
     #[serde(skip_serializing_if = "is_false")]
     pub resume_trajectory: bool,
+    /// Seed the agent's session from a native (.jsonl) or ATIF (.json) trajectory.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub load_trajectory: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub extra_allowed_hosts: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
