@@ -278,7 +278,7 @@ impl Vibe {
                 ],
                 "streamable-http" => vec![("name", toml_str(&s.name)), ("transport", toml_str("streamable-http")), ("url", toml_str(&s.url.clone().unwrap_or_else(none)))],
                 _ => bail!(
-                    "Vibe does not support MCP transport '{t}' (server '{}'). Set transport = 'streamable-http' or 'stdio' explicitly in the task's MCP server config (upstream defaults to 'sse' when omitted).",
+                    "Vibe does not support MCP transport '{t}' (server '{}'). Set transport = 'streamable-http' or 'stdio' explicitly in the task's MCP server config (the task format defaults to 'sse' when omitted).",
                     s.name
                 ),
             });

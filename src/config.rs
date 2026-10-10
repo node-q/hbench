@@ -235,7 +235,7 @@ impl TaskRef {
     }
     pub fn validate(&self) -> Result<()> {
         if self.name.is_some() {
-            bail!("package tasks (name/ref) need upstream's hosted registry, which hbench doesn't support; use path or git_url+path");
+            bail!("package tasks (name/ref) need a hosted package registry, which hbench doesn't support; use path or git_url+path");
         }
         if self.path.is_none() {
             bail!("task config needs 'path'");

@@ -266,7 +266,7 @@ impl Eve {
             let Some(url) = s.url.as_deref().filter(|u| !u.is_empty() && matches!(s.transport(), "sse" | "streamable-http")) else { continue };
             std::fs::create_dir_all(&dir)?;
             let file = connection_filename(&mut used, &s.name);
-            let description = format!("upstream-provided MCP server {} via {} transport.", py_repr(&s.name), s.transport());
+            let description = format!("hbench-provided MCP server {} via {} transport.", py_repr(&s.name), s.transport());
             std::fs::write(
                 dir.join(file),
                 format!(
@@ -795,7 +795,7 @@ mod tests {
         }
         let linear = std::fs::read_to_string(staged.join("agent/connections/hbench-linear.ts")).unwrap();
         assert!(linear.contains("defineMcpClientConnection") && linear.contains("\"http://linear-mcp:8000/sse\""));
-        assert!(linear.contains("\"upstream-provided MCP server 'linear' via sse transport.\""));
+        assert!(linear.contains("\"hbench-provided MCP server 'linear' via sse transport.\""));
         assert!(std::fs::read_to_string(staged.join("agent/connections/hbench-api-server.ts")).unwrap().contains("\"http://api-mcp:8000/mcp\""));
         assert!(!staged.join("agent/connections/hbench-local.ts").exists());
         let mut used = BTreeSet::from(["hbench-x".to_string()]);
