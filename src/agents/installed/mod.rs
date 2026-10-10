@@ -257,10 +257,15 @@ pub fn classify(output: &str) -> &'static str {
 /// `classify` with agent-specific patterns appended after the base list (upstream's
 /// `ERROR_PATTERNS = [*base, ...]`): last match end wins, earlier pattern wins ties.
 pub fn classify_with(output: &str, extra: &[(Regex, &'static str)]) -> &'static str {
+    classify_ordered(output, &[], extra)
+}
+
+/// Agent patterns placed `before` and/or `after` the base list; same last-match/tie rules.
+pub fn classify_ordered(output: &str, before: &[(Regex, &'static str)], after: &[(Regex, &'static str)]) -> &'static str {
     // A soft Claude divert continues the run; don't call it a safety refusal.
     let skip_asr = output.contains("model_refusal_fallback") && !output.contains("model_refusal_no_fallback");
     let mut best: Option<(usize, &'static str)> = None;
-    for (re, kind) in error_patterns().iter().chain(extra.iter()) {
+    for (re, kind) in before.iter().chain(error_patterns().iter()).chain(after.iter()) {
         if skip_asr && *kind == "AgentSafetyRefusalError" {
             continue;
         }

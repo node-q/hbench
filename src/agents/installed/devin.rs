@@ -53,6 +53,12 @@ impl Devin {
 
 #[async_trait::async_trait]
 impl Agent for Devin {
+    /// upstream pops DEVIN_API_KEY from the agent env once it's in credentials.toml.
+    fn extra_env(&self) -> Option<BTreeMap<String, String>> {
+        let mut e = self.args.extra_env.clone();
+        e.remove("DEVIN_API_KEY");
+        Some(e)
+    }
     fn name(&self) -> &str {
         "devin"
     }
@@ -66,7 +72,6 @@ impl Agent for Devin {
         let none = BTreeMap::new();
         exec_agent(cx, "CONFIG_DIR=\"${XDG_CONFIG_HOME:-$HOME/.config}/devin\"; mkdir -p \"$CONFIG_DIR\"; echo '{\"shell\":{\"setup_complete\":true}}' > \"$CONFIG_DIR/config.json\"", &none).await?;
         // The API key goes into credentials.toml, never the agent's run env.
-        // ponytail: upstream also pops DEVIN_API_KEY from the agent env overlay; AgentCtx.overlay is framework-owned.
         let creds = self.credentials()?;
         let data_dir = exec_agent(cx, "DATA_DIR=\"${XDG_DATA_HOME:-$HOME/.local/share}/devin\"; mkdir -p \"$DATA_DIR\"; echo \"$DATA_DIR\"", &none).await?;
         upload_text(cx, &format!("{}/credentials.toml", data_dir.stdout.trim()), &creds).await?;
@@ -114,7 +119,7 @@ mod tests {
         std::fs::create_dir_all(dir.join("environment")).unwrap();
         std::fs::write(dir.join("task.toml"), "[environment]\ndocker_image='x'\n").unwrap();
         std::fs::write(dir.join("instruction.md"), "x").unwrap();
-        let args = AgentArgs {
+        let args = AgentArgs { load_trajectory: None,
             model_name: model.map(String::from),
             kwargs: Default::default(),
             extra_env: env.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect(),

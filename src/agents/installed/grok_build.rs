@@ -330,13 +330,9 @@ fn deep_merge(base: &mut Value, over: &Value) {
 
 /// upstream prepends `resource-exhausted|currently at capacity` (ApiOverloadedError) to ERROR_PATTERNS.
 fn classify_grok(output: &str) -> &'static str {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    let re = RE.get_or_init(|| Regex::new(r"(?i)resource-exhausted|currently at capacity").unwrap());
-    // ponytail: base matches straddling the grok match end are ignored; exact would need base match offsets from mod.rs.
-    match re.find_iter(output).last() {
-        Some(m) if classify(&output[m.end()..]) == "NonZeroAgentExitCodeError" => "ApiOverloadedError",
-        _ => classify(output),
-    }
+    static P: OnceLock<Vec<(Regex, &'static str)>> = OnceLock::new();
+    let p = P.get_or_init(|| vec![(Regex::new(r"(?i)resource-exhausted|currently at capacity").unwrap(), "ApiOverloadedError")]);
+    super::classify_ordered(output, p, &[])
 }
 
 /// GrokUsage buckets: (input, output, cache_read, cache_creation, reasoning). None if malformed.
@@ -475,7 +471,7 @@ mod tests {
         std::fs::write(dir.join("task.toml"), "[environment]\ndocker_image='x'\n").unwrap();
         std::fs::write(dir.join("instruction.md"), "x").unwrap();
         let task = Arc::new(crate::task::Task::load(&dir).unwrap());
-        GrokBuild::new(AgentArgs {
+        GrokBuild::new(AgentArgs { load_trajectory: None,
             model_name: model.map(String::from),
             kwargs: serde_json::from_value(kwargs).unwrap(),
             extra_env: env.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect(),
