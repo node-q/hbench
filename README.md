@@ -1,64 +1,96 @@
 # hbench
 
-A Rust agent-harness benchmark runner, compatible with [upstream](https://github.com/node-q/hbench) tasks, datasets, and its result layout.
+A Rust agent-harness benchmark runner with behavior parity with [upstream](https://github.com/node-q/hbench).
+It reads the same task format, registry datasets, and job configs, and writes the same result layout.
 
 ```bash
 cargo build --release
 B=target/release/hbench
 
-# Oracle (reference solutions) on a local task or a dir of tasks
-$B run -p examples/tasks/hello-world
-# Registry dataset (upstream's registry.json), 4 concurrent trials
-$B run -d terminal-bench@2.0 -a oracle -n 4
-# Claude Code, 3 attempts per task (pass@k), selected tasks
-ANTHROPIC_API_KEY=... $B run -d terminal-bench-sample@2.0 -a claude-code -m anthropic/claude-opus-5-5 -k 3 -i 'regex*'
-
-$B jobs resume -p jobs/<job>     # rerun unfinished/cancelled trials
-$B jobs summary -p jobs/<job>
-$B datasets list
+$B run -p examples/tasks/hello-world                          # oracle on one task
+$B run -d terminal-bench@2.0 -a oracle -n 8                    # registry dataset
+$B run -d terminal-bench-sample@2.0 -a claude-code -m anthropic/claude-opus-5-5 -k 3 -i 'regex*'
+$B run -c job.yaml                                             # upstream job config (YAML/JSON)
+$B run -c job.yaml --diff jobs/<old-job>                       # reuse / regrade / rerun vs an earlier job
+$B jobs resume -p jobs/<job>        $B jobs summary -p jobs/<job>
+$B jobs regrade --source jobs/<job> -p <tasks>                 # re-verify recorded outputs
+$B trials start -p <task> -a codex -m openai/gpt-5             # single trial
+$B trials handoff jobs/<job>/<trial>                           # resume the session locally (claude-code, muse-code)
+$B sweeps run -c job.yaml --max-sweeps 3                       # drop solved tasks each sweep
+$B view -p jobs                                                # web results viewer
+$B traces export -p jobs/<job> -o traces.jsonl                 # upstream trace rows (ATIF episodes)
+$B datasets list | download <name@ver>
+$B tasks init <name> | check -p <dir> | start-env -p <task> | migrate -i <tb1 tasks> -o <out>
+$B agents        $B cache clean
 ```
 
-Main flags (named as in `hbench run`): `-a/--agent {oracle,nop,claude-code}`, `-m/--model`, `-k/--n-attempts`,
-`-n/--n-concurrent`, `--ae KEY=VALUE`, `-i/-x` include/exclude task globs, `-l/--n-tasks`, `--timeout-multiplier`,
-`--max-retries`, `--force-build`, `--disable-verification`, `--jobs-dir`, `--job-name`, `--registry-path`.
+Docker: hbench uses whatever `docker` points at (`DOCKER_CONTEXT`/`DOCKER_HOST`). Remote ssh daemons work because
+files move with `docker compose cp` rather than bind mounts.
+
+## Agents
+
+All 47 upstream agents: `oracle`, `nop`, `terminus-2` (also `terminus`, `terminus-1`), `claude-code`, `codex`,
+`gemini-cli`, `opencode`, `aider`, `goose`, `copilot-cli`, `cursor-cli`, `openhands`, `openhands-sdk`, `mini-swe-agent`,
+`swe-agent`, `trae-agent`, `qwen-coder`, `kimi-cli`, `kimi-code`, `grok-build`, `hermes`, `junie`, `rovodev-cli`,
+`cline-cli`, `cortex-code`, `code-puppy`, `devin`, `langgraph`, `deerflow`, `strands`, `nemo-agent`, `mimo`, `mcode`,
+`pi`, `openclaw`, `antigravity-cli`, `antigravity-sdk`, `eve`, `fx`, `fx-dev`, `vibe`, `muse-code`, `acp` (+ `acp:<id>`),
+`computer-1`, `dspy-rlm`.
+
+Each port keeps upstream's install commands and versions, CLI flags and env (`--ak key=value` / `kwargs`, validated
+against upstream's options models), auth resolution, error classification (`ApiRateLimitError`,
+`AgentAuthenticationError`, ...), and usage/cost parsing. Cost uses LiteLLM's price table pinned to upstream's LiteLLM
+version. Claude Code works with an API key or a subscription token (`CLAUDE_CODE_OAUTH_TOKEN`, from `claude setup-token`).
 
 ## Task format (same as upstream)
 
 ```
 task/
-├── task.toml        # [agent] timeout_sec/user, [verifier] timeout_sec/env/user,
-│                    # [environment] docker_image/build_timeout_sec/cpus/memory_mb/gpus/workdir/env/network_mode
-├── instruction.md
-├── environment/     # Dockerfile and/or docker-compose.yaml (extra services; `main` is the agent container)
-├── tests/test.sh    # writes /logs/verifier/reward.txt (one number) or reward.json ({"name": number})
-└── solution/solve.sh  # used by the oracle agent
+├── task.toml        # [task] [agent] [verifier] [environment] [[steps]] artifacts=[...] ...
+├── instruction.md   # or steps/<name>/instruction.md for multi-step tasks
+├── environment/     # Dockerfile and/or docker-compose.yaml (`main` = agent container)
+├── tests/test.sh    # writes /logs/verifier/reward.txt or reward.json
+└── solution/solve.sh
 ```
 
-## Trial lifecycle
+The following upstream task features are supported:
 
-1. `docker compose build` (once per image per run) and `up --wait`. The `main` service runs `sleep infinity`.
-2. Agent setup, then the agent run (with the agent timeout). Timeouts and non-zero exits are recorded, and the verifier still runs.
-3. `tests/` is copied to `/tests`, then `/tests/test.sh` runs and `/logs/verifier` is copied back to parse the reward.
-4. `/logs/agent` and `/logs/artifacts` are copied back, then `docker compose down --volumes`.
+- Multi-step tasks: per-step workdir/setup.sh, healthcheck, `min_reward` gates, mean/final reward strategy, and resume.
+- Shared and separate verifier environments, including bundled verifier images.
+- Artifacts: sidecar sources, destinations, excludes, `manifest.json`, and `[[verifier.collect]]` hooks.
+- Network policies: `public`, `no-network`, and `allowlist`, phase-scoped per agent/verifier/step. upstream's egress
+  sidecar is vendored, and run-level `extra_allowed_hosts` are supported.
+- Healthchecks, `workdir`, task env, agent/verifier users, resource limits, and GPUs.
+- MCP servers and skills.
+- `trajectory.json` / `load_trajectory` (native + ATIF), the simulated-user ACP bridge (`user_agent`), regrades, and
+  diffs.
 
-Files move with `docker compose cp`, not bind mounts, so remote daemons work (`DOCKER_CONTEXT=...`).
-
-## Output
+## Output (same layout as upstream)
 
 ```
-jobs/<job>/config.json, result.json        # JobStats: mean metric, pass@k, reward/exception stats, tokens, cost
-jobs/<job>/<task>__<id>/config.json, result.json, trial.log, exception.txt,
-                        agent/, verifier/ (reward.*, test-stdout.txt), artifacts/
+jobs/<job>/{config.json, lock.json, result.json}
+jobs/<job>/<task>__<id>/{config.json, lock.json, result.json, trial.log, exception.txt,
+                         agent/, verifier/, artifacts/{manifest.json, logs/artifacts/...}, steps/<name>/...}
 ```
 
-Error types follow upstream's names (AgentTimeoutError, VerifierTimeoutError, RewardFileNotFoundError, ...). Retries
-(`--max-retries`) skip the same non-retryable set that upstream skips.
+`result.json` has JobStats: per-eval metrics (mean/sum/min/max/uv-script), pass@k, reward/exception stats, tokens, and
+cost. Error types and the retry policy (`--max-retries`, include/exclude) match upstream.
 
-## Not implemented (yet)
+## Not supported
 
-These upstream features are missing: multi-step tasks, cloud sandboxes (Daytona/Modal/...), network allowlists, artifact
-configs, ATIF trajectories, and agents other than oracle/nop/claude-code. Add them when a benchmark needs them.
+These require external services:
 
-## Tests
+- Cloud sandboxes (Daytona, Modal, E2B, ...).
+- upstream Hub (publish/upload/package registry).
+- Windows containers.
+- LLM-powered `analyze`/`check`/`summarize`.
 
-`cargo test` runs the unit tests. `scripts/e2e.sh` runs the fixture suite against a real docker daemon.
+Benchmark adapters aren't needed: they produce upstream task dirs, which hbench runs directly, and converted datasets
+are in the registry.
+
+## Verification
+
+- `cargo test`: unit tests for every module and agent.
+- `scripts/e2e.sh`: a fixture suite against a real docker daemon. It covers timeouts, missing rewards, reward.json,
+  users/env, no-network, compose sidecars, and prebuilt images, and checks for leaked containers.
+- `scripts/conformance.sh`: runs upstream's own `examples/tasks` with the outcomes upstream's runtime tests expect. That
+  includes the network-policy matrix, verifier-mode matrix, multi-step, sidecar artifacts, and extra allowed hosts.
