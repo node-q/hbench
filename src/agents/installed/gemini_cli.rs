@@ -1,9 +1,10 @@
-//! Gemini CLI (port of upstream's agents/installed/gemini_cli.py). ACP bridge mode is not ported.
+//! Gemini CLI (port of upstream's agents/installed/gemini_cli.py), incl. ACP target mode.
 
 use super::aider::opts;
 use super::codex::parse_bool_env;
-use super::{connection, ensure_system_dependencies, exec_agent, exec_root};
+use super::{connection, ensure_system_dependencies, exec_agent, exec_root, pinned_bin_wrapper_command, safe_bin_symlink_command};
 use crate::agents::model_connection::{Resolved, Spec};
+use crate::agents::pricing;
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::quote;
 use anyhow::{Result, bail};
@@ -105,9 +106,9 @@ impl GeminiCli {
     }
 
     /// settings.json content and the `--model` alias carrying the reasoning effort.
-    fn settings(&self, model: &str, auth_type: Option<&str>) -> Result<(Option<Value>, Option<String>)> {
+    fn settings(&self, model: Option<&str>, auth_type: Option<&str>) -> Result<(Option<Value>, Option<String>)> {
         let effort = self.effort()?;
-        let alias = effort.as_ref().map(|e| format!("hbench-{model}-{e}"));
+        let alias = model.filter(|m| !m.is_empty()).zip(effort.as_ref()).map(|(m, e)| format!("hbench-{m}-{e}"));
         let mut c = serde_json::Map::new();
         if let Some(t) = auth_type {
             // Headless mode can't show the auth dialog; pin the method.
@@ -140,6 +141,38 @@ impl GeminiCli {
         c.insert("experimental".into(), json!({"skills": true}));
         Ok((Some(Value::Object(c)), alias))
     }
+
+    fn short_model(&self) -> Option<String> {
+        self.args.model_name.as_deref().map(|m| m.rsplit('/').next().unwrap().to_string())
+    }
+
+    fn settings_command(&self, model: Option<&str>, auth_type: Option<&str>) -> Result<(Option<String>, Option<String>)> {
+        let (s, alias) = self.settings(model, auth_type)?;
+        let cmd = s.map(|s| format!("mkdir -p ~/.gemini && printf %s {} > ~/.gemini/settings.json", quote(&serde_json::to_string_pretty(&s).unwrap())));
+        Ok((cmd, alias))
+    }
+
+    /// Upload oauth_creds.json (lands as root) into ~/.gemini with 0600 perms.
+    async fn inject_oauth_creds(&self, cx: &AgentCtx<'_>, creds: &Path, env: &BTreeMap<String, String>) -> Result<()> {
+        let tmp = format!("{SECRETS_DIR}/oauth_creds.json");
+        exec_agent(cx, &format!("mkdir -p {} ~/.gemini", quote(SECRETS_DIR)), env).await?;
+        cx.env.upload_file(creds, &tmp).await?;
+        if let Some(u) = &cx.user {
+            exec_root(cx, &format!("chown {u} {}", quote(&tmp)), &BTreeMap::new()).await?;
+        }
+        exec_agent(cx, &format!("cp {} ~/.gemini/oauth_creds.json\nchmod 600 ~/.gemini/oauth_creds.json", quote(&tmp)), env).await.map(|_| ())
+    }
+}
+
+/// upstream's `_compute_cost_from_pricing`: the session has no cost field, so back it out of
+/// LiteLLM's table (cache reads fall back to the input rate). None on a pricing miss.
+pub fn gemini_cost(model: &str, prompt: i64, completion: i64, cached: i64) -> Option<f64> {
+    let p = pricing::model_cost(&pricing::pricing_key(model)?)?;
+    let rate = |k: &str| p.get(k).and_then(Value::as_f64).filter(|v| *v != 0.0);
+    let input = rate("input_cost_per_token").unwrap_or(0.0);
+    let output = rate("output_cost_per_token").unwrap_or(0.0);
+    let cache_read = rate("cache_read_input_token_cost").unwrap_or(input);
+    Some((prompt - cached).max(0) as f64 * input + cached as f64 * cache_read + completion as f64 * output)
 }
 
 /// Gemini CLI session: legacy single JSON blob, or v0.40+ JSONL records normalized to `{sessionId, messages}`.
@@ -215,7 +248,7 @@ pub fn load_gemini_session(text: &str) -> Option<Value> {
     Some(Value::Object(out))
 }
 
-/// Token totals over `gemini` messages. Cost needs LiteLLM pricing, which hbench doesn't have.
+/// Token totals over `gemini` messages (cost comes from `gemini_cost`).
 pub fn gemini_usage(session: &Value) -> AgentContext {
     let (mut i, mut o, mut c) = (0, 0, 0);
     for m in session["messages"].as_array().into_iter().flatten().filter(|m| m["type"] == "gemini") {
@@ -240,6 +273,56 @@ impl Agent for GeminiCli {
     }
     fn supports_resume(&self) -> bool {
         true
+    }
+
+    fn acp_command(&self) -> Option<Vec<String>> {
+        let mut c: Vec<String> = ["env", "GEMINI_CLI_TRUST_WORKSPACE=true", "gemini", "--acp"].map(String::from).to_vec();
+        if let Some(m) = self.short_model() {
+            let alias = self.effort().ok().flatten().map(|e| format!("hbench-{m}-{e}"));
+            c.push(format!("--model={}", alias.unwrap_or(m)));
+        }
+        Some(c)
+    }
+
+    /// Only the env-var half of auth; acp_install handles the oauth file + settings selectedType.
+    fn acp_env(&self) -> BTreeMap<String, String> {
+        self.auth_env(self.oauth_creds_path().ok().flatten().is_some())
+    }
+
+    async fn acp_install(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
+        let r = exec_agent(
+            cx,
+            "_hb_system_node=\"$(command -v node 2>/dev/null || true)\"; if [ -s \"$HOME/.nvm/nvm.sh\" ]; then . \"$HOME/.nvm/nvm.sh\"; fi; \
+             echo \"${_hb_system_node:-none}:$(command -v node):$(command -v gemini)\"",
+            &BTreeMap::new(),
+        )
+        .await?;
+        let last = r.stdout.trim().lines().last().unwrap_or_default();
+        let parts: Vec<&str> = if last.matches(':').count() == 2 { last.split(':').collect() } else { vec!["", "", ""] };
+        let (system_node, node, gemini) = (parts[0], parts[1], parts[2]);
+        if node.is_empty() || gemini.is_empty() {
+            bail!("Could not locate node/gemini binaries for ACP mode (got {:?})", r.stdout);
+        }
+        // Pin gemini to the node it was installed with; expose node only if the image had none.
+        let mut link = pinned_bin_wrapper_command(node, gemini, "/usr/local/bin/gemini");
+        if system_node == "none" {
+            link += &format!(" && {}", safe_bin_symlink_command(node, "/usr/local/bin/node"));
+        }
+        exec_root(cx, &link, &BTreeMap::new()).await?;
+        let oauth = self.oauth_creds_path()?;
+        let auth_type = if oauth.is_some() { Some("oauth-personal") } else { self.env_auth_type() };
+        if let Some(p) = &oauth {
+            self.inject_oauth_creds(cx, p, &BTreeMap::new()).await?;
+        }
+        if let (Some(s), _) = self.settings_command(self.short_model().as_deref(), auth_type)? {
+            exec_agent(cx, &s, &BTreeMap::new()).await?;
+        }
+        Ok(())
+    }
+
+    /// run()'s cleanup never executes in ACP mode; injected OAuth material must not outlive the session.
+    async fn acp_teardown(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
+        exec_agent(cx, &format!("rm -rf {} ~/.gemini/oauth_creds.json", quote(SECRETS_DIR)), &BTreeMap::new()).await.map(|_| ())
     }
 
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
@@ -269,20 +352,14 @@ impl Agent for GeminiCli {
         let auth_type = if oauth.is_some() { Some("oauth-personal") } else { self.env_auth_type() };
 
         if let Some(p) = &oauth {
-            let tmp = format!("{SECRETS_DIR}/oauth_creds.json");
-            exec_agent(cx, &format!("mkdir -p {} ~/.gemini", quote(SECRETS_DIR)), &env).await?;
-            cx.env.upload_file(p, &tmp).await?;
-            if let Some(u) = &cx.user {
-                exec_root(cx, &format!("chown {u} {}", quote(&tmp)), &BTreeMap::new()).await?;
-            }
-            exec_agent(cx, &format!("cp {} ~/.gemini/oauth_creds.json\nchmod 600 ~/.gemini/oauth_creds.json", quote(&tmp)), &env).await?;
+            self.inject_oauth_creds(cx, p, &env).await?;
         }
         if let Some(d) = opts::skills_dir(&self.args) {
             exec_agent(cx, &format!("mkdir -p ~/.gemini/skills && cp -r {}/* ~/.gemini/skills/ 2>/dev/null || true", quote(&d)), &env).await?;
         }
-        let (settings, alias) = self.settings(&model, auth_type)?;
+        let (settings, alias) = self.settings_command(Some(&model), auth_type)?;
         if let Some(s) = settings {
-            exec_agent(cx, &format!("mkdir -p ~/.gemini && printf %s {} > ~/.gemini/settings.json", quote(&serde_json::to_string_pretty(&s)?)), &env).await?;
+            exec_agent(cx, &s, &env).await?;
         }
         let flags = self.cli_flags()?;
         let extra = if flags.is_empty() { String::new() } else { format!("{flags} ") };
@@ -315,7 +392,7 @@ impl Agent for GeminiCli {
             ctx.n_input_tokens = c.n_input_tokens;
             ctx.n_cache_tokens = c.n_cache_tokens;
             ctx.n_output_tokens = c.n_output_tokens;
-            ctx.cost_usd = None;
+            ctx.cost_usd = self.args.model_name.as_deref().and_then(|m| gemini_cost(m, c.n_input_tokens.unwrap_or(0), c.n_output_tokens.unwrap_or(0), c.n_cache_tokens.unwrap_or(0)));
         }
     }
 }
@@ -337,7 +414,7 @@ mod tests {
         assert_eq!(a.cli_flags().unwrap(), "--sandbox");
         assert_eq!(a.env_auth_type(), Some("gemini-api-key"));
         assert_eq!(a.auth_env(false)["GEMINI_API_KEY"], "g");
-        let (s, alias) = a.settings("gemini-3-flash", Some("gemini-api-key")).unwrap();
+        let (s, alias) = a.settings(Some("gemini-3-flash"), Some("gemini-api-key")).unwrap();
         let s = s.unwrap();
         assert_eq!(alias.as_deref(), Some("hbench-gemini-3-flash-medium"));
         assert_eq!(s["modelConfigs"]["customAliases"]["hbench-gemini-3-flash-medium"]["modelConfig"]["generateContentConfig"]["thinkingConfig"]["thinkingLevel"], "MEDIUM");
@@ -346,7 +423,23 @@ mod tests {
         assert_eq!(s["experimental"]["skills"], true);
         let v = agent(json!({}), &[("GOOGLE_GENAI_USE_VERTEXAI", "true")], Some("google/gemini-3-pro")).unwrap();
         assert_eq!(v.env_auth_type(), Some("vertex-ai"));
-        assert_eq!(agent(json!({}), &[], Some("google/x")).unwrap().settings("x", None).unwrap().0, None);
+        assert_eq!(agent(json!({}), &[], Some("google/x")).unwrap().settings(Some("x"), None).unwrap().0, None);
+    }
+
+    #[test]
+    fn litellm_cost_and_acp_command() {
+        // gemini-2.5-flash: in 3e-7, out 2.5e-6, cache read 3e-8.
+        let c = gemini_cost("google/gemini-2.5-flash", 1_000_000, 10_000, 400_000).unwrap();
+        assert!((c - (600_000.0 * 3e-7 + 400_000.0 * 3e-8 + 10_000.0 * 2.5e-6)).abs() < 1e-12);
+        // gpt-4 has no cache-read rate: cached tokens bill at the input rate (3e-5), out 6e-5.
+        let c = gemini_cost("gpt-4", 100, 10, 40).unwrap();
+        assert!((c - (100.0 * 3e-5 + 10.0 * 6e-5)).abs() < 1e-12);
+        assert!(gemini_cost("google/not-a-model", 1, 1, 0).is_none());
+
+        let a = agent(json!({"reasoning_effort": "high"}), &[("GEMINI_API_KEY", "g")], Some("google/gemini-3-pro")).unwrap();
+        assert_eq!(a.acp_command().unwrap(), vec!["env", "GEMINI_CLI_TRUST_WORKSPACE=true", "gemini", "--acp", "--model=hbench-gemini-3-pro-high"]);
+        assert_eq!(a.acp_env()["GEMINI_API_KEY"], "g");
+        assert_eq!(agent(json!({}), &[], None).unwrap().acp_command().unwrap(), vec!["env", "GEMINI_CLI_TRUST_WORKSPACE=true", "gemini", "--acp"]);
     }
 
     #[test]

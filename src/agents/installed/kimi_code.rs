@@ -2,7 +2,7 @@
 
 use super::kimi_cli::{loads_lenient, validate_kwargs};
 use super::{exec_agent, exec_root};
-use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
+use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx, pricing};
 use crate::env::quote;
 use anyhow::Result;
 use serde_json::{Value, json};
@@ -144,7 +144,7 @@ impl Agent for KimiCode {
     }
 
     fn populate_context_post_run(&self, logs_dir: &Path, ctx: &mut AgentContext) {
-        if let Some(c) = usage(logs_dir) {
+        if let Some(c) = usage(logs_dir, self.args.model_name.as_deref()) {
             *ctx = c;
         }
     }
@@ -159,12 +159,14 @@ struct Step {
     text: String,
     calls: Vec<String>,
     usage: Option<Value>,
+    model: Option<String>,
 }
 
 #[derive(Default)]
 struct Parsed {
     steps: Vec<Step>,
     session_id: Option<String>,
+    model: Option<String>,
 }
 
 fn read_jsonl(path: &Path) -> Vec<Value> {
@@ -245,6 +247,15 @@ fn parse_wire(path: &Path, session_id: String) -> Parsed {
                 turn += 1;
                 p.steps.push(Step { turn, text: texts(&o["input"]), ..Default::default() });
             }
+            "llm.request" => {
+                let m = o["model"].as_str().map(String::from);
+                if m.is_some() {
+                    p.model = m.clone();
+                }
+                if let Some(s) = current.as_mut() {
+                    s.model = m;
+                }
+            }
             "usage.record" => {
                 if let Some(s) = current.as_mut().filter(|s| s.usage.is_none()) {
                     s.usage = o.get("usage").cloned().filter(|u| !u.is_null());
@@ -302,9 +313,20 @@ fn same_invocation(wire: &Parsed, stream: &Parsed) -> bool {
     cur.last().is_some_and(|s| s.text == last_stream.text)
 }
 
+/// upstream's `_pricing_key`: `moonshotai/x` and bare `x` are priced as `moonshot/x`; other prefixes as-is.
+fn pricing_key(model: &str) -> Option<String> {
+    let (provider, bare) = model.rsplit_once('/').unwrap_or(("", model));
+    let mut keys = vec![model.to_string()];
+    if ["", "moonshot", "moonshotai"].contains(&provider) {
+        keys.extend([bare.to_string(), format!("moonshot/{bare}")]);
+    }
+    keys.into_iter().find(|k| pricing::model_cost(k).is_some())
+}
+
 /// Token totals of the current turn (earlier `--continue` turns are copied context);
 /// `None` when nothing was parsed or no usage was observed (tokens stay null, as upstream).
-pub fn usage(logs_dir: &Path) -> Option<AgentContext> {
+/// Cost is upstream's all-or-nothing LiteLLM estimate (`estimate_cost_usd`).
+pub fn usage(logs_dir: &Path, model_name: Option<&str>) -> Option<AgentContext> {
     let stream_path = logs_dir.join("kimi-code.txt");
     let has_stream = stream_path.is_file();
     let stream = if has_stream { parse_stream_json(&stream_path) } else { Parsed::default() };
@@ -320,19 +342,30 @@ pub fn usage(logs_dir: &Path) -> Option<AgentContext> {
         .find(|w| !w.steps.is_empty() && (w.session_id == stream.session_id || same_invocation(w, &stream)))
         .unwrap_or(stream);
     let last_turn = parsed.steps.iter().map(|s| s.turn).max()?;
-    let used: Vec<&Value> = parsed.steps.iter().filter(|s| s.agent && s.turn == last_turn).filter_map(|s| s.usage.as_ref()).filter(|u| u.as_object().is_some_and(|o| !o.is_empty())).collect();
+    let used: Vec<(&Value, Option<&str>)> = parsed
+        .steps
+        .iter()
+        .filter(|s| s.agent && s.turn == last_turn)
+        .filter_map(|s| s.usage.as_ref().filter(|u| u.as_object().is_some_and(|o| !o.is_empty())).map(|u| (u, s.model.as_deref().or(parsed.model.as_deref()).or(model_name))))
+        .collect();
     if used.is_empty() {
         return None;
     }
     let (mut prompt, mut out, mut cache) = (0, 0, 0);
-    for u in used {
+    let (mut cost, mut priceable) = (None::<f64>, true);
+    for (u, model) in used {
         let n = |k: &str| u[k].as_i64().unwrap_or(0);
-        prompt += n("inputOther") + n("inputCacheRead") + n("inputCacheCreation");
-        out += n("output");
+        let (p, o) = (n("inputOther") + n("inputCacheRead") + n("inputCacheCreation"), n("output"));
+        prompt += p;
+        out += o;
         cache += n("inputCacheRead");
+        let Some(model) = model.filter(|_| p != 0 || o != 0) else { continue };
+        match pricing_key(model).and_then(|k| pricing::cost_per_token(&k, p, o, n("inputCacheCreation"), n("inputCacheRead"))) {
+            Some((a, b)) => cost = Some(cost.unwrap_or(0.0) + a + b),
+            None => priceable = false,
+        }
     }
-    // ponytail: upstream prices this via litellm's model table; no table here, so cost stays None.
-    Some(AgentContext { n_input_tokens: Some(prompt), n_output_tokens: Some(out), n_cache_tokens: Some(cache), cost_usd: None, ..Default::default() })
+    Some(AgentContext { n_input_tokens: Some(prompt), n_output_tokens: Some(out), n_cache_tokens: Some(cache), cost_usd: cost.filter(|_| priceable), ..Default::default() })
 }
 
 #[cfg(test)]
@@ -392,12 +425,25 @@ mod tests {
 
     #[test]
     fn wire_usage_totals() {
-        assert_eq!(tokens(usage(&logs(Some(WIRE), Some(STREAM)))), Some((39615, 115, 19744)));
+        assert_eq!(tokens(usage(&logs(Some(WIRE), Some(STREAM)), None)), Some((39615, 115, 19744)));
         // run killed before the final step.end: usage.record keeps the tokens
         let cut = WIRE.lines().take(13).collect::<Vec<_>>().join("\n");
-        assert_eq!(tokens(usage(&logs(Some(&cut), Some(STREAM)))).unwrap().1, 86 + 29);
+        assert_eq!(tokens(usage(&logs(Some(&cut), Some(STREAM)), None)).unwrap().1, 86 + 29);
         // missing stream falls back to the journal
-        assert_eq!(tokens(usage(&logs(Some(WIRE), None))), Some((39615, 115, 19744)));
+        assert_eq!(tokens(usage(&logs(Some(WIRE), None), None)), Some((39615, 115, 19744)));
+    }
+
+    #[test]
+    fn litellm_cost_estimate() {
+        // moonshotai/kimi-k3 has no LiteLLM entry: cost stays None.
+        assert_eq!(usage(&logs(Some(WIRE), Some(STREAM)), Some("moonshot/kimi-k2.6")).unwrap().cost_usd, None);
+        // moonshotai/x is priced as moonshot/x: in 6e-7, out 2.5e-6, cache read 1.5e-7.
+        let wire = WIRE.replace("moonshotai/kimi-k3", "moonshotai/kimi-k2-0905-preview");
+        let c = usage(&logs(Some(&wire), Some(STREAM)), None).unwrap().cost_usd.unwrap();
+        let want = 19745.0 * 6e-7 + 86.0 * 2.5e-6 + 126.0 * 6e-7 + 19744.0 * 1.5e-7 + 29.0 * 2.5e-6;
+        assert!((c - want).abs() < 1e-12, "{c} vs {want}");
+        assert_eq!(pricing_key("kimi-k2-0905-preview").as_deref(), Some("moonshot/kimi-k2-0905-preview"));
+        assert_eq!(pricing_key("openrouter/kimi-k2.5"), None);
     }
 
     #[test]
@@ -419,25 +465,25 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         let root = logs(Some(&format!("{WIRE}{second}\n")), Some(&STREAM.replace(CALL, "call_second")));
-        assert_eq!(tokens(usage(&root)), Some((20, 10, 0)));
+        assert_eq!(tokens(usage(&root, None)), Some((20, 10, 0)));
     }
 
     #[test]
     fn journal_selection() {
         // stream-json only: no usage -> tokens stay null
-        assert!(usage(&logs(None, Some(STREAM))).is_none());
+        assert!(usage(&logs(None, Some(STREAM)), None).is_none());
         let no_hint: String = STREAM.lines().filter(|l| !l.contains("resume_hint")).map(|l| format!("{l}\n")).collect();
         // stale journal (different tool call) is not this run's
-        assert!(usage(&logs(Some(WIRE), Some(&no_hint.replace(CALL, "call_new")))).is_none());
+        assert!(usage(&logs(Some(WIRE), Some(&no_hint.replace(CALL, "call_new"))), None).is_none());
         // interrupted run without hint still uses its own journal
-        assert!(usage(&logs(Some(WIRE), Some(&no_hint))).is_some());
+        assert!(usage(&logs(Some(WIRE), Some(&no_hint)), None).is_some());
         // unindexed current journal beats indexed stale one
         let root = logs(Some(WIRE), Some(&no_hint.replace(CALL, "call_new")));
         add_session(&root, "session_new", &WIRE.replace(CALL, "call_new").replace("19745", "1"));
-        assert_eq!(tokens(usage(&root)).unwrap().0, 1 + 126 + 19744);
+        assert_eq!(tokens(usage(&root, None)).unwrap().0, 1 + 126 + 19744);
         // empty stream without hint does not adopt an older journal
-        assert!(usage(&logs(Some(WIRE), Some("{\"role\":\"meta\",\"type\":\"system.version\",\"version\":\"2.1.1\"}\n"))).is_none());
-        assert!(usage(&logs(None, None)).is_none());
+        assert!(usage(&logs(Some(WIRE), Some("{\"role\":\"meta\",\"type\":\"system.version\",\"version\":\"2.1.1\"}\n")), None).is_none());
+        assert!(usage(&logs(None, None), None).is_none());
     }
 
     #[test]

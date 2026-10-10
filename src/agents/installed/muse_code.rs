@@ -29,6 +29,8 @@ pub struct MuseCode {
     args: AgentArgs,
     version: Option<String>,
     base_config: Map<String, Value>,
+    /// load_trajectory is consumed by the first run only.
+    loaded: bool,
 }
 
 impl MuseCode {
@@ -47,9 +49,12 @@ impl MuseCode {
         if !(sv.is_i64() || sv.is_u64()) || sv.as_i64() != Some(1) {
             bail!("Muse settings require schema_version 1");
         }
-        let a = MuseCode { version: args.version_kw(), args, base_config };
+        let a = MuseCode { version: args.version_kw(), args, base_config, loaded: false };
         a.cli_flags()?; // validate options eagerly, like upstream
         a.effective_config()?; // validate transport/config conflicts
+        if let Some(p) = &a.args.load_trajectory {
+            validate_load_trajectory(p)?;
+        }
         Ok(a)
     }
 
@@ -121,9 +126,12 @@ impl MuseCode {
         Ok(Value::Object(config))
     }
 
-    fn run_command(&self, instruction: &str, session_id: &str) -> Result<String> {
+    fn run_command(&self, instruction: &str, session_id: &str, load: bool) -> Result<String> {
         let prompt = format!("{RUNTIME_DIR}/prompt.txt");
         let mut parts = vec!["muse exec".to_string(), "--json".into(), "--yolo".into(), "--user-input-auto-resolve".into(), format!("--session-id {session_id}"), format!("--prompt-file {prompt}")];
+        if load {
+            parts.push("--allow-workspace-switch".into());
+        }
         if let Some(m) = self.model_slug() {
             parts.push(format!("--model {}", quote(&m)));
         }
@@ -143,6 +151,235 @@ impl MuseCode {
             quote(&format!("{LOGS}/{STDERR_FILENAME}")),
             quote(&format!("{LOGS}/{OUTPUT_FILENAME}"))
         ))
+    }
+}
+
+/// upstream's `_validate_load_trajectory` at construction: ATIF must parse; native must be a valid session.jsonl.
+fn validate_load_trajectory(p: &Path) -> Result<()> {
+    if p.extension().is_some_and(|e| e == "json") {
+        let raw = std::fs::read_to_string(p).map_err(|e| anyhow!("load_trajectory file not found: {}: {e}", p.display()))?;
+        let v: Value = serde_json::from_str(&raw).map_err(|e| anyhow!("load_trajectory is not a valid ATIF trajectory file ({}): {e}", p.display()))?;
+        if !v["steps"].is_array() {
+            bail!("load_trajectory is not a valid ATIF trajectory file ({}): missing steps", p.display());
+        }
+        return Ok(());
+    }
+    if p.file_name().is_none_or(|n| n != "session.jsonl") || !p.is_file() {
+        bail!("Muse native load_trajectory must be an existing session.jsonl file");
+    }
+    let records = read_session(&std::fs::read_to_string(p)?);
+    native_session_id_strict(&records)?;
+    if session_metadata(&records)["workspace_root"].as_str().is_none_or(str::is_empty) {
+        bail!("Muse native log is missing session workspace metadata");
+    }
+    Ok(())
+}
+
+fn native_session_id_strict(records: &Records) -> Result<String> {
+    let ids: HashSet<String> = records.iter().map(|(_, r)| r["stream"]["id"].to_string()).collect();
+    if ids.len() != 1 {
+        bail!("Expected exactly one Muse session in the native log");
+    }
+    native_session_id(records).ok_or_else(|| anyhow!("Muse session log must contain a valid session UUID"))
+}
+
+fn session_metadata(records: &Records) -> Value {
+    records.iter().find(|(_, r)| r["payload"]["kind"] == "metadata").map(|(_, r)| r["payload"]["record"].clone()).unwrap_or_else(|| json!({}))
+}
+
+/// Base `_atif_session_id`: reuse the trajectory's session id when it is a UUID; else mint one.
+fn atif_session_id(traj: &Value) -> String {
+    traj["session_id"].as_str().filter(|s| uuid::Uuid::parse_str(s).is_ok()).map(String::from).unwrap_or_else(|| uuid::Uuid::new_v4().to_string())
+}
+
+/// Python `json.dumps` (default separators, ensure_ascii).
+fn py_json(v: &Value) -> String {
+    match v {
+        Value::Object(m) => format!("{{{}}}", m.iter().map(|(k, v)| format!("{}: {}", py_json(&Value::String(k.clone())), py_json(v))).collect::<Vec<_>>().join(", ")),
+        Value::Array(a) => format!("[{}]", a.iter().map(py_json).collect::<Vec<_>>().join(", ")),
+        Value::String(s) => serde_json::to_string(s).unwrap().chars().fold(String::new(), |mut o, c| {
+            if c.is_ascii() {
+                o.push(c);
+            } else {
+                for u in c.encode_utf16(&mut [0; 2]) {
+                    o += &format!("\\u{u:04x}");
+                }
+            }
+            o
+        }),
+        v => v.to_string(),
+    }
+}
+
+/// upstream's `_session_text`: text content only.
+fn session_text(m: &Value) -> Result<String> {
+    Ok(match m {
+        Value::Null => String::new(),
+        Value::String(s) => s.clone(),
+        Value::Array(parts) => {
+            if parts.iter().any(|p| p["type"] != "text") {
+                bail!("Muse ATIF loading currently requires text messages and tool results");
+            }
+            parts.iter().map(|p| p["text"].as_str().unwrap_or("")).collect::<Vec<_>>().join("\n")
+        }
+        _ => String::new(),
+    })
+}
+
+/// upstream's `_to_native` (`atif_to_native_trajectory`): conversation history as durable
+/// session envelopes, without replaying historical usage or effects.
+pub fn atif_to_native(traj: &Value, sid: &str) -> Result<String> {
+    let mut rows: Vec<Value> = vec![];
+    let mut run_id = uuid::Uuid::new_v4().to_string();
+    let mut run_seq = 0;
+    let now = chrono::Utc::now().timestamp_micros();
+    let append = |rows: &mut Vec<Value>, payload: Value, payload_type: &str| {
+        let n = rows.len() as i64;
+        rows.push(json!({"schema_version": 1, "id": uuid::Uuid::new_v4().to_string(), "stream": {"kind": "session", "id": sid},
+            "sequence": n + 1, "recorded_at": now + n, "record_type": "event", "durability": "durable", "causation_id": null,
+            "payload_type": payload_type, "payload_schema_version": 1, "payload": payload}));
+    };
+    let event = |rows: &mut Vec<Value>, run_id: &str, run_seq: &mut i64, value: Value| {
+        *run_seq += 1;
+        append(rows, json!({"kind": "run", "run_id": run_id, "event": value, "source_run_record_id": uuid::Uuid::new_v4().to_string(), "source_run_record_sequence": *run_seq}), "runtime.session");
+    };
+    // The uploader replaces this placeholder with the task environment's cwd.
+    append(&mut rows, json!({"kind": "metadata", "record": {"workspace_root": "/", "provider_id": "meta", "web_search_mode": "client", "tool_surface_version": "2"}}), "runtime.session.metadata");
+    let steps: Vec<&Value> = traj["steps"].as_array().into_iter().flatten().collect();
+    let (mut system, mut user_count, mut system_allowed) = (vec![], 0, true);
+    for step in &steps {
+        match step["source"].as_str() {
+            Some("user") => user_count += 1,
+            Some("agent") => system_allowed = false,
+            Some("system") => {
+                if !system_allowed || user_count > 1 {
+                    bail!("Muse ATIF loading cannot preserve later system steps; use a native session.jsonl for this history");
+                }
+                system.push(session_text(&step["message"])?);
+            }
+            _ => {}
+        }
+    }
+    let mut started = false;
+    for step in &steps {
+        match step["source"].as_str() {
+            Some("system") => continue,
+            Some("user") => {
+                if started {
+                    event(&mut rows, &run_id, &mut run_seq, json!({"kind": "terminal", "terminal": "completed", "reason": null}));
+                    (run_id, run_seq) = (uuid::Uuid::new_v4().to_string(), 0);
+                }
+                event(&mut rows, &run_id, &mut run_seq, json!({"kind": "started", "prompt": session_text(&step["message"])?}));
+                if !system.is_empty() {
+                    event(&mut rows, &run_id, &mut run_seq, json!({"kind": "model_request_configured", "base_instructions": system.join("\n")}));
+                }
+                started = true;
+                continue;
+            }
+            _ => {}
+        }
+        if !started {
+            bail!("Muse ATIF loading requires a user message before agent steps");
+        }
+        let response_id = uuid::Uuid::new_v4().to_string();
+        event(&mut rows, &run_id, &mut run_seq, json!({"kind": "model_response_created", "response_id": response_id}));
+        let reasoning = &step["extra"]["muse_reasoning"];
+        let reasoning_text = step["reasoning_content"].as_str().unwrap_or("");
+        if !reasoning_text.is_empty() || reasoning.as_object().is_some_and(|o| !o.is_empty()) {
+            event(&mut rows, &run_id, &mut run_seq, json!({"kind": "reasoning_committed", "message_id": uuid::Uuid::new_v4().to_string(), "response_id": response_id,
+                "text": reasoning_text, "encrypted_content": reasoning["encrypted_content"]}));
+        }
+        let message = session_text(&step["message"])?;
+        if !message.is_empty() {
+            event(&mut rows, &run_id, &mut run_seq, json!({"kind": "assistant_message_committed", "message_id": uuid::Uuid::new_v4().to_string(), "response_id": response_id, "text": message}));
+        }
+        let calls: Vec<&Value> = step["tool_calls"].as_array().into_iter().flatten().collect();
+        if !calls.is_empty() {
+            let tools: Vec<Value> = calls
+                .iter()
+                .map(|c| {
+                    let raw = &c["extra"]["muse_tool_call"];
+                    let id = if raw.get("id").is_some() { raw["id"].clone() } else { json!(uuid::Uuid::new_v4().to_string()) };
+                    let args = if raw.get("args").is_some() { raw["args"].clone() } else { json!(py_json(&c["arguments"])) };
+                    json!({"call_id": c["tool_call_id"], "id": id, "name": c["function_name"], "args": args})
+                })
+                .collect();
+            event(&mut rows, &run_id, &mut run_seq, json!({"kind": "assistant_tool_calls_committed", "message_id": uuid::Uuid::new_v4().to_string(), "response_id": response_id, "tool_calls": tools}));
+        }
+        let results: Vec<&Value> = step["observation"]["results"].as_array().into_iter().flatten().collect();
+        if !calls.is_empty() {
+            let by_call: BTreeMap<String, &Value> = results.iter().map(|r| (r["source_call_id"].to_string(), *r)).collect();
+            let call_ids: HashSet<String> = calls.iter().map(|c| c["tool_call_id"].to_string()).collect();
+            if by_call.len() != results.len() || by_call.keys().cloned().collect::<HashSet<_>>() != call_ids {
+                bail!("Muse ATIF loading requires exactly one result per tool call");
+            }
+            let mut out = vec![];
+            for (i, c) in calls.iter().enumerate() {
+                out.push(json!({"tool_call_index": i, "tool_call_id": c["tool_call_id"], "text": session_text(&by_call[&c["tool_call_id"].to_string()]["content"])?}));
+            }
+            event(&mut rows, &run_id, &mut run_seq, json!({"kind": "tool_result_batch_committed", "batch_id": uuid::Uuid::new_v4().to_string(), "results": out}));
+        } else if !results.is_empty() {
+            bail!("Muse ATIF loading requires tool results to reference a tool call");
+        }
+    }
+    if !started {
+        bail!("Muse ATIF loading requires at least one user message");
+    }
+    event(&mut rows, &run_id, &mut run_seq, json!({"kind": "terminal", "terminal": "completed", "reason": null}));
+    Ok(rows.iter().map(|r| py_json(r) + "\n").collect())
+}
+
+/// upstream's `_relocate_session`: change only the copied workspace metadata.
+fn relocate_session(text: &str, workspace: &str) -> String {
+    text.split_inclusive('\n')
+        .map(|line| match serde_json::from_str::<Value>(line) {
+            Ok(mut row) if row["payload"]["kind"] == "metadata" => {
+                row["payload"]["record"]["workspace_root"] = json!(workspace);
+                py_json(&row) + "\n"
+            }
+            _ => line.to_string(),
+        })
+        .collect()
+}
+
+/// upstream's `_upload_agent_owned_file`: upload as root, then chown to the agent user.
+async fn upload_owned(cx: &AgentCtx<'_>, local: &Path, target: &str) -> Result<()> {
+    cx.env.upload_file(local, target).await?;
+    if let Some(u) = &cx.user {
+        exec_root(cx, &format!("chown {} {}", quote(u), quote(target)), &BTreeMap::new()).await?;
+    }
+    Ok(())
+}
+
+impl MuseCode {
+    /// upstream's `_seed_load_trajectory` + `_upload_load_trajectory`; returns the seeded session id.
+    async fn seed_load_trajectory(&self, cx: &AgentCtx<'_>, src: &Path) -> Result<String> {
+        let (sid, content, native_dir) = if src.extension().is_some_and(|e| e == "json") {
+            let traj: Value = serde_json::from_str(&std::fs::read_to_string(src)?)?;
+            let content = atif_to_native(&traj, &atif_session_id(&traj))?;
+            (native_session_id_strict(&read_session(&content))?, content, None)
+        } else {
+            let content = std::fs::read_to_string(src)?;
+            let sid = native_session_id_strict(&read_session(&content))?;
+            let dir = src.parent().filter(|p| p.file_name().is_some_and(|n| n == sid.as_str()));
+            (sid, content, dir)
+        };
+        let date = chrono::Utc::now().format("%Y/%m/%d");
+        let target = format!("{LOGS}/sessions/{date}/{sid}");
+        exec_agent(cx, &format!("test ! -e {target} && mkdir -p {target}"), &BTreeMap::new()).await?;
+        if let Some(dir) = native_dir {
+            cx.env.upload_dir(dir, &target).await?;
+            if let Some(u) = &cx.user {
+                exec_root(cx, &format!("chown -R {} {target}", quote(u)), &BTreeMap::new()).await?;
+            }
+        }
+        let cwd = exec_agent(cx, "pwd -P", &BTreeMap::new()).await?;
+        let local = std::env::temp_dir().join(format!("hbench-muse-{}.jsonl", uuid::Uuid::new_v4().simple()));
+        std::fs::write(&local, relocate_session(&content, cwd.stdout.trim()))?;
+        let r = upload_owned(cx, &local, &format!("{target}/session.jsonl")).await;
+        let _ = std::fs::remove_file(&local);
+        r?;
+        Ok(sid)
     }
 }
 
@@ -329,6 +566,9 @@ impl Agent for MuseCode {
     fn supports_resume(&self) -> bool {
         true
     }
+    fn supports_load(&self, _atif: bool) -> bool {
+        true
+    }
 
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
         cx.env.exec_root("[ -d /installed-agent ] || mkdir -p /installed-agent", None).await?;
@@ -369,7 +609,16 @@ impl Agent for MuseCode {
         exec_agent(cx, &setup, &env).await?;
         upload_text(cx, &format!("{config_home}/muse/settings.json"), &serde_json::to_string(&self.effective_config()?)?).await?;
 
-        let session_id = if resume { read_manifest(&cx.logs_dir)?["session_id"].as_str().unwrap_or_default().to_string() } else { uuid::Uuid::new_v4().to_string() };
+        let load_src = self.args.load_trajectory.clone().filter(|_| !self.loaded);
+        let load = load_src.is_some();
+        let session_id = if let Some(src) = load_src {
+            self.loaded = true;
+            self.seed_load_trajectory(cx, &src).await?
+        } else if resume {
+            read_manifest(&cx.logs_dir)?["session_id"].as_str().unwrap_or_default().to_string()
+        } else {
+            uuid::Uuid::new_v4().to_string()
+        };
         let r = exec_agent(cx, &format!("find {sessions} -type f -name session.jsonl -exec wc -l {{}} +"), &BTreeMap::new()).await?;
         let usage_start = parse_positions(&r.stdout, &sessions);
         if resume && !usage_start.keys().any(|p| format!("/{p}").contains(&format!("/{session_id}/session.jsonl"))) {
@@ -378,17 +627,13 @@ impl Agent for MuseCode {
         let manifest = json!({
             "session_id": session_id,
             "usage_start": usage_start,
-            "copied_until": if resume { json!(usage_start) } else { json!({}) },
+            "copied_until": if load || resume { json!(usage_start) } else { json!({}) },
         });
         std::fs::create_dir_all(&cx.logs_dir)?;
         let local = cx.logs_dir.join(MANIFEST);
         std::fs::write(&local, serde_json::to_string(&manifest)?)?;
-        let target = format!("{LOGS}/{MANIFEST}");
-        cx.env.upload_file(&local, &target).await?;
-        if let Some(u) = &cx.user {
-            exec_root(cx, &format!("chown {} {}", quote(u), quote(&target)), &BTreeMap::new()).await?;
-        }
-        exec_agent(cx, &self.run_command(&instruction, &session_id)?, &env).await?;
+        upload_owned(cx, &local, &format!("{LOGS}/{MANIFEST}")).await?;
+        exec_agent(cx, &self.run_command(&instruction, &session_id, load)?, &env).await?;
         Ok(())
     }
 
@@ -473,7 +718,7 @@ mod tests {
     #[test]
     fn flags_command_and_validation() {
         let a = agent(json!({"reasoning_effort": "xhigh", "max_model_steps": 50}), &[("META_API_KEY", "test-key")], Some("meta/muse-spark-1.2")).unwrap();
-        let cmd = a.run_command("do the task", SID).unwrap();
+        let cmd = a.run_command("do the task", SID, false).unwrap();
         for part in [
             "muse exec --json --yolo --user-input-auto-resolve --session-id 00000000-0000-4000-8000-000000000001 --prompt-file /tmp/hbench-muse/agent/prompt.txt",
             "printf '%s' 'do the task' > /tmp/hbench-muse/agent/prompt.txt",
@@ -488,10 +733,10 @@ mod tests {
         assert_eq!(agent(json!({}), &[], Some("openai/gpt-5")).unwrap().model_slug().as_deref(), Some("openai/gpt-5"));
         // META_BASE_URL alias is forwarded, quoted.
         let b = agent(json!({}), &[("META_BASE_URL", "https://example.com/v1?x=1&y=2")], None).unwrap();
-        assert!(b.run_command("hi", SID).unwrap().contains("--base-url 'https://example.com/v1?x=1&y=2'"));
+        assert!(b.run_command("hi", SID, false).unwrap().contains("--base-url 'https://example.com/v1?x=1&y=2'"));
         let e = agent(json!({"base_url": "https://explicit/v1"}), &[("META_BASE_URL", "https://other")], None).unwrap();
         assert_eq!(e.model_connection().base_url.as_deref(), Some("https://explicit/v1"));
-        assert_eq!(e.run_command("hi", SID).unwrap().matches("--base-url").count(), 1);
+        assert_eq!(e.run_command("hi", SID, false).unwrap().matches("--base-url").count(), 1);
         for bad in [json!({"max_model_steps": 0}), json!({"max_model_steps": -1}), json!({"reasoning_effort": "none"}), json!({"reasoning_effort": "invalid"})] {
             assert!(agent(bad, &[], None).is_err());
         }
@@ -531,6 +776,56 @@ mod tests {
         std::fs::write(logs.join(MANIFEST), json!({"session_id": SID, "usage_start": {SESSION: 7}}).to_string()).unwrap();
         let u = usage_from_logs(&logs).unwrap();
         assert_eq!((u.prompt, u.cached, u.completion), (Some(100), Some(48), Some(11)));
+    }
+
+    #[test]
+    fn atif_to_native_shape_and_load_validation() {
+        let traj = json!({"schema_version": "ATIF-v1.4", "session_id": SID, "agent": {"name": "x", "version": "1"},
+            "steps": [
+                {"step_id": 1, "source": "system", "message": "be brief"},
+                {"step_id": 2, "source": "user", "message": "Read the answer"},
+                {"step_id": 3, "source": "agent", "message": "Reading", "reasoning_content": "think",
+                 "tool_calls": [{"tool_call_id": "c1", "function_name": "bash", "arguments": {"cmd": "cat x", "n": 1}}],
+                 "observation": {"results": [{"source_call_id": "c1", "content": "42"}]}},
+                {"step_id": 4, "source": "user", "message": [{"type": "text", "text": "again"}]}
+            ]});
+        let out = atif_to_native(&traj, SID).unwrap();
+        let recs = read_session(&out);
+        assert_eq!(native_session_id(&recs).as_deref(), Some(SID));
+        assert_eq!(session_metadata(&recs)["workspace_root"], "/");
+        let kinds: Vec<&str> = run_events(&recs, 0).iter().map(|e| e["kind"].as_str().unwrap()).collect();
+        assert_eq!(
+            kinds,
+            ["started", "model_request_configured", "model_response_created", "reasoning_committed", "assistant_message_committed", "assistant_tool_calls_committed", "tool_result_batch_committed", "terminal", "started", "model_request_configured", "terminal"]
+        );
+        let ev = run_events(&recs, 0);
+        assert_eq!(ev[1]["base_instructions"], "be brief");
+        assert_eq!(ev[5]["tool_calls"][0]["args"], "{\"cmd\": \"cat x\", \"n\": 1}");
+        assert_eq!(ev[6]["results"][0], json!({"tool_call_index": 0, "tool_call_id": "c1", "text": "42"}));
+        assert!(out.lines().next().unwrap().contains("\"payload_type\": \"runtime.session.metadata\""));
+        assert!(!has_steps(&read_session("")) && has_steps(&recs));
+        // upstream's guard rails.
+        assert!(atif_to_native(&json!({"steps": [{"source": "agent", "message": "x"}]}), SID).is_err());
+        assert!(atif_to_native(&json!({"steps": [{"source": "user", "message": "a"}, {"source": "agent", "message": "b"}, {"source": "system", "message": "late"}]}), SID).is_err());
+        assert!(atif_to_native(&json!({"steps": [{"source": "user", "message": "a"}, {"source": "agent", "tool_calls": [{"tool_call_id": "c1", "function_name": "f", "arguments": {}}]}]}), SID).is_err());
+        // Relocation rewrites only the metadata workspace.
+        let moved = relocate_session(&out, "/app");
+        assert_eq!(session_metadata(&read_session(&moved))["workspace_root"], "/app");
+        assert_eq!(moved.lines().nth(1), out.lines().nth(1));
+        // Native load file validation at construction.
+        let dir = tmp().join(SID);
+        let native = dir.join("session.jsonl");
+        write_session(&native, SID);
+        assert!(validate_load_trajectory(&native).is_ok());
+        let other = dir.join("other.jsonl");
+        std::fs::copy(&native, &other).unwrap();
+        assert!(validate_load_trajectory(&other).is_err());
+        let bad = tmp().join("session.jsonl");
+        write_session(&bad, "not-a-uuid");
+        assert!(validate_load_trajectory(&bad).is_err());
+        let a = agent(json!({}), &[], Some("meta/muse-spark-1.2")).unwrap();
+        assert!(a.supports_load(true) && a.supports_load(false));
+        assert!(a.run_command("hi", SID, true).unwrap().contains("--prompt-file /tmp/hbench-muse/agent/prompt.txt --allow-workspace-switch --model"));
     }
 
     #[test]

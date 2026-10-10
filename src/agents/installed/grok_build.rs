@@ -1,7 +1,7 @@
 //! grok-build (port of upstream's agents/installed/grok_build.py).
 
 use super::{ensure_system_dependencies, exec_agent, exec_error};
-use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
+use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx, pricing};
 use crate::env::{kind_err, quote};
 use anyhow::{Result, anyhow, bail};
 use regex::Regex;
@@ -353,11 +353,46 @@ fn parse_usage(v: &Value) -> Option<Usage> {
     Some(u)
 }
 
-/// upstream's `_parse_usage_report` + `populate_context_post_run` (LiteLLM cost estimate omitted).
-pub fn usage_from_output(text: &str) -> Option<AgentContext> {
+/// upstream's `_total_cost_usd`: LiteLLM price per call (so each is tiered by its own prompt size),
+/// with xAI's at-boundary tiering and cache-write-at-input-rate adjustments. None if unpriced.
+fn total_cost_usd(model: &str, calls: &[Usage]) -> Option<f64> {
+    let key = pricing::pricing_key(model)?;
+    let p = pricing::model_cost(&key)?;
+    let xai = p.get("litellm_provider").and_then(Value::as_str) == Some("xai");
+    let tier_re = Regex::new(r"^input_cost_per_token_above_(\d+)k_tokens$").unwrap();
+    let mut total = 0.0;
+    for u in calls {
+        let prompt = u[0] + u[2] + u[3];
+        // `_input_cost_tier`: the highest `above_Nk` threshold the prompt reaches.
+        let (mut rate_key, mut threshold) = ("input_cost_per_token", None::<i64>);
+        for (k, v) in p {
+            let Some(n) = tier_re.captures(k).and_then(|c| c[1].parse::<i64>().ok()).filter(|_| v.is_number()) else { continue };
+            if prompt >= n * 1000 && threshold.is_none_or(|t| n * 1000 > t) {
+                (rate_key, threshold) = (k.as_str(), Some(n * 1000));
+            }
+        }
+        let boundary_rate = p.get(rate_key).and_then(Value::as_f64);
+        // LiteLLM tiers strictly above the boundary, xAI at it: price one synthetic token, then remove it.
+        let at_boundary = threshold == Some(prompt) && xai && boundary_rate.is_some();
+        let (mut input, output) = pricing::cost_per_token(&key, prompt + at_boundary as i64, u[1], u[3], u[2])?;
+        if at_boundary {
+            input -= boundary_rate.unwrap();
+        }
+        if xai && p.get("cache_creation_input_token_cost").is_none_or(Value::is_null) {
+            let rate = boundary_rate.filter(|r| *r != 0.0).or_else(|| p.get("input_cost_per_token").and_then(Value::as_f64))?;
+            input += u[3] as f64 * rate;
+        }
+        total += input + output;
+    }
+    Some(total)
+}
+
+/// upstream's `_parse_usage_report` + `populate_context_post_run`, incl. the LiteLLM estimate when grok reports no cost.
+pub fn usage_from_output(text: &str, model: Option<&str>) -> Option<AgentContext> {
     let mut calls: Vec<Usage> = vec![];
     let mut total: Option<Usage> = None;
     let mut cost: Option<f64> = None;
+    let mut can_estimate = true;
     for line in text.lines().map(str::trim).filter(|l| l.starts_with('{')) {
         let Ok(e) = serde_json::from_str::<Value>(line) else { continue };
         let t = e["type"].as_str().unwrap_or("");
@@ -371,6 +406,7 @@ pub fn usage_from_output(text: &str) -> Option<AgentContext> {
         }
         total = usage;
         cost = None;
+        can_estimate = !(e["usage_is_incomplete"] == true || e["cost_is_partial"] == true);
         if e["cost_is_partial"] != true {
             if let Some(ticks) = e["total_cost_usd_ticks"].as_i64().filter(|t| *t >= 0) {
                 cost = Some(ticks as f64 / USD_TICKS_PER_DOLLAR);
@@ -395,8 +431,10 @@ pub fn usage_from_output(text: &str) -> Option<AgentContext> {
         ctx.n_output_tokens = Some(u[1]);
         ctx.n_cache_tokens = Some(u[2]);
     }
-    // ponytail: upstream falls back to a LiteLLM per-call price estimate when grok reports no cost; no pricing table here.
-    ctx.cost_usd = cost;
+    ctx.cost_usd = cost.or_else(|| {
+        let model = model.filter(|_| can_estimate && summed.is_some() && total.is_none_or(|t| Some(t) == summed))?;
+        total_cost_usd(model, &calls)
+    });
     Some(ctx)
 }
 
@@ -454,7 +492,7 @@ impl Agent for GrokBuild {
     }
 
     fn populate_context_post_run(&self, logs_dir: &std::path::Path, ctx: &mut AgentContext) {
-        if let Some(c) = std::fs::read_to_string(logs_dir.join(OUTPUT)).ok().and_then(|t| usage_from_output(&t)) {
+        if let Some(c) = std::fs::read_to_string(logs_dir.join(OUTPUT)).ok().and_then(|t| usage_from_output(&t, self.args.model_name.as_deref())) {
             *ctx = c;
         }
     }
@@ -532,19 +570,38 @@ mod tests {
             json!({"type": "end", "stopReason": "end_turn", "usage": {"input_tokens": 200, "output_tokens": 40, "cache_read_input_tokens": 20, "cache_creation_input_tokens": 10, "reasoning_tokens": 6}, "total_cost_usd": 0.0}).to_string(),
         ]
         .join("\n");
-        let c = usage_from_output(&out).unwrap();
+        let c = usage_from_output(&out, None).unwrap();
         assert_eq!((c.n_input_tokens, c.n_output_tokens, c.n_cache_tokens, c.cost_usd), (Some(230), Some(40), Some(20), Some(0.0)));
 
         let ticks = [rec(json!({"input_tokens": 100, "output_tokens": 20})), json!({"type": "end", "usage": {"input_tokens": 100, "output_tokens": 20}, "total_cost_usd": 9.99, "total_cost_usd_ticks": 261_300_000}).to_string()].join("\n");
-        assert_eq!(usage_from_output(&ticks).unwrap().cost_usd, Some(0.02613));
+        assert_eq!(usage_from_output(&ticks, None).unwrap().cost_usd, Some(0.02613));
         let partial = [rec(json!({"input_tokens": 100})), json!({"type": "end", "usage": {"input_tokens": 100}, "cost_is_partial": true, "total_cost_usd": 9.99}).to_string()].join("\n");
-        assert_eq!(usage_from_output(&partial).unwrap().cost_usd, None);
+        assert_eq!(usage_from_output(&partial, None).unwrap().cost_usd, None);
 
         // Malformed records are skipped; no terminal event -> per-call sum.
         let calls = [rec(json!({"input_tokens": null})), rec(json!({"output_tokens": 12.5})), rec(json!({"input_tokens": -1})), rec(json!({"input_tokens": 100, "output_tokens": 10}))].join("\n");
-        let c = usage_from_output(&calls).unwrap();
+        let c = usage_from_output(&calls, None).unwrap();
         assert_eq!((c.n_input_tokens, c.n_output_tokens, c.cost_usd), (Some(100), Some(10), None));
-        assert!(usage_from_output("").is_none());
+        assert!(usage_from_output("", None).is_none());
+    }
+
+    #[test]
+    fn litellm_estimate() {
+        // xai/grok-4-0709: in 3e-6 (6e-6 above 128k), out 1.5e-5, no cache rates; cache writes billed at input rate.
+        let rec = |u: Value| json!({"type": "usage", "usage": u}).to_string();
+        let a = json!({"input_tokens": 1000, "output_tokens": 100, "cache_read_input_tokens": 200, "cache_creation_input_tokens": 50});
+        let b = json!({"input_tokens": 128_000});
+        let want = 1000.0 * 3e-6 + 100.0 * 1.5e-5 + 50.0 * 3e-6 + 128_000.0 * 6e-6; // second call tiers at the xAI boundary
+        let end = |u: Value| json!({"type": "end", "usage": u}).to_string();
+        let out = [rec(a.clone()), rec(b.clone()), end(json!({"input_tokens": 129_000, "output_tokens": 100, "cache_read_input_tokens": 200, "cache_creation_input_tokens": 50}))].join("\n");
+        let c = usage_from_output(&out, Some("xai/grok-4-0709")).unwrap().cost_usd.unwrap();
+        assert!((c - want).abs() < 1e-9, "{c} vs {want}");
+        // Terminal total differs from the per-call sum (subagents): no estimate. Unpriced model: None.
+        let sub = [rec(a.clone()), end(json!({"input_tokens": 5000}))].join("\n");
+        assert_eq!(usage_from_output(&sub, Some("xai/grok-4-0709")).unwrap().cost_usd, None);
+        assert_eq!(usage_from_output(&rec(a.clone()), Some("xai/not-a-model")).unwrap().cost_usd, None);
+        let incomplete = [rec(a), json!({"type": "end", "usage_is_incomplete": true}).to_string()].join("\n");
+        assert_eq!(usage_from_output(&incomplete, Some("xai/grok-4-0709")).unwrap().cost_usd, None);
     }
 
     #[test]

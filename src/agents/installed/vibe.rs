@@ -191,12 +191,20 @@ impl Vibe {
         Ok((backend, key_env))
     }
 
-    /// Explicit VIBE_INPUT_PRICE / VIBE_OUTPUT_PRICE (dollars per million tokens).
-    // ponytail: upstream falls back to LiteLLM's pricing table; there's no such table here, so only explicit prices apply.
+    /// Dollars per million (input, output) tokens: explicit VIBE_INPUT_PRICE / VIBE_OUTPUT_PRICE,
+    /// else LiteLLM's table (full model name, then the provider-stripped id; all-zero entries skipped).
     fn pricing(&self) -> Result<Option<(f64, f64)>> {
         let (i, o) = (self.args.get_env("VIBE_INPUT_PRICE"), self.args.get_env("VIBE_OUTPUT_PRICE"));
         match (&i, &o) {
-            (None, None) => Ok(None),
+            (None, None) => {
+                let Some(m) = self.args.model_name.as_deref() else { return Ok(None) };
+                Ok([m, m.split_once('/').map_or(m, |(_, r)| r)].into_iter().find_map(|k| {
+                    let e = crate::agents::pricing::model_cost(k)?;
+                    let rate = |f: &str| e.get(f).and_then(Value::as_f64).unwrap_or(0.0);
+                    let (i, o) = (rate("input_cost_per_token"), rate("output_cost_per_token"));
+                    (i > 0.0 || o > 0.0).then_some((i * 1_000_000.0, o * 1_000_000.0))
+                }))
+            }
             (Some(i), Some(o)) => match (i.trim().parse::<f64>(), o.trim().parse::<f64>()) {
                 (Ok(a), Ok(b)) => Ok(Some((a, b))),
                 _ => bail!("VIBE_INPUT_PRICE and VIBE_OUTPUT_PRICE must be numbers (dollars per million tokens); got '{i}' / '{o}'."),
@@ -484,7 +492,9 @@ mod tests {
         for s in ["active_model = \"mistral-medium-3-5\"", "api_base = \"https://api.mistral.ai/v1\"", "backend = \"mistral\"", "name = \"mistral\"", "api_key_env_var = \"MISTRAL_API_KEY\"", "temperature = 0.2"] {
             assert!(c.contains(s), "{s} missing in {c}");
         }
-        assert!(!c.contains("api_style") && !c.contains("thinking") && !c.contains("input_price"));
+        assert!(!c.contains("api_style") && !c.contains("thinking"));
+        // LiteLLM mistral/mistral-medium-3-5: 1.5e-6 / 7.5e-6 per token.
+        assert!(c.contains("input_price = 1.5") && c.contains("output_price = 7.5"), "{c}");
         assert!(c.starts_with("active_model = \"mistral-medium-3-5\"\nenable_telemetry = false\n"));
         assert_eq!(agent(json!({}), &[], Some("together_ai/openai/gpt-oss-120b")).model_id().unwrap(), "openai/gpt-oss-120b");
 
@@ -502,6 +512,11 @@ mod tests {
         // pricing validation
         assert!(agent(json!({"max_price": "2.50"}), &[], Some("m")).config_toml().unwrap_err().to_string().contains("max-price cannot be enforced"));
         assert!(agent(json!({"max_price": "2.50"}), &[("VIBE_INPUT_PRICE", "0"), ("VIBE_OUTPUT_PRICE", "0")], Some("m")).config_toml().is_err());
+        // LiteLLM fallback (mistral/devstral-medium-2507: in 4e-7, out 2e-6 per token) makes --max-price enforceable.
+        let p = agent(json!({"max_price": "2.50"}), &[], Some("mistral/devstral-medium-2507"));
+        let (i, o) = p.pricing().unwrap().unwrap();
+        assert!((i - 0.4).abs() < 1e-9 && (o - 2.0).abs() < 1e-9);
+        assert!(p.config_toml().unwrap().contains("input_price = "));
         assert!(agent(json!({}), &[("VIBE_INPUT_PRICE", "1.5")], Some("m")).config_toml().unwrap_err().to_string().contains("both VIBE_INPUT_PRICE"));
         assert!(agent(json!({}), &[("VIBE_INPUT_PRICE", "$1.5"), ("VIBE_OUTPUT_PRICE", "7")], Some("m")).config_toml().unwrap_err().to_string().contains("must be numbers"));
 
