@@ -3,6 +3,7 @@
 pub mod computer1;
 pub mod dspy_rlm;
 pub mod installed;
+pub mod llm;
 pub mod model_connection;
 pub mod nop;
 pub mod oracle;
