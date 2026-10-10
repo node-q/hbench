@@ -142,10 +142,10 @@ impl Bridge {
     /// Install acpx, prepare the target for ACP, write .acpxrc.json, open the session.
     pub async fn setup(&mut self, cx: &AgentCtx<'_>, target: &mut AgentBox) -> Result<()> {
         let prep = "_hb_missing=\"\"; for _hb_prerequisite in curl bash; do if ! command -v \"$_hb_prerequisite\" >/dev/null 2>&1; then _hb_missing=\"$_hb_missing $_hb_prerequisite\"; fi; done; \
-            if [ -n \"$_hb_missing\" ]; then set -- $_hb_missing; if command -v apt-get >/dev/null 2>&1; then apt-get update && apt-get install -y \"$@\"; \
+            if [ -n \"$_hb_missing\" ]; then set -- $_hb_missing; if command -v apt-get >/dev/null 2>&1; then hb_apt_install \"$@\"; \
             elif command -v apk >/dev/null 2>&1; then apk add --no-cache \"$@\"; elif command -v dnf >/dev/null 2>&1; then dnf install -y \"$@\"; fi; fi; \
             for _hb_prerequisite in curl bash; do if ! command -v \"$_hb_prerequisite\" >/dev/null 2>&1; then echo \"Missing ACPX prerequisite: $_hb_prerequisite\" >&2; exit 1; fi; done";
-        let r = cx.exec_as(prep, Some("root"), &BTreeMap::from([("DEBIAN_FRONTEND".to_string(), "noninteractive".to_string())]), None).await?;
+        let r = cx.exec_as(&format!("{}{prep}", crate::agents::installed::APT_INSTALL_FN), Some("root"), &BTreeMap::from([("DEBIAN_FRONTEND".to_string(), "noninteractive".to_string())]), None).await?;
         if r.code != 0 {
             bail!("Failed to prepare container for ACPX install: {}", r.stderr);
         }

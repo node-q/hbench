@@ -16,6 +16,7 @@ pub fn allowed(agent: &str) -> Option<&'static [&'static str]> {
         "copilot-cli" => &["config", "disable_web_search", "prompt_template_path", "reasoning_effort", "version"],
         "cortex-code" => &["allowed_tools", "cli_mode", "config", "disable_web_search", "disallowed_tools", "prompt_template_path", "version"],
         "cursor-cli" => &["config", "mode", "pricing", "prompt_template_path", "reasoning_effort", "version"],
+        "deepseek-harness" => &["config", "prompt_template_path", "reasoning_effort", "version"],
         "deerflow" => &["config", "config_path", "disable_web_search", "openrouter_base_url", "plan_mode", "prompt_template_path", "recursion_limit", "repo_ref", "repo_url", "subagent", "summarize", "thinking", "version", "workdir"],
         "devin" => &["config", "prompt_template_path", "version"],
         "dspy-rlm" => &["extra_tools", "max_iterations", "max_llm_calls", "max_output_chars", "signature", "sub_model_name", "tool_timeout_sec", "verbose", "working_dir"],

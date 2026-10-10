@@ -98,12 +98,28 @@ enum Cmd {
     },
     /// Web results viewer for a jobs dir.
     View {
-        #[arg(short = 'p', long = "path", default_value = "jobs")]
-        jobs_dir: PathBuf,
-        #[arg(long, default_value_t = 8080)]
-        port: u16,
+        /// Folder containing job directories or task definitions (auto-detected).
+        folder: Option<PathBuf>,
+        /// Folder (hbench style). A port or port range here (e.g. `-p 9000`) is taken as `--port`, like `hbench view -p`.
+        #[arg(short = 'p', long = "path")]
+        path: Option<String>,
+        /// Port or port range (e.g., 8080 or 8080-8089).
+        #[arg(long, default_value = "8080-8089")]
+        port: String,
+        /// Host to bind the server to.
         #[arg(long, default_value = "127.0.0.1")]
         host: String,
+        /// Force task definitions mode.
+        #[arg(long, conflicts_with = "jobs")]
+        tasks: bool,
+        /// Force jobs mode.
+        #[arg(long)]
+        jobs: bool,
+        /// Accepted for `hbench view` compatibility; the viewer is prebuilt and embedded.
+        #[arg(long, hide = true)]
+        build: bool,
+        #[arg(long, hide = true)]
+        no_build: bool,
     },
     /// Trace export.
     Traces {
@@ -1034,7 +1050,17 @@ async fn main() -> Result<()> {
         }
         Cmd::Analyze(a) => analyze::analyze_command(*a).await,
         Cmd::Check(a) => analyze::check_command(*a).await,
-        Cmd::View { jobs_dir, port, host } => viewer::serve(&jobs_dir, &host, port),
+        Cmd::View { folder, path, port, host, tasks, jobs, .. } => {
+            // ponytail: `-p` is hbench's folder flag but hbench's port flag; a port-shaped value that isn't a dir is a port.
+            let is_port = |p: &str| !std::path::Path::new(p).is_dir() && viewer::parse_port_range(p).is_ok();
+            let (folder, port) = match path {
+                Some(p) if is_port(&p) => (folder, p),
+                Some(p) => (folder.or(Some(PathBuf::from(p))), port),
+                None => (folder, port),
+            };
+            let mode = if tasks { Some(viewer::Mode::Tasks) } else if jobs { Some(viewer::Mode::Jobs) } else { None };
+            viewer::serve(&folder.unwrap_or_else(|| "jobs".into()), mode, &host, viewer::parse_port_range(&port)?)
+        }
         Cmd::Traces { cmd: TracesCmd::Export { path, output, no_recursive, episodes, filter, sharegpt, instruction_metadata, verifier_metadata } } => {
             let o = traces::ExportOpts {
                 recursive: !no_recursive,

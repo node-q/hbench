@@ -23,8 +23,7 @@ const SYSTEM_INSTALL: &str = r#"if command -v apk >/dev/null 2>&1; then
   fi
 elif ! command -v curl >/dev/null 2>&1; then
   if command -v apt-get >/dev/null 2>&1; then
-    apt-get update
-    apt-get install -y curl
+    hb_apt_install curl
   elif command -v dnf >/dev/null 2>&1; then
     dnf install -y curl
   elif command -v yum >/dev/null 2>&1; then
@@ -113,7 +112,7 @@ impl Agent for KimiCode {
 
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
         cx.env.exec_root("[ -d /installed-agent ] || mkdir -p /installed-agent", None).await?;
-        exec_root(cx, SYSTEM_INSTALL, &BTreeMap::from([("DEBIAN_FRONTEND".to_string(), "noninteractive".to_string())])).await?;
+        exec_root(cx, &format!("{}{SYSTEM_INSTALL}", super::APT_INSTALL_FN), &BTreeMap::from([("DEBIAN_FRONTEND".to_string(), "noninteractive".to_string())])).await?;
         let spec = self.version.as_ref().map(|v| format!("@{v}")).unwrap_or_else(|| "@latest".into());
         exec_agent(
             cx,

@@ -605,7 +605,7 @@ impl JobConfig {
 }
 
 /// upstream moved `orchestrator.{n_concurrent_trials,quiet,retry}` to the top level.
-fn migrate_legacy(v: &mut Value) {
+pub fn migrate_legacy(v: &mut Value) {
     let Some(obj) = v.as_object_mut() else { return };
     if let Some(Value::Object(orch)) = obj.remove("orchestrator") {
         for (k, val) in orch {

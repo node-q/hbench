@@ -17,7 +17,7 @@ $B jobs regrade --source jobs/<job> -p <tasks>                 # re-verify recor
 $B trials start -p <task> -a codex -m openai/gpt-5             # single trial
 $B trials handoff jobs/<job>/<trial>                           # resume the session locally (claude-code, muse-code)
 $B sweeps run -c job.yaml --max-sweeps 3                       # drop solved tasks each sweep
-$B view -p jobs                                                # web results viewer
+$B view jobs [--port 8080-8089] [--tasks|--jobs]                # upstream's web viewer (also `view -p jobs`)
 $B traces export -p jobs/<job> -o traces.jsonl                 # upstream trace rows (ATIF episodes)
 $B datasets list | download <name@ver> | init | add | remove
 $B init <org/name> [--steps N]   $B add|remove|sync ...             # task/dataset authoring (dataset.toml)
@@ -43,6 +43,16 @@ Each port keeps upstream's install commands and versions, CLI flags and env (`--
 against upstream's options models), auth resolution, error classification (`ApiRateLimitError`,
 `AgentAuthenticationError`, ...), and usage/cost parsing. Cost uses LiteLLM's price table pinned to upstream's LiteLLM
 version. Claude Code works with an API key or a subscription token (`CLAUDE_CODE_OAUTH_TOKEN`, from `claude setup-token`).
+
+Beyond upstream: `deepseek-harness` runs DeepSeek's own harness ([`dsh`](https://github.com/deepseek-ai/deepseek-harness),
+npm `@deepseek-ai/dsh`) in its headless profile. It needs `DEEPSEEK_API_KEY` (optional `DEEPSEEK_BASE_URL`, an
+Anthropic-Messages root). Pass the model as `-m deepseek/<id>` (default: dsh's `deepseek-flash`) and optionally
+`--ak reasoning_effort=off|low|high|max`. It writes `trajectory.json` (ATIF), token usage and LiteLLM cost from dsh's
+session logs, and supports `resume_trajectory` for multi-step tasks.
+
+```bash
+DEEPSEEK_API_KEY=... $B run -d terminal-bench@2.0 -a deepseek-harness -m deepseek/deepseek-v4-flash
+```
 
 ## Task format (same as upstream)
 
@@ -77,6 +87,14 @@ jobs/<job>/<task>__<id>/{config.json, lock.json, result.json, trial.log, excepti
 
 `result.json` has JobStats: per-eval metrics (mean/sum/min/max/uv-script), pass@k, reward/exception stats, tokens, and
 cost. Error types and the retry policy (`--max-retries`, include/exclude) match upstream.
+
+Beyond upstream, agent setup is hardened so environment problems aren't charged to the agent:
+
+- A failed agent install is retried (3 tries within the setup timeout).
+- If it still fails, it's recorded as `AgentSetupError` ("failed before the agent started"), where upstream reports
+  `NonZeroAgentExitCodeError`.
+- apt installs fall back to the image's sources minus the `*-security` suites. This matters for EOL releases like
+  Debian bullseye, whose security index lists packages that are gone from the mirror.
 
 ## Not supported
 

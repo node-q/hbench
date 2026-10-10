@@ -2,6 +2,7 @@
 # Install every installed agent into a real container (install_only: setup runs, no LLM calls),
 # so install commands/URLs/versions are verified without API keys.
 #   AGENTS="codex goose" scripts/install-matrix.sh     (default: all that need no user project)
+#   TASK=path/to/task scripts/install-matrix.sh        (default: examples/tasks/hello-world)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 cargo build --release -q
@@ -11,7 +12,7 @@ OUT=${OUT:-$(mktemp -d)}; mkdir -p "$OUT"
 # a registry target (acp) or a desktop (computer-1) need inputs beyond a model, so they're opt-in.
 DEFAULT="claude-code codex gemini-cli opencode aider goose copilot-cli cursor-cli openhands openhands-sdk mini-swe-agent
 swe-agent trae-agent qwen-coder kimi-cli kimi-code grok-build hermes junie rovodev-cli cline-cli cortex-code code-puppy
-devin mimo mcode pi openclaw antigravity-cli antigravity-sdk fx fx-dev vibe muse-code"
+devin mimo mcode pi openclaw antigravity-cli antigravity-sdk fx fx-dev vibe muse-code deepseek-harness"
 AGENTS=${AGENTS:-$DEFAULT}
 model_for() {
   case $1 in
@@ -26,11 +27,11 @@ model_for() {
 }
 {
   echo "jobs_dir: $OUT"; echo "job_name: install-matrix"; echo "n_concurrent_trials: ${N:-6}"; echo "install_only: true"
-  echo "tasks: [{path: $PWD/examples/tasks/hello-world}]"
+  echo "tasks: [{path: ${TASK:-$PWD/examples/tasks/hello-world}}]"
   echo "agents:"
   for a in $AGENTS; do
     echo "  - name: $a"; echo "    model_name: $(model_for "$a")"
-    echo "    env: {ANTHROPIC_API_KEY: sk-ant-dummy, OPENAI_API_KEY: sk-dummy, GEMINI_API_KEY: dummy, GOOGLE_API_KEY: dummy, XAI_API_KEY: dummy, KIMI_API_KEY: dummy, MISTRAL_API_KEY: dummy, DEVIN_API_KEY: dummy, JUNIE_API_KEY: dummy, CURSOR_API_KEY: dummy, GITHUB_TOKEN: dummy, ROVODEV_USER_EMAIL: a@b.c, ROVODEV_USER_API_TOKEN: dummy, SNOWFLAKE_ACCOUNT: dummy, SNOWFLAKE_USER: dummy, SNOWFLAKE_PASSWORD: dummy, AI_GATEWAY_API_KEY: dummy, META_API_KEY: dummy, MIMO_API_KEY: dummy}"
+    echo "    env: {ANTHROPIC_API_KEY: sk-ant-dummy, OPENAI_API_KEY: sk-dummy, GEMINI_API_KEY: dummy, GOOGLE_API_KEY: dummy, XAI_API_KEY: dummy, KIMI_API_KEY: dummy, MISTRAL_API_KEY: dummy, DEVIN_API_KEY: dummy, JUNIE_API_KEY: dummy, CURSOR_API_KEY: dummy, GITHUB_TOKEN: dummy, ROVODEV_USER_EMAIL: a@b.c, ROVODEV_USER_API_TOKEN: dummy, SNOWFLAKE_ACCOUNT: dummy, SNOWFLAKE_USER: dummy, SNOWFLAKE_PASSWORD: dummy, AI_GATEWAY_API_KEY: dummy, META_API_KEY: dummy, MIMO_API_KEY: dummy, DEEPSEEK_API_KEY: dummy}"
   done
 } > "$OUT/install-matrix.yaml"
 "$BIN" run -c "$OUT/install-matrix.yaml" | tail -n 60

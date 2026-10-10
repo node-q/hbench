@@ -913,14 +913,14 @@ fn dependencies_command(kind: &str) -> String {
     let install_uv = if kind == "uvx" { "1" } else { "0" };
     let uv = format!("{UV_INSTALL_DIR}/uv");
     let py = format!("{RUNNER_VENV_PATH}/bin/python");
+    let apt_fn = super::APT_INSTALL_FN;
     format!(
         "set -euo pipefail
-            export UV_PYTHON_INSTALL_DIR={PYTHON_INSTALL_DIR}
+{apt_fn}            export UV_PYTHON_INSTALL_DIR={PYTHON_INSTALL_DIR}
             export UV_CACHE_DIR=/opt/hbench-acp-bootstrap-cache
             if command -v apt-get >/dev/null 2>&1; then
               export DEBIAN_FRONTEND=noninteractive
-              apt-get update -qq
-              apt-get install -y python3 curl ca-certificates {apt}
+              hb_apt_install python3 curl ca-certificates {apt}
             elif command -v apk >/dev/null 2>&1; then
               apk add --no-cache python3 curl ca-certificates {apk}
             elif command -v dnf >/dev/null 2>&1; then
@@ -1219,9 +1219,9 @@ mod tests {
 
         let d = dependencies_command("npx");
         let line = |k: &str| d.lines().find(|l| l.contains(k)).unwrap().to_string();
-        assert!(!line("apt-get install").contains("nodejs") && line("apk add").contains("nodejs npm"));
+        assert!(!line("hb_apt_install python3").contains("nodejs") && line("apk add").contains("nodejs npm"));
         let d = dependencies_command("uvx");
-        assert!(d.starts_with("set -euo pipefail\n            export UV_PYTHON_INSTALL_DIR=/opt/hbench-acp-python\n"));
+        assert!(d.starts_with(&format!("set -euo pipefail\n{}            export UV_PYTHON_INSTALL_DIR=/opt/hbench-acp-python\n", super::super::APT_INSTALL_FN)));
         assert!(d.contains("curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/opt/hbench-acp-tools sh"));
         assert!(d.contains("/opt/hbench-acp-tools/uv venv --python 3.12 /opt/hbench-acp-venv") && d.contains("[ \"1\" = \"1\" ]"));
         assert!(dependencies_command("binary").contains("xz-utils"));

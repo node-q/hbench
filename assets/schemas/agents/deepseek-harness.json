@@ -1,0 +1,58 @@
+{
+  "additionalProperties": false,
+  "description": "Options for DeepSeek Harness (dsh, headless profile).",
+  "properties": {
+    "version": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Agent CLI version to install. Omit for latest.",
+      "title": "Version"
+    },
+    "prompt_template_path": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Jinja2 template path; must include {{ instruction }}.",
+      "title": "Prompt Template Path"
+    },
+    "config": {
+      "default": null,
+      "description": "Native config file path or inline JSON.",
+      "title": "Config"
+    },
+    "reasoning_effort": {
+      "anyOf": [
+        {
+          "enum": [
+            "off",
+            "low",
+            "high",
+            "max"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "dsh reasoningEffort for the deepseek-official route (default: dsh's own, high).",
+      "title": "Reasoning Effort"
+    }
+  },
+  "title": "DeepSeekHarnessOptions",
+  "type": "object"
+}

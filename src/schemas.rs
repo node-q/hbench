@@ -25,6 +25,7 @@ pub fn agent(name: &str) -> Option<&'static str> {
         "copilot-cli" => include_str!("../assets/schemas/agents/copilot-cli.json"),
         "cortex-code" => include_str!("../assets/schemas/agents/cortex-code.json"),
         "cursor-cli" => include_str!("../assets/schemas/agents/cursor-cli.json"),
+        "deepseek-harness" => include_str!("../assets/schemas/agents/deepseek-harness.json"),
         "deerflow" => include_str!("../assets/schemas/agents/deerflow.json"),
         "devin" => include_str!("../assets/schemas/agents/devin.json"),
         "dspy-rlm" => include_str!("../assets/schemas/agents/dspy-rlm.json"),
