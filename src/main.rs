@@ -1,4 +1,5 @@
 mod agents;
+mod authoring;
 mod artifacts;
 mod bridge;
 mod atif;
@@ -48,12 +49,32 @@ enum Cmd {
         #[command(subcommand)]
         cmd: TrialsCmd,
     },
-    /// Registry datasets.
+    /// Initialize a new task or dataset.
+    Init(Box<InitArgs>),
+    /// Add tasks, datasets, or files to a dataset.toml manifest.
+    Add(AddArgs),
+    /// Remove tasks from a dataset.toml manifest.
+    Remove(RemoveArgs),
+    /// Update task digests in a dataset manifest.
+    Sync {
+        /// Path to dataset.toml or directory containing one.
+        #[arg(default_value = ".")]
+        path: PathBuf,
+        /// Also update registry tasks to their latest digest (needs upstream Hub; unsupported).
+        #[arg(short = 'u', long)]
+        upgrade: bool,
+        /// Max concurrent registry lookups.
+        #[arg(short = 'c', long, default_value_t = 50)]
+        concurrency: usize,
+    },
+    /// Registry datasets and dataset manifests.
+    #[command(alias = "dataset")]
     Datasets {
         #[command(subcommand)]
         cmd: DatasetsCmd,
     },
     /// Task authoring helpers.
+    #[command(alias = "task")]
     Tasks {
         #[command(subcommand)]
         cmd: TasksCmd,
@@ -87,6 +108,70 @@ enum Cmd {
         #[command(subcommand)]
         cmd: TracesCmd,
     },
+}
+
+#[derive(Args)]
+struct InitArgs {
+    /// Task or dataset name (org/name format).
+    name: Option<String>,
+    /// Initialize a task.
+    #[arg(short = 't', long)]
+    task: bool,
+    /// Initialize a dataset.
+    #[arg(short = 'd', long)]
+    dataset: bool,
+    #[arg(short = 'o', long, default_value = ".")]
+    output_dir: PathBuf,
+    /// Organization name (if name lacks org/).
+    #[arg(long)]
+    org: Option<String>,
+    #[arg(long, default_value = "")]
+    description: String,
+    /// Author in 'Name <email>' or 'Name' format. Repeatable.
+    #[arg(long)]
+    author: Vec<String>,
+    /// Create metric.py template (dataset only).
+    #[arg(long)]
+    with_metric: bool,
+    #[arg(long)]
+    no_pytest: bool,
+    #[arg(long)]
+    no_solution: bool,
+    #[arg(long)]
+    include_canary_strings: bool,
+    #[arg(long)]
+    include_standard_metadata: bool,
+    /// Skip [task] package section in task.toml.
+    #[arg(long)]
+    no_package: bool,
+    /// Scaffold a multi-step task with N steps (0 = single-step).
+    #[arg(long, default_value_t = 0)]
+    steps: usize,
+}
+
+#[derive(Args)]
+struct AddArgs {
+    /// Local task dirs, dataset dirs/dataset.toml, or metric.py.
+    #[arg(required = true)]
+    packages: Vec<String>,
+    /// Path to dataset.toml or directory containing one.
+    #[arg(short = 't', long, default_value = ".")]
+    to: PathBuf,
+    /// When a directory has no task.toml/dataset.toml, scan subdirs for tasks.
+    #[arg(long)]
+    scan: bool,
+}
+
+#[derive(Args)]
+struct RemoveArgs {
+    /// Package to remove (path or org/name).
+    package: String,
+    /// Target dataset.toml or directory containing one.
+    #[arg(long = "from", default_value = ".")]
+    from: PathBuf,
+    /// Treat package as a directory and scan subdirs for tasks to remove.
+    #[arg(long)]
+    scan: bool,
 }
 
 #[derive(Subcommand)]
@@ -234,15 +319,54 @@ enum DatasetsCmd {
         #[arg(short = 'o', long)]
         output_dir: Option<PathBuf>,
     },
+    /// Initialize a new dataset directory.
+    Init {
+        name: Option<String>,
+        #[arg(short = 'o', long, default_value = ".")]
+        output_dir: PathBuf,
+        #[arg(long)]
+        org: Option<String>,
+        #[arg(long, default_value = "")]
+        description: String,
+        #[arg(long)]
+        with_metric: bool,
+        #[arg(long)]
+        author: Vec<String>,
+    },
+    /// Add tasks or datasets to a dataset.toml.
+    Add(AddArgs),
+    /// Remove tasks from a dataset.toml.
+    Remove(RemoveArgs),
 }
 
 #[derive(Subcommand)]
 enum TasksCmd {
-    /// Create a new task skeleton.
+    /// Initialize a new task directory.
     Init {
-        name: String,
-        #[arg(short = 'p', long = "path", default_value = ".")]
-        dir: PathBuf,
+        name: Option<String>,
+        #[arg(short = 'p', long = "tasks-dir", default_value = ".")]
+        tasks_dir: PathBuf,
+        #[arg(long)]
+        org: Option<String>,
+        #[arg(long, default_value = "")]
+        description: String,
+        #[arg(long)]
+        no_pytest: bool,
+        #[arg(long)]
+        no_solution: bool,
+        #[arg(long)]
+        include_canary_strings: bool,
+        /// Path to a template TOML file for task metadata and defaults.
+        #[arg(long)]
+        metadata_template: Option<PathBuf>,
+        #[arg(long, hide = true)]
+        include_standard_metadata: bool,
+        #[arg(long)]
+        no_package: bool,
+        #[arg(long)]
+        author: Vec<String>,
+        #[arg(long, default_value_t = 0)]
+        steps: usize,
     },
     /// Print the task.toml JSON schema.
     Schema,
@@ -579,23 +703,57 @@ async fn run_with_ctrl_c(cfg: JobConfig, trials: Option<Vec<TrialConfig>>, filte
     Ok(())
 }
 
-fn task_template(name: &str) -> [(&'static str, String); 5] {
-    [
-        (
-            "task.toml",
-            format!(
-                "schema_version = \"1.4\"\n\n[task]\nname = \"{name}\"\nversion = \"1.0.0\"\n\n[metadata]\ndifficulty = \"easy\"\ncategory = \"programming\"\ntags = []\n\n\
-                 [verifier]\ntimeout_sec = 120.0\n\n[agent]\ntimeout_sec = 600.0\n\n[environment]\nbuild_timeout_sec = 600.0\ncpus = 1\nmemory_mb = 2048\n"
-            ),
-        ),
-        ("instruction.md", "Create a file called hello.txt with \"Hello, world!\" as the content.\n".into()),
-        ("environment/Dockerfile", "FROM ubuntu:24.04\n\nWORKDIR /app\n".into()),
-        (
-            "tests/test.sh",
-            "#!/bin/bash\n\nif [ \"$(cat /app/hello.txt 2>/dev/null)\" = \"Hello, world!\" ]; then\n  echo 1 > /logs/verifier/reward.txt\nelse\n  echo 0 > /logs/verifier/reward.txt\nfi\n".into(),
-        ),
-        ("solution/solve.sh", "#!/bin/bash\n\necho \"Hello, world!\" > hello.txt\n".into()),
-    ]
+/// `hbench init`: task or dataset, with upstream's cross-type flag checks.
+fn run_init(a: InitArgs) -> Result<()> {
+    let (mut task, mut dataset) = (a.task, a.dataset);
+    if task && dataset {
+        bail!("Cannot specify both --task and --dataset.");
+    }
+    if !task && !dataset {
+        print!("Initialize a [t]ask or [d]ataset?: ");
+        std::io::Write::flush(&mut std::io::stdout())?;
+        let mut choice = String::new();
+        std::io::stdin().read_line(&mut choice)?;
+        match choice.trim().to_lowercase().as_str() {
+            "t" | "task" => task = true,
+            "d" | "dataset" => dataset = true,
+            _ => bail!("Invalid choice. Please enter 't' for task or 'd' for dataset."),
+        }
+    }
+    if dataset {
+        let task_flags = [
+            ("--no-pytest", a.no_pytest),
+            ("--no-solution", a.no_solution),
+            ("--include-canary-strings", a.include_canary_strings),
+            ("--include-standard-metadata", a.include_standard_metadata),
+            ("--no-package", a.no_package),
+            ("--steps", a.steps > 0),
+        ];
+        if let Some((flag, _)) = task_flags.iter().find(|(_, set)| *set) {
+            bail!("{flag} is a task-only option and cannot be used with --dataset.");
+        }
+    }
+    if task && a.with_metric {
+        bail!("--with-metric is a dataset-only option and cannot be used with --task.");
+    }
+    let name = authoring::resolve_name(a.name, a.org)?;
+    let authors = authoring::parse_authors(&a.author);
+    if task {
+        let opts = authoring::TaskOpts {
+            no_pytest: a.no_pytest,
+            no_solution: a.no_solution,
+            include_canary_strings: a.include_canary_strings,
+            include_standard_metadata: a.include_standard_metadata,
+            no_package: a.no_package,
+            description: a.description,
+            authors,
+            metadata_template: None,
+            steps: a.steps,
+        };
+        authoring::init_task(&name, &a.output_dir, &opts).map(|_| ())
+    } else {
+        authoring::init_dataset(&name, &a.output_dir, &a.description, a.with_metric, &authors)
+    }
 }
 
 #[tokio::main]
@@ -734,22 +892,28 @@ async fn main() -> Result<()> {
             }
             Ok(())
         }
-        Cmd::Tasks { cmd: TasksCmd::Init { name, dir } } => {
-            let root = dir.join(name.rsplit('/').next().unwrap());
-            if root.exists() {
-                bail!("{} already exists", root.display());
+        Cmd::Tasks {
+            cmd: TasksCmd::Init { name, tasks_dir, org, description, no_pytest, no_solution, include_canary_strings, metadata_template, include_standard_metadata, no_package, author, steps },
+        } => {
+            if include_standard_metadata {
+                bail!("--include-standard-metadata has been removed. Use --metadata-template <path-to-template.toml> instead.");
             }
-            for (rel, content) in task_template(&name) {
-                let p = root.join(rel);
-                std::fs::create_dir_all(p.parent().unwrap())?;
-                std::fs::write(&p, content)?;
-                if rel.ends_with(".sh") {
-                    use std::os::unix::fs::PermissionsExt;
-                    std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755))?;
-                }
+            if let Some(t) = &metadata_template
+                && !t.exists()
+            {
+                bail!("Template file not found: {}", t.display());
             }
-            println!("created {}", root.display());
-            Ok(())
+            let name = authoring::resolve_name(name, org)?;
+            let opts = authoring::TaskOpts { no_pytest, no_solution, include_canary_strings, no_package, description, authors: authoring::parse_authors(&author), metadata_template, steps, ..Default::default() };
+            authoring::init_task(&name, &tasks_dir, &opts).map(|_| ())
+        }
+        Cmd::Init(a) => run_init(*a),
+        Cmd::Add(a) | Cmd::Datasets { cmd: DatasetsCmd::Add(a) } => authoring::add(&a.packages, &a.to, a.scan),
+        Cmd::Remove(a) | Cmd::Datasets { cmd: DatasetsCmd::Remove(a) } => authoring::remove(&a.package, &a.from, a.scan),
+        Cmd::Sync { path, upgrade, concurrency: _ } => authoring::sync(&path, upgrade),
+        Cmd::Datasets { cmd: DatasetsCmd::Init { name, output_dir, org, description, with_metric, author } } => {
+            let name = authoring::resolve_name(name, org)?;
+            authoring::init_dataset(&name, &output_dir, &description, with_metric, &authoring::parse_authors(&author))
         }
         Cmd::Tasks { cmd: TasksCmd::Check { path } } => {
             let dirs: Vec<PathBuf> = if Task::is_task_dir(&path) {
