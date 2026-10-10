@@ -1,4 +1,5 @@
 mod agents;
+mod analyze;
 mod artifacts;
 mod bridge;
 mod atif;
@@ -87,6 +88,10 @@ enum Cmd {
         #[command(subcommand)]
         cmd: TracesCmd,
     },
+    /// Analyze trial trajectories against a rubric (trial dir or job dir).
+    Analyze(Box<analyze::AnalyzeArgs>),
+    /// Check task quality against a rubric (task dir or dir of tasks).
+    Check(Box<analyze::CheckArgs>),
 }
 
 #[derive(Subcommand)]
@@ -855,6 +860,8 @@ async fn main() -> Result<()> {
             println!("{}", schemas::TRIAL);
             Ok(())
         }
+        Cmd::Analyze(a) => analyze::analyze_command(*a).await,
+        Cmd::Check(a) => analyze::check_command(*a).await,
         Cmd::View { jobs_dir, port, host } => viewer::serve(&jobs_dir, &host, port),
         Cmd::Traces { cmd: TracesCmd::Export { path, output, no_recursive, episodes, filter, sharegpt, instruction_metadata, verifier_metadata } } => {
             let o = traces::ExportOpts {
