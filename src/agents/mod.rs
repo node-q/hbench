@@ -36,9 +36,9 @@ pub struct AgentContext {
     pub n_cache_tokens: Option<i64>,
     pub n_output_tokens: Option<i64>,
     pub cost_usd: Option<f64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub model_usage: Option<BTreeMap<String, ModelUsage>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub rollout_details: Option<Vec<Value>>,
     pub metadata: Option<Value>,
 }

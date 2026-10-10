@@ -286,8 +286,14 @@ impl DockerEnv {
         if !startup_env.is_empty() {
             files.push(write("docker-compose-env.json", json!({"services": {"main": {"environment": startup_env}}}))?);
         }
-        if !spec.mounts.is_empty() {
-            files.push(write("docker-compose-mounts.json", json!({"services": {"main": {"volumes": spec.mounts}}}))?);
+        // /logs dirs are named volumes (upstream bind-mounts host dirs): services that mount
+        // ${HOST_*_PATH} share them with main, and it works on remote daemons too.
+        let log_volume = |dir: &str| format!("hb-logs-{}", dir.trim_start_matches("/logs/"));
+        let mut volumes: Vec<Value> = spec.log_dirs.iter().map(|d| json!({"type": "volume", "source": log_volume(d), "target": d})).collect();
+        volumes.extend(spec.mounts.iter().cloned());
+        if !volumes.is_empty() {
+            let decl: serde_json::Map<String, Value> = spec.log_dirs.iter().map(|d| (log_volume(d), json!({}))).collect();
+            files.push(write("docker-compose-mounts.json", json!({"services": {"main": {"volumes": volumes}}, "volumes": decl}))?);
         }
         if egress {
             let image = egress_image(&log).await?;
@@ -328,7 +334,8 @@ impl DockerEnv {
         }
         for (dir, name) in [("verifier", "VERIFIER_LOGS"), ("agent", "AGENT_LOGS"), ("artifacts", "ARTIFACTS")] {
             compose_env.insert(format!("ENV_{name}_PATH"), format!("/logs/{dir}"));
-            compose_env.insert(format!("HOST_{name}_PATH"), trial_dir.join(dir).display().to_string());
+            let host = if spec.log_dirs.contains(&format!("/logs/{dir}").as_str()) { format!("hb-logs-{dir}") } else { trial_dir.join(dir).display().to_string() };
+            compose_env.insert(format!("HOST_{name}_PATH"), host);
         }
         compose_env.insert(
             "DOCKER_CONFIG".into(),

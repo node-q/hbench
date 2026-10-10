@@ -77,6 +77,10 @@ pub async fn download(env: &DockerEnv, artifacts_dir: &Path, specs: &[ArtifactSp
         entry.kind = if is_dir { "directory" } else { "file" }.into();
         entry.exclude = Some(if is_dir { a.exclude.clone() } else { vec![] });
         entry.status = if res.is_ok() { "ok" } else { "failed" }.into();
+        // upstream's mounted convention dir is recorded "empty" when nothing was published.
+        if a.is_convention() && a.destination.is_none() && a.exclude.is_empty() && res.is_ok() && std::fs::read_dir(&target).map(|mut d| d.next().is_none()).unwrap_or(true) {
+            entry.status = "empty".into();
+        }
         entries.push(entry);
     }
     let path = artifacts_dir.join("manifest.json");

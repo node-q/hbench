@@ -727,6 +727,17 @@ impl Trial {
         Ok(())
     }
 
+    /// upstream bind-mounts /logs/artifacts, so files the shared verifier writes there end up in
+    /// the trial's artifacts too: re-sync the convention dir after shared verification.
+    async fn resync_convention_artifacts(&self, artifacts_dir: &Path) {
+        if self.env_stopped || self.env.is_none() {
+            return;
+        }
+        if let Err(e) = self.env().download_dir(MAIN, crate::task::CONVENTION_ARTIFACTS, &artifacts_dir.join("logs/artifacts")).await {
+            self.log.line(&format!("artifact resync failed: {e:#}"));
+        }
+    }
+
     async fn run_single_step(&mut self) -> Result<()> {
         let mode = self.task.verifier_mode(None);
         let instruction = self.instruction(None)?;
@@ -755,6 +766,9 @@ impl Trial {
             let t = TimingInfo::start();
             let r = self.verify(None, &self.dir.join("artifacts")).await;
             self.result.verifier = Some(t.finish());
+            if !separate {
+                self.resync_convention_artifacts(&self.dir.join("artifacts")).await;
+            }
             self.result.verifier_result = Some(VerifierResult { rewards: Some(r?) });
         }
         Ok(())
@@ -829,8 +843,17 @@ impl Trial {
                     }
                 }
                 sr.verifier = Some(t.finish());
+                if mode == VerifierMode::Shared {
+                    self.resync_convention_artifacts(&sdir.join("artifacts")).await;
+                }
             }
             archive_step(&self.dir, &sdir, next_resumes);
+            // Archiving empties upstream's mounted /logs/artifacts; do the same in the container.
+            if !self.env_stopped
+                && let Err(e) = self.env().empty_dirs(&[crate::task::CONVENTION_ARTIFACTS], true).await
+            {
+                self.log.line(&format!("clearing /logs/artifacts failed: {e:#}"));
+            }
             let stop = (sr.exception_info.is_some() && sr.verifier_result.is_none()) || (!self.cfg.verifier.disable && min_reward_failure(sr.verifier_result.as_ref(), step.min_reward.as_ref()));
             results.push(sr);
             if stop {
