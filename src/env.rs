@@ -549,6 +549,21 @@ impl DockerEnv {
         res
     }
 
+    /// Interactive shell in main (inherits the terminal; no own process group so the TTY works).
+    pub async fn attach(&self) -> Result<std::process::ExitStatus> {
+        let mut c = Command::new("docker");
+        c.arg("compose").arg("--project-name").arg(&self.spec.project).arg("--project-directory").arg(&self.spec.env_dir);
+        for f in &self.files {
+            c.arg("-f").arg(f);
+        }
+        c.args(["exec", "-it"]);
+        if let Some(w) = self.workdir() {
+            c.args(["-w", w]);
+        }
+        c.args(["main", "bash"]).envs(&self.compose_env);
+        Ok(c.status().await?)
+    }
+
     pub async fn stop_service(&self, service: &str) -> Result<()> {
         self.run_ok(sv(&["stop", service]), Some(Duration::from_secs(120))).await.map(|_| ())
     }

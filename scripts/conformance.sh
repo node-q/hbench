@@ -9,7 +9,7 @@ HBENCH=${HBENCH:-/tmp/hb-ref/hbench}
 EX=$HBENCH/examples/tasks
 cargo build --release -q
 BIN=$PWD/target/release/hbench
-OUT=${OUT:-$(mktemp -d)}
+OUT=${OUT:-$(mktemp -d)}; mkdir -p "$OUT"
 SUITES=${*:-core matrix extra env}
 N=${N:-6}
 

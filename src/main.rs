@@ -11,6 +11,7 @@ mod regrade;
 mod registry;
 mod sweeps;
 mod task;
+mod tools;
 mod traces;
 mod trial;
 mod viewer;
@@ -57,6 +58,11 @@ enum Cmd {
     },
     /// List built-in agents.
     Agents,
+    /// Cache management.
+    Cache {
+        #[command(subcommand)]
+        cmd: CacheCmd,
+    },
     /// Successive sweeps that drop tasks once they succeed.
     Sweeps {
         #[command(subcommand)]
@@ -124,6 +130,21 @@ enum TracesCmd {
 }
 
 #[derive(Subcommand)]
+enum CacheCmd {
+    /// Remove ~/.cache/hbench and hbench-built docker images.
+    Clean {
+        #[arg(short = 'f', long)]
+        force: bool,
+        #[arg(long)]
+        dry: bool,
+        #[arg(long)]
+        no_docker: bool,
+        #[arg(long)]
+        no_cache_dir: bool,
+    },
+}
+
+#[derive(Subcommand)]
 enum JobsCmd {
     /// Start a job.
     Start(Box<RunArgs>),
@@ -159,6 +180,8 @@ enum JobsCmd {
 
 #[derive(Subcommand)]
 enum TrialsCmd {
+    /// Resume a finished trial's agent session in the local agent CLI (claude-code, muse-code).
+    Handoff { trial_dir: PathBuf },
     /// Run one trial: `-p task` or `-c trial.yaml`.
     Start {
         #[arg(short = 'c', long = "config")]
@@ -199,6 +222,22 @@ enum TasksCmd {
         name: String,
         #[arg(short = 'p', long = "path", default_value = ".")]
         dir: PathBuf,
+    },
+    /// Start a task's environment and attach a shell (solution + tests uploaded by default).
+    StartEnv {
+        #[arg(short = 'p', long = "path")]
+        path: PathBuf,
+        /// Don't upload solution/ and tests/.
+        #[arg(long)]
+        no_all: bool,
+        #[arg(long)]
+        non_interactive: bool,
+        #[arg(long)]
+        agent: Option<String>,
+        #[arg(short = 'm', long = "model")]
+        model: Option<String>,
+        #[arg(long = "ak", value_parser = parse_kv)]
+        agent_kwargs: Vec<(String, String)>,
     },
     /// Validate task dirs (config, files, test scripts).
     Check {
@@ -709,6 +748,23 @@ async fn main() -> Result<()> {
                 println!("{}", d.display());
             }
             Ok(())
+        }
+        Cmd::Cache { cmd: CacheCmd::Clean { force, dry, no_docker, no_cache_dir } } => tools::cache_clean(force, dry, no_docker, no_cache_dir).await,
+        Cmd::Tasks { cmd: TasksCmd::StartEnv { path, no_all, non_interactive, agent, model, agent_kwargs } } => {
+            env::preflight().await?;
+            let a = agent.map(|name| AgentConfig {
+                name: Some(name),
+                model_name: model,
+                kwargs: agent_kwargs.iter().map(|(k, v)| (k.clone(), kwarg_value(v))).collect(),
+                ..Default::default()
+            });
+            tools::start_env(&path, !no_all, !non_interactive, a).await
+        }
+        Cmd::Trials { cmd: TrialsCmd::Handoff { trial_dir } } => {
+            let cmd = tools::handoff_command(&trial_dir.canonicalize()?, &std::env::current_dir()?)?;
+            println!("Resuming session from trial {} with: {}", trial_dir.display(), cmd.join(" "));
+            use std::os::unix::process::CommandExt;
+            Err(std::process::Command::new(&cmd[0]).args(&cmd[1..]).exec().into())
         }
         Cmd::Agents => {
             for n in agents::agent_names() {

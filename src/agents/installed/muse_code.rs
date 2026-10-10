@@ -16,7 +16,7 @@ const PATH_EXPORT: &str = "export PATH=\"$HOME/.local/bin:$PATH\"";
 const LOGS: &str = "/logs/agent";
 const OUTPUT_FILENAME: &str = "muse-code.jsonl";
 const STDERR_FILENAME: &str = "muse-code.stderr.log";
-const MANIFEST: &str = "muse-session.json";
+pub const MANIFEST: &str = "muse-session.json";
 // upstream: /tmp/hbench-muse/{environment_logs_dir.name}
 const RUNTIME_DIR: &str = "/tmp/hbench-muse/agent";
 const EFFORTS: &[&str] = &["minimal", "low", "medium", "high", "xhigh", "ultra"];
@@ -330,7 +330,7 @@ pub fn atif_to_native(traj: &Value, sid: &str) -> Result<String> {
 }
 
 /// upstream's `_relocate_session`: change only the copied workspace metadata.
-fn relocate_session(text: &str, workspace: &str) -> String {
+pub fn relocate_session(text: &str, workspace: &str) -> String {
     text.split_inclusive('\n')
         .map(|line| match serde_json::from_str::<Value>(line) {
             Ok(mut row) if row["payload"]["kind"] == "metadata" => {
