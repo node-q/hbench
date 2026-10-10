@@ -206,6 +206,8 @@ pub async fn run_job(cfg: JobConfig, trial_configs: Option<Vec<TrialConfig>>, fi
         None => uuid::Uuid::new_v4(),
     };
     std::fs::write(job_dir.join("config.json"), serde_json::to_string_pretty(&cfg)?)?;
+    let log = crate::env::TrialLog::create(&job_dir.join("job.log"))?;
+    log.line(&format!("job {} started ({} agent config(s))", cfg.job_name, cfg.agents.len()));
 
     let mut pending = match trial_configs {
         Some(t) => t,
@@ -283,7 +285,7 @@ pub async fn run_job(cfg: JobConfig, trial_configs: Option<Vec<TrialConfig>>, fi
     for tcfg in pending {
         let task = tasks[&registry::local_path(&tcfg.task)].clone();
         let pool = pools.get(&tcfg.agent.concurrency_key()).cloned();
-        let (sem, shared, write, cancel, retry) = (sem.clone(), shared.clone(), write.clone(), cancel.clone(), cfg.retry.clone());
+        let (sem, shared, write, cancel, retry, log) = (sem.clone(), shared.clone(), write.clone(), cancel.clone(), cfg.retry.clone(), log.clone());
         handles.push(tokio::spawn(async move {
             let _permit = sem.acquire_owned().await.unwrap();
             if *cancel.borrow() {
@@ -291,6 +293,7 @@ pub async fn run_job(cfg: JobConfig, trial_configs: Option<Vec<TrialConfig>>, fi
             }
             shared.lock().unwrap().running += 1;
             write();
+            log.line(&format!("trial {} started (task {}, agent {})", tcfg.trial_name, tcfg.task.display_name(), tcfg.agent.name()));
             let mut attempt = 0;
             let result = loop {
                 let r = match Trial::new(tcfg.clone(), task.clone(), pool.clone()) {
@@ -309,6 +312,7 @@ pub async fn run_job(cfg: JobConfig, trial_configs: Option<Vec<TrialConfig>>, fi
                 let wait = retry.backoff_sec(attempt);
                 attempt += 1;
                 eprintln!("retrying {} ({attempt}/{}) after {kind} in {wait:.1}s", tcfg.trial_name, retry.max_retries);
+                log.line(&format!("trial {} retry {attempt} after {kind}", tcfg.trial_name));
                 let _ = std::fs::remove_dir_all(tcfg.trials_dir.join(&tcfg.trial_name));
                 tokio::time::sleep(Duration::from_secs_f64(wait)).await;
             };
@@ -316,6 +320,12 @@ pub async fn run_job(cfg: JobConfig, trial_configs: Option<Vec<TrialConfig>>, fi
                 let mut sh = shared.lock().unwrap();
                 sh.running -= 1;
                 sh.results.push(result.clone());
+                log.line(&format!(
+                    "trial {} finished: rewards={} exception={}",
+                    result.trial_name,
+                    result.reward().map(|r| serde_json::to_string(r).unwrap()).unwrap_or_else(|| "-".into()),
+                    result.exception_info.as_ref().map(|e| e.exception_type.as_str()).unwrap_or("-")
+                ));
                 if !quiet {
                     let reward = result.reward().map(|r| serde_json::to_string(r).unwrap()).unwrap_or_else(|| "-".into());
                     let err = result.exception_info.as_ref().map(|e| format!(" [{}: {}]", e.exception_type, crate::env::tail(&e.exception_message, 200))).unwrap_or_default();
@@ -330,6 +340,9 @@ pub async fn run_job(cfg: JobConfig, trial_configs: Option<Vec<TrialConfig>>, fi
     }
     if !*cancel.borrow() {
         job_result.lock().unwrap().finished_at = Some(Utc::now());
+        log.line("job finished");
+    } else {
+        log.line("job cancelled");
     }
     write();
     let jr = job_result.lock().unwrap().clone();
