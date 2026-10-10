@@ -1,8 +1,8 @@
-//! OpenCode (port of upstream's agents/installed/opencode.py). ACP bridge mode is not ported.
+//! OpenCode (port of upstream's agents/installed/opencode.py), incl. ACP target mode.
 
 use super::aider::opts;
 use super::gemini_cli::NVM_NODE_INSTALL;
-use super::{connection, ensure_system_dependencies, exec_agent};
+use super::{connection, ensure_system_dependencies, exec_agent, exec_root, safe_bin_symlink_command};
 use crate::agents::model_connection::Spec;
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::{kind_err, quote};
@@ -152,6 +152,40 @@ impl Agent for OpenCode {
         true
     }
 
+    fn acp_command(&self) -> Option<Vec<String>> {
+        let mut c: Vec<String> = ["env", "OPENCODE_FAKE_VCS=git", "XDG_DATA_HOME=/logs/agent/opencode/xdg-data", "XDG_STATE_HOME=/logs/agent/opencode/xdg-state"].map(String::from).to_vec();
+        if let Some(m) = &self.args.model_name {
+            // Inline config outranks opencode.json, like --model in run(). Python json.dumps spacing.
+            c.push(format!("OPENCODE_CONFIG_CONTENT={{\"model\": {}}}", json!(m)));
+        }
+        c.extend(["opencode".into(), "acp".into()]);
+        Some(c)
+    }
+
+    fn acp_env(&self) -> BTreeMap<String, String> {
+        connection(&self.args, SPEC).env
+    }
+
+    async fn acp_install(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
+        if !self.args.model_name.as_deref().is_some_and(|m| m.contains('/')) {
+            bail!("Model name must be in the format provider/model_name");
+        }
+        if opts::string(&self.args, "variant", None)?.is_some() {
+            bail!("OpenCode variant is not supported in ACP target mode");
+        }
+        let none = BTreeMap::new();
+        if let Some(c) = self.config()? {
+            exec_agent(cx, &format!("mkdir -p ~/.config/opencode && echo {} > ~/.config/opencode/opencode.json", quote(&serde_json::to_string_pretty(&c)?)), &none).await?;
+        }
+        if let Some(d) = opts::skills_dir(&self.args) {
+            exec_agent(cx, &format!("mkdir -p ~/.config/opencode/skills && cp -r {}/* ~/.config/opencode/skills/ 2>/dev/null || true", quote(&d)), &none).await?;
+        }
+        // The npm bin is a native binary; it only needs to be reachable off the nvm PATH.
+        let r = exec_agent(cx, "[ -f ~/.nvm/nvm.sh ] && . ~/.nvm/nvm.sh; command -v opencode", &none).await?;
+        let Some(bin) = r.stdout.trim().lines().last() else { bail!("Could not locate the opencode binary for ACP mode") };
+        exec_root(cx, &safe_bin_symlink_command(bin, "/usr/local/bin/opencode"), &none).await.map(|_| ())
+    }
+
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
         opts::installed_dir(cx).await?;
         // nodejs/npm cover musl images (nvm can't); coreutils provides stdbuf.
@@ -233,6 +267,16 @@ mod tests {
         assert_eq!(agent(json!({"disable_web_search": true, "opencode_config": {"permission": "allow"}}), &[]).config().unwrap().unwrap()["permission"]["*"], "allow");
         assert!(create(opts::test_args(json!({"opencode_config": "x"}), &[], None)).is_err());
         assert!(create(opts::test_args(json!({"disable_web_search": "maybe"}), &[], None)).is_err());
+    }
+
+    #[test]
+    fn acp_command_contents() {
+        let a = agent(json!({}), &[("OPENAI_API_KEY", "k")]);
+        assert_eq!(
+            a.acp_command().unwrap(),
+            vec!["env", "OPENCODE_FAKE_VCS=git", "XDG_DATA_HOME=/logs/agent/opencode/xdg-data", "XDG_STATE_HOME=/logs/agent/opencode/xdg-state", "OPENCODE_CONFIG_CONTENT={\"model\": \"openai/gpt-5\"}", "opencode", "acp"]
+        );
+        assert_eq!(a.acp_env().get("OPENAI_API_KEY").map(String::as_str), Some("k"));
     }
 
     #[test]

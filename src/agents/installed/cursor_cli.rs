@@ -23,6 +23,15 @@ fn builtin_pricing(slug: &str) -> Option<[f64; 4]> {
     })
 }
 
+/// LiteLLM `model_cost` rates for `model` (then without its `provider/` prefix), per million tokens.
+fn litellm_rates(model: &str) -> Option<[f64; 4]> {
+    let p = crate::agents::pricing::model_cost(model).or_else(|| crate::agents::pricing::model_cost(model.split_once('/').map_or(model, |(_, m)| m)))?;
+    let rate = |k: &str| p.get(k).and_then(Value::as_f64);
+    let input = rate("input_cost_per_token").unwrap_or(0.0);
+    let output = rate("output_cost_per_token").unwrap_or(0.0);
+    Some([input, output, rate("cache_read_input_token_cost").unwrap_or(input), rate("cache_creation_input_token_cost").unwrap_or(input)].map(|r| r * 1_000_000.0))
+}
+
 fn model_slug(model: &str) -> String {
     let s = model.split_once('/').map_or(model, |(_, m)| m).to_lowercase();
     match s.as_str() {
@@ -121,7 +130,7 @@ impl CursorCli {
         Ok(format!("{}[{merged}]", &c["base"]))
     }
 
-    /// Per-million rates: user `pricing` override, then built-in Cursor rates (LiteLLM fallback not available).
+    /// Per-million rates: user `pricing` override, then built-in Cursor rates, then LiteLLM.
     fn rates(&self) -> Option<[f64; 4]> {
         let model = self.args.model_name.as_deref()?;
         let user = match &self.pricing {
@@ -129,7 +138,7 @@ impl CursorCli {
             Some(Pricing::Map(m)) => m.get(&model_slug(model)).copied(),
             None => None,
         };
-        user.or_else(|| builtin_pricing(&model_slug(model)))
+        user.or_else(|| builtin_pricing(&model_slug(model))).or_else(|| litellm_rates(model))
     }
 
     fn mcp_command(&self) -> Option<String> {
@@ -282,6 +291,9 @@ mod tests {
         let flat = agent(json!({"pricing": {"input": 1, "output": 2}}), "cursor/unknown").unwrap().parse_usage(log).unwrap();
         assert!((flat.cost_usd.unwrap() - (4500.0 + 400.0) / 1e6).abs() < 1e-12);
         assert_eq!(agent(json!({}), "cursor/unknown").unwrap().parse_usage(log).unwrap().cost_usd, None);
+        // LiteLLM fallback: gpt-5 in 1.25e-6, out 1e-5, cache read 1.25e-7, no cache write (-> input rate).
+        let l = agent(json!({}), "cursor/gpt-5").unwrap().parse_usage(log).unwrap().cost_usd.unwrap();
+        assert!((l - (1000.0 * 1.25e-6 + 3000.0 * 1.25e-7 + 500.0 * 1.25e-6 + 200.0 * 1e-5)).abs() < 1e-12);
         let reported = log.replace("\"cacheWriteTokens\":500}", "\"cacheWriteTokens\":500,\"totalCost\":0.42}");
         assert_eq!(agent(json!({}), "cursor/composer-2").unwrap().parse_usage(&reported).unwrap().cost_usd, Some(0.42));
     }

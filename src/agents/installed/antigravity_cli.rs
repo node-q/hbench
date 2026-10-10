@@ -572,8 +572,19 @@ impl Agent for AntigravityCli {
             ctx.n_input_tokens = Some(i);
             ctx.n_output_tokens = Some(o);
             ctx.n_cache_tokens = Some(c);
+            ctx.cost_usd = self.args.model_name.as_deref().and_then(|m| cost_from_pricing(m, i, o, c));
         }
     }
+}
+
+/// upstream's `_compute_cost_from_pricing`: LiteLLM rates for the model (then provider-stripped),
+/// cache reads at `cache_read_input_token_cost or input rate`. None when the model isn't priced.
+pub fn cost_from_pricing(model: &str, prompt: i64, completion: i64, cached: i64) -> Option<f64> {
+    let p = crate::agents::pricing::model_cost(model).or_else(|| crate::agents::pricing::model_cost(model.split_once('/').map_or(model, |(_, m)| m)))?;
+    let rate = |k: &str| p.get(k).and_then(Value::as_f64).filter(|r| *r != 0.0);
+    let input = rate("input_cost_per_token").unwrap_or(0.0);
+    let read = rate("cache_read_input_token_cost").unwrap_or(input);
+    Some((prompt - cached).max(0) as f64 * input + cached as f64 * read + completion as f64 * rate("output_cost_per_token").unwrap_or(0.0))
 }
 
 #[cfg(test)]
@@ -719,6 +730,11 @@ mod tests {
         std::fs::write(dir.join(STREAM_LOG), json!({"event": "result", "result": {"usage": {"input_tokens": 70, "output_tokens": 8}}}).to_string()).unwrap();
         let mut ctx = AgentContext::default();
         agent(json!({}), &[], Some("google/gemini-3.5-flash")).unwrap().populate_context_post_run(&dir, &mut ctx);
-        assert_eq!((ctx.n_input_tokens, ctx.n_output_tokens, ctx.n_cache_tokens, ctx.cost_usd), (Some(70), Some(8), Some(0), None));
+        assert_eq!((ctx.n_input_tokens, ctx.n_output_tokens, ctx.n_cache_tokens), (Some(70), Some(8), Some(0)));
+        // gemini-3.5-flash: in 1.5e-6, out 9e-6, cache read 1.5e-7.
+        assert!((ctx.cost_usd.unwrap() - (70.0 * 1.5e-6 + 8.0 * 9e-6)).abs() < 1e-12);
+        let c = cost_from_pricing("google/gemini-3.5-flash", 100, 10, 40).unwrap();
+        assert!((c - (60.0 * 1.5e-6 + 40.0 * 1.5e-7 + 10.0 * 9e-6)).abs() < 1e-12);
+        assert_eq!(cost_from_pricing("google/not-a-model", 1, 1, 0), None);
     }
 }
