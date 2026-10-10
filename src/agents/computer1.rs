@@ -1,14 +1,13 @@
 //! computer-1 (port of upstream's agents/computer_1): desktop computer-use agent.
 //!
 //! Ported: the generic strict-JSON harness (upstream's `litellm` provider flavor, the default for
-//! models outside the anthropic/bedrock/gemini/vertex_ai routes): the desktop runtime
+//! models outside the anthropic/bedrock/gemini/vertex_ai routes), the native computer-use
+//! providers (`native`: Anthropic/Bedrock computer tool, Gemini Computer Use, OpenAI Responses
+//! `computer` tool) with upstream's provider selection, and the shared pieces: the desktop runtime
 //! (Xvfb + XFCE + VNC + Chromium in the container, driven by xdotool over `docker compose exec`),
 //! the JSON action parser and prompts, the episode loop with double-confirmed completion,
 //! image-aware context compaction, the ATIF recorder, per-episode logs and final_answer.txt.
 //!
-//! Not ported: the native vendor-SDK providers (Anthropic/Bedrock computer-use tool, Gemini,
-//! OpenAI Responses CUA). upstream loads those from optional SDK extras; selecting one here fails
-//! with a clear error that points at `provider="litellm"`.
 
 use super::llm::{LiteLlm, Llm, LlmConfig, LlmError, LlmResponse, add_anthropic_caching, lookup_model_info};
 use super::terminus2::{Kw, Shell, limit_output_length, now, py_format, pyf, pyrepr};
@@ -38,6 +37,8 @@ const UNWIND_TARGET_FREE_TOKENS: i64 = 4_000;
 const IMAGE_TOKEN_ESTIMATE: i64 = 1_300;
 const KEEP_LAST_SCREENSHOTS: usize = 3;
 const TERMINAL_ACTION_TYPES: [&str; 3] = ["terminate", "done", "answer"];
+
+mod native;
 
 type BoxFut<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
@@ -715,7 +716,7 @@ impl Desktop {
     }
 
     async fn execute(&mut self, sh: &dyn Shell, a: &Action) -> Result<Value> {
-        // ponytail: only native providers emit normalized coordinates; the JSON harness sends desktop pixels.
+        let a = &native::normalize_action(a, self.geo.desktop_width, self.geo.desktop_height);
         let kind = a.kind.as_str();
         if matches!(kind, "key" | "keypress") && is_blocked_key_combo(a.keys.as_ref()) {
             return Err(rt_err(kind, 403, "Action blocked: developer tools are not available in this environment."));
@@ -1009,6 +1010,8 @@ struct Options {
     extra_tools: Vec<String>,
     enable_images: Option<bool>,
     provider: Option<String>,
+    aws_region_name: Option<String>,
+    gemini_auto_ack_safety: bool,
 }
 
 const KNOWN_OPTIONS: [&str; 30] = [
@@ -1085,10 +1088,10 @@ impl Options {
             extra_tools,
             enable_images,
             provider: kw.string("provider").map(|p| p.to_lowercase()),
+            aws_region_name: kw.string("aws_region_name"),
+            gemini_auto_ack_safety: kw.boolean("gemini_auto_ack_safety", false),
         };
         let use_responses = kw.boolean("use_responses_api", false);
-        kw.string("aws_region_name");
-        kw.boolean("gemini_auto_ack_safety", false);
         kw.finish(NAME)?;
         if use_responses {
             bail!("computer-1 use_responses_api is not supported by hbench's port (its generic harness always uses chat completions)");
@@ -1133,6 +1136,7 @@ fn resolve_provider_name(model: &str, override_: Option<&str>) -> Result<String>
                 Some("bedrock") => "bedrock",
                 Some("gemini" | "vertex_ai") => "gemini",
                 None if model.to_lowercase().starts_with("claude") => "anthropic",
+                None if model.to_lowercase().contains("anthropic.claude") => "bedrock",
                 None if model.to_lowercase().starts_with("gemini") => "gemini",
                 _ => "litellm",
             }
@@ -1193,6 +1197,11 @@ pub struct Computer1 {
     wait_streak: i64,
     latest_screenshot: Option<String>,
     compaction_count: i64,
+    /// Resolved provider flavor ("litellm" or a native one).
+    provider: String,
+    native: Option<native::Native>,
+    /// Native providers: whether any turn reported usage (upstream leaves the context unset otherwise).
+    usage_seen: bool,
 }
 
 pub fn create(args: AgentArgs) -> Result<AgentBox> {
@@ -1204,14 +1213,8 @@ impl Computer1 {
         let opts = Options::parse(&args.kwargs)?;
         let model = args.model_name.clone().ok_or_else(|| anyhow!("model_name is required for computer-1"))?;
         let provider = resolve_provider_name(&model, opts.provider.as_deref())?;
-        if provider != "litellm" {
-            bail!(
-                "computer-1's native {} provider drives the vendor's computer-use tool through its SDK (upstream's optional 'hbench[computer-1]' extra), which hbench doesn't port; pass provider='litellm' to use the generic JSON harness",
-                pyrepr(&provider)
-            );
-        }
         // Known to LiteLLM without vision support -> fail fast (unknown models pass).
-        if opts.enable_images.is_none() && lookup_model_info(&model).is_some() && supports_vision(&model) != Some(true) {
+        if provider == "litellm" && opts.enable_images.is_none() && lookup_model_info(&model).is_some() && supports_vision(&model) != Some(true) {
             bail!(
                 "Model {} does not support vision input, but computer-1's generic harness is screenshot-driven. Use a vision-capable model, or pass enable_images explicitly to override litellm's metadata.",
                 pyrepr(&model)
@@ -1238,8 +1241,12 @@ impl Computer1 {
             use_responses_api: false,
             llm_kwargs,
         };
-        let llm = LiteLlm::new(cfg, &|k: &str| args.get_env(k))?;
-        Ok(Self::with_llm(args, opts, model, Box::new(llm), enable_images, enable_bash, session_id))
+        // Native providers talk to their vendor APIs directly; the litellm client is never used
+        // (no JSON loop, compaction or fallback query), so its endpoint isn't resolved.
+        let llm: Box<dyn Llm> = if provider == "litellm" { Box::new(LiteLlm::new(cfg, &|k: &str| args.get_env(k))?) } else { Box::new(NoLlm) };
+        let mut c = Self::with_llm(args, opts, model, llm, enable_images, enable_bash, session_id);
+        c.provider = provider;
+        Ok(c)
     }
 
     fn with_llm(args: AgentArgs, opts: Options, model_name: String, llm: Box<dyn Llm>, enable_images: bool, enable_bash: bool, session_id: String) -> Computer1 {
@@ -1262,6 +1269,9 @@ impl Computer1 {
             wait_streak: 0,
             latest_screenshot: None,
             compaction_count: 0,
+            provider: "litellm".into(),
+            native: None,
+            usage_seen: false,
         }
     }
 
@@ -1358,6 +1368,10 @@ impl Computer1 {
         m
     }
 
+    fn image_part(&self, p: &str) -> Value {
+        json!({"type": "image", "source": {"media_type": mime_for_path(p), "path": self.viewer_path(p)}})
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn record_agent_step(&mut self, episode: i64, resp: &LlmResponse, step: &ModelStep, is_complete: bool, observation: &str, paths: &[String], metrics: Value) {
         let mut parts = vec![];
@@ -1379,7 +1393,7 @@ impl Computer1 {
             json!(observation)
         } else {
             let mut c = vec![json!({"type": "text", "text": observation})];
-            c.extend(paths.iter().map(|p| json!({"type": "image", "source": {"media_type": mime_for_path(p), "path": self.viewer_path(p)}})));
+            c.extend(paths.iter().map(|p| self.image_part(p)));
             Value::Array(c)
         };
         let mut result = json!({"content": content});
@@ -1399,10 +1413,12 @@ impl Computer1 {
 
     fn sync_context(&self, ctx: &mut AgentContext) {
         let c = &self.chat;
-        ctx.n_input_tokens = Some(c.total_input_tokens);
-        ctx.n_output_tokens = Some(c.total_output_tokens);
-        ctx.n_cache_tokens = Some(c.total_cache_tokens);
-        ctx.cost_usd = (c.total_cost > 0.0).then_some(c.total_cost);
+        if self.native.is_none() || self.usage_seen {
+            ctx.n_input_tokens = Some(c.total_input_tokens);
+            ctx.n_output_tokens = Some(c.total_output_tokens);
+            ctx.n_cache_tokens = Some(c.total_cache_tokens);
+            ctx.cost_usd = (c.total_cost > 0.0).then_some(c.total_cost);
+        }
         let md = ctx.metadata.get_or_insert_with(|| json!({}));
         if !md.is_object() {
             *md = json!({});
@@ -1449,6 +1465,9 @@ impl Computer1 {
         if c.total_cost > 0.0 {
             fm["total_cost_usd"] = json!(c.total_cost);
         }
+        if self.native.is_some() {
+            fm = aggregate_step_metrics(&self.steps);
+        }
         let mut t = json!({
             "schema_version": "ATIF-v1.8", "session_id": self.session_id,
             "agent": {"name": NAME, "version": VERSION, "model_name": self.model_name},
@@ -1474,8 +1493,8 @@ impl Computer1 {
         Ok(p)
     }
 
-    async fn execute_action(&mut self, sh: &dyn Shell, action: Option<&Action>, episode: i64) -> Result<(String, Vec<String>, bool)> {
-        let shot = format!("screenshot_ep{episode}.webp");
+    async fn execute_action(&mut self, sh: &dyn Shell, action: Option<&Action>, episode: i64, index: Option<usize>) -> Result<(String, Vec<String>, bool)> {
+        let shot = format!("screenshot_ep{episode}{}.webp", index.map(|i| format!("_action{i}")).unwrap_or_default());
         let Some(a) = action else { return Ok(("(no action taken)".into(), vec![self.capture(sh, &shot).await?], false)) };
         if a.is_terminal() {
             return Ok((format!("Terminal action committed: {}", a.kind), vec![self.capture(sh, &shot).await?], false));
@@ -1517,7 +1536,8 @@ impl Computer1 {
         if sh.sh(&format!("test -f {}", quote(&self.io_path(FINAL_ANSWER))), false, Some(Duration::from_secs(10))).await?.code == 0 {
             return Ok(());
         }
-        let text = self.extract_text_fallback(sh, instruction).await.unwrap_or_default();
+        // Native providers have no chat history to ask: upstream writes an empty answer.
+        let text = if self.native.is_some() { String::new() } else { self.extract_text_fallback(sh, instruction).await.unwrap_or_default() };
         self.write_final_answer(sh, &text).await
     }
 
@@ -1727,7 +1747,7 @@ impl Computer1 {
                 continue;
             }
 
-            let (obs_text, mut paths, _) = self.execute_action(sh, step.action.as_ref(), episode).await?;
+            let (obs_text, mut paths, _) = self.execute_action(sh, step.action.as_ref(), episode, None).await?;
             let was_pending = self.pending_completion;
             let is_complete = step.is_terminal || step.action.as_ref().is_some_and(Action::is_terminal);
             let mut observation = if is_complete {
@@ -1782,6 +1802,10 @@ impl Computer1 {
             bail!("Session is not set. Call setup() first.");
         }
         self.chat = CChat::default();
+        if self.provider != "litellm" && self.native.is_none() {
+            let o = &self.opts;
+            self.native = Some(native::Native::new(&self.provider, &self.model_name, o.geo.desktop_width, o.geo.desktop_height, o.aws_region_name.as_deref(), o.gemini_auto_ack_safety, &|k: &str| self.args.get_env(k))?);
+        }
         if let Some(url) = self.opts.start_url.clone() {
             let mut a = Action::new("navigate");
             a.url = Some(url.clone());
@@ -1796,7 +1820,11 @@ impl Computer1 {
             ]));
         }
         let initial = self.capture(sh, "screenshot_init.webp").await?;
-        let r = self.run_loop(sh, ctx, instruction, &initial).await;
+        let r = match self.native.as_ref().map(|n| n.kind) {
+            Some(native::Kind::OpenAi) => self.run_openai_loop(sh, ctx, instruction).await,
+            Some(_) => self.run_step_loop(sh, ctx, instruction, &initial).await,
+            None => self.run_loop(sh, ctx, instruction, &initial).await,
+        };
         let _ = self.final_answer_fallback(sh, instruction).await; // upstream logs and continues
         ctx.rollout_details = Some(vec![]);
         self.sync_context(ctx);
@@ -1805,6 +1833,38 @@ impl Computer1 {
             Ok(le) => le.into_anyhow(),
             Err(e) => e,
         })
+    }
+}
+
+/// `_aggregate_step_metrics`: native providers' final metrics are the per-step sums.
+fn aggregate_step_metrics(steps: &[Value]) -> Value {
+    let mut fm = Map::new();
+    for (key, total) in [("prompt_tokens", "total_prompt_tokens"), ("completion_tokens", "total_completion_tokens"), ("cached_tokens", "total_cached_tokens")] {
+        let vals: Vec<i64> = steps.iter().filter_map(|s| s["metrics"][key].as_i64()).collect();
+        if !vals.is_empty() {
+            fm.insert(total.into(), json!(vals.iter().sum::<i64>()));
+        }
+    }
+    let cost: f64 = steps.iter().filter_map(|s| s["metrics"]["cost_usd"].as_f64()).sum();
+    if cost > 0.0 {
+        fm.insert("total_cost_usd".into(), json!(cost));
+    }
+    Value::Object(fm)
+}
+
+/// Stand-in client for native providers, which never query litellm.
+struct NoLlm;
+
+#[async_trait::async_trait]
+impl Llm for NoLlm {
+    async fn call(&self, _: &str, _: &[Value], _: &Map<String, Value>, _: Option<&str>) -> Result<LlmResponse, LlmError> {
+        Err(LlmError::Api { kind: "APIError", msg: "computer-1 native providers don't use the litellm client".into() })
+    }
+    fn context_limit(&self) -> i64 {
+        1_000_000
+    }
+    fn output_limit(&self) -> Option<i64> {
+        None
     }
 }
 
@@ -1936,8 +1996,8 @@ mod tests {
     // ----- loop with mocks -----
 
     #[derive(Default)]
-    struct MockShell {
-        log: Mutex<Vec<String>>,
+    pub(super) struct MockShell {
+        pub(super) log: Mutex<Vec<String>>,
     }
 
     #[async_trait::async_trait]
@@ -1958,7 +2018,7 @@ mod tests {
     }
 
     #[derive(Clone, Default)]
-    struct MockLlm {
+    pub(super) struct MockLlm {
         replies: Arc<Mutex<VecDeque<Result<LlmResponse, LlmError>>>>,
         seen: Arc<Mutex<Vec<Vec<Value>>>>,
     }
@@ -1986,7 +2046,7 @@ mod tests {
         Ok(LlmResponse { content: c.into(), model_name: Some("m-1".into()), usage: Some(Usage { prompt_tokens: 50, completion_tokens: 5, cache_tokens: 0, cost_usd: 0.0 }), ..Default::default() })
     }
 
-    fn agent(kwargs: Value, llm: &MockLlm) -> (Computer1, PathBuf) {
+    pub(super) fn agent(kwargs: Value, llm: &MockLlm) -> (Computer1, PathBuf) {
         let root = std::env::temp_dir().join(format!("hbench-c1-{}", uuid::Uuid::new_v4()));
         let task_dir = root.join("task");
         std::fs::create_dir_all(task_dir.join("environment")).unwrap();

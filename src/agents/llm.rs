@@ -835,6 +835,16 @@ fn cq(s: &str) -> String {
 
 /// POST JSON; non-2xx statuses become classified errors.
 pub async fn send(url: &str, req: &Request) -> Result<Value, LlmError> {
+    let (status, body) = send_raw(url, req).await?;
+    if !(200..300).contains(&status) {
+        return Err(classify_http(status, &body));
+    }
+    serde_json::from_str(&body).map_err(|e| api_err("APIError", format!("invalid JSON from {url}: {e}: {}", tail(&body, 1000))))
+}
+
+/// POST JSON; returns (HTTP status, body). Only transport failures are errors
+/// (kind `Timeout` or `APIConnectionError`).
+pub async fn send_raw(url: &str, req: &Request) -> Result<(u16, String), LlmError> {
     let path = std::env::temp_dir().join(format!("hbench-llm-{}.json", uuid::Uuid::new_v4().simple()));
     std::fs::write(&path, serde_json::to_vec(&req.body).unwrap_or_default()).map_err(|e| api_err("APIConnectionError", format!("writing request body: {e}")))?;
     let mut cfg = format!(
@@ -868,11 +878,7 @@ pub async fn send(url: &str, req: &Request) -> Result<Value, LlmError> {
         return Err(api_err(kind, format!("{url}: {}", String::from_utf8_lossy(&out.stderr).trim())));
     }
     let (body, status) = stdout.rsplit_once('\n').unwrap_or(("", &stdout));
-    let status: u16 = status.trim().parse().unwrap_or(0);
-    if !(200..300).contains(&status) {
-        return Err(classify_http(status, body));
-    }
-    serde_json::from_str(body).map_err(|e| api_err("APIError", format!("invalid JSON from {url}: {e}: {}", tail(body, 1000))))
+    Ok((status.trim().parse().unwrap_or(0), body.to_string()))
 }
 
 /// Port of upstream's `Chat`: message history plus cumulative usage.
