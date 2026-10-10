@@ -1,0 +1,37 @@
+{
+  "files": {
+    "in/a/x.txt": "hi\n",
+    "in/b/y.txt": "yo\n",
+    "in/b/.hidden": "h\n",
+    "in/c.md": "c\n",
+    "inst.md": "From a file.\n",
+    "schema.json": "{\"type\": \"object\"}\n",
+    "envsrc/Dockerfile": "FROM python:3.12\n",
+    "testsrc/test.sh": "#!/bin/bash\necho 1\n",
+    "tpl/instruction.md": "Template instruction.\n",
+    "tpl/README.md": "Template readme.\n",
+    "tpl/environment/Dockerfile": "FROM ubuntu:24.04\n",
+    "tpl/tests/test.sh": "#!/bin/bash\nexit 0\n",
+    "tpl/task.toml": "version = \"1.2\"\nsource = \"src-x\"\n\n[task]\nname = \"org/name\"\nauthors = [{ name = \"A\", email = \"a@x\" }, { name = \"B\" }]\nkeywords = [\"k1\"]\n\n[metadata]\ndifficulty = \"hard\"\nweird = \"q\\\"uo'te \\\\ back\\ttab\"\nboth = \"it's \\\"x\\\"\"\nuni = \"café 中\"\ntags = [\"a\", \"b\"]\nnested = { inner = { deep = 1 }, list = [1.5, 2] }\nnum = 3\nflt = 1e-7\nbig = 1e20\nflag = true\nempty = []\n\"spaced key\" = 1\n\n[verifier]\ntimeout_sec = 60\nenv = { A = \"1\" }\n\n[[verifier.collect]]\ncommand = \"dump\"\n\n[agent]\ntimeout_sec = 300\nuser = 1000\n\n[environment]\nmemory = \"2G\"\nstorage_mb = 100\nallow_internet = false\ncpus = 2\nos = \"Linux\"\nmcp_servers = [{ name = \"s\", transport = \"http\", url = \"http://x\" }]\n\n[environment.healthcheck]\ncommand = \"true\"\nretries = 5\n\n[solution.env]\nS = \"v\"\n",
+    "tpl_steps/task.toml": "multi_step_reward_strategy = \"final\"\nartifacts = [\"/logs/x\"]\n\n[[steps]]\nname = \"one\"\nmin_reward = 1\nartifacts = [{ source = \"/app/o\", exclude = [\"*.tmp\"] }]\n\n[steps.agent]\ntimeout_sec = 10\n\n[[steps]]\nname = \"two\"\nmin_reward = { a = 1, b = 0.5 }\n\n[steps.healthcheck]\ncommand = \"ok\"\ninterval_sec = 1\n",
+    "tpl_steps/steps/one/instruction.md": "one\n",
+    "tpl_steps/steps/two/instruction.md": "two\n",
+    "tpl_sep/instruction.md": "Sep.\n",
+    "tpl_sep/task.toml": "schema_version = \"1.3\"\n\n[verifier]\nenvironment_mode = \"separate\"\n",
+    "tpl_sep/tests/Dockerfile": "FROM ubuntu:latest\n",
+    "tpl_bad/instruction.md": "Bad.\n",
+    "tpl_bad/tests/README.md": "No verifier script here.\n"
+  },
+  "cases": {
+    "cross_product": {"task_name_prefix": "My Job!", "instructions": ["Write out/report.md"], "artifacts": ["/app/out/report.md", "/app/r.json"], "environments": [{"paths": ["{ROOT}/in/a"]}, {"paths": ["{ROOT}/in/b/*", "{ROOT}/in/c.md"], "docker_image": "python:3.12", "workdir": "/w"}], "verifiers": [{"auto_verifier": {"required_artifacts": ["/app/out/report.md"], "reward_artifact": "/app/r.json"}}]},
+    "dict_artifacts": {"dataset_name": "DS", "instructions": ["a", {"path": "{ROOT}/inst.md"}], "artifacts": [{"source": "/app/r.json", "destination": "x"}, {"source": "/app/o", "service": "db"}], "verifiers": [{"auto_verifier": {}}]},
+    "template_replaced_env": {"task_template": "{ROOT}/tpl", "instructions": [{"text": "Override."}], "artifacts": ["/app/a.md"], "environments": [{"docker_image": "img"}]},
+    "template_kept_env": {"task_template": "{ROOT}/tpl"},
+    "template_steps": {"task_template": "{ROOT}/tpl_steps", "environments": [{"path": "{ROOT}/envsrc", "docker_image": "z"}], "verifiers": [{"path": "{ROOT}/testsrc"}]},
+    "schemas": {"instructions": ["Write /app/ré.json"], "verifiers": [{"auto_verifier": {"required_artifacts": ["/app/ré.json"], "artifact_json_schemas": {"/app/ré.json": "{ROOT}/schema.json"}}}]},
+    "separate_verifier": {"task_template": "{ROOT}/tpl_sep"},
+    "template_missing_test_script": {"task_template": "{ROOT}/tpl_bad"},
+    "recursive_glob": {"instructions": ["x"], "environments": [{"paths": ["{ROOT}/in/**"]}]},
+    "no_match": {"instructions": ["x"], "environments": [{"paths": ["{ROOT}/nope*"]}]}
+  }
+}
