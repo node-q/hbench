@@ -20,9 +20,19 @@ const PATCHES: &[(&str, &str, &str)] = &[
     ("compare-BQ", "color-mix(in oklch, var(--foreground) ${ie(O,z,E)}%, var(--card))", "color-mix(in oklch, var(--hb-good) ${ie(O,z,E)}%, var(--card))"),
     ("compare-BQ", "color-mix(in oklch, var(--foreground) 12%, var(--card)), var(--foreground))", "color-mix(in oklch, var(--hb-good) 12%, var(--card)), var(--hb-good))"),
     ("home-", r#"writeText("hbench run -d <dataset>")"#, r#"writeText("hbench run -d <dataset>")"#),
+    ("home-", r#"children:"hbench run -d <dataset>""#, r#"children:"hbench run -d <dataset>""#),
     ("run-", r#"children:"hbench run"}"#, r#"children:"hbench run"}"#),
     ("trial-", r#"const r=["hbench run"]"#, r#"const r=["hbench run"]"#),
+    // No upstream branding: own favicon (the .ico isn't embedded), titles and Hub wording.
+    ("index.html", r#"<link rel="icon" href="/favicon.ico" sizes="any"/>"#, ""),
+    ("run-", r#"{title:"New run · upstream"}"#, r#"{title:"New run · hbench"}"#),
+    ("job-", r#""upstream Hub is unreachable; upload may still work""#, r#""The hub is unreachable; upload may still work""#),
+    ("job-", r#""Share jobs or store for later on upstream Hub""#, r#""Share jobs or store them for later""#),
+    ("job-", r#"children:"Upload to upstream Hub"}"#, r#"children:"Upload job"}"#),
 ];
+
+/// upstream mentions allowed to remain in the served UI: data, not branding (the run form's default task id).
+const ALLOWED_HBENCH: &[&str] = &["hbench/hello-world"];
 
 fn walk(dir: &Path, out: &mut Vec<String>) {
     let mut entries: Vec<_> = std::fs::read_dir(dir).unwrap().flatten().map(|e| e.path()).collect();
@@ -48,22 +58,35 @@ fn main() {
     let mut used = vec![0usize; PATCHES.len()];
     let mut src = String::from("pub static VIEWER_FILES: &[(&str, &[u8])] = &[\n");
     src += &format!("    (\"/assets/hbench-theme.css\", include_bytes!({:?})),\n", theme.to_str().unwrap());
+    let favicon = viewer.join("hbench-favicon.svg");
+    println!("cargo:rerun-if-changed={}", favicon.display());
+    src += &format!("    (\"/favicon.svg\", include_bytes!({:?})),\n", favicon.to_str().unwrap());
     for f in &files {
         let path = Path::new(f);
         let rel = path.strip_prefix(&root).unwrap().to_str().unwrap().replace('\\', "/");
         let name = path.file_name().unwrap().to_str().unwrap();
+        if rel == "favicon.ico" || rel == "favicon.svg" {
+            continue;
+        }
         let mut file = f.clone();
-        if PATCHES.iter().any(|(p, ..)| name.starts_with(p)) {
-            let mut text = std::fs::read_to_string(path).unwrap();
+        if let Ok(orig) = std::fs::read_to_string(path) {
+            let mut text = orig.clone();
             for (i, (prefix, from, to)) in PATCHES.iter().enumerate() {
                 if name.starts_with(prefix) && text.contains(from) {
                     text = text.replace(from, to);
                     used[i] += 1;
                 }
             }
-            let patched = out_dir.join(format!("viewer-{}", rel.replace('/', "_")));
-            std::fs::write(&patched, text).unwrap();
-            file = patched.to_str().unwrap().to_string();
+            let mut rest = text.to_lowercase();
+            for a in ALLOWED_HBENCH {
+                rest = rest.replace(a, "");
+            }
+            assert!(!rest.contains("hbench"), "upstream branding left in viewer file {rel}: add a patch");
+            if text != orig {
+                let patched = out_dir.join(format!("viewer-{}", rel.replace('/', "_")));
+                std::fs::write(&patched, text).unwrap();
+                file = patched.to_str().unwrap().to_string();
+            }
         }
         src += &format!("    ({:?}, include_bytes!({:?})),\n", format!("/{rel}"), file);
     }

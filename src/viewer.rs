@@ -35,7 +35,7 @@ const MEDIA_EXTENSIONS: &[(&str, &str)] = &[
     ("aif", "audio/aiff"),
 ];
 const STREAM_HANDLE_NAME: &str = "stream.json";
-const NOT_AUTHENTICATED: &str = "Not authenticated. Please run `hbench auth login` first.";
+const NOT_AUTHENTICATED: &str = "Not authenticated: hub sign-in is not supported by hbench.";
 /// upstream's `EnvironmentType` values.
 const ENVIRONMENTS: &[&str] = &[
     "docker", "podman", "daytona", "e2b", "modal", "runloop", "langsmith", "ec2", "gke", "ack", "openshift", "novita", "apple-container",
@@ -1227,7 +1227,7 @@ impl App {
     fn stream_dir(&self, job: &str, trial: &str, req: &Req) -> std::result::Result<PathBuf, Err> {
         // SSH forwards are loopback-only. The browser must run on this host.
         if !req.client_loopback {
-            return Err(err(403, "Browser VS Code requires a browser on the upstream viewer host"));
+            return Err(err(403, "Browser VS Code requires a browser on the hbench viewer host"));
         }
         let p = resolve(&self.folder, &format!("{job}/{trial}"));
         if p.parent().and_then(Path::parent) != Some(self.folder.as_path()) || !p.is_dir() {
@@ -2066,7 +2066,7 @@ fn route(app: &App, req: &Req) -> Res {
             return static_file(path).ok_or_else(|| err(404, "Not Found"));
         }
         if path == "/auth/callback" {
-            let msg = q.get("error").unwrap_or("upstream Hub sign-in is not supported by hbench");
+            let msg = q.get("error").unwrap_or("Hub sign-in is not supported by hbench");
             return Ok(Resp { status: 400, ctype: "text/html; charset=utf-8".into(), body: format!("<h1>Sign-in failed</h1><p>{}</p>", html_escape(msg)).into_bytes(), headers: vec![] });
         }
         return static_file(if path == "/favicon.ico" || path == "/favicon.svg" { path } else { "/index.html" }).ok_or_else(|| err(404, "Not Found"));
@@ -2079,7 +2079,7 @@ fn route(app: &App, req: &Req) -> Res {
         ("GET", ["pricing"]) => pricing(&q.required("model")?),
         ("GET", ["auth", "status"]) => ok_json(json!({"authenticated": false, "username": null})),
         ("GET", ["auth", "organizations"]) => Err(err(401, NOT_AUTHENTICATED)),
-        ("GET", ["auth", "login-url"]) => Err(err(501, "upstream Hub sign-in is not supported by hbench.")),
+        ("GET", ["auth", "login-url"]) => Err(err(501, "Hub sign-in is not supported by hbench.")),
         ("POST", ["auth", "logout"]) => ok_json(json!({"status": "ok"})),
         ("GET", s) if app.mode == Mode::Tasks => app.tasks_get(s, &q),
         ("GET", s) => app.jobs_get(s, &q, req),
@@ -2129,7 +2129,7 @@ pub fn serve(folder: &Path, mode: Option<Mode>, host: &str, ports: (u16, u16)) -
         .find_map(|p| tiny_http::Server::http((host, p)).ok().map(|s| (s, p)))
         .ok_or_else(|| anyhow!("No available port found in range {}-{}", ports.0, ports.1))?;
     let (server, port) = (Arc::new(server.0), server.1);
-    println!("Starting hbench viewer (upstream viewer UI)");
+    println!("Starting hbench viewer");
     println!("  {}: {}", if mode == Mode::Tasks { "Tasks folder" } else { "Jobs folder" }, folder.display());
     println!("  Mode: {}", mode.as_str());
     println!("  Server: http://{host}:{port}");

@@ -525,7 +525,7 @@ impl JobConfig {
         }
         for d in &self.datasets {
             if d.repo.is_some() || d.reference.is_some() || d.name.as_deref().is_some_and(|n| n.contains('/')) {
-                bail!("package/repo datasets need upstream's hosted registry; use a registry.json dataset or a local path");
+                bail!("package/repo datasets need a hosted package registry, which hbench does not support; use a registry.json dataset or a local path");
             }
             match (&d.path, &d.name) {
                 (None, None) => bail!("dataset needs 'path' or 'name'"),

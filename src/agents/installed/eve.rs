@@ -196,7 +196,7 @@ impl Eve {
         let unknown: Vec<&String> = args.kwargs.keys().filter(|k| !OPTIONS.contains(&k.as_str())).collect();
         if !unknown.is_empty() {
             let lines: Vec<String> = unknown.iter().map(|k| format!("  Unknown option '{k}'.")).collect();
-            bail!("Invalid kwargs for agent 'eve':\n{}\nSee hbench agent schema eve for available options.", lines.join("\n"));
+            bail!("Invalid kwargs for agent 'eve':\n{}\nSee `hbench agents schema eve` for available options.", lines.join("\n"));
         }
         if args.kwargs.get("config").is_some_and(|v| !v.is_null()) {
             bail!("Agent 'eve' does not support config. You can implement it.");

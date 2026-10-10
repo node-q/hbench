@@ -1109,7 +1109,7 @@ impl<'a> Kw<'a> {
             return Ok(());
         }
         bail!(
-            "Invalid kwargs for agent '{agent}':\n{}\nSee hbench agent schema {agent} for available options.",
+            "Invalid kwargs for agent '{agent}':\n{}\nSee `hbench agents schema {agent}` for available options.",
             self.errors.iter().map(|e| format!("  {e}")).collect::<Vec<_>>().join("\n")
         )
     }

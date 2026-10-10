@@ -101,9 +101,9 @@ fn vibe_classify(output: &str) -> &'static str {
 
 impl Vibe {
     pub fn new(args: AgentArgs) -> Result<Vibe> {
-        let bad = |k: &str, why: &str| anyhow!("Invalid kwargs for agent 'vibe':\n  {k}: {why}\nSee hbench agent schema vibe for available options.");
+        let bad = |k: &str, why: &str| anyhow!("Invalid kwargs for agent 'vibe':\n  {k}: {why}\nSee `hbench agents schema vibe` for available options.");
         if let Some(k) = args.kwargs.keys().find(|k| !OPTION_KEYS.contains(&k.as_str())) {
-            bail!("Invalid kwargs for agent 'vibe':\n  Unknown option '{k}'.\nSee hbench agent schema vibe for available options.");
+            bail!("Invalid kwargs for agent 'vibe':\n  Unknown option '{k}'.\nSee `hbench agents schema vibe` for available options.");
         }
         if args.kwargs.get("config").is_some_and(|v| !v.is_null()) {
             bail!("Agent 'vibe' does not support config. You can implement it.");

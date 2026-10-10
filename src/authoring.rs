@@ -812,7 +812,7 @@ fn resolve_manifest_path(target: &Path) -> Result<PathBuf> {
 }
 
 fn hub_unsupported(what: &str) -> anyhow::Error {
-    anyhow!("'{what}' is not a local path; resolving registered packages requires upstream Hub, which hbench does not support")
+    anyhow!("'{what}' is not a local path; resolving registered packages requires a hosted package registry, which hbench does not support")
 }
 
 // ---------------------------------------------------------------- init
@@ -974,9 +974,6 @@ pub fn init_task(name: &str, output_dir: &Path, o: &TaskOpts) -> Result<PathBuf>
         } else {
             println!("- Fill out the solution: {td}/solution/solve.sh");
         }
-    }
-    if multi {
-        println!("- Multi-step docs: https://nodeq.tech/docs/tasks/multi-step");
     }
     Ok(task_dir)
 }
@@ -1281,7 +1278,7 @@ pub fn sync(path: &Path, upgrade: bool) -> Result<()> {
     if upgrade {
         // ponytail: no upstream Hub client; registry-only tasks keep their digests, like a failed lookup in upstream.
         for c in changes.iter().filter(|c| c.source == "skipped") {
-            println!("Warning: registry lookup failed for {}: upstream Hub is not supported by hbench", c.name);
+            println!("Warning: registry lookup failed for {}: hosted package registries are not supported by hbench", c.name);
         }
     }
     let rows: Vec<[String; 5]> = changes

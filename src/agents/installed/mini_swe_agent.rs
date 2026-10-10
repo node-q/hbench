@@ -58,7 +58,7 @@ pub(crate) fn opt_str(args: &AgentArgs, agent: &str, k: &str) -> Result<Option<S
 /// `extra="forbid"` on the options model.
 pub(crate) fn reject_unknown(args: &AgentArgs, agent: &str, known: &[&str]) -> Result<()> {
     if let Some(k) = args.kwargs.keys().find(|k| !known.contains(&k.as_str()) && *k != "override_setup_timeout_sec") {
-        bail!("Invalid kwargs for agent '{agent}':\n  Unknown option '{k}'.\nSee hbench agent schema {agent} for available options.");
+        bail!("Invalid kwargs for agent '{agent}':\n  Unknown option '{k}'.\nSee `hbench agents schema {agent}` for available options.");
     }
     Ok(())
 }

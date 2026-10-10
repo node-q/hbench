@@ -40,7 +40,7 @@ pub(super) fn validate_kwargs(name: &str, args: &AgentArgs, extra: &[&str]) -> R
         .map(|k| format!("  Unknown option '{k}'."))
         .collect();
     if !unknown.is_empty() {
-        bail!("Invalid kwargs for agent '{name}':\n{}\nSee hbench agent schema {name} for available options.", unknown.join("\n"));
+        bail!("Invalid kwargs for agent '{name}':\n{}\nSee `hbench agents schema {name}` for available options.", unknown.join("\n"));
     }
     Ok(())
 }

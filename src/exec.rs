@@ -55,7 +55,7 @@ pub struct ExecArgs {
     /// Markdown or text path containing the task instruction.
     #[arg(long, help_heading = "Task Compilation")]
     pub instruction_path: Option<String>,
-    /// Optional upstream task template directory.
+    /// Optional task template directory.
     #[arg(long, help_heading = "Task Compilation")]
     pub task_template: Option<String>,
     /// Task Docker image. Defaults to ubuntu:latest in flags mode.
@@ -118,7 +118,7 @@ pub struct ExecArgs {
     /// Markdown or text path containing the reducer instruction.
     #[arg(long, help_heading = "Reduce Task")]
     pub reduce_instruction_path: Option<String>,
-    /// Optional upstream task template directory for the reducer.
+    /// Optional task template directory for the reducer.
     #[arg(long, help_heading = "Reduce Task")]
     pub reduce_task_template: Option<String>,
     /// Reducer Docker image. Defaults to ubuntu:latest.
@@ -151,7 +151,7 @@ pub struct ExecArgs {
     /// Attempts for the reducer task.
     #[arg(long = "rk", visible_alias = "n-reduce-attempts", value_parser = clap::value_parser!(i64).range(1..), help_heading = "Reduce Job")]
     pub reduce_n_attempts: Option<i64>,
-    /// Job plugin import path (upstream Python plugins; not supported by hbench).
+    /// Job plugin import path (Python plugins; not supported by hbench).
     #[arg(long = "plugin", help_heading = "Integrations")]
     pub job_plugin: Vec<String>,
     /// Plugin kwarg (not supported by hbench).
