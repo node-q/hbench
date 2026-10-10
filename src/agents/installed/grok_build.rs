@@ -1,6 +1,6 @@
 //! grok-build (port of upstream's agents/installed/grok_build.py).
 
-use super::{classify, ensure_system_dependencies, exec_agent, exec_error};
+use super::{ensure_system_dependencies, exec_agent, exec_error};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::{kind_err, quote};
 use anyhow::{Result, anyhow, bail};

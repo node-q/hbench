@@ -6,6 +6,7 @@ pub mod installed;
 pub mod model_connection;
 pub mod nop;
 pub mod oracle;
+pub mod pricing;
 pub mod terminus2;
 
 use crate::config::AgentConfig;
