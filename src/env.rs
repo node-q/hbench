@@ -239,6 +239,10 @@ impl DockerEnv {
             (None, false) => None,
         };
         main.insert("command".into(), json!(["sh", "-c", "sleep infinity"]));
+        // Like a Dockerfile WORKDIR, make sure the task workdir exists (prebuilt images may lack it).
+        if let Some(w) = &ec.workdir {
+            main.insert("working_dir".into(), json!(w));
+        }
         if let Some(c) = spec.override_cpus.or(ec.cpus) {
             main.insert("cpus".into(), json!(c as f64));
         }

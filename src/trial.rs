@@ -199,7 +199,8 @@ pub struct Trial {
 
 impl Trial {
     pub fn new(cfg: TrialConfig, task: Arc<Task>, agent_permit: Option<Arc<Semaphore>>) -> Result<Trial> {
-        let dir = cfg.trials_dir.join(&cfg.trial_name);
+        // Absolute: docker compose runs with the task's environment/ as cwd.
+        let dir = std::path::absolute(cfg.trials_dir.join(&cfg.trial_name))?;
         for d in ["agent", "verifier", "artifacts"] {
             std::fs::create_dir_all(dir.join(d))?;
         }
@@ -295,7 +296,7 @@ impl Trial {
             override_memory_mb: e.override_memory_mb,
             override_gpus: e.override_gpus,
             mounts: if agent_env { e.mounts.clone().unwrap_or_default() } else { vec![] },
-            extra_compose: if agent_env { e.extra_docker_compose.clone() } else { vec![] },
+            extra_compose: if agent_env { e.extra_docker_compose.iter().map(|p| std::path::absolute(p).unwrap_or_else(|_| p.clone())).collect() } else { vec![] },
             baseline,
             phase_policies: phases,
             upload_env_dir: true,
