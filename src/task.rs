@@ -614,10 +614,9 @@ pub fn strip_canary(text: &str) -> String {
     lines[i..].join("\n")
 }
 
-/// upstream's task digest (`Packager.compute_content_hash`), `sha256:`-prefixed.
-/// ponytail: interim; replaced by the exact port (gitignore filtering) from the authoring module.
+/// upstream's task digest (`Packager.compute_content_hash`, gitignore-filtered), `sha256:`-prefixed.
 pub fn content_digest(dir: &Path) -> String {
-    hash_dir(dir).map(|h| format!("sha256:{h}")).unwrap_or_default()
+    crate::authoring::content_hash(dir).map(|h| format!("sha256:{h}")).unwrap_or_default()
 }
 
 /// Stable sha256 over relative paths + contents of every file under `dir`.
