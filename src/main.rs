@@ -1,11 +1,13 @@
 mod agents;
 mod artifacts;
 mod config;
+mod diff;
 mod env;
 mod job;
 mod metrics;
 mod regrade;
 mod registry;
+mod sweeps;
 mod task;
 mod trial;
 
@@ -51,6 +53,29 @@ enum Cmd {
     },
     /// List built-in agents.
     Agents,
+    /// Successive sweeps that drop tasks once they succeed.
+    Sweeps {
+        #[command(subcommand)]
+        cmd: SweepsCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum SweepsCmd {
+    Run {
+        #[arg(short = 'c', long = "config")]
+        config: PathBuf,
+        #[arg(long, default_value_t = 3)]
+        max_sweeps: usize,
+        #[arg(long, default_value_t = 2)]
+        trials_per_task: usize,
+        /// Generic hint passed to agents as kwargs.hint.
+        #[arg(long)]
+        hint: Option<String>,
+        /// JSON object {task_name: hint}; runs one job per task.
+        #[arg(long)]
+        hints_file: Option<PathBuf>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -242,6 +267,12 @@ struct RunArgs {
     skill: Vec<String>,
     #[arg(long)]
     quiet: bool,
+    /// Compare against earlier job(s): reuse / regrade / rerun (repeatable).
+    #[arg(long)]
+    diff: Vec<PathBuf>,
+    /// Don't ask for confirmation (with --diff).
+    #[arg(short = 'y', long)]
+    yes: bool,
 }
 
 fn parse_kv(s: &str) -> Result<(String, String), String> {
@@ -449,12 +480,37 @@ fn task_template(name: &str) -> [(&'static str, String); 5] {
 async fn main() -> Result<()> {
     match Cli::parse().cmd {
         Cmd::Run(a) | Cmd::Jobs { cmd: JobsCmd::Start(a) } => {
-            let cfg = build_job_config(&a)?;
+            let mut cfg = build_job_config(&a)?;
             preflight_agents(&cfg)?;
             if cfg.job_dir().join("config.json").exists() {
                 bail!("job {} already exists; use `hbench jobs resume -p {}`", cfg.job_name, cfg.job_dir().display());
             }
-            run_with_ctrl_c(cfg, None, &[]).await
+            if a.diff.is_empty() {
+                return run_with_ctrl_c(cfg, None, &[]).await;
+            }
+            if cfg.install_only {
+                bail!("--diff cannot use --install-only.");
+            }
+            let sources = diff::load_sources(&diff::source_dirs(&a.diff)?)?;
+            let tasks = job::resolve_tasks(&cfg)?;
+            let targets = job::build_trial_configs(&cfg, &tasks, uuid::Uuid::new_v4());
+            let diffs = diff::compare(&targets, &sources)?;
+            diff::print_preview(&diffs, &sources);
+            let trials = diff::trial_configs(targets, &diffs, &sources);
+            if trials.is_empty() {
+                println!("Nothing to run: every target trial can be reused.");
+                return Ok(());
+            }
+            if !a.yes {
+                eprint!("Proceed with {} trial(s)? [y/N] ", trials.len());
+                let mut ans = String::new();
+                std::io::stdin().read_line(&mut ans)?;
+                if !matches!(ans.trim(), "y" | "Y" | "yes") {
+                    bail!("aborted");
+                }
+            }
+            cfg.source_jobs = a.diff.iter().map(|p| config::SourceJob { action: "diff".into(), path: p.clone() }).collect();
+            run_with_ctrl_c(cfg, Some(trials), &[]).await
         }
         Cmd::Jobs { cmd: JobsCmd::Resume { path, filter_error_types } } => {
             let cfg = job::load_config(&path)?;
@@ -593,6 +649,19 @@ async fn main() -> Result<()> {
             }
             if bad > 0 {
                 bail!("{bad} invalid task(s)");
+            }
+            Ok(())
+        }
+        Cmd::Sweeps { cmd: SweepsCmd::Run { config, max_sweeps, trials_per_task, hint, hints_file } } => {
+            let cfg = JobConfig::load(&config)?;
+            preflight_agents(&cfg)?;
+            env::preflight().await?;
+            let hints: BTreeMap<String, String> = match hints_file {
+                Some(p) => serde_json::from_str(&std::fs::read_to_string(&p)?).context("--hints-file must be a JSON object {task_name: hint}")?,
+                None => BTreeMap::new(),
+            };
+            for d in sweeps::run(cfg, max_sweeps, trials_per_task, hint, hints).await? {
+                println!("{}", d.display());
             }
             Ok(())
         }

@@ -3,7 +3,7 @@
 use crate::config::{JobConfig, TaskRef, TrialConfig};
 use crate::metrics;
 use crate::registry;
-use crate::task::{Task, hash_dir};
+use crate::task::Task;
 use crate::trial::{Trial, TrialResult};
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
@@ -190,40 +190,6 @@ pub fn build_trial_configs(cfg: &JobConfig, tasks: &[TaskRef], job_id: uuid::Uui
     out
 }
 
-/// Reproducibility record of the resolved run input (upstream's lock.json, simplified).
-fn trial_lock(c: &TrialConfig) -> Value {
-    let local = registry::local_path(&c.task);
-    let digest = |p: &Path| hash_dir(p).map(|h| format!("sha256:{h}")).unwrap_or_default();
-    let file_digest = |p: &Path| std::fs::read(p).map(|b| format!("sha256:{}", crate::task::hex(&sha2::Digest::finalize(<sha2::Sha256 as sha2::Digest>::new_with_prefix(&b))))).unwrap_or_default();
-    serde_json::json!({
-        "schema_version": 2,
-        "task": {
-            "name": Task::load(&local).map(|t| t.name()).unwrap_or_default(),
-            "type": if c.task.git_url.is_some() { "git" } else { "local" },
-            "digest": digest(&local),
-            "source": c.task.source,
-            "path": c.task.path,
-            "git_url": c.task.git_url,
-            "git_commit_id": c.task.git_commit_id,
-        },
-        "install_only": c.install_only,
-        "timeout_multiplier": c.timeout_multiplier,
-        "agent_timeout_multiplier": c.agent_timeout_multiplier,
-        "verifier_timeout_multiplier": c.verifier_timeout_multiplier,
-        "agent_setup_timeout_multiplier": c.agent_setup_timeout_multiplier,
-        "environment_build_timeout_multiplier": c.environment_build_timeout_multiplier,
-        "extra_instructions": c.extra_instruction_paths.iter().map(|p| serde_json::json!({"path": p, "digest": file_digest(p)}))
-            .chain(c.extra_instructions.iter().map(|s| serde_json::json!({"digest": format!("sha256:{}", crate::task::hex(&<sha2::Sha256 as sha2::Digest>::digest(s.as_bytes())))})))
-            .collect::<Vec<_>>(),
-        "agent": c.agent,
-        "skills": c.agent.skills.iter().map(|s| serde_json::json!({"name": Path::new(s).file_name().map(|n| n.to_string_lossy().into_owned()), "source": s, "digest": digest(Path::new(s))})).collect::<Vec<_>>(),
-        "environment": c.environment,
-        "extra_docker_compose": c.environment.extra_docker_compose.iter().map(|p| serde_json::json!({"path": p, "digest": file_digest(p)})).collect::<Vec<_>>(),
-        "verifier": c.verifier,
-        "source_trial": c.source_trial,
-    })
-}
-
 struct Shared {
     results: Vec<TrialResult>,
     running: usize,
@@ -285,7 +251,7 @@ pub async fn run_job(cfg: JobConfig, trial_configs: Option<Vec<TrialConfig>>, fi
         "hbench": {"version": env!("CARGO_PKG_VERSION")},
         "n_concurrent_trials": cfg.n_concurrent_trials,
         "retry": cfg.retry,
-        "trials": pending.iter().map(trial_lock).collect::<Vec<_>>(),
+        "trials": pending.iter().map(crate::trial::trial_lock).collect::<Vec<_>>(),
     });
     std::fs::write(job_dir.join("lock.json"), serde_json::to_string_pretty(&lock)?)?;
 
