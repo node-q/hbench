@@ -7,6 +7,7 @@ mod diff;
 mod env;
 mod job;
 mod metrics;
+mod migrate;
 mod regrade;
 mod registry;
 mod sweeps;
@@ -238,6 +239,21 @@ enum TasksCmd {
         model: Option<String>,
         #[arg(long = "ak", value_parser = parse_kv)]
         agent_kwargs: Vec<(String, String)>,
+    },
+    /// Migrate Terminal-Bench (v1) tasks to upstream format.
+    Migrate {
+        #[arg(short = 'i', long = "input")]
+        input: PathBuf,
+        #[arg(short = 'o', long = "output")]
+        output: PathBuf,
+        #[arg(long)]
+        cpus: Option<i64>,
+        #[arg(long)]
+        memory_mb: Option<i64>,
+        #[arg(long)]
+        storage_mb: Option<i64>,
+        #[arg(long)]
+        gpus: Option<i64>,
     },
     /// Validate task dirs (config, files, test scripts).
     Check {
@@ -746,6 +762,28 @@ async fn main() -> Result<()> {
             };
             for d in sweeps::run(cfg, max_sweeps, trials_per_task, hint, hints).await? {
                 println!("{}", d.display());
+            }
+            Ok(())
+        }
+        Cmd::Tasks { cmd: TasksCmd::Migrate { input, output, cpus, memory_mb, storage_mb, gpus } } => {
+            println!("⚠️  WARNING: This migration tool is not foolproof. Please review migrated tasks carefully and make manual adjustments as needed.\n");
+            if !input.exists() {
+                println!("❌ Input path does not exist: {}", input.display());
+                return Ok(());
+            }
+            let single = input.join("task.yaml").exists();
+            if single {
+                println!("📦 Migrating single task from: {}", input.display());
+            } else {
+                println!("📦 Migrating tasks from: {}", input.display());
+                println!("📤 Output directory: {}", output.display());
+            }
+            match migrate::migrate(&input, &output, migrate::Overrides { cpus, memory_mb, storage_mb, gpus }) {
+                Ok(dirs) if single => println!("✓ Successfully migrated task to: {}", dirs[0].display()),
+                Ok(dirs) if dirs.is_empty() => println!("⚠️  No tasks found to migrate"),
+                Ok(dirs) => println!("✓ Successfully migrated {} task(s)", dirs.len()),
+                Err(e) if single => println!("❌ Failed to migrate task: {e:#}"),
+                Err(e) => return Err(e),
             }
             Ok(())
         }
