@@ -1,5 +1,6 @@
 //! Agent abstraction (upstream's BaseAgent) and the factory mapping names to agents.
 
+pub mod allowed_kwargs;
 pub mod computer1;
 pub mod dspy_rlm;
 pub mod installed;
@@ -197,7 +198,19 @@ pub fn agent_names() -> Vec<&'static str> {
     v
 }
 
+/// upstream's options validation: kwargs outside the agent's options model are rejected.
+pub fn check_kwargs(name: &str, kwargs: &BTreeMap<String, Value>) -> Result<()> {
+    let key = if name.starts_with("acp:") { "acp" } else { name };
+    let Some(allowed) = allowed_kwargs::allowed(key) else { return Ok(()) };
+    let unknown: Vec<String> = kwargs.keys().filter(|k| !allowed.contains(&k.as_str())).map(|k| format!("  Unknown option '{k}'.")).collect();
+    if !unknown.is_empty() {
+        bail!("Invalid kwargs for agent '{name}':\n{}\nSee hbench agent schema {name} for available options.", unknown.join("\n"));
+    }
+    Ok(())
+}
+
 pub fn create(cfg: &AgentConfig, logs_dir: PathBuf, task: Arc<Task>, load_trajectory: Option<PathBuf>) -> Result<AgentBox> {
+    check_kwargs(cfg.name(), &cfg.kwargs)?;
     let args = AgentArgs {
         model_name: cfg.model_name.clone(),
         kwargs: cfg.kwargs.clone(),
