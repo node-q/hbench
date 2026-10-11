@@ -140,7 +140,7 @@ impl Codex {
             return Ok(c);
         }
         let Some(servers) = c.entry("mcp_servers").or_insert_with(|| json!({})).as_object_mut() else {
-            bail!("Invalid Codex config: mcp_servers must be a TOML table when upstream task MCP servers are configured")
+            bail!("Invalid Codex config: mcp_servers must be a TOML table when task MCP servers are configured")
         };
         for s in &self.args.mcp_servers {
             let v = if s.transport() == "stdio" { json!({"command": s.command, "args": s.args}) } else { json!({"url": s.url}) };

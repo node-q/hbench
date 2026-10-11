@@ -12,6 +12,7 @@ pub mod codex;
 pub mod copilot_cli;
 pub mod cortex_code;
 pub mod cursor_cli;
+pub mod deepseek_harness;
 pub mod deerflow;
 pub mod devin;
 pub mod eve;
@@ -51,7 +52,7 @@ use std::collections::BTreeMap;
 use std::sync::OnceLock;
 
 /// Names of every installed agent (upstream's AgentName values).
-pub const NAMES: &[&str] = &["claude-code", "acp", "cline-cli", "cortex-code", "aider", "codex", "cursor-cli", "gemini-cli", "antigravity-cli", "rovodev-cli", "goose", "grok-build", "hermes", "junie", "mini-swe-agent", "nemo-agent", "swe-agent", "opencode", "openclaw", "openhands", "openhands-sdk", "antigravity-sdk", "kimi-code", "kimi-cli", "langgraph", "deerflow", "mimo", "mcode", "pi", "qwen-coder", "copilot-cli", "code-puppy", "devin", "trae-agent", "eve", "fx", "fx-dev", "vibe", "muse-code", "strands"];
+pub const NAMES: &[&str] = &["claude-code", "acp", "cline-cli", "cortex-code", "aider", "codex", "cursor-cli", "gemini-cli", "antigravity-cli", "rovodev-cli", "goose", "grok-build", "hermes", "junie", "mini-swe-agent", "nemo-agent", "swe-agent", "opencode", "openclaw", "openhands", "openhands-sdk", "antigravity-sdk", "kimi-code", "kimi-cli", "langgraph", "deerflow", "mimo", "mcode", "pi", "qwen-coder", "copilot-cli", "code-puppy", "devin", "trae-agent", "eve", "fx", "fx-dev", "vibe", "muse-code", "strands", "deepseek-harness"];
 
 pub fn create(name: &str, args: AgentArgs) -> Result<Option<AgentBox>> {
     Ok(Some(match name {
@@ -95,6 +96,7 @@ pub fn create(name: &str, args: AgentArgs) -> Result<Option<AgentBox>> {
         "vibe" => vibe::create(args)?,
         "muse-code" => muse_code::create(args)?,
         "strands" => strands::create(args)?,
+        "deepseek-harness" => deepseek_harness::create(args)?,
         _ => return Ok(None),
     }))
 }
@@ -140,6 +142,40 @@ fn package_spec(name: &str) -> Option<PackageSpec> {
     })
 }
 
+/// Shell function `hb_apt_install PKG...`: `apt-get update && apt-get install -y PKG...`, retried against archived
+/// mirrors if that fails. Beyond upstream: when a release reaches EOL its packages move to archive.debian.org /
+/// old-releases.ubuntu.com while deb.debian.org keeps serving the index, so installs 404 (debian:bullseye-security,
+/// Oct 2026) and every agent install on that image would fail. Stage 1 points only the security suites at the
+/// archive, stage 2 every Debian/Ubuntu source. Sources are rewritten into a temp dir used via `-o Dir::Etc::*`,
+/// so the image's apt config is left as is.
+pub const APT_INSTALL_FN: &str = r#"hb_apt_install() {
+  if apt-get update && apt-get install -y "$@"; then return 0; fi
+  _hb_rc=1
+  for _hb_stage in 1 2; do
+    echo "hbench: apt-get install failed; retrying with archived mirrors (stage $_hb_stage)" >&2
+    _hb_s='s#https\?://\(deb\|security\)\.debian\.org/debian-security#http://archive.debian.org/debian-security#g'
+    if [ "$_hb_stage" = 2 ]; then
+      _hb_s="$_hb_s;"'s#https\?://security\.debian\.org\([ \t]\)#http://archive.debian.org/debian-security\1#g;s#https\?://deb\.debian\.org/debian\([/ \t]\|$\)#http://archive.debian.org/debian\1#g;s#https\?://\([a-z]*\.\)\?\(archive\|security\)\.ubuntu\.com/ubuntu#http://old-releases.ubuntu.com/ubuntu#g'
+    fi
+    _hb_d=/tmp/hbench-apt.$$; rm -rf "$_hb_d"; mkdir -p "$_hb_d/parts" "$_hb_d/conf"; : > "$_hb_d/sources.list"
+    # Same apt config minus docker-clean, whose update hook would delete the .debs the failed attempt downloaded.
+    # (APT_CONFIG is read before apt.conf.d; a command-line -o Dir::Etc::Parts would come too late.)
+    cp -R /etc/apt/apt.conf.d/. "$_hb_d/conf/" 2>/dev/null || true; rm -f "$_hb_d/conf/docker-clean"
+    { [ -f /etc/apt/apt.conf ] && cat /etc/apt/apt.conf; echo "Dir::Etc::Parts \"$_hb_d/conf\";"; } > "$_hb_d/apt.conf" || true
+    if [ -f /etc/apt/sources.list ]; then sed "$_hb_s" /etc/apt/sources.list > "$_hb_d/sources.list"; fi
+    for _hb_f in /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do
+      if [ -f "$_hb_f" ]; then sed "$_hb_s" "$_hb_f" > "$_hb_d/parts/${_hb_f##*/}"; fi
+    done
+    _hb_o="-o Dir::Etc::SourceList=$_hb_d/sources.list -o Dir::Etc::SourceParts=$_hb_d/parts -o Acquire::Check-Valid-Until=false"
+    _hb_rc=0; { APT_CONFIG="$_hb_d/apt.conf" apt-get $_hb_o update && APT_CONFIG="$_hb_d/apt.conf" apt-get $_hb_o install -y "$@"; } || _hb_rc=$?
+    rm -rf "$_hb_d"
+    if [ "$_hb_rc" = 0 ]; then break; fi
+  done
+  apt-get update >/dev/null 2>&1 || true
+  return $_hb_rc
+}
+"#;
+
 /// Install missing system packages with the image's package manager (upstream semantics).
 pub async fn ensure_system_dependencies(cx: &AgentCtx<'_>, deps: &[&str]) -> Result<()> {
     let mut specs = vec![];
@@ -179,11 +215,19 @@ pub async fn ensure_system_dependencies(cx: &AgentCtx<'_>, deps: &[&str]) -> Res
     }
     let args = pkgs.iter().map(|p| quote(p)).collect::<Vec<_>>().join(" ");
     let (cmd, env) = match mgr.as_str() {
-        "apt-get" => (format!("apt-get update && apt-get install -y {args}"), BTreeMap::from([("DEBIAN_FRONTEND".to_string(), "noninteractive".to_string())])),
+        "apt-get" => (format!("{APT_INSTALL_FN}hb_apt_install {args}"), BTreeMap::from([("DEBIAN_FRONTEND".to_string(), "noninteractive".to_string())])),
         "dnf" => (format!("dnf install -y {args}"), BTreeMap::new()),
         "yum" => (format!("yum install -y {args}"), BTreeMap::new()),
         _ => (format!("apk add --no-cache {args}"), BTreeMap::new()),
     };
+    if mgr == "apt-get" {
+        // Report the plain command, not the helper's body.
+        let r = cx.exec_as(&format!("set -o pipefail; {cmd}"), Some("root"), &env, None).await?;
+        if r.code != 0 {
+            return Err(exec_error(&format!("apt-get update && apt-get install -y {args} (also tried archived mirrors)"), &r, None));
+        }
+        return Ok(());
+    }
     exec_root(cx, &cmd, &env).await.map(|_| ())
 }
 

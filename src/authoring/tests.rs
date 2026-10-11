@@ -621,6 +621,6 @@ fn rejects_hub_refs_and_bad_input() {
     let before = read(&d.join("dataset.toml"));
     add(&["org/remote@v1".into()], &d, false).unwrap(); // reported, nothing added
     assert_eq!(read(&d.join("dataset.toml")), before);
-    assert!(remove("org/missing", &d, false).unwrap_err().to_string().contains("upstream Hub"));
+    assert!(remove("org/missing", &d, false).unwrap_err().to_string().contains("hosted package registry"));
     assert!(init_task("acme/bad..name", &d, &TaskOpts::default()).is_err());
 }

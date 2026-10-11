@@ -1,0 +1,122 @@
+/* Task definitions list + detail. */
+.flags {
+  display: inline-flex;
+  gap: 2px;
+  font: 500 var(--text-2xs) / 1 var(--font-mono);
+}
+.flags > span {
+  display: inline-grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: var(--radius-sm);
+}
+.flags__on {
+  background: var(--color-accent-wash);
+  color: var(--color-accent);
+}
+.flags__off {
+  color: var(--color-faint);
+  border: 1px dashed var(--color-rule-2);
+}
+.tag-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+/* Difficulty reads by weight of colour: easy calm, hard loud. */
+.diff--easy {
+  background: var(--color-good-wash);
+  border-color: transparent;
+  color: var(--color-good);
+}
+.diff--medium {
+  background: var(--color-warn-wash);
+  border-color: transparent;
+  color: var(--color-warn);
+}
+.diff--hard {
+  background: var(--color-bad-wash);
+  border-color: transparent;
+  color: var(--color-bad);
+}
+.task-dir {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  max-width: min(520px, 100%);
+  font-size: var(--text-xs);
+  color: var(--color-faint);
+  min-width: 0;
+}
+
+/* Configuration: four hairline-divided groups, then steps and the raw tree. */
+.cfg-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr));
+  border-top: 1px solid var(--color-rule);
+}
+.cfg-group {
+  display: grid;
+  align-content: start;
+  gap: var(--space-xs);
+  padding: var(--space-md) var(--space-lg) var(--space-md) 0;
+  border-bottom: 1px solid var(--color-rule);
+}
+.steps {
+  margin: 0;
+  padding-left: 1.4em;
+  display: grid;
+  gap: var(--space-2xs);
+  font-size: var(--text-sm);
+}
+
+/* Files: tree on the left, reader on the right; stacks below 760px. */
+.files {
+  display: grid;
+  grid-template-columns: minmax(200px, 280px) minmax(0, 1fr);
+  gap: var(--space-md);
+  align-items: start;
+}
+.files__tree {
+  position: sticky;
+  top: calc(var(--bar-h) + var(--space-md));
+  max-height: calc(100vh - var(--bar-h) - 2 * var(--space-md));
+  overflow: auto;
+  padding: var(--space-2xs);
+}
+.files__item {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+.files__item svg {
+  flex: none;
+  transition: transform var(--dur-micro) var(--ease-out);
+}
+.file-view {
+  display: grid;
+  gap: var(--space-xs);
+  min-width: 0;
+}
+.file-view__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  min-height: 32px;
+  font-size: var(--text-sm);
+}
+.file-view__img {
+  max-width: 100%;
+  border: 1px solid var(--color-rule);
+  border-radius: var(--radius);
+}
+@media (max-width: 760px) {
+  .files {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .files__tree {
+    position: static;
+    max-height: 40vh;
+  }
+}

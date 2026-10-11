@@ -359,20 +359,142 @@ pub fn load_config(job_dir: &Path) -> Result<JobConfig> {
     Ok(cfg)
 }
 
+/// upstream's `print_job_results_tables` + "Job Info": the same numbers, laid out as a dashboard with bars.
 pub fn print_summary(jr: &JobResult, job_dir: &Path) {
-    let s = &jr.stats;
-    println!("\nJob: {}", job_dir.display());
-    println!("Trials: {} completed, {} errored, {} total", s.n_completed_trials, s.n_errored_trials, jr.n_total_trials);
-    for (k, e) in &s.evals {
-        let metrics: Vec<String> = e.metrics.iter().flat_map(|m| m.iter().map(|(k, v)| format!("{k}={}", v.as_f64().map(|f| format!("{f:.3}")).unwrap_or(v.to_string())))).collect();
-        let pak: Vec<String> = e.pass_at_k.iter().map(|(k, v)| format!("pass@{k}={v:.3}")).collect();
-        println!("  {k}: trials={} errors={} {} {}", e.n_trials, e.n_errors, metrics.join(" "), pak.join(" "));
-        for (ex, names) in &e.exception_stats {
-            println!("    {ex}: {}", names.len());
+    print!("\n{}", render_summary(jr, job_dir, use_color()));
+}
+
+fn use_color() -> bool {
+    use std::io::IsTerminal;
+    std::env::var_os("NO_COLOR").is_none() && std::io::stdout().is_terminal()
+}
+
+const BAR: usize = 24;
+
+fn bar(frac: f64) -> (String, String) {
+    let n = ((frac.clamp(0.0, 1.0) * BAR as f64).round() as usize).min(BAR);
+    ("█".repeat(n), "░".repeat(BAR - n))
+}
+
+pub fn render_summary(jr: &JobResult, job_dir: &Path, color: bool) -> String {
+    let paint = |code: &str, t: &str| if color { format!("\x1b[{code}m{t}\x1b[0m") } else { t.to_string() };
+    // Score colour: green = good, yellow = partial, red = zero.
+    let tone = |v: f64| if v >= 1.0 { "32" } else if v > 0.0 { "33" } else { "31" };
+    let mut out = String::new();
+    for (key, e) in &jr.stats.evals {
+        let mut metrics: Vec<(String, &Value)> = Vec::new();
+        for (i, m) in e.metrics.iter().enumerate() {
+            for (k, v) in m {
+                let label = if e.metrics.len() > 1 { format!("Metric {}: {k}", i + 1) } else { k.clone() };
+                metrics.push((py_title(&label), v));
+            }
         }
+        let pass: Vec<(String, f64)> = e.pass_at_k.iter().map(|(k, v)| (format!("Pass@{k}"), *v)).collect();
+        let rewards: Vec<(&String, usize)> = e.reward_stats.values().flat_map(|vals| vals.iter().rev().map(|(v, n)| (v, n.len()))).collect();
+        let w = metrics.iter().map(|(l, _)| l.chars().count())
+            .chain(pass.iter().map(|(l, _)| l.len()))
+            .chain(rewards.iter().map(|(v, _)| v.chars().count()))
+            .chain(e.exception_stats.keys().map(|x| x.chars().count()))
+            .chain([10])
+            .max()
+            .unwrap();
+        let title = group_title(key);
+        out += &format!("{}\n{}\n", paint("1", &title), paint("2", &"─".repeat(title.chars().count().max(w + BAR + 12))));
+
+        // upstream's n_trials counts graded trials only; metrics divide by every finished trial (no reward = 0).
+        let names: std::collections::HashSet<&String> = e.reward_stats.values().flat_map(|v| v.values().flatten()).chain(e.exception_stats.values().flatten()).collect();
+        let total = names.len().max(e.n_trials);
+        let ungraded = total.saturating_sub(e.n_trials);
+        let errs = if e.n_errors == 0 { paint("2", "0 exceptions") } else { paint("33", &format!("{} exceptions", e.n_errors)) };
+        out += &format!("  {:<w$}  {}  {}\n\n", "Trials", paint("1", &format!("{total:>6}")), [paint("2", "finished"), format!("{} graded", e.n_trials), errs].join(&paint("2", " · ")));
+
+        let score = |label: &str, text: String, frac: Option<f64>| {
+            let bars = frac.map(|f| { let (a, b) = bar(f); format!("  {}{}", paint(tone(f), &a), paint("2", &b)) }).unwrap_or_default();
+            format!("  {label:<w$}  {}{bars}\n", paint("1", &format!("{text:>6}")))
+        };
+        for (l, v) in &metrics {
+            out += &score(l, py_str(v), v.as_f64().filter(|f| (0.0..=1.0).contains(f)));
+        }
+        for (l, v) in &pass {
+            out += &score(l, format!("{v:.3}"), Some(*v));
+        }
+
+        let counts = |head: &str, rows: Vec<(String, usize, &str)>| {
+            let total = total.max(1) as f64;
+            let mut s = format!("\n  {}\n", paint("2", &format!("{head:<w$}   count  share of trials")));
+            for (label, n, code) in rows {
+                let (a, b) = bar(n as f64 / total);
+                s += &format!("  {}  {}  {}{}  {}\n", paint(if code == "2" { "2" } else { "0" }, &format!("{label:<w$}")), paint("1", &format!("{n:>6}")), paint(code, &a), paint("2", &b), paint("2", &format!("{:.0}%", 100.0 * n as f64 / total)));
+            }
+            s
+        };
+        if !rewards.is_empty() {
+            let mut rows: Vec<(String, usize, &str)> = rewards.iter().map(|(v, n)| ((*v).clone(), *n, v.parse::<f64>().map(tone).unwrap_or("36"))).collect();
+            if ungraded > 0 {
+                rows.push(("no reward".into(), ungraded, "2"));
+            }
+            out += &counts("Reward", rows);
+        }
+        if !e.exception_stats.is_empty() {
+            out += &counts("Exception", e.exception_stats.iter().map(|(x, n)| (x.clone(), n.len(), "33")).collect());
+        }
+        out += "\n";
     }
+    let s = &jr.stats;
+    let mut info = vec![format!("runtime {}", format_duration(jr.started_at, jr.finished_at))];
+    // hbench extra: upstream only keeps tokens/cost in result.json.
     if let Some(c) = s.cost_usd {
-        println!("Cost: ${c:.4}  tokens in={} cache={} out={}", s.n_input_tokens.unwrap_or(0), s.n_cache_tokens.unwrap_or(0), s.n_output_tokens.unwrap_or(0));
+        info.push(format!("cost ${c:.2}"));
+        info.push(format!("tokens {} in ({} cached) · {} out", human(s.n_input_tokens), human(s.n_cache_tokens), human(s.n_output_tokens)));
+    }
+    out += &format!("{}  {}\n", paint("1", "Job"), info.join(&paint("2", " · ")));
+    out += &format!("     {} {}\n", paint("2", "results"), job_dir.join("result.json").display());
+    out += &format!("     {} hbench view {}\n", paint("2", "inspect"), job_dir.parent().unwrap_or(Path::new(".")).display());
+    out
+}
+
+fn human(n: Option<i64>) -> String {
+    let n = n.unwrap_or(0) as f64;
+    if n >= 1e6 { format!("{:.2}M", n / 1e6) } else if n >= 1e3 { format!("{:.1}K", n / 1e3) } else { format!("{n}") }
+}
+
+/// `agent__model__dataset` -> `dataset • agent • model` (model names may themselves contain `__`).
+fn group_title(key: &str) -> String {
+    let parts: Vec<&str> = key.split("__").collect();
+    match parts.as_slice() {
+        [agent, dataset] => format!("{dataset} • {agent}"),
+        [agent, model @ .., dataset] if !model.is_empty() => format!("{dataset} • {agent} • {}", model.join("__")),
+        _ => key.to_string(),
+    }
+}
+
+fn format_duration(start: DateTime<Utc>, end: Option<DateTime<Utc>>) -> String {
+    let Some(end) = end else { return "unknown".into() };
+    let t = (end - start).num_seconds().max(0);
+    let (h, m, s) = (t / 3600, t / 60 % 60, t % 60);
+    if h > 0 { format!("{h}h {m}m {s}s") } else if m > 0 { format!("{m}m {s}s") } else { format!("{s}s") }
+}
+
+/// Python `str.title()`.
+fn py_title(s: &str) -> String {
+    let mut prev_alpha = false;
+    s.chars()
+        .map(|c| {
+            let r = if prev_alpha { c.to_lowercase().to_string() } else { c.to_uppercase().to_string() };
+            prev_alpha = c.is_alphabetic();
+            r
+        })
+        .collect()
+}
+
+/// upstream: floats as `{:.3}`, anything else via Python `str()`.
+fn py_str(v: &Value) -> String {
+    match v {
+        Value::Number(n) if n.is_f64() => format!("{:.3}", n.as_f64().unwrap()),
+        Value::Null => "None".into(),
+        Value::Bool(b) => if *b { "True" } else { "False" }.into(),
+        Value::String(s) => s.clone(),
+        v => v.to_string(),
     }
 }
 
@@ -421,6 +543,37 @@ mod tests {
         assert!((metrics::pass_at_k(&three.iter().collect::<Vec<_>>())[&2] - 2.0 / 3.0).abs() < 1e-12);
         let nb = [result("c", "1", Some(0.5), None), result("c", "2", Some(1.0), None)];
         assert!(metrics::pass_at_k(&nb.iter().collect::<Vec<_>>()).is_empty());
+    }
+
+    #[test]
+    fn summary_dashboard() {
+        let rs = vec![result("a", "a1", Some(1.0), None), result("a", "a2", Some(0.0), None), result("b", "b1", None, Some("AgentTimeoutError")), result("b", "b2", Some(0.0), None)];
+        let t0 = Utc::now();
+        let jr = JobResult { id: uuid::Uuid::nil(), started_at: t0, updated_at: None, finished_at: Some(t0 + chrono::Duration::seconds(3725)), n_total_trials: 4, stats: compute_stats(&rs, 4, 0, 0, &[]) };
+        let out = render_summary(&jr, Path::new("jobs/j"), false);
+        let expect = "\
+adhoc • oracle
+─────────────────────────────────────────────────────
+  Trials                  4  finished · 3 graded · 1 exceptions
+
+  Mean                0.250  ██████░░░░░░░░░░░░░░░░░░
+  Pass@2              0.500  ████████████░░░░░░░░░░░░
+
+  Reward              count  share of trials
+  1.0                     1  ██████░░░░░░░░░░░░░░░░░░  25%
+  0.0                     2  ████████████░░░░░░░░░░░░  50%
+  no reward               1  ██████░░░░░░░░░░░░░░░░░░  25%
+
+  Exception           count  share of trials
+  AgentTimeoutError       1  ██████░░░░░░░░░░░░░░░░░░  25%
+
+Job  runtime 1h 2m 5s
+     results jobs/j/result.json
+     inspect hbench view jobs
+";
+        assert_eq!(out, expect);
+        assert_eq!(group_title("claude-code__deepseek/deepseek-v4-flash__terminal-bench@2.0"), "terminal-bench@2.0 • claude-code • deepseek/deepseek-v4-flash");
+        assert_eq!(py_title("Metric 1: pass_rate"), "Metric 1: Pass_Rate");
     }
 
     #[test]

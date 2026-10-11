@@ -3,6 +3,7 @@
 //! to the model through `llm.rs`. Writes an ATIF `trajectory.json` (plus summarization subagent
 //! trajectories) to the agent logs dir; the pane log and asciinema recording land in /logs/agent.
 
+use crate::agents::installed::APT_INSTALL_FN;
 use super::llm::{Chat, LiteLlm, Llm, LlmConfig, LlmError, LlmResponse, content_text};
 use super::{Agent, AgentArgs, AgentContext, AgentCtx, ModelUsage};
 use crate::env::{ExecResult, quote};
@@ -703,7 +704,7 @@ impl Tmux {
         if let Some(pm) = pm {
             let pkgs = tools.join(" ");
             let cmd = match pm {
-                "apt-get" => format!("DEBIAN_FRONTEND=noninteractive apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y {pkgs}"),
+                "apt-get" => format!("{APT_INSTALL_FN}export DEBIAN_FRONTEND=noninteractive; hb_apt_install {pkgs}"),
                 "dnf" | "yum" => format!("{pm} install -y {pkgs}"),
                 "apk" => format!("apk add --no-cache {pkgs}"),
                 "pacman" => format!("pacman -S --noconfirm {pkgs}"),
@@ -871,12 +872,12 @@ impl Tmux {
 async fn build_tmux_from_source(sh: &dyn Shell) {
     let _ = async {
         for cmd in [
-            "DEBIAN_FRONTEND=noninteractive apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential libevent-dev libncurses5-dev curl",
+            "export DEBIAN_FRONTEND=noninteractive; hb_apt_install build-essential libevent-dev libncurses5-dev curl",
             "yum groupinstall -y 'Development Tools' && yum install -y libevent-devel ncurses-devel curl",
             "dnf groupinstall -y 'Development Tools' && dnf install -y libevent-devel ncurses-devel curl",
             "apk add --no-cache build-base libevent-dev ncurses-dev curl",
         ] {
-            if sh.sh(cmd, true, Some(INSTALL_TIMEOUT)).await?.code == 0 {
+            if sh.sh(&format!("{APT_INSTALL_FN}{cmd}"), true, Some(INSTALL_TIMEOUT)).await?.code == 0 {
                 break;
             }
         }
@@ -894,12 +895,12 @@ async fn build_tmux_from_source(sh: &dyn Shell) {
 async fn install_asciinema_with_pip(sh: &dyn Shell) {
     let _ = async {
         for cmd in [
-            "DEBIAN_FRONTEND=noninteractive apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y python3-pip",
+            "export DEBIAN_FRONTEND=noninteractive; hb_apt_install python3-pip",
             "yum install -y python3-pip",
             "dnf install -y python3-pip",
             "apk add --no-cache python3 py3-pip",
         ] {
-            if sh.sh(cmd, true, Some(INSTALL_TIMEOUT)).await?.code == 0 {
+            if sh.sh(&format!("{APT_INSTALL_FN}{cmd}"), true, Some(INSTALL_TIMEOUT)).await?.code == 0 {
                 break;
             }
         }
@@ -1108,7 +1109,7 @@ impl<'a> Kw<'a> {
             return Ok(());
         }
         bail!(
-            "Invalid kwargs for agent '{agent}':\n{}\nSee hbench agent schema {agent} for available options.",
+            "Invalid kwargs for agent '{agent}':\n{}\nSee `hbench agents schema {agent}` for available options.",
             self.errors.iter().map(|e| format!("  {e}")).collect::<Vec<_>>().join("\n")
         )
     }

@@ -115,7 +115,7 @@ impl MCode {
             "openai" => "OpenAI".into(),
             p => title(&p.replace(['-', '_'], " ")),
         };
-        format!("upstream {display}")
+        format!("hbench {display}")
     }
 
     fn api_format(&self, provider: &str) -> Result<String> {
@@ -320,7 +320,7 @@ mod tests {
         let (setup, run, env) = a.commands("do it", true).unwrap();
         assert_eq!(env["MINIMAX_API_KEY"], "k");
         assert_eq!(env["MINIMAX_DATA_DIR"], DATA_DIR);
-        assert!(setup.contains("--name 'upstream MiniMax' --base-url https://api.minimax.io/anthropic --api-format anthropic-messages --model MiniMax-M3 --api-key-env MINIMAX_API_KEY"));
+        assert!(setup.contains("--name 'hbench MiniMax' --base-url https://api.minimax.io/anthropic --api-format anthropic-messages --model MiniMax-M3 --api-key-env MINIMAX_API_KEY"));
         assert!(setup.contains("context: 512000") && setup.contains("Warning: Could not apply known"));
         assert!(run.contains("--model custom_provider:hbench-minimax/MiniMax-M3 --config /tmp/hbench-mcode/hbench-config.yaml --permission full --max-steps 7 --continue --output-format stream-json 'do it'"));
         let no_key = MCode::new(args(json!({}), &[], Some("zzprov/m"))).unwrap();

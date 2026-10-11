@@ -44,7 +44,7 @@ pub(crate) fn check_options(args: &AgentArgs, name: &str, fields: &[&str]) -> Re
         .map(|k| format!("  Unknown option '{k}'."))
         .collect();
     if !unknown.is_empty() {
-        bail!("Invalid kwargs for agent '{name}':\n{}\nSee hbench agent schema {name} for available options.", unknown.join("\n"));
+        bail!("Invalid kwargs for agent '{name}':\n{}\nSee `hbench agents schema {name}` for available options.", unknown.join("\n"));
     }
     if args.kwargs.get("config").is_some_and(|v| !v.is_null()) {
         bail!("Agent '{name}' does not support config. You can implement it.");

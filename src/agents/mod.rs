@@ -204,7 +204,7 @@ pub fn check_kwargs(name: &str, kwargs: &BTreeMap<String, Value>) -> Result<()> 
     let Some(allowed) = allowed_kwargs::allowed(key) else { return Ok(()) };
     let unknown: Vec<String> = kwargs.keys().filter(|k| !allowed.contains(&k.as_str())).map(|k| format!("  Unknown option '{k}'.")).collect();
     if !unknown.is_empty() {
-        bail!("Invalid kwargs for agent '{name}':\n{}\nSee hbench agent schema {name} for available options.", unknown.join("\n"));
+        bail!("Invalid kwargs for agent '{name}':\n{}\nSee `hbench agents schema {name}` for available options.", unknown.join("\n"));
     }
     Ok(())
 }

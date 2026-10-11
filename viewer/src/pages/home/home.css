@@ -1,0 +1,38 @@
+.home-name {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2xs);
+}
+.home-name .btn {
+  opacity: 0;
+}
+.table tr:hover .home-name .btn,
+.home-name .btn:focus-visible {
+  opacity: 1;
+}
+.home-err {
+  color: var(--color-bad);
+}
+.home-selcount {
+  font-size: var(--text-xs);
+}
+.home-cmd {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2xs);
+  padding: var(--space-2xs) var(--space-2xs) var(--space-2xs) var(--space-sm);
+  border-radius: var(--radius);
+  background: var(--color-graphite);
+  color: var(--color-graphite-ink);
+  font-size: var(--text-xs);
+}
+.home-cmd .btn {
+  color: var(--color-graphite-muted);
+}
+.home-dellist {
+  max-height: 10rem;
+  overflow: auto;
+  margin: 0;
+  padding-left: 1.2em;
+  font-size: var(--text-xs);
+}

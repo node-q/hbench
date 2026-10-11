@@ -26,7 +26,7 @@ const KNOWN: &[&str] = &[
 // ---- Pydantic-style option coercion shared with openhands_sdk ----
 
 fn invalid(agent: &str, k: &str, msg: &str) -> anyhow::Error {
-    anyhow::anyhow!("Invalid kwargs for agent '{agent}':\n  {k}: {msg}\nSee hbench agent schema {agent} for available options.")
+    anyhow::anyhow!("Invalid kwargs for agent '{agent}':\n  {k}: {msg}\nSee `hbench agents schema {agent}` for available options.")
 }
 
 /// `extra="forbid"` + `config` only for agents with native_config (none here).
@@ -36,7 +36,7 @@ pub(super) fn check_known(args: &AgentArgs, agent: &str, known: &[&str]) -> Resu
             continue; // upstream pops this before validation
         }
         if !known.contains(&k.as_str()) {
-            return Err(anyhow::anyhow!("Invalid kwargs for agent '{agent}':\n  Unknown option '{k}'.\nSee hbench agent schema {agent} for available options."));
+            return Err(anyhow::anyhow!("Invalid kwargs for agent '{agent}':\n  Unknown option '{k}'.\nSee `hbench agents schema {agent}` for available options."));
         }
     }
     if args.kwargs.get("config").is_some_and(|v| !v.is_null()) {

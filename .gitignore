@@ -1,3 +1,4 @@
 target/
 jobs/
 .claude/
+viewer/node_modules/

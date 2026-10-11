@@ -370,11 +370,11 @@ impl Agent for ClineCli {
         cx.env.exec_root("[ -d /installed-agent ] || mkdir -p /installed-agent", None).await?;
         self.exec_with_retries(
             cx,
-            "if command -v git &> /dev/null && command -v curl &> /dev/null && command -v unzip &> /dev/null; then  echo 'git, curl, and unzip already installed, skipping apt-get...'; \
+            &format!("{}{}", super::APT_INSTALL_FN, "if command -v git &> /dev/null && command -v curl &> /dev/null && command -v unzip &> /dev/null; then  echo 'git, curl, and unzip already installed, skipping apt-get...'; \
              else  echo 'Killing background apt processes to release lock...';  pkill -9 -x unattended-upgrades 2>/dev/null || true;  pkill -9 -x apt-get 2>/dev/null || true;  \
              pkill -9 -x dpkg 2>/dev/null || true;  sleep 1;  rm -f /var/lib/apt/lists/lock /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend /var/cache/apt/archives/lock 2>/dev/null || true;  \
              dpkg --configure -a 2>/dev/null || true;  echo 'Trying apt-get install without update first...';  if apt-get install -y curl ca-certificates git unzip 2>/dev/null; then    \
-             echo 'Install succeeded without update.';  else    echo 'Falling back to apt-get update + install...';    apt-get update && apt-get install -y curl ca-certificates git unzip;  fi; fi",
+             echo 'Install succeeded without update.';  else    echo 'Falling back to apt-get update + install...';    hb_apt_install curl ca-certificates git unzip;  fi; fi"),
             "install-root-prereqs",
             true,
             &BTreeMap::from([("DEBIAN_FRONTEND".to_string(), "noninteractive".to_string())]),

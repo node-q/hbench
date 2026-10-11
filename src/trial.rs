@@ -145,6 +145,9 @@ pub fn task_id(cfg: &TrialConfig) -> Value {
     Value::Object(m)
 }
 
+/// Agent setup tries (Beyond upstream), all within the setup timeout.
+const SETUP_ATTEMPTS: u32 = 3;
+
 /// Agent errors that are recorded while the verifier still runs (upstream's
 /// AgentTimeoutError + NonZeroAgentExitCodeError family).
 pub fn is_agent_run_error(kind: &str) -> bool {
@@ -478,10 +481,32 @@ impl Trial {
         let mut agent = self.agent.take().unwrap();
         let r = match self.agent_ctx(user.clone(), steps[0]) {
             Err(e) => Err(e),
-            Ok(cx) => match tokio::time::timeout(setup_timeout, agent.setup(&cx)).await {
-                Ok(r) => r,
-                Err(_) => Err(timeout_err("Agent setup")),
-            },
+            // Beyond upstream: installs fail on transient network/mirror errors, so retry within the setup timeout,
+            // and label what still fails AgentSetupError so it can't be mistaken for the agent failing the task.
+            Ok(cx) => {
+                let log = self.log.clone();
+                let attempts = async {
+                    let mut n = 1;
+                    loop {
+                        match agent.setup(&cx).await {
+                            Err(e) if n < SETUP_ATTEMPTS => {
+                                log.line(&format!("agent setup attempt {n} failed, retrying: {}", format!("{e:#}").chars().take(300).collect::<String>()));
+                                tokio::time::sleep(Duration::from_secs(5 * n as u64)).await;
+                                n += 1;
+                            }
+                            r => break r.map_err(|e| (e, n)),
+                        }
+                    }
+                };
+                match tokio::time::timeout(setup_timeout, attempts).await {
+                    Ok(Ok(())) => Ok(()),
+                    Ok(Err((e, n))) => Err(kind_err("AgentSetupError", format!(
+                        "Agent setup failed before the agent started (environment/install problem, {n} attempt{}): {e:#}",
+                        if n == 1 { "" } else { "s" }
+                    ))),
+                    Err(_) => Err(timeout_err("Agent setup")),
+                }
+            }
         };
         self.agent = Some(agent);
         let r = match (r, self.bridge.take()) {

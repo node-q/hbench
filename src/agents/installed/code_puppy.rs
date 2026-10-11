@@ -79,7 +79,7 @@ impl CodePuppy {
     }
 
     fn puppy_cfg(&self, alias: &str) -> String {
-        let mut lines = vec!["[puppy]".to_string(), "puppy_name = upstreamPup".into(), "owner_name = upstream".into(), "auto_save_session = false".into()];
+        let mut lines = vec!["[puppy]".to_string(), "puppy_name = HbenchPup".into(), "owner_name = hbench".into(), "auto_save_session = false".into()];
         if let Some(r) = &self.reasoning_effort {
             let setting = alias.replace(['.', '-', '/'], "_").to_lowercase();
             lines.push(format!("model_settings_{setting}_reasoning_effort = {r}"));
@@ -223,7 +223,7 @@ mod tests {
         let a = agent(json!({"reasoning_effort": "high"}), &[], Some("openai/gpt-5.1-codex")).unwrap();
         assert_eq!(
             a.puppy_cfg("openai/gpt-5.1-codex"),
-            "[puppy]\npuppy_name = upstreamPup\nowner_name = upstream\nauto_save_session = false\nmodel_settings_openai_gpt_5_1_codex_reasoning_effort = high\n"
+            "[puppy]\npuppy_name = HbenchPup\nowner_name = hbench\nauto_save_session = false\nmodel_settings_openai_gpt_5_1_codex_reasoning_effort = high\n"
         );
         let cmd = a.run_command("/help me");
         assert!(cmd.contains("--model openai/gpt-5.1-codex --prompt 'Task request:\n/help me' 2>&1 </dev/null | stdbuf -oL tee /logs/agent/code-puppy.txt; cp_status=$?"));

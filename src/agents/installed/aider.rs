@@ -208,7 +208,7 @@ pub(super) mod opts {
     pub fn check_known(a: &AgentArgs, agent: &str, known: &[&str], native_config: bool) -> Result<()> {
         for k in a.kwargs.keys() {
             if !known.contains(&k.as_str()) && !["version", "prompt_template_path", "config"].contains(&k.as_str()) {
-                bail!("Invalid kwargs for agent '{agent}':\n  Unknown option '{k}'.\nSee hbench agent schema {agent} for available options.");
+                bail!("Invalid kwargs for agent '{agent}':\n  Unknown option '{k}'.\nSee `hbench agents schema {agent}` for available options.");
             }
         }
         if !native_config && a.kw("config").is_some() {

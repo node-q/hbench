@@ -386,7 +386,7 @@ impl MuseCode {
 fn read_manifest(logs_dir: &Path) -> Result<Value> {
     let p = logs_dir.join(MANIFEST);
     if !p.exists() {
-        bail!("Cannot resume Muse Code: no saved upstream session");
+        bail!("Cannot resume Muse Code: no saved session");
     }
     let mut v: Value = serde_json::from_str(&std::fs::read_to_string(p)?)?;
     let sid = uuid::Uuid::parse_str(v["session_id"].as_str().unwrap_or_default())?.to_string();

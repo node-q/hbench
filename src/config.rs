@@ -235,7 +235,7 @@ impl TaskRef {
     }
     pub fn validate(&self) -> Result<()> {
         if self.name.is_some() {
-            bail!("package tasks (name/ref) need upstream's hosted registry, which hbench doesn't support; use path or git_url+path");
+            bail!("package tasks (name/ref) need a hosted package registry, which hbench doesn't support; use path or git_url+path");
         }
         if self.path.is_none() {
             bail!("task config needs 'path'");
@@ -525,7 +525,7 @@ impl JobConfig {
         }
         for d in &self.datasets {
             if d.repo.is_some() || d.reference.is_some() || d.name.as_deref().is_some_and(|n| n.contains('/')) {
-                bail!("package/repo datasets need upstream's hosted registry; use a registry.json dataset or a local path");
+                bail!("package/repo datasets need a hosted package registry, which hbench does not support; use a registry.json dataset or a local path");
             }
             match (&d.path, &d.name) {
                 (None, None) => bail!("dataset needs 'path' or 'name'"),
@@ -605,7 +605,7 @@ impl JobConfig {
 }
 
 /// upstream moved `orchestrator.{n_concurrent_trials,quiet,retry}` to the top level.
-fn migrate_legacy(v: &mut Value) {
+pub fn migrate_legacy(v: &mut Value) {
     let Some(obj) = v.as_object_mut() else { return };
     if let Some(Value::Object(orch)) = obj.remove("orchestrator") {
         for (k, val) in orch {

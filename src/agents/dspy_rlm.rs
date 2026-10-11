@@ -48,7 +48,7 @@ impl Options {
         };
         kw.finish(NAME)?;
         if kwargs.get("extra_tools").is_some_and(|v| !v.is_null()) {
-            bail!("dspy-rlm extra_tools are Python callables passed to upstream's constructor; they can't come from an hbench config");
+            bail!("dspy-rlm extra_tools are Python callables, which can't be set from an hbench config");
         }
         Ok(o)
     }

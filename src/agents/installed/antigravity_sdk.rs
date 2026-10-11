@@ -181,12 +181,15 @@ impl AntigravitySdk {
     }
 
     /// The runner with its `google-antigravity` dependency pinned to an uploaded wheel, if any.
+    /// Beyond upstream: pinned to Python 3.12. With only `requires-python = ">=3.12"`, uv now downloads CPython 3.15,
+    /// for which cffi/pydantic-core have no wheels, so the install needs a C compiler most task images lack.
     fn runner_script(remote_wheel: Option<&str>) -> String {
+        let runner = RUNNER.replacen("#!/usr/bin/env -S uv run --script", "#!/usr/bin/env -S uv run --python 3.12 --script", 1);
         match remote_wheel {
-            None => RUNNER.to_string(),
+            None => runner,
             Some(w) => regex::Regex::new(r#""google-antigravity[^"]*""#)
                 .unwrap()
-                .replace(RUNNER, regex::NoExpand(&format!("\"google-antigravity @ file://{w}\"")))
+                .replace(&runner, regex::NoExpand(&format!("\"google-antigravity @ file://{w}\"")))
                 .into_owned(),
         }
     }

@@ -125,7 +125,7 @@ impl AntigravityCli {
     pub fn new(mut args: AgentArgs) -> Result<AntigravityCli> {
         let unknown: Vec<String> = args.kwargs.keys().filter(|k| !KNOWN_OPTIONS.contains(&k.as_str())).map(|k| format!("  Unknown option '{k}'.")).collect();
         if !unknown.is_empty() {
-            bail!("Invalid kwargs for agent 'antigravity-cli':\n{}\nSee hbench agent schema antigravity-cli for available options.", unknown.join("\n"));
+            bail!("Invalid kwargs for agent 'antigravity-cli':\n{}\nSee `hbench agents schema antigravity-cli` for available options.", unknown.join("\n"));
         }
         if args.kwargs.get("config").is_some_and(|v| !v.is_null()) {
             bail!("Agent 'antigravity-cli' does not support config. You can implement it.");
