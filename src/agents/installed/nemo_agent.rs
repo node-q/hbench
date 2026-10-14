@@ -29,9 +29,22 @@ struct ProviderSpec {
 }
 
 fn provider_spec(llm_type: &str) -> ProviderSpec {
-    let base = ProviderSpec { api_key_env: None, base_url_env: None, model_field: "model_name", base_url_field: "base_url", extra: &[], env_to_config: &[], forwarded: &[] };
+    let base = ProviderSpec {
+        api_key_env: None,
+        base_url_env: None,
+        model_field: "model_name",
+        base_url_field: "base_url",
+        extra: &[],
+        env_to_config: &[],
+        forwarded: &[],
+    };
     match llm_type {
-        "nim" => ProviderSpec { api_key_env: Some("NVIDIA_API_KEY"), base_url_env: Some("NVIDIA_BASE_URL"), extra: &[("max_tokens", 2048.0)], ..base },
+        "nim" => ProviderSpec {
+            api_key_env: Some("NVIDIA_API_KEY"),
+            base_url_env: Some("NVIDIA_BASE_URL"),
+            extra: &[("max_tokens", 2048.0)],
+            ..base
+        },
         "openai" => ProviderSpec { api_key_env: Some("OPENAI_API_KEY"), base_url_env: Some("OPENAI_BASE_URL"), ..base },
         "azure_openai" => ProviderSpec {
             api_key_env: Some("AZURE_OPENAI_API_KEY"),
@@ -48,8 +61,18 @@ fn provider_spec(llm_type: &str) -> ProviderSpec {
             ..base
         },
         "litellm" => ProviderSpec { api_key_env: Some("LITELLM_API_KEY"), base_url_env: Some("LITELLM_BASE_URL"), ..base },
-        "huggingface_inference" => ProviderSpec { api_key_env: Some("HF_TOKEN"), base_url_field: "endpoint_url", env_to_config: &[("HF_ENDPOINT_URL", "endpoint_url")], ..base },
-        _ => ProviderSpec { api_key_env: Some("DYNAMO_API_KEY"), base_url_env: Some("DYNAMO_BASE_URL"), extra: &[("request_timeout", 600.0)], ..base },
+        "huggingface_inference" => ProviderSpec {
+            api_key_env: Some("HF_TOKEN"),
+            base_url_field: "endpoint_url",
+            env_to_config: &[("HF_ENDPOINT_URL", "endpoint_url")],
+            ..base
+        },
+        _ => ProviderSpec {
+            api_key_env: Some("DYNAMO_API_KEY"),
+            base_url_env: Some("DYNAMO_BASE_URL"),
+            extra: &[("request_timeout", 600.0)],
+            ..base
+        },
     }
 }
 
@@ -169,9 +192,16 @@ impl NemoAgent {
 
     fn run_command(instruction: &str) -> String {
         let sentinel_writes = |var: &str| {
-            ["/app/answer.txt", "/app/result.json", "/workspace/answer.txt", "/logs/agent/nemo-agent-output.txt", "/workspace/solution.txt", "/app/response.txt"]
-                .map(|p| format!("echo \"${var}\" > {p}; "))
-                .concat()
+            [
+                "/app/answer.txt",
+                "/app/result.json",
+                "/workspace/answer.txt",
+                "/logs/agent/nemo-agent-output.txt",
+                "/workspace/solution.txt",
+                "/app/response.txt",
+            ]
+            .map(|p| format!("echo \"${var}\" > {p}; "))
+            .concat()
         };
         format!(
             "export PATH=\"/opt/nvidia-nat-venv/bin:$HOME/.local/bin:$PATH\"; mkdir -p /app /logs/agent /workspace && \
@@ -219,7 +249,12 @@ impl Agent for NemoAgent {
         let none = BTreeMap::new();
         let install = async {
             ensure_system_dependencies(cx, if self.nat_repo.is_some() { &["curl", "git"] } else { &["curl"] }).await?;
-            exec_agent(cx, &format!("{PATH_SETUP}; command -v uv > /dev/null 2>&1 || curl -LsSf https://astral.sh/uv/install.sh | sh"), &none).await?;
+            exec_agent(
+                cx,
+                &format!("{PATH_SETUP}; command -v uv > /dev/null 2>&1 || curl -LsSf https://astral.sh/uv/install.sh | sh"),
+                &none,
+            )
+            .await?;
             let user = cx.user.clone().unwrap_or_else(|| "root".into());
             exec_root(cx, &format!("mkdir -p /opt/nvidia-nat-venv && chown {user}:{user} /opt/nvidia-nat-venv"), &none).await?;
             exec_agent(cx, &format!("{PATH_SETUP}; uv venv /opt/nvidia-nat-venv --python 3.12 --clear"), &none).await?;
@@ -256,7 +291,10 @@ impl Agent for NemoAgent {
                 cx.env.upload_dir(local, "/installed-agent/workflow-package").await?;
                 "export PATH=\"/opt/nvidia-nat-venv/bin:$HOME/.local/bin:$PATH\"; SETUPTOOLS_SCM_PRETEND_VERSION=0.0.0 pip install --no-deps /installed-agent/workflow-package".to_string()
             } else {
-                format!("export PATH=\"/opt/nvidia-nat-venv/bin:$HOME/.local/bin:$PATH\"; uv pip install --python /opt/nvidia-nat-venv/bin/python {}", quote(pkg))
+                format!(
+                    "export PATH=\"/opt/nvidia-nat-venv/bin:$HOME/.local/bin:$PATH\"; uv pip install --python /opt/nvidia-nat-venv/bin/python {}",
+                    quote(pkg)
+                )
             };
             let r = cx.exec(&cmd, &env, None).await?;
             if r.code != 0 {
@@ -303,10 +341,23 @@ mod tests {
     fn options_env_and_config() {
         assert!(NemoAgent::new(args(json!({"llm_type": "bogus"}), &[], None)).is_err());
         assert!(NemoAgent::new(args(json!({"verbose": "loud"}), &[], None)).is_err());
-        let a = NemoAgent::new(args(json!({}), &[("NVIDIA_NAT_LLM_TYPE", "azure_openai"), ("AZURE_OPENAI_API_KEY", "k+="), ("AZURE_OPENAI_ENDPOINT", "https://r/"), ("AZURE_OPENAI_API_VERSION", "2024")], Some("azure/dep"))).unwrap();
+        let a = NemoAgent::new(args(
+            json!({}),
+            &[
+                ("NVIDIA_NAT_LLM_TYPE", "azure_openai"),
+                ("AZURE_OPENAI_API_KEY", "k+="),
+                ("AZURE_OPENAI_ENDPOINT", "https://r/"),
+                ("AZURE_OPENAI_API_VERSION", "2024"),
+            ],
+            Some("azure/dep"),
+        ))
+        .unwrap();
         assert_eq!(a.llm_type, "azure_openai");
         let env = a.build_env();
-        assert_eq!((env["AZURE_OPENAI_API_KEY"].as_str(), env["AZURE_OPENAI_ENDPOINT"].as_str(), env["NVIDIA_NAT_LOG_LEVEL"].as_str()), ("k+=", "https://r/", "warning"));
+        assert_eq!(
+            (env["AZURE_OPENAI_API_KEY"].as_str(), env["AZURE_OPENAI_ENDPOINT"].as_str(), env["NVIDIA_NAT_LOG_LEVEL"].as_str()),
+            ("k+=", "https://r/", "warning")
+        );
         let y: serde_yaml_ng::Value = serde_yaml_ng::from_str(&a.config_yaml()).unwrap();
         let llm = &y["llms"]["azure_openai_llm"];
         assert_eq!(llm["azure_deployment"].as_str(), Some("dep"));
@@ -318,14 +369,21 @@ mod tests {
         let yaml = nim.config_yaml();
         assert!(yaml.starts_with("llms:\n  nim_llm:\n    _type: nim\n    model_name: meta/llama-3.3-70b-instruct\n"), "{yaml}");
         assert!(yaml.contains("max_tokens: 2048\n"));
-        assert!(NemoAgent::run_command("q a").contains("python3 /installed-agent/nemo_agent_run_wrapper.py /app/nemo-agent-config.yml 'q a' --trajectory-output"));
+        assert!(
+            NemoAgent::run_command("q a")
+                .contains("python3 /installed-agent/nemo_agent_run_wrapper.py /app/nemo-agent-config.yml 'q a' --trajectory-output")
+        );
         assert!(WRAPPER.contains("IntermediateStepToATIFConverter"));
     }
 
     #[test]
     fn outputs() {
         let mut ctx = AgentContext::default();
-        parse_outputs(Some("x\n  final answer \n\n"), Some(r#"{"final_metrics":{"total_prompt_tokens":10,"total_completion_tokens":3,"total_cost_usd":0.1}}"#), &mut ctx);
+        parse_outputs(
+            Some("x\n  final answer \n\n"),
+            Some(r#"{"final_metrics":{"total_prompt_tokens":10,"total_completion_tokens":3,"total_cost_usd":0.1}}"#),
+            &mut ctx,
+        );
         assert_eq!(ctx.metadata.unwrap()["nemo_agent_final_output"], "final answer");
         assert_eq!((ctx.n_input_tokens, ctx.n_output_tokens, ctx.n_cache_tokens, ctx.cost_usd), (Some(10), Some(3), Some(0), Some(0.1)));
     }

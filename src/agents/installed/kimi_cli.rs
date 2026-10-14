@@ -97,10 +97,7 @@ impl KimiCli {
 
     /// upstream's `_get_env(*names)`: agent env (all names) before host env (all names).
     fn get_env_any(&self, names: &[&str]) -> Option<String> {
-        names
-            .iter()
-            .find_map(|n| self.args.extra_env.get(*n).cloned())
-            .or_else(|| names.iter().find_map(|n| std::env::var(n).ok()))
+        names.iter().find_map(|n| self.args.extra_env.get(*n).cloned()).or_else(|| names.iter().find_map(|n| std::env::var(n).ok()))
     }
 
     fn resolve_api_key(&self, provider: &str) -> String {
@@ -120,7 +117,12 @@ impl KimiCli {
             return 262144;
         }
         // ponytail: upstream asks litellm's model table; we only honor `model_info` registered via kwargs.
-        self.args.kwargs.get("model_info").and_then(|m| m["max_input_tokens"].as_i64()).filter(|n| *n != 0).unwrap_or(DEFAULT_MAX_CONTEXT_SIZE)
+        self.args
+            .kwargs
+            .get("model_info")
+            .and_then(|m| m["max_input_tokens"].as_i64())
+            .filter(|n| *n != 0)
+            .unwrap_or(DEFAULT_MAX_CONTEXT_SIZE)
     }
 
     fn build_config_json(&self, provider: &str, model: &str) -> Result<String> {
@@ -230,7 +232,11 @@ fn parse_wire_events(text: &str) -> Vec<Value> {
             last.push_str(line);
         }
     }
-    msgs.iter().filter_map(|m| loads_lenient(m)).filter(|m| m["method"] == "event").map(|m| m.get("params").cloned().unwrap_or(json!({}))).collect()
+    msgs.iter()
+        .filter_map(|m| loads_lenient(m))
+        .filter(|m| m["method"] == "event")
+        .map(|m| m.get("params").cloned().unwrap_or(json!({})))
+        .collect()
 }
 
 /// upstream's trajectory final_metrics totals: each step's last StatusUpdate token_usage.
@@ -256,7 +262,13 @@ fn usage_from_events(events: &[Value]) -> Option<AgentContext> {
         completion += n("output");
         cached += n("input_cache_read");
     }
-    Some(AgentContext { n_input_tokens: Some(prompt), n_output_tokens: Some(completion), n_cache_tokens: Some(cached), cost_usd: None, ..Default::default() })
+    Some(AgentContext {
+        n_input_tokens: Some(prompt),
+        n_output_tokens: Some(completion),
+        n_cache_tokens: Some(cached),
+        cost_usd: None,
+        ..Default::default()
+    })
 }
 
 #[async_trait::async_trait]
@@ -324,7 +336,8 @@ pub(super) mod tests {
         std::fs::write(dir.join("task.toml"), "[environment]\ndocker_image='x'\n").unwrap();
         std::fs::write(dir.join("instruction.md"), "x").unwrap();
         let task = Arc::new(crate::task::Task::load(&dir).unwrap());
-        AgentArgs { load_trajectory: None,
+        AgentArgs {
+            load_trajectory: None,
             model_name: model.map(String::from),
             kwargs: serde_json::from_value(kwargs).unwrap(),
             extra_env: env.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect(),
@@ -386,7 +399,9 @@ pub(super) mod tests {
         assert_eq!(cfg["models"]["model"]["max_context_size"], 131072);
         let (setup, run, env) = a.commands("solve the task", false).unwrap();
         assert!(setup.contains("/tmp/kimi-config.json"));
-        assert!(run.contains("--wire --yolo --afk ") && run.contains("solve the task") && run.contains("kill 0") && !run.contains("--continue"));
+        assert!(
+            run.contains("--wire --yolo --afk ") && run.contains("solve the task") && run.contains("kill 0") && !run.contains("--continue")
+        );
         assert_eq!(env["HBENCH_KIMI_API_KEY"], "sk-m");
         assert_eq!(env["MOONSHOT_API_KEY"], "sk-m");
         assert!(a.commands("x", true).unwrap().1.contains("--continue "));
@@ -400,7 +415,10 @@ pub(super) mod tests {
 
         let m = agent(json!({"model_info": {"max_input_tokens": 200000}, "base_url": "http://x"}), &[], Some("moonshot/k")).unwrap();
         let cfg: Value = serde_json::from_str(&m.build_config_json("moonshot", "k").unwrap()).unwrap();
-        assert_eq!((cfg["models"]["model"]["max_context_size"].as_i64(), cfg["providers"]["hbench"]["base_url"].as_str()), (Some(200000), Some("http://x")));
+        assert_eq!(
+            (cfg["models"]["model"]["max_context_size"].as_i64(), cfg["providers"]["hbench"]["base_url"].as_str()),
+            (Some(200000), Some("http://x"))
+        );
         let e = agent(json!({}), &[("KIMI_MODEL_MAX_CONTEXT_SIZE", "1048576")], Some("kimi/kimi-k2.6")).unwrap();
         assert_eq!(e.max_context_size, 1048576);
     }

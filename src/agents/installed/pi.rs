@@ -93,8 +93,16 @@ impl Pi {
             }
         }
         let spec = format!("@{}", install_version.as_deref().unwrap_or("latest"));
-        let mcp = if self.args.mcp_servers.is_empty() { String::new() } else { format!(" && npm install --prefix {MCP_ADAPTER_DIR} --ignore-scripts {MCP_ADAPTER_PACKAGE}") };
-        Ok(format!("set -euo pipefail; {} && npm install -g --ignore-scripts {}{spec}{mcp} && pi --version", nvm_node_install_snippet(22), self.package_name()))
+        let mcp = if self.args.mcp_servers.is_empty() {
+            String::new()
+        } else {
+            format!(" && npm install --prefix {MCP_ADAPTER_DIR} --ignore-scripts {MCP_ADAPTER_PACKAGE}")
+        };
+        Ok(format!(
+            "set -euo pipefail; {} && npm install -g --ignore-scripts {}{spec}{mcp} && pi --version",
+            nvm_node_install_snippet(22),
+            self.package_name()
+        ))
     }
 
     fn custom_models_json(&self, access: &Resolved, model_id: &str) -> Result<Option<Value>> {
@@ -117,7 +125,9 @@ impl Pi {
                 model["thinkingLevelMap"] = json!({t: t});
             }
         }
-        Ok(Some(json!({"providers": {CUSTOM_PROVIDER: {"baseUrl": endpoint, "apiKey": format!("${key_env}"), "api": model_api, "models": [model]}}})))
+        Ok(Some(
+            json!({"providers": {CUSTOM_PROVIDER: {"baseUrl": endpoint, "apiKey": format!("${key_env}"), "api": model_api, "models": [model]}}}),
+        ))
     }
 
     fn mcp_config(&self) -> Value {
@@ -150,7 +160,15 @@ impl Pi {
         )
     }
 
-    fn run_command(&self, instruction: &str, provider: &str, model_id: &str, isolated: bool, extensions: &[String], resume: bool) -> String {
+    fn run_command(
+        &self,
+        instruction: &str,
+        provider: &str,
+        model_id: &str,
+        isolated: bool,
+        extensions: &[String],
+        resume: bool,
+    ) -> String {
         let prefix = if isolated { format!("PI_CODING_AGENT_DIR={CONFIG_DIR} ") } else { String::new() };
         let ext: String = extensions.iter().map(|p| format!("--extension {} ", quote(p))).collect();
         let flags = self.thinking.as_ref().map(|t| format!("--thinking {} ", quote(t))).unwrap_or_default();
@@ -175,7 +193,12 @@ fn metrics(usage: &Value) -> Option<(i64, i64, i64, Option<f64>)> {
         return None;
     }
     let cost = usage["cost"]["total"].as_f64().filter(|c| *c > 0.0);
-    Some((int(&usage["input"]) + int(&usage["cacheRead"]) + int(&usage["cacheWrite"]), int(&usage["output"]), int(&usage["cacheRead"]), cost))
+    Some((
+        int(&usage["input"]) + int(&usage["cacheRead"]) + int(&usage["cacheWrite"]),
+        int(&usage["output"]),
+        int(&usage["cacheRead"]),
+        cost,
+    ))
 }
 
 /// Root-to-leaf branch of Pi's append-only session tree (headers first).
@@ -220,7 +243,8 @@ fn has_steps(events: &[&(usize, Value)]) -> bool {
             Some("user") => true,
             Some("assistant") => {
                 let m = &e["message"];
-                let aborted = m["stopReason"] == "aborted" || (m["stopReason"] == "error" && m["errorMessage"] == "This operation was aborted");
+                let aborted =
+                    m["stopReason"] == "aborted" || (m["stopReason"] == "error" && m["errorMessage"] == "This operation was aborted");
                 let has_content = m["content"].as_array().is_some_and(|c| {
                     c.iter().any(|b| match b["type"].as_str() {
                         Some("text") => b["text"].is_string(),
@@ -239,8 +263,11 @@ fn has_steps(events: &[&(usize, Value)]) -> bool {
 
 /// Usage from the newest Pi session file (events after `copied_until` only).
 pub fn session_usage(text: &str, copied_until: usize) -> Option<AgentContext> {
-    let events: Vec<(usize, Value)> =
-        text.lines().enumerate().filter_map(|(i, l)| serde_json::from_str::<Value>(l).ok().filter(Value::is_object).map(|v| (i + 1, v))).collect();
+    let events: Vec<(usize, Value)> = text
+        .lines()
+        .enumerate()
+        .filter_map(|(i, l)| serde_json::from_str::<Value>(l).ok().filter(Value::is_object).map(|v| (i + 1, v)))
+        .collect();
     if !has_steps(&active_events(&events)) {
         return None;
     }
@@ -277,7 +304,13 @@ pub fn output_usage(text: &str) -> AgentContext {
         cw += int(&u["cacheWrite"]);
         cost += u["cost"]["total"].as_f64().unwrap_or(0.0);
     }
-    AgentContext { n_input_tokens: Some(input + cr + cw), n_output_tokens: Some(output), n_cache_tokens: Some(cr), cost_usd: (cost > 0.0).then_some(cost), ..Default::default() }
+    AgentContext {
+        n_input_tokens: Some(input + cr + cw),
+        n_output_tokens: Some(output),
+        n_cache_tokens: Some(cr),
+        cost_usd: (cost > 0.0).then_some(cost),
+        ..Default::default()
+    }
 }
 
 fn newest_session(dir: &Path) -> Option<std::path::PathBuf> {
@@ -307,12 +340,17 @@ impl Agent for Pi {
             ensure_system_dependencies(cx, &["curl"]).await?;
             exec_agent(cx, &cmd, &BTreeMap::new()).await.map(|_| ())
         };
-        installed_setup(cx, &mut self.version, install, ". ~/.nvm/nvm.sh; pi --version", |s| s.trim().lines().last().unwrap_or("").trim().to_string()).await
+        installed_setup(cx, &mut self.version, install, ". ~/.nvm/nvm.sh; pi --version", |s| {
+            s.trim().lines().last().unwrap_or("").trim().to_string()
+        })
+        .await
     }
 
     async fn run(&mut self, instruction: &str, cx: &AgentCtx<'_>, _ctx: &mut AgentContext, resume: bool) -> Result<()> {
         let instruction = self.args.render_instruction(instruction)?;
-        let Some((provider, model_id)) = self.args.model_name.clone().and_then(|m| m.split_once('/').map(|(a, b)| (a.to_string(), b.to_string()))) else {
+        let Some((provider, model_id)) =
+            self.args.model_name.clone().and_then(|m| m.split_once('/').map(|(a, b)| (a.to_string(), b.to_string())))
+        else {
             bail!("Model name must be in the format provider/model_name")
         };
         let access = connection(&self.args, SPEC);
@@ -348,11 +386,17 @@ impl Agent for Pi {
             extensions.push(path);
         }
         if let Some(d) = skills_dir(&self.args) {
-            exec_agent(cx, &format!("mkdir -p $HOME/.agents/skills && cp -r {}/* $HOME/.agents/skills/ 2>/dev/null || true", quote(&d)), &BTreeMap::new()).await?;
+            exec_agent(
+                cx,
+                &format!("mkdir -p $HOME/.agents/skills && cp -r {}/* $HOME/.agents/skills/ 2>/dev/null || true", quote(&d)),
+                &BTreeMap::new(),
+            )
+            .await?;
         }
         self.session_usage_start.clear();
         if resume {
-            let r = exec_agent(cx, &format!("find {SESSION_DIR} -maxdepth 1 -type f -name '*.jsonl' -exec wc -l {{}} +"), &BTreeMap::new()).await?;
+            let r = exec_agent(cx, &format!("find {SESSION_DIR} -maxdepth 1 -type f -name '*.jsonl' -exec wc -l {{}} +"), &BTreeMap::new())
+                .await?;
             for line in r.stdout.lines() {
                 if let Some((n, f)) = line.trim().split_once(' ')
                     && let Ok(n) = n.parse()
@@ -402,19 +446,33 @@ mod tests {
         assert!(pi(json!({"model_api": 3}), &[], None).is_err());
         assert_eq!(pi(json!({"reasoning_effort": "high"}), &[], None).unwrap().thinking.as_deref(), Some("high"));
         let legacy = pi(json!({"version": "0.73.9"}), &[], None).unwrap();
-        assert!(legacy.install_command().unwrap().contains("npm install -g --ignore-scripts @mariozechner/pi-coding-agent@0.73.9 && pi --version"));
+        assert!(
+            legacy
+                .install_command()
+                .unwrap()
+                .contains("npm install -g --ignore-scripts @mariozechner/pi-coding-agent@0.73.9 && pi --version")
+        );
         assert!(pi(json!({"version": "0.30.0", "max_turns": 3}), &[], None).unwrap().install_command().is_err());
         assert!(pi(json!({}), &[], None).unwrap().install_command().unwrap().contains("@earendil-works/pi-coding-agent@latest"));
         let mut a = args(json!({}), &[], None);
         a.mcp_servers = vec![serde_json::from_value(json!({"name": "s", "transport": "stdio", "command": "npx", "args": ["x"]})).unwrap()];
         let m = Pi::new(a).unwrap();
-        assert!(m.install_command().unwrap().contains("@0.85.1 && npm install --prefix /tmp/hbench-pi-mcp-adapter --ignore-scripts pi-mcp-adapter@2.34.0"));
+        assert!(
+            m.install_command()
+                .unwrap()
+                .contains("@0.85.1 && npm install --prefix /tmp/hbench-pi-mcp-adapter --ignore-scripts pi-mcp-adapter@2.34.0")
+        );
         assert_eq!(m.mcp_config()["mcpServers"]["s"], json!({"command": "npx", "args": ["x"]}));
     }
 
     #[test]
     fn custom_endpoint_and_command() {
-        let a = pi(json!({"model_api": "openai-completions", "thinking": "xhigh"}), &[("OPENAI_API_KEY", "secret"), ("OPENAI_BASE_URL", "http://e/v1")], Some("openai/m")).unwrap();
+        let a = pi(
+            json!({"model_api": "openai-completions", "thinking": "xhigh"}),
+            &[("OPENAI_API_KEY", "secret"), ("OPENAI_BASE_URL", "http://e/v1")],
+            Some("openai/m"),
+        )
+        .unwrap();
         let access = connection(&a.args, SPEC);
         let mj = a.custom_models_json(&access, "m").unwrap().unwrap();
         assert_eq!(

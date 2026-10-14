@@ -58,7 +58,8 @@ impl OpenCode {
             let mut mcp = serde_json::Map::new();
             for s in &self.args.mcp_servers {
                 let v = if s.transport() == "stdio" {
-                    let cmd: Vec<String> = s.command.iter().cloned().chain(s.command.as_ref().map(|_| s.args.clone()).unwrap_or_default()).collect();
+                    let cmd: Vec<String> =
+                        s.command.iter().cloned().chain(s.command.as_ref().map(|_| s.args.clone()).unwrap_or_default()).collect();
                     json!({"type": "local", "command": cmd})
                 } else {
                     // oauth=false disables opencode's 401-triggered OAuth auto-detection.
@@ -135,7 +136,13 @@ pub fn parse_opencode_usage(text: &str) -> Option<AgentContext> {
             _ => {}
         }
     }
-    (turns > 0).then(|| AgentContext { n_input_tokens: Some(input), n_cache_tokens: Some(cache), n_output_tokens: Some(output), cost_usd: (cost != 0.0).then_some(cost), ..Default::default() })
+    (turns > 0).then(|| AgentContext {
+        n_input_tokens: Some(input),
+        n_cache_tokens: Some(cache),
+        n_output_tokens: Some(output),
+        cost_usd: (cost != 0.0).then_some(cost),
+        ..Default::default()
+    })
 }
 
 const VERSION_CMD: &str = "[ -f ~/.nvm/nvm.sh ] && . ~/.nvm/nvm.sh; opencode --version";
@@ -153,7 +160,14 @@ impl Agent for OpenCode {
     }
 
     fn acp_command(&self) -> Option<Vec<String>> {
-        let mut c: Vec<String> = ["env", "OPENCODE_FAKE_VCS=git", "XDG_DATA_HOME=/logs/agent/opencode/xdg-data", "XDG_STATE_HOME=/logs/agent/opencode/xdg-state"].map(String::from).to_vec();
+        let mut c: Vec<String> = [
+            "env",
+            "OPENCODE_FAKE_VCS=git",
+            "XDG_DATA_HOME=/logs/agent/opencode/xdg-data",
+            "XDG_STATE_HOME=/logs/agent/opencode/xdg-state",
+        ]
+        .map(String::from)
+        .to_vec();
         if let Some(m) = &self.args.model_name {
             // Inline config outranks opencode.json, like --model in run(). Python json.dumps spacing.
             c.push(format!("OPENCODE_CONFIG_CONTENT={{\"model\": {}}}", json!(m)));
@@ -175,10 +189,23 @@ impl Agent for OpenCode {
         }
         let none = BTreeMap::new();
         if let Some(c) = self.config()? {
-            exec_agent(cx, &format!("mkdir -p ~/.config/opencode && echo {} > ~/.config/opencode/opencode.json", quote(&serde_json::to_string_pretty(&c)?)), &none).await?;
+            exec_agent(
+                cx,
+                &format!(
+                    "mkdir -p ~/.config/opencode && echo {} > ~/.config/opencode/opencode.json",
+                    quote(&serde_json::to_string_pretty(&c)?)
+                ),
+                &none,
+            )
+            .await?;
         }
         if let Some(d) = opts::skills_dir(&self.args) {
-            exec_agent(cx, &format!("mkdir -p ~/.config/opencode/skills && cp -r {}/* ~/.config/opencode/skills/ 2>/dev/null || true", quote(&d)), &none).await?;
+            exec_agent(
+                cx,
+                &format!("mkdir -p ~/.config/opencode/skills && cp -r {}/* ~/.config/opencode/skills/ 2>/dev/null || true", quote(&d)),
+                &none,
+            )
+            .await?;
         }
         // The npm bin is a native binary; it only needs to be reachable off the nvm PATH.
         let r = exec_agent(cx, "[ -f ~/.nvm/nvm.sh ] && . ~/.nvm/nvm.sh; command -v opencode", &none).await?;
@@ -208,16 +235,31 @@ impl Agent for OpenCode {
 
     async fn run(&mut self, instruction: &str, cx: &AgentCtx<'_>, _ctx: &mut AgentContext, resume: bool) -> Result<()> {
         let instruction = self.args.render_instruction(instruction)?;
-        let Some(model) = self.args.model_name.clone().filter(|m| m.contains('/')) else { bail!("Model name must be in the format provider/model_name") };
+        let Some(model) = self.args.model_name.clone().filter(|m| m.contains('/')) else {
+            bail!("Model name must be in the format provider/model_name")
+        };
         let mut env = connection(&self.args, SPEC).env;
         env.insert("OPENCODE_FAKE_VCS".into(), "git".into());
         env.insert("XDG_DATA_HOME".into(), "/logs/agent/opencode/xdg-data".into());
         env.insert("XDG_STATE_HOME".into(), "/logs/agent/opencode/xdg-state".into());
         if let Some(d) = opts::skills_dir(&self.args) {
-            exec_agent(cx, &format!("mkdir -p ~/.config/opencode/skills && cp -r {}/* ~/.config/opencode/skills/ 2>/dev/null || true", quote(&d)), &env).await?;
+            exec_agent(
+                cx,
+                &format!("mkdir -p ~/.config/opencode/skills && cp -r {}/* ~/.config/opencode/skills/ 2>/dev/null || true", quote(&d)),
+                &env,
+            )
+            .await?;
         }
         if let Some(c) = self.config()? {
-            exec_agent(cx, &format!("mkdir -p ~/.config/opencode && echo {} > ~/.config/opencode/opencode.json", quote(&serde_json::to_string_pretty(&c)?)), &env).await?;
+            exec_agent(
+                cx,
+                &format!(
+                    "mkdir -p ~/.config/opencode && echo {} > ~/.config/opencode/opencode.json",
+                    quote(&serde_json::to_string_pretty(&c)?)
+                ),
+                &env,
+            )
+            .await?;
         }
         let flags = self.cli_flags()?;
         let flags_arg = if flags.is_empty() { String::new() } else { format!("{flags} ") };
@@ -231,7 +273,10 @@ impl Agent for OpenCode {
         let r = exec_agent(cx, &cmd, &env).await?;
         let msgs = error_messages(&r.stdout);
         if !msgs.is_empty() {
-            return Err(kind_err("NonZeroAgentExitCodeError", format!("OpenCode emitted error event(s): {}", msgs[..msgs.len().min(3)].join("; "))));
+            return Err(kind_err(
+                "NonZeroAgentExitCodeError",
+                format!("OpenCode emitted error event(s): {}", msgs[..msgs.len().min(3)].join("; ")),
+            ));
         }
         Ok(())
     }
@@ -257,14 +302,22 @@ mod tests {
 
     #[test]
     fn config_flags_and_validation() {
-        let mut a = agent(json!({"variant": "high", "disable_web_search": true, "opencode_config": {"permission": {"bash": "ask", "webfetch": "allow"}, "provider": {"openai": {"options": {"timeout": 5}}}}}), &[("OPENAI_BASE_URL", "http://p/v1")]);
-        a.args.mcp_servers = vec![serde_json::from_value(json!({"name": "fs", "transport": "stdio", "command": "npx", "args": ["-y", "fs"]})).unwrap()];
+        let mut a = agent(
+            json!({"variant": "high", "disable_web_search": true, "opencode_config": {"permission": {"bash": "ask", "webfetch": "allow"}, "provider": {"openai": {"options": {"timeout": 5}}}}}),
+            &[("OPENAI_BASE_URL", "http://p/v1")],
+        );
+        a.args.mcp_servers =
+            vec![serde_json::from_value(json!({"name": "fs", "transport": "stdio", "command": "npx", "args": ["-y", "fs"]})).unwrap()];
         assert_eq!(a.cli_flags().unwrap(), "--variant high");
         let c = a.config().unwrap().unwrap();
         assert_eq!(c["mcp"]["fs"], json!({"type": "local", "command": ["npx", "-y", "fs"]}));
         assert_eq!(c["provider"]["openai"], json!({"models": {"gpt-5": {}}, "options": {"baseURL": "http://p/v1", "timeout": 5}}));
         assert_eq!(c["permission"], json!({"bash": "ask", "webfetch": "deny", "websearch": "deny"}));
-        assert_eq!(agent(json!({"disable_web_search": true, "opencode_config": {"permission": "allow"}}), &[]).config().unwrap().unwrap()["permission"]["*"], "allow");
+        assert_eq!(
+            agent(json!({"disable_web_search": true, "opencode_config": {"permission": "allow"}}), &[]).config().unwrap().unwrap()["permission"]
+                ["*"],
+            "allow"
+        );
         assert!(create(opts::test_args(json!({"opencode_config": "x"}), &[], None)).is_err());
         assert!(create(opts::test_args(json!({"disable_web_search": "maybe"}), &[], None)).is_err());
     }
@@ -274,7 +327,15 @@ mod tests {
         let a = agent(json!({}), &[("OPENAI_API_KEY", "k")]);
         assert_eq!(
             a.acp_command().unwrap(),
-            vec!["env", "OPENCODE_FAKE_VCS=git", "XDG_DATA_HOME=/logs/agent/opencode/xdg-data", "XDG_STATE_HOME=/logs/agent/opencode/xdg-state", "OPENCODE_CONFIG_CONTENT={\"model\": \"openai/gpt-5\"}", "opencode", "acp"]
+            vec![
+                "env",
+                "OPENCODE_FAKE_VCS=git",
+                "XDG_DATA_HOME=/logs/agent/opencode/xdg-data",
+                "XDG_STATE_HOME=/logs/agent/opencode/xdg-state",
+                "OPENCODE_CONFIG_CONTENT={\"model\": \"openai/gpt-5\"}",
+                "opencode",
+                "acp"
+            ]
         );
         assert_eq!(a.acp_env().get("OPENAI_API_KEY").map(String::as_str), Some("k"));
     }

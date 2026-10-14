@@ -10,7 +10,10 @@ use std::path::{Path, PathBuf};
 pub fn succeeded_tasks(job_dir: &Path) -> BTreeSet<String> {
     let mut ok = BTreeSet::new();
     for e in std::fs::read_dir(job_dir).into_iter().flatten().flatten() {
-        let Some(v) = std::fs::read_to_string(e.path().join("result.json")).ok().and_then(|s| serde_json::from_str::<Value>(&s).ok()) else { continue };
+        let Some(v) = std::fs::read_to_string(e.path().join("result.json")).ok().and_then(|s| serde_json::from_str::<Value>(&s).ok())
+        else {
+            continue;
+        };
         if v["verifier_result"]["rewards"]["reward"].as_f64().is_some_and(|r| r > 0.0) {
             // Match by task dir name (the name sweeps track tasks by).
             if let Some(p) = v["config"]["task"]["path"].as_str() {
@@ -21,7 +24,13 @@ pub fn succeeded_tasks(job_dir: &Path) -> BTreeSet<String> {
     ok
 }
 
-pub async fn run(base: JobConfig, max_sweeps: usize, trials_per_task: usize, hint: Option<String>, hints: BTreeMap<String, String>) -> Result<Vec<PathBuf>> {
+pub async fn run(
+    base: JobConfig,
+    max_sweeps: usize,
+    trials_per_task: usize,
+    hint: Option<String>,
+    hints: BTreeMap<String, String>,
+) -> Result<Vec<PathBuf>> {
     let mut base = base;
     base.n_attempts = trials_per_task;
     if let Some(h) = hint {

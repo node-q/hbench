@@ -48,7 +48,15 @@ fn uv_script(m: &MetricConfig, rewards: &[Option<&Rewards>]) -> Result<MetricOut
     let output = dir.join("metric.json");
     let lines: Vec<String> = rewards.iter().map(|r| r.map_or("null".to_string(), |r| serde_json::to_string(r).unwrap())).collect();
     std::fs::write(&input, lines.join("\n") + "\n")?;
-    let out = std::process::Command::new("uv").arg("run").arg(script).arg("-i").arg(&input).arg("-o").arg(&output).output().context("running uv")?;
+    let out = std::process::Command::new("uv")
+        .arg("run")
+        .arg(script)
+        .arg("-i")
+        .arg(&input)
+        .arg("-o")
+        .arg(&output)
+        .output()
+        .context("running uv")?;
     if !out.status.success() {
         bail!("Failed to compute custom metric: {}", String::from_utf8_lossy(&out.stderr));
     }

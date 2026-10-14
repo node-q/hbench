@@ -18,9 +18,24 @@ const SPEC: Spec = Spec {
 const VERSION_CMD: &str = "/opt/openhands-venv/bin/python -m openhands.core.main --version";
 const CONFIG_PATH: &str = "$HOME/.openhands/config.toml";
 const KNOWN: &[&str] = &[
-    "version", "prompt_template_path", "config", "disable_tool_calls", "reasoning_effort", "temperature", "max_iterations",
-    "caching_prompt", "top_p", "num_retries", "max_budget_per_task", "drop_params", "disable_vision", "trajectory_config",
-    "api_base", "model_info", "python_version", "git_version",
+    "version",
+    "prompt_template_path",
+    "config",
+    "disable_tool_calls",
+    "reasoning_effort",
+    "temperature",
+    "max_iterations",
+    "caching_prompt",
+    "top_p",
+    "num_retries",
+    "max_budget_per_task",
+    "drop_params",
+    "disable_vision",
+    "trajectory_config",
+    "api_base",
+    "model_info",
+    "python_version",
+    "git_version",
 ];
 
 // ---- Pydantic-style option coercion shared with openhands_sdk ----
@@ -36,7 +51,9 @@ pub(super) fn check_known(args: &AgentArgs, agent: &str, known: &[&str]) -> Resu
             continue; // upstream pops this before validation
         }
         if !known.contains(&k.as_str()) {
-            return Err(anyhow::anyhow!("Invalid kwargs for agent '{agent}':\n  Unknown option '{k}'.\nSee `hbench agents schema {agent}` for available options."));
+            return Err(anyhow::anyhow!(
+                "Invalid kwargs for agent '{agent}':\n  Unknown option '{k}'.\nSee `hbench agents schema {agent}` for available options."
+            ));
         }
     }
     if args.kwargs.get("config").is_some_and(|v| !v.is_null()) {
@@ -84,7 +101,9 @@ pub(super) fn opt_int(args: &AgentArgs, agent: &str, k: &str) -> Result<Option<i
     let err = || invalid(agent, k, "Input should be a valid integer");
     match get(args, k) {
         None => Ok(None),
-        Some(Value::Number(n)) => n.as_i64().or_else(|| n.as_f64().filter(|f| f.fract() == 0.0).map(|f| f as i64)).map(Some).ok_or_else(err),
+        Some(Value::Number(n)) => {
+            n.as_i64().or_else(|| n.as_f64().filter(|f| f.fract() == 0.0).map(|f| f as i64)).map(Some).ok_or_else(err)
+        }
         Some(Value::String(s)) => s.trim().parse().map(Some).map_err(|_| err()),
         Some(_) => Err(err()),
     }
@@ -159,7 +178,12 @@ impl OpenHands {
         let disable_tool_calls = opt_bool(&args, N, "disable_tool_calls")?.unwrap_or(false);
         let mut option_env = BTreeMap::new();
         option_env.insert("LLM_NATIVE_TOOL_CALLING".to_string(), (if disable_tool_calls { "false" } else { "true" }).to_string());
-        for (k, env) in [("reasoning_effort", "LLM_REASONING_EFFORT"), ("temperature", "LLM_TEMPERATURE"), ("top_p", "LLM_TOP_P"), ("max_budget_per_task", "MAX_BUDGET_PER_TASK")] {
+        for (k, env) in [
+            ("reasoning_effort", "LLM_REASONING_EFFORT"),
+            ("temperature", "LLM_TEMPERATURE"),
+            ("top_p", "LLM_TOP_P"),
+            ("max_budget_per_task", "MAX_BUDGET_PER_TASK"),
+        ] {
             if let Some(v) = opt_str(&args, N, k)? {
                 option_env.insert(env.to_string(), v);
             }
@@ -169,7 +193,9 @@ impl OpenHands {
                 option_env.insert(env.to_string(), v.to_string());
             }
         }
-        for (k, env) in [("caching_prompt", "LLM_CACHING_PROMPT"), ("drop_params", "LLM_DROP_PARAMS"), ("disable_vision", "LLM_DISABLE_VISION")] {
+        for (k, env) in
+            [("caching_prompt", "LLM_CACHING_PROMPT"), ("drop_params", "LLM_DROP_PARAMS"), ("disable_vision", "LLM_DISABLE_VISION")]
+        {
             if let Some(v) = opt_bool(&args, N, k)? {
                 option_env.insert(env.to_string(), v.to_string());
             }
@@ -226,7 +252,8 @@ impl OpenHands {
             env.insert("LLM_API_KEY".into(), k.clone());
         }
         // `api_base or configured_base_url`: Python `or` skips an empty api_base.
-        let base_url = raw_env(&self.args, "LLM_BASE_URL").or_else(|| self.api_base.clone().filter(|s| !s.is_empty()).or(conn.configured_base_url.clone()));
+        let base_url = raw_env(&self.args, "LLM_BASE_URL")
+            .or_else(|| self.api_base.clone().filter(|s| !s.is_empty()).or(conn.configured_base_url.clone()));
         if let Some(u) = base_url {
             env.insert("LLM_BASE_URL".into(), u);
         }
@@ -247,11 +274,10 @@ impl OpenHands {
             .filter(|m| !m.is_empty())
             .or_else(|| raw_env(&self.args, "LLM_MODEL").filter(|m| !m.is_empty()))
             .or_else(|| raw_env(&self.args, "ANTHROPIC_MODEL").filter(|m| !m.is_empty()));
-        let Some(model) = model else {
-            bail!("No LLM model found. Please set LLM_MODEL environment variable or specify it in the CLI")
-        };
+        let Some(model) = model else { bail!("No LLM model found. Please set LLM_MODEL environment variable or specify it in the CLI") };
         env.insert("LLM_MODEL".into(), model);
-        let api_version = raw_env(&self.args, "LLM_API_VERSION").or_else(|| (conn.provider.as_deref() == Some("azure")).then(|| raw_env(&self.args, "AZURE_API_VERSION")).flatten());
+        let api_version = raw_env(&self.args, "LLM_API_VERSION")
+            .or_else(|| (conn.provider.as_deref() == Some("azure")).then(|| raw_env(&self.args, "AZURE_API_VERSION")).flatten());
         if let Some(v) = api_version {
             env.insert("LLM_API_VERSION".into(), v);
         }
@@ -301,7 +327,11 @@ impl OpenHands {
                 "streamable-http" => shttp.push(format!("{{url = \"{url}\"}}")),
                 "stdio" => {
                     let a = s.args.iter().map(|a| format!("\"{a}\"")).collect::<Vec<_>>().join(", ");
-                    stdio.push(format!("{{name = \"{}\", command = \"{}\", args = [{a}]}}", s.name, s.command.as_deref().unwrap_or("None")));
+                    stdio.push(format!(
+                        "{{name = \"{}\", command = \"{}\", args = [{a}]}}",
+                        s.name,
+                        s.command.as_deref().unwrap_or("None")
+                    ));
                 }
                 _ => {}
             }
@@ -353,13 +383,21 @@ fn events_totals(events_dir: &Path) -> Option<Totals> {
     let events: Vec<Value> = files.iter().filter_map(|(_, p)| read_json(p)).collect();
     let m = events.iter().rev().find_map(|e| e.get("llm_metrics"))?;
     let u = m.get("accumulated_token_usage").cloned().unwrap_or(Value::Null);
-    Some((int(&u, "prompt_tokens"), int(&u, "completion_tokens"), int(&u, "cache_read_tokens"), m.get("accumulated_cost").and_then(Value::as_f64).unwrap_or(0.0)))
+    Some((
+        int(&u, "prompt_tokens"),
+        int(&u, "completion_tokens"),
+        int(&u, "cache_read_tokens"),
+        m.get("accumulated_cost").and_then(Value::as_f64).unwrap_or(0.0),
+    ))
 }
 
 /// Raw-content mode: sum per-completion usage from `completions/*.json`.
 fn completions_totals(dir: &Path) -> Option<Totals> {
-    let ts = |p: &Path| p.file_stem().and_then(|s| s.to_str()).and_then(|s| s.rsplit('-').next()).and_then(|t| t.parse::<f64>().ok()).unwrap_or(0.0);
-    let mut files: Vec<_> = std::fs::read_dir(dir).ok()?.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "json")).collect();
+    let ts = |p: &Path| {
+        p.file_stem().and_then(|s| s.to_str()).and_then(|s| s.rsplit('-').next()).and_then(|t| t.parse::<f64>().ok()).unwrap_or(0.0)
+    };
+    let mut files: Vec<_> =
+        std::fs::read_dir(dir).ok()?.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "json")).collect();
     files.sort();
     files.sort_by(|a, b| ts(a).total_cmp(&ts(b)));
     read_json(files.first()?)?; // upstream gives up if the first completion is unreadable
@@ -449,7 +487,8 @@ pub(super) mod tests {
         std::fs::write(dir.join("task.toml"), "[environment]\ndocker_image='x'\n").unwrap();
         std::fs::write(dir.join("instruction.md"), "x").unwrap();
         let task = Arc::new(crate::task::Task::load(&dir).unwrap());
-        AgentArgs { load_trajectory: None,
+        AgentArgs {
+            load_trajectory: None,
             model_name: model.map(String::from),
             kwargs: serde_json::from_value(kwargs).unwrap(),
             extra_env: env.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect(),
@@ -465,7 +504,13 @@ pub(super) mod tests {
     }
 
     fn mcp(name: &str, transport: &str, url: Option<&str>, command: Option<&str>, a: &[&str]) -> McpServer {
-        McpServer { name: name.into(), transport: transport.into(), url: url.map(String::from), command: command.map(String::from), args: a.iter().map(|s| s.to_string()).collect() }
+        McpServer {
+            name: name.into(),
+            transport: transport.into(),
+            url: url.map(String::from),
+            command: command.map(String::from),
+            args: a.iter().map(|s| s.to_string()).collect(),
+        }
     }
 
     #[test]
@@ -484,27 +529,56 @@ pub(super) mod tests {
         assert!(agent(json!({"config": {"a": 1}}), &[], None).is_err());
         assert!(agent(json!({"trajectory_config": {"raw_content": true}}), &[], None).is_err());
         assert!(agent(json!({"trajectory_config": {"raw_content": true}, "disable_tool_calls": true}), &[], None).unwrap().raw_content);
-        assert!(d.install_cmd().ends_with("uv pip install openhands-ai && /opt/openhands-venv/bin/python -m openhands.core.main --version"));
+        assert!(
+            d.install_cmd().ends_with("uv pip install openhands-ai && /opt/openhands-venv/bin/python -m openhands.core.main --version")
+        );
         assert!(agent(json!({"version": "0.59.0"}), &[], None).unwrap().install_cmd().contains("openhands-ai==0.59.0"));
-        assert!(agent(json!({"git_version": "main", "python_version": "3.12"}), &[], None).unwrap().install_cmd().contains("--python 3.12 && source"));
+        assert!(
+            agent(json!({"git_version": "main", "python_version": "3.12"}), &[], None)
+                .unwrap()
+                .install_cmd()
+                .contains("--python 3.12 && source")
+        );
     }
 
     #[test]
     fn run_env_auth() {
-        let a = agent(json!({"model_info": {"max_input_tokens": 1000, "max_output_tokens": 0}}), &[("LLM_API_KEY", "k"), ("OPENHANDS_FOO", "bar")], Some("openai/gpt-5")).unwrap();
+        let a = agent(
+            json!({"model_info": {"max_input_tokens": 1000, "max_output_tokens": 0}}),
+            &[("LLM_API_KEY", "k"), ("OPENHANDS_FOO", "bar")],
+            Some("openai/gpt-5"),
+        )
+        .unwrap();
         let e = a.run_env().unwrap();
         assert_eq!((e["LLM_API_KEY"].as_str(), e["LLM_MODEL"].as_str(), e["FOO"].as_str()), ("k", "openai/gpt-5", "bar"));
         assert_eq!(e["LLM_MAX_INPUT_TOKENS"], "1000");
         assert!(!e.contains_key("LLM_MAX_OUTPUT_TOKENS"));
         assert_eq!(e["RUNTIME"], "local");
 
-        let az = agent(json!({}), &[("LLM_API_KEY", ""), ("AZURE_API_KEY", "azure-key"), ("AZURE_API_BASE", "https://azure.example.test"), ("AZURE_API_VERSION", "2026-01-01")], Some("azure/gpt-5"));
+        let az = agent(
+            json!({}),
+            &[
+                ("LLM_API_KEY", ""),
+                ("AZURE_API_KEY", "azure-key"),
+                ("AZURE_API_BASE", "https://azure.example.test"),
+                ("AZURE_API_VERSION", "2026-01-01"),
+            ],
+            Some("azure/gpt-5"),
+        );
         // explicit empty LLM_API_KEY wins over the provider key (keyless endpoint)
         assert_eq!(az.unwrap().run_env().unwrap()["LLM_API_KEY"], "");
-        let az = agent(json!({}), &[("AZURE_API_KEY", "azure-key"), ("AZURE_API_BASE", "https://azure.example.test"), ("AZURE_API_VERSION", "2026-01-01")], Some("azure/gpt-5")).unwrap();
+        let az = agent(
+            json!({}),
+            &[("AZURE_API_KEY", "azure-key"), ("AZURE_API_BASE", "https://azure.example.test"), ("AZURE_API_VERSION", "2026-01-01")],
+            Some("azure/gpt-5"),
+        )
+        .unwrap();
         if std::env::var("LLM_API_KEY").is_err() && std::env::var("LLM_BASE_URL").is_err() && std::env::var("LLM_API_VERSION").is_err() {
             let e = az.run_env().unwrap();
-            assert_eq!((e["LLM_API_KEY"].as_str(), e["LLM_BASE_URL"].as_str(), e["LLM_API_VERSION"].as_str()), ("azure-key", "https://azure.example.test", "2026-01-01"));
+            assert_eq!(
+                (e["LLM_API_KEY"].as_str(), e["LLM_BASE_URL"].as_str(), e["LLM_API_VERSION"].as_str()),
+                ("azure-key", "https://azure.example.test", "2026-01-01")
+            );
             let v = agent(json!({}), &[], Some("hosted_vllm/m")).unwrap().run_env().unwrap();
             assert_eq!(v["LLM_API_KEY"], "dummy-key-for-local-vllm");
             assert!(agent(json!({}), &[], Some("nokey-provider/m")).unwrap().run_env().is_err());
@@ -521,7 +595,11 @@ pub(super) mod tests {
             json!({}),
             &[],
             None,
-            vec![mcp("a", "sse", Some("http://a:8000/sse"), None, &[]), mcp("b", "streamable-http", Some("http://b:8000/mcp"), None, &[]), mcp("stdio-server", "stdio", None, Some("npx"), &["-y", "my-mcp"])],
+            vec![
+                mcp("a", "sse", Some("http://a:8000/sse"), None, &[]),
+                mcp("b", "streamable-http", Some("http://b:8000/mcp"), None, &[]),
+                mcp("stdio-server", "stdio", None, Some("npx"), &["-y", "my-mcp"]),
+            ],
         ))
         .unwrap();
         assert_eq!(
@@ -543,7 +621,11 @@ pub(super) mod tests {
         let ev = d.join("sessions/sess-1/events");
         std::fs::create_dir_all(&ev).unwrap();
         let m = |p: i64, c: i64, k: i64, cost: f64| json!({"accumulated_cost": cost, "accumulated_token_usage": {"prompt_tokens": p, "completion_tokens": c, "cache_read_tokens": k}});
-        std::fs::write(ev.join("0.json"), json!({"id": 0, "source": "user", "action": "message", "args": {"openhands_version": "0.59.0"}}).to_string()).unwrap();
+        std::fs::write(
+            ev.join("0.json"),
+            json!({"id": 0, "source": "user", "action": "message", "args": {"openhands_version": "0.59.0"}}).to_string(),
+        )
+        .unwrap();
         std::fs::write(ev.join("2.json"), json!({"id": 2, "source": "agent", "llm_metrics": m(100, 10, 50, 0.01)}).to_string()).unwrap();
         std::fs::write(ev.join("10.json"), json!({"id": 10, "source": "agent", "llm_metrics": m(300, 30, 150, 0.03)}).to_string()).unwrap();
         std::fs::write(ev.join("11.json"), json!({"id": 11, "source": "environment", "observation": "x"}).to_string()).unwrap();
@@ -554,13 +636,20 @@ pub(super) mod tests {
         let c = |p: i64, o: i64, cached: Value, cost: f64| json!({"messages": [], "response": {"choices": [{"message": {"content": "x"}}], "usage": {"prompt_tokens": p, "completion_tokens": o, "cache_read_input_tokens": cached}}, "cost": cost, "timestamp": 1.0});
         std::fs::write(comp.join("anthropic__claude-sonnet-4-5-1765823587.968077.json"), c(100, 10, json!(20), 0.5).to_string()).unwrap();
         std::fs::write(comp.join("anthropic__claude-sonnet-4-5-1765823590.1.json"), c(200, 20, json!(30), 0.25).to_string()).unwrap();
-        std::fs::write(comp.join("anthropic__claude-sonnet-4-5-1765823599.0.json"), json!({"response": {"choices": []}, "cost": 9.0}).to_string()).unwrap();
+        std::fs::write(
+            comp.join("anthropic__claude-sonnet-4-5-1765823599.0.json"),
+            json!({"response": {"choices": []}, "cost": 9.0}).to_string(),
+        )
+        .unwrap();
         assert_eq!(usage_from_logs(&d, true), Some((300, 30, 50, 0.75)));
 
         let a = agent(json!({}), &[], None).unwrap();
         let mut ctx = AgentContext::default();
         a.populate_context_post_run(&d, &mut ctx);
-        assert_eq!((ctx.n_input_tokens, ctx.n_cache_tokens, ctx.n_output_tokens, ctx.cost_usd), (Some(300), Some(150), Some(30), Some(0.03)));
+        assert_eq!(
+            (ctx.n_input_tokens, ctx.n_cache_tokens, ctx.n_output_tokens, ctx.cost_usd),
+            (Some(300), Some(150), Some(30), Some(0.03))
+        );
         std::fs::create_dir_all(d.join("sessions/sess-2")).unwrap();
         assert_eq!(usage_from_logs(&d, false), None);
     }

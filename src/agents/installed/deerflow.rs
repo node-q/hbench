@@ -52,7 +52,9 @@ fn kw_flag(args: &AgentArgs, k: &str, default: bool) -> Result<bool> {
     match args.kwargs.get(k) {
         None | Some(Value::Null) => Ok(default),
         Some(Value::String(s)) if matches!(s.trim().to_lowercase().as_str(), "on" | "off") => Ok(s.trim().eq_ignore_ascii_case("on")),
-        Some(_) => args.kw_bool(k).ok_or_else(|| anyhow::anyhow!("Invalid kwargs for agent 'deerflow':\n  {k}: Input should be a valid boolean")),
+        Some(_) => {
+            args.kw_bool(k).ok_or_else(|| anyhow::anyhow!("Invalid kwargs for agent 'deerflow':\n  {k}: Input should be a valid boolean"))
+        }
     }
 }
 
@@ -126,7 +128,9 @@ impl DeerFlow {
         let model = self.args.model_name.clone().unwrap_or_else(|| "openai/gpt-4o".into());
         if let Some((provider, rest)) = model.split_once('/') {
             let direct = match provider {
-                "openrouter" => return ("langchain_openai:ChatOpenAI", rest.into(), Some(self.openrouter_base_url.clone()), "OPENROUTER_API_KEY"),
+                "openrouter" => {
+                    return ("langchain_openai:ChatOpenAI", rest.into(), Some(self.openrouter_base_url.clone()), "OPENROUTER_API_KEY");
+                }
                 "openai" => Some(("langchain_openai:ChatOpenAI", "OPENAI_API_KEY")),
                 "anthropic" => Some(("langchain_anthropic:ChatAnthropic", "ANTHROPIC_API_KEY")),
                 "deepseek" => Some(("langchain_deepseek:ChatDeepSeek", "DEEPSEEK_API_KEY")),
@@ -197,7 +201,9 @@ impl DeerFlow {
             ConfigSource::None => self.default_config(),
         };
         if kw_flag(&self.args, "disable_web_search", false)? {
-            let keep = |k: &str, f: &dyn Fn(&Value) -> bool| -> Value { json!(config[k].as_array().into_iter().flatten().filter(|v| f(v)).cloned().collect::<Vec<_>>()) };
+            let keep = |k: &str, f: &dyn Fn(&Value) -> bool| -> Value {
+                json!(config[k].as_array().into_iter().flatten().filter(|v| f(v)).cloned().collect::<Vec<_>>())
+            };
             let groups = keep("tool_groups", &|g| g["name"] != "web");
             let tools = keep("tools", &|t| t["group"] != "web" && t["name"] != "web_search" && t["name"] != "web_fetch");
             config["tool_groups"] = groups;
@@ -231,7 +237,14 @@ impl DeerFlow {
         let mut sandbox = config["sandbox"].as_object().cloned().unwrap_or_default();
         sandbox.insert("use".into(), json!("deerflow.sandbox.local:LocalSandboxProvider"));
         sandbox.insert("allow_host_bash".into(), json!(true));
-        let mut mounts: Vec<Value> = sandbox.get("mounts").and_then(Value::as_array).into_iter().flatten().filter(|m| m.is_object() && m["container_path"] != workdir.as_str()).cloned().collect();
+        let mut mounts: Vec<Value> = sandbox
+            .get("mounts")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter(|m| m.is_object() && m["container_path"] != workdir.as_str())
+            .cloned()
+            .collect();
         mounts.push(json!({"host_path": workdir, "container_path": workdir, "read_only": false}));
         sandbox.insert("mounts".into(), json!(mounts));
         config["sandbox"] = Value::Object(sandbox);
@@ -251,7 +264,11 @@ impl DeerFlow {
     }
 
     fn install_command(&self) -> String {
-        let checkout = self.repo_ref.as_ref().map(|r| format!("git -C {REPO_DIR} fetch --depth 1 origin {0}; git -C {REPO_DIR} checkout --quiet FETCH_HEAD; ", quote(r))).unwrap_or_default();
+        let checkout = self
+            .repo_ref
+            .as_ref()
+            .map(|r| format!("git -C {REPO_DIR} fetch --depth 1 origin {0}; git -C {REPO_DIR} checkout --quiet FETCH_HEAD; ", quote(r)))
+            .unwrap_or_default();
         format!(
             "set -euo pipefail; curl -LsSf https://astral.sh/uv/install.sh | sh; if [ -f \"$HOME/.local/bin/env\" ]; then . \"$HOME/.local/bin/env\"; \
              else export PATH=\"$HOME/.local/bin:$PATH\"; fi; git clone --depth 1 {} {REPO_DIR}; {checkout}uv python install 3.12; \
@@ -289,7 +306,9 @@ fn runtime_context(stdout: &str, workdir_opt: Option<&str>) -> Result<(String, i
     if !workdir.starts_with('/') || workdir.split('/').any(|p| p == "..") {
         bail!("DeerFlow workdir must be an absolute normalized path: '{workdir}'");
     }
-    let (Ok(uid), Ok(gid)) = (uid.trim().parse::<i64>(), gid.trim().parse::<i64>()) else { bail!("Could not resolve numeric UID:GID for DeerFlow") };
+    let (Ok(uid), Ok(gid)) = (uid.trim().parse::<i64>(), gid.trim().parse::<i64>()) else {
+        bail!("Could not resolve numeric UID:GID for DeerFlow")
+    };
     if uid < 0 || gid < 0 {
         bail!("Could not resolve numeric UID:GID for DeerFlow");
     }
@@ -330,7 +349,12 @@ impl Agent for DeerFlow {
         self.runtime = Some(rt);
         if cx.exec(&format!("test -x {VENV_DIR}/bin/deerflow"), &none, None).await?.code != 0 {
             ensure_system_dependencies(cx, &["git", "curl"]).await?;
-            exec_root(cx, &format!("rm -rf {REPO_DIR} {VENV_DIR} && mkdir -p {REPO_DIR} {VENV_DIR} && chown -R {owner} {REPO_DIR} {VENV_DIR}"), &none).await?;
+            exec_root(
+                cx,
+                &format!("rm -rf {REPO_DIR} {VENV_DIR} && mkdir -p {REPO_DIR} {VENV_DIR} && chown -R {owner} {REPO_DIR} {VENV_DIR}"),
+                &none,
+            )
+            .await?;
             let cmd = self.install_command();
             let r = cx.exec(&format!("set -o pipefail; {cmd}"), &none, Some(Duration::from_secs(2400))).await?;
             if r.code != 0 {
@@ -342,7 +366,9 @@ impl Agent for DeerFlow {
         upload_asset(cx, &yaml, &format!("{PROJECT_DIR}/config.yaml")).await?;
         upload_asset(cx, RUNNER, RUNNER_PATH).await?;
         if self.version.is_none()
-            && let Ok(r) = cx.exec(&format!("{VENV_PYTHON} -c \"import importlib.metadata as m; print(m.version('deerflow-harness'))\""), &none, None).await
+            && let Ok(r) = cx
+                .exec(&format!("{VENV_PYTHON} -c \"import importlib.metadata as m; print(m.version('deerflow-harness'))\""), &none, None)
+                .await
             && r.code == 0
             && !r.stdout.is_empty()
         {
@@ -408,13 +434,19 @@ mod tests {
     fn options_and_model() {
         let d = df(json!({"subagent": "true", "thinking": "off", "recursion_limit": "400"}), &[], "openrouter/example/m");
         assert!((d.subagent, d.thinking, d.plan_mode, d.recursion_limit) == (true, false, false, 400));
-        assert_eq!(d.model_entry(), json!({"name": "hbench-model", "use": "langchain_openai:ChatOpenAI", "model": "example/m", "base_url": "https://openrouter.ai/api/v1", "api_key": "$OPENROUTER_API_KEY", "request_timeout": 600.0, "max_retries": 2}));
+        assert_eq!(
+            d.model_entry(),
+            json!({"name": "hbench-model", "use": "langchain_openai:ChatOpenAI", "model": "example/m", "base_url": "https://openrouter.ai/api/v1", "api_key": "$OPENROUTER_API_KEY", "request_timeout": 600.0, "max_retries": 2})
+        );
         assert_eq!(df(json!({}), &[], "anthropic/claude").model_provider_config().0, "langchain_anthropic:ChatAnthropic");
         assert_eq!(df(json!({}), &[], "gpt-4o").model_provider_config().1, "gpt-4o");
         assert!(DeerFlow::new(args(json!({"config": {"a": 1}, "config_path": "/x"}), &[], None)).is_err());
         assert!(DeerFlow::new(args(json!({"subagent": "maybe"}), &[], None)).is_err());
         let env = d.run_env();
-        assert_eq!((env["DEERFLOW_SUBAGENT_ENABLED"].as_str(), env["DEERFLOW_RECURSION_LIMIT"].as_str(), env["DEERFLOW_MODEL_NAME"].as_str()), ("true", "400", "hbench-model"));
+        assert_eq!(
+            (env["DEERFLOW_SUBAGENT_ENABLED"].as_str(), env["DEERFLOW_RECURSION_LIMIT"].as_str(), env["DEERFLOW_MODEL_NAME"].as_str()),
+            ("true", "400", "hbench-model")
+        );
         assert!(d.install_command().contains(&format!("git -C {REPO_DIR} fetch --depth 1 origin {DEERFLOW_REF}; ")));
     }
 
@@ -436,7 +468,10 @@ mod tests {
         let c = user.build_config().unwrap();
         assert_eq!(c["tools"], json!([{"name": "x", "group": "g"}]));
         assert_eq!(c["models"][0]["name"], "other");
-        assert_eq!((c["models"][1]["use"].as_str(), c["models"][1]["supports_vision"].as_bool()), (Some("langchain_openai:ChatOpenAI"), Some(true)));
+        assert_eq!(
+            (c["models"][1]["use"].as_str(), c["models"][1]["supports_vision"].as_bool()),
+            (Some("langchain_openai:ChatOpenAI"), Some(true))
+        );
         assert_eq!(c["sandbox"]["mounts"].as_array().unwrap().len(), 2);
         assert_eq!(c["summarization"]["trigger"][0]["value"], 0.8);
         assert!(serde_yaml_ng::to_string(&c).unwrap().contains("allow_host_bash: true"));
@@ -450,8 +485,19 @@ mod tests {
         assert!(runtime_context("/w\n0\n0", Some("rel")).is_err());
         assert!(runtime_context("/w\n0\n0", Some("/a/../b")).is_err());
         assert!(runtime_context("/w\nx\n0", None).is_err());
-        assert_eq!(parse_summary(r#"{"schema_version":1,"status":"completed","usage":{"input_tokens":11,"output_tokens":7,"total_tokens":18},"error":null}"#), Some((11, 7)));
-        for bad in ["not json", "[]", r#"{"schema_version":2,"usage":{}}"#, r#"{"schema_version":1,"usage":{"input_tokens":true,"output_tokens":2}}"#, r#"{"schema_version":1,"usage":{"input_tokens":-1,"output_tokens":2}}"#] {
+        assert_eq!(
+            parse_summary(
+                r#"{"schema_version":1,"status":"completed","usage":{"input_tokens":11,"output_tokens":7,"total_tokens":18},"error":null}"#
+            ),
+            Some((11, 7))
+        );
+        for bad in [
+            "not json",
+            "[]",
+            r#"{"schema_version":2,"usage":{}}"#,
+            r#"{"schema_version":1,"usage":{"input_tokens":true,"output_tokens":2}}"#,
+            r#"{"schema_version":1,"usage":{"input_tokens":-1,"output_tokens":2}}"#,
+        ] {
             assert_eq!(parse_summary(bad), None, "{bad}");
         }
         assert_eq!(parse_summary(&"x".repeat(65_537)), None);

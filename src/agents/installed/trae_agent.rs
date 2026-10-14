@@ -78,7 +78,8 @@ impl TraeAgent {
     fn new(args: AgentArgs) -> Result<TraeAgent> {
         check_kwargs("trae-agent", &args, &["max_steps", "temperature", "max_tokens", "top_p", "top_k"])?;
         // kwarg > fallback env (extra_env > host) > default.
-        let raw = |k: &str, env: &str| args.kwargs.get(k).filter(|v| !v.is_null()).cloned().or_else(|| args.get_env(env).map(Value::String));
+        let raw =
+            |k: &str, env: &str| args.kwargs.get(k).filter(|v| !v.is_null()).cloned().or_else(|| args.get_env(env).map(Value::String));
         let int = |k: &str, env: &str, d: i64| raw(k, env).map(|v| opt_int(k, &v)).unwrap_or(Ok(d));
         let st = |k: &str, env: &str, d: &str| raw(k, env).map(|v| opt_str(k, &v)).unwrap_or(Ok(d.to_string()));
         Ok(TraeAgent {
@@ -159,12 +160,15 @@ pub fn trajectory_usage(raw: &Value) -> Option<(i64, i64, i64)> {
     let empty = vec![];
     let inter = raw["llm_interactions"].as_array().unwrap_or(&empty);
     let steps = raw["agent_steps"].as_array().unwrap_or(&empty);
-    let truthy = |v: &Value| !matches!(v, Value::Null | Value::Bool(false)) && *v != json!("") && *v != json!(0) && *v != json!([]) && *v != json!({});
+    let truthy = |v: &Value| {
+        !matches!(v, Value::Null | Value::Bool(false)) && *v != json!("") && *v != json!(0) && *v != json!([]) && *v != json!({})
+    };
     if inter.is_empty() && !steps.iter().any(|s| truthy(&s["error"])) {
         return None;
     }
     // Step timestamps that fail ATIF validation make upstream's conversion raise (no usage recorded).
-    let stepped: Vec<&Value> = if inter.is_empty() { steps.iter().filter(|s| truthy(&s["error"])).collect() } else { inter.iter().collect() };
+    let stepped: Vec<&Value> =
+        if inter.is_empty() { steps.iter().filter(|s| truthy(&s["error"])).collect() } else { inter.iter().collect() };
     if !stepped.iter().all(|s| iso_timestamp_ok(&s["timestamp"])) {
         return None;
     }
@@ -236,12 +240,20 @@ impl Agent for TraeAgent {
         );
         let r = exec_agent(cx, &cmd, &env).await;
         // Mask the API key left in the config, whatever the outcome.
-        let _ = exec_agent(cx, &format!(r"sed -i 's/\(api_key:\s*\)\(.\{{4\}}\)[^ ]*/\1\2********/g' {CONFIG_PATH} 2>/dev/null || true"), &BTreeMap::new()).await;
+        let _ = exec_agent(
+            cx,
+            &format!(r"sed -i 's/\(api_key:\s*\)\(.\{{4\}}\)[^ ]*/\1\2********/g' {CONFIG_PATH} 2>/dev/null || true"),
+            &BTreeMap::new(),
+        )
+        .await;
         r.map(|_| ())
     }
 
     fn populate_context_post_run(&self, logs_dir: &std::path::Path, ctx: &mut AgentContext) {
-        let Some(raw) = std::fs::read_to_string(logs_dir.join(TRAJECTORY_FILE)).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()) else { return };
+        let Some(raw) = std::fs::read_to_string(logs_dir.join(TRAJECTORY_FILE)).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok())
+        else {
+            return;
+        };
         if let Some((i, o, c)) = trajectory_usage(&raw) {
             ctx.cost_usd = None;
             ctx.n_input_tokens = Some(i);
@@ -262,7 +274,8 @@ pub(crate) mod tests {
         std::fs::write(dir.join("task.toml"), "[environment]\ndocker_image='x'\n").unwrap();
         std::fs::write(dir.join("instruction.md"), "x").unwrap();
         let task = Arc::new(crate::task::Task::load(&dir).unwrap());
-        AgentArgs { load_trajectory: None,
+        AgentArgs {
+            load_trajectory: None,
             model_name: model.map(String::from),
             kwargs: serde_json::from_value(kwargs).unwrap(),
             extra_env: env.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect(),
@@ -275,18 +288,33 @@ pub(crate) mod tests {
 
     #[test]
     fn options_and_config() {
-        let a = TraeAgent::new(args(json!({}), &[("ANTHROPIC_API_KEY", "sk-test-123")], Some("anthropic/claude-sonnet-4-20250514"))).unwrap();
+        let a =
+            TraeAgent::new(args(json!({}), &[("ANTHROPIC_API_KEY", "sk-test-123")], Some("anthropic/claude-sonnet-4-20250514"))).unwrap();
         let (env, yaml) = a.prepare().unwrap();
         assert_eq!(env["ANTHROPIC_API_KEY"], "sk-test-123");
         let cfg: Value = serde_yaml_ng::from_str(&yaml).unwrap();
         let ag = &cfg["agents"]["trae_agent"];
-        assert_eq!((ag["enable_lakeview"].clone(), ag["model"].clone(), ag["max_steps"].clone()), (json!(false), json!("hbench_model"), json!(200)));
+        assert_eq!(
+            (ag["enable_lakeview"].clone(), ag["model"].clone(), ag["max_steps"].clone()),
+            (json!(false), json!("hbench_model"), json!(200))
+        );
         assert_eq!(cfg["model_providers"]["anthropic"], json!({"api_key": "sk-test-123", "provider": "anthropic"}));
         let m = &cfg["models"]["hbench_model"];
-        assert_eq!((m["temperature"].as_f64(), m["top_p"].as_f64(), m["top_k"].as_i64(), m["max_tokens"].as_i64()), (Some(0.7), Some(0.95), Some(20), Some(16384)));
-        assert_eq!((m["model"].as_str(), m["max_retries"].as_i64(), m["parallel_tool_calls"].as_bool()), (Some("claude-sonnet-4-20250514"), Some(10), Some(true)));
+        assert_eq!(
+            (m["temperature"].as_f64(), m["top_p"].as_f64(), m["top_k"].as_i64(), m["max_tokens"].as_i64()),
+            (Some(0.7), Some(0.95), Some(20), Some(16384))
+        );
+        assert_eq!(
+            (m["model"].as_str(), m["max_retries"].as_i64(), m["parallel_tool_calls"].as_bool()),
+            (Some("claude-sonnet-4-20250514"), Some(10), Some(true))
+        );
 
-        let b = TraeAgent::new(args(json!({"max_steps": "50", "temperature": 0.2}), &[("TRAE_TOP_K", "5"), ("OPENAI_API_KEY", "k"), ("OPENAI_BASE_URL", "http://x")], Some("openai/gpt-5"))).unwrap();
+        let b = TraeAgent::new(args(
+            json!({"max_steps": "50", "temperature": 0.2}),
+            &[("TRAE_TOP_K", "5"), ("OPENAI_API_KEY", "k"), ("OPENAI_BASE_URL", "http://x")],
+            Some("openai/gpt-5"),
+        ))
+        .unwrap();
         let cfg: Value = serde_yaml_ng::from_str(&b.prepare().unwrap().1).unwrap();
         assert_eq!(cfg["agents"]["trae_agent"]["max_steps"], 50);
         assert_eq!(cfg["models"]["hbench_model"]["top_k"], 5);
@@ -299,7 +327,9 @@ pub(crate) mod tests {
         // Run-time validation.
         assert!(TraeAgent::new(args(json!({}), &[], Some("nomodel"))).unwrap().prepare().is_err());
         assert!(TraeAgent::new(args(json!({}), &[("XAI_API_KEY", "k")], Some("xai/grok"))).unwrap().prepare().is_err());
-        assert!(TraeAgent::new(args(json!({"temperature": "hot"}), &[("OPENAI_API_KEY", "k")], Some("openai/x"))).unwrap().prepare().is_err());
+        assert!(
+            TraeAgent::new(args(json!({"temperature": "hot"}), &[("OPENAI_API_KEY", "k")], Some("openai/x"))).unwrap().prepare().is_err()
+        );
         // Provider alias canonicalized (upstream test_provider_alias_can_be_canonicalized).
         let g = TraeAgent::new(args(json!({}), &[("GEMINI_API_KEY", "gemini-key")], Some("google/gemini-2.5-pro"))).unwrap();
         assert_eq!(g.connection().env, BTreeMap::from([("GOOGLE_API_KEY".to_string(), "gemini-key".to_string())]));

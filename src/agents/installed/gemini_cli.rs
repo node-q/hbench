@@ -12,7 +12,12 @@ use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-const SPEC: Spec = Spec { default_provider: Some("google"), api_key_envs: &["GEMINI_API_KEY"], base_url_envs: &["GOOGLE_GEMINI_BASE_URL"], passthrough: true };
+const SPEC: Spec = Spec {
+    default_provider: Some("google"),
+    api_key_envs: &["GEMINI_API_KEY"],
+    base_url_envs: &["GOOGLE_GEMINI_BASE_URL"],
+    passthrough: true,
+};
 const SECRETS_DIR: &str = "/tmp/gemini-secrets";
 /// upstream's `nvm_node_install_snippet()` (Node 22).
 pub(super) const NVM_NODE_INSTALL: &str = "curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.2/install.sh | env -u NODE_VERSION bash && \
@@ -39,7 +44,9 @@ impl GeminiCli {
                 bail!("Gemini 2.5 models do not support reasoning_effort. Use a Gemini 3 model, or add explicit thinking_budget support.");
             }
             if ["minimal", "medium"].contains(&effort.as_str()) && !model.contains("flash") {
-                bail!("Gemini model '{model}' does not support reasoning_effort='{effort}'. Use 'low' or 'high', or choose a Gemini 3 Flash model.");
+                bail!(
+                    "Gemini model '{model}' does not support reasoning_effort='{effort}'. Use 'low' or 'high', or choose a Gemini 3 Flash model."
+                );
             }
         }
         Ok(a)
@@ -88,7 +95,10 @@ impl GeminiCli {
     fn auth_env(&self, oauth: bool) -> BTreeMap<String, String> {
         if oauth {
             // Don't leak an API key alongside OAuth; keep the project for Workspace logins.
-            ["GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_LOCATION"].iter().filter_map(|k| self.args.get_env(k).map(|v| (k.to_string(), v))).collect()
+            ["GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_LOCATION"]
+                .iter()
+                .filter_map(|k| self.args.get_env(k).map(|v| (k.to_string(), v)))
+                .collect()
         } else {
             self.connection().env
         }
@@ -148,7 +158,9 @@ impl GeminiCli {
 
     fn settings_command(&self, model: Option<&str>, auth_type: Option<&str>) -> Result<(Option<String>, Option<String>)> {
         let (s, alias) = self.settings(model, auth_type)?;
-        let cmd = s.map(|s| format!("mkdir -p ~/.gemini && printf %s {} > ~/.gemini/settings.json", quote(&serde_json::to_string_pretty(&s).unwrap())));
+        let cmd = s.map(|s| {
+            format!("mkdir -p ~/.gemini && printf %s {} > ~/.gemini/settings.json", quote(&serde_json::to_string_pretty(&s).unwrap()))
+        });
         Ok((cmd, alias))
     }
 
@@ -160,7 +172,9 @@ impl GeminiCli {
         if let Some(u) = &cx.user {
             exec_root(cx, &format!("chown {u} {}", quote(&tmp)), &BTreeMap::new()).await?;
         }
-        exec_agent(cx, &format!("cp {} ~/.gemini/oauth_creds.json\nchmod 600 ~/.gemini/oauth_creds.json", quote(&tmp)), env).await.map(|_| ())
+        exec_agent(cx, &format!("cp {} ~/.gemini/oauth_creds.json\nchmod 600 ~/.gemini/oauth_creds.json", quote(&tmp)), env)
+            .await
+            .map(|_| ())
     }
 }
 
@@ -355,7 +369,8 @@ impl Agent for GeminiCli {
             self.inject_oauth_creds(cx, p, &env).await?;
         }
         if let Some(d) = opts::skills_dir(&self.args) {
-            exec_agent(cx, &format!("mkdir -p ~/.gemini/skills && cp -r {}/* ~/.gemini/skills/ 2>/dev/null || true", quote(&d)), &env).await?;
+            exec_agent(cx, &format!("mkdir -p ~/.gemini/skills && cp -r {}/* ~/.gemini/skills/ 2>/dev/null || true", quote(&d)), &env)
+                .await?;
         }
         let (settings, alias) = self.settings_command(Some(&model), auth_type)?;
         if let Some(s) = settings {
@@ -384,7 +399,12 @@ impl Agent for GeminiCli {
     }
 
     fn populate_context_post_run(&self, logs_dir: &Path, ctx: &mut AgentContext) {
-        let Some(text) = ["gemini-cli.trajectory.jsonl", "gemini-cli.trajectory.json"].iter().map(|f| logs_dir.join(f)).find(|p| p.exists()).and_then(|p| std::fs::read_to_string(p).ok()) else {
+        let Some(text) = ["gemini-cli.trajectory.jsonl", "gemini-cli.trajectory.json"]
+            .iter()
+            .map(|f| logs_dir.join(f))
+            .find(|p| p.exists())
+            .and_then(|p| std::fs::read_to_string(p).ok())
+        else {
             return;
         };
         if let Some(s) = load_gemini_session(&text) {
@@ -392,7 +412,10 @@ impl Agent for GeminiCli {
             ctx.n_input_tokens = c.n_input_tokens;
             ctx.n_cache_tokens = c.n_cache_tokens;
             ctx.n_output_tokens = c.n_output_tokens;
-            ctx.cost_usd = self.args.model_name.as_deref().and_then(|m| gemini_cost(m, c.n_input_tokens.unwrap_or(0), c.n_output_tokens.unwrap_or(0), c.n_cache_tokens.unwrap_or(0)));
+            ctx.cost_usd =
+                self.args.model_name.as_deref().and_then(|m| {
+                    gemini_cost(m, c.n_input_tokens.unwrap_or(0), c.n_output_tokens.unwrap_or(0), c.n_cache_tokens.unwrap_or(0))
+                });
         }
     }
 }
@@ -410,14 +433,22 @@ mod tests {
         assert!(agent(json!({"reasoning_effort": "high"}), &[], Some("google/gemini-2.5-pro")).is_err());
         assert!(agent(json!({"reasoning_effort": "medium"}), &[], Some("google/gemini-3-pro")).is_err());
         assert!(agent(json!({"reasoning_effort": "turbo"}), &[], None).is_err());
-        let a = agent(json!({"reasoning_effort": "medium", "disable_web_search": true, "sandbox": true}), &[("GEMINI_API_KEY", "g")], Some("google/gemini-3-flash")).unwrap();
+        let a = agent(
+            json!({"reasoning_effort": "medium", "disable_web_search": true, "sandbox": true}),
+            &[("GEMINI_API_KEY", "g")],
+            Some("google/gemini-3-flash"),
+        )
+        .unwrap();
         assert_eq!(a.cli_flags().unwrap(), "--sandbox");
         assert_eq!(a.env_auth_type(), Some("gemini-api-key"));
         assert_eq!(a.auth_env(false)["GEMINI_API_KEY"], "g");
         let (s, alias) = a.settings(Some("gemini-3-flash"), Some("gemini-api-key")).unwrap();
         let s = s.unwrap();
         assert_eq!(alias.as_deref(), Some("hbench-gemini-3-flash-medium"));
-        assert_eq!(s["modelConfigs"]["customAliases"]["hbench-gemini-3-flash-medium"]["modelConfig"]["generateContentConfig"]["thinkingConfig"]["thinkingLevel"], "MEDIUM");
+        assert_eq!(
+            s["modelConfigs"]["customAliases"]["hbench-gemini-3-flash-medium"]["modelConfig"]["generateContentConfig"]["thinkingConfig"]["thinkingLevel"],
+            "MEDIUM"
+        );
         assert_eq!(s["security"]["auth"]["selectedType"], "gemini-api-key");
         assert_eq!(s["tools"]["exclude"], json!(["google_web_search", "web_fetch"]));
         assert_eq!(s["experimental"]["skills"], true);
@@ -437,9 +468,15 @@ mod tests {
         assert!(gemini_cost("google/not-a-model", 1, 1, 0).is_none());
 
         let a = agent(json!({"reasoning_effort": "high"}), &[("GEMINI_API_KEY", "g")], Some("google/gemini-3-pro")).unwrap();
-        assert_eq!(a.acp_command().unwrap(), vec!["env", "GEMINI_CLI_TRUST_WORKSPACE=true", "gemini", "--acp", "--model=hbench-gemini-3-pro-high"]);
+        assert_eq!(
+            a.acp_command().unwrap(),
+            vec!["env", "GEMINI_CLI_TRUST_WORKSPACE=true", "gemini", "--acp", "--model=hbench-gemini-3-pro-high"]
+        );
         assert_eq!(a.acp_env()["GEMINI_API_KEY"], "g");
-        assert_eq!(agent(json!({}), &[], None).unwrap().acp_command().unwrap(), vec!["env", "GEMINI_CLI_TRUST_WORKSPACE=true", "gemini", "--acp"]);
+        assert_eq!(
+            agent(json!({}), &[], None).unwrap().acp_command().unwrap(),
+            vec!["env", "GEMINI_CLI_TRUST_WORKSPACE=true", "gemini", "--acp"]
+        );
     }
 
     #[test]

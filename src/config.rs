@@ -525,7 +525,9 @@ impl JobConfig {
         }
         for d in &self.datasets {
             if d.repo.is_some() || d.reference.is_some() || d.name.as_deref().is_some_and(|n| n.contains('/')) {
-                bail!("package/repo datasets need a hosted package registry, which hbench does not support; use a registry.json dataset or a local path");
+                bail!(
+                    "package/repo datasets need a hosted package registry, which hbench does not support; use a registry.json dataset or a local path"
+                );
             }
             match (&d.path, &d.name) {
                 (None, None) => bail!("dataset needs 'path' or 'name'"),
@@ -587,7 +589,8 @@ impl TrialConfig {
     /// config.json as upstream writes it (`exclude_defaults=True`).
     pub fn config_json(&self) -> Value {
         let mut v = serde_json::to_value(self).unwrap_or_default();
-        let d: TrialConfig = serde_json::from_value(serde_json::json!({"task": {}, "trial_name": "", "trials_dir": "trials"})).expect("default trial config");
+        let d: TrialConfig = serde_json::from_value(serde_json::json!({"task": {}, "trial_name": "", "trials_dir": "trials"}))
+            .expect("default trial config");
         prune_defaults(&mut v, &serde_json::to_value(d).unwrap_or_default());
         v
     }
@@ -673,7 +676,10 @@ mod tests {
     #[test]
     fn config_json_excludes_defaults_like_hbench() {
         let t: TrialConfig = serde_json::from_value(serde_json::json!({"task": {"path": "/t/hello-world"}, "trial_name": "hello-world__x", "trials_dir": "/j", "job_id": "04eeb23d-d3b1-4af2-8b96-5fd962b43b6e"})).unwrap();
-        assert_eq!(t.config_json(), serde_json::json!({"task": {"path": "/t/hello-world"}, "trial_name": "hello-world__x", "trials_dir": "/j", "job_id": "04eeb23d-d3b1-4af2-8b96-5fd962b43b6e"}));
+        assert_eq!(
+            t.config_json(),
+            serde_json::json!({"task": {"path": "/t/hello-world"}, "trial_name": "hello-world__x", "trials_dir": "/j", "job_id": "04eeb23d-d3b1-4af2-8b96-5fd962b43b6e"})
+        );
         let full = serde_json::to_value(&t).unwrap();
         for k in ["install_only", "user_agent", "artifacts", "source_trial", "extra_instructions"] {
             assert!(full.get(k).is_some(), "{k} must be serialized in result.json config");
@@ -682,8 +688,14 @@ mod tests {
         assert_eq!(full["environment"]["type"], "docker");
         let j: JobConfig = serde_json::from_value(serde_json::json!({"job_name": "j", "jobs_dir": "/x", "agents": [{"name": "oracle"}], "tasks": [{"path": "/t/a"}], "environment": {"type": "docker", "delete": true}})).unwrap();
         assert_eq!(j.config_json(), serde_json::json!({"job_name": "j", "jobs_dir": "/x", "tasks": [{"path": "/t/a"}]}));
-        let j2: JobConfig = serde_json::from_value(serde_json::json!({"job_name": "j", "agents": [{"name": "claude-code", "model_name": "m"}], "n_attempts": 3})).unwrap();
-        assert_eq!(j2.config_json(), serde_json::json!({"job_name": "j", "n_attempts": 3, "agents": [{"name": "claude-code", "model_name": "m"}]}));
+        let j2: JobConfig = serde_json::from_value(
+            serde_json::json!({"job_name": "j", "agents": [{"name": "claude-code", "model_name": "m"}], "n_attempts": 3}),
+        )
+        .unwrap();
+        assert_eq!(
+            j2.config_json(),
+            serde_json::json!({"job_name": "j", "n_attempts": 3, "agents": [{"name": "claude-code", "model_name": "m"}]})
+        );
     }
 
     #[test]

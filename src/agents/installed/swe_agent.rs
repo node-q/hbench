@@ -50,7 +50,10 @@ pub fn create(args: AgentArgs) -> Result<AgentBox> {
 /// Python `json.dumps` (default separators, ensure_ascii).
 fn py_json(v: &Value) -> String {
     match v {
-        Value::Object(m) => format!("{{{}}}", m.iter().map(|(k, v)| format!("{}: {}", py_json(&Value::String(k.clone())), py_json(v))).collect::<Vec<_>>().join(", ")),
+        Value::Object(m) => format!(
+            "{{{}}}",
+            m.iter().map(|(k, v)| format!("{}: {}", py_json(&Value::String(k.clone())), py_json(v))).collect::<Vec<_>>().join(", ")
+        ),
         Value::Array(a) => format!("[{}]", a.iter().map(py_json).collect::<Vec<_>>().join(", ")),
         Value::String(s) => serde_json::to_string(s).unwrap().chars().fold(String::new(), |mut o, c| {
             if c.is_ascii() {
@@ -116,7 +119,9 @@ impl SweAgent {
         let mut kwargs = self.completion_kwargs.clone();
         if let Some(raw) = &self.completion_kwargs {
             let mut v: Value = serde_json::from_str(raw)?;
-            let Some(o) = v.as_object_mut() else { bail!("SWE-agent completion_kwargs must be a JSON object when reasoning_effort is configured") };
+            let Some(o) = v.as_object_mut() else {
+                bail!("SWE-agent completion_kwargs must be a JSON object when reasoning_effort is configured")
+            };
             o.insert("reasoning_effort".into(), Value::String(effort.clone()));
             kwargs = Some(py_json(&v));
         }
@@ -170,7 +175,11 @@ PY\n",
             instruction += "\n\nMCP Servers:\nThe following MCP servers are available for this task.\n";
             for s in &self.args.mcp_servers {
                 if s.transport() == "stdio" {
-                    let cmd = std::iter::once(s.command.clone().unwrap_or_default()).chain(s.args.iter().cloned()).map(|a| quote(&a)).collect::<Vec<_>>().join(" ");
+                    let cmd = std::iter::once(s.command.clone().unwrap_or_default())
+                        .chain(s.args.iter().cloned())
+                        .map(|a| quote(&a))
+                        .collect::<Vec<_>>()
+                        .join(" ");
                     instruction += &format!("- {}: stdio transport, command: {cmd}\n", s.name);
                 } else {
                     instruction += &format!("- {}: {} transport, url: {}\n", s.name, s.transport(), s.url.as_deref().unwrap_or("None"));
@@ -385,7 +394,12 @@ mod tests {
 
     #[test]
     fn reasoning() {
-        let a = agent(json!({"reasoning_effort": "none", "completion_kwargs": {"parallel_tool_calls": false, "timeout": 300}}), &[], "openai/gpt-5").unwrap();
+        let a = agent(
+            json!({"reasoning_effort": "none", "completion_kwargs": {"parallel_tool_calls": false, "timeout": 300}}),
+            &[],
+            "openai/gpt-5",
+        )
+        .unwrap();
         let (k, inject, active) = a.reasoning_options().unwrap();
         assert_eq!(k.as_deref(), Some(r#"{"parallel_tool_calls": false, "timeout": 300, "reasoning_effort": "none"}"#));
         assert!(!inject && !active);
@@ -400,7 +414,11 @@ mod tests {
         let a = agent(json!({"reasoning_effort": "none"}), &[], "openai/gpt-5").unwrap();
         let (p, cmd) = a.reasoning_config_command("/opt/custom config.yaml", true, false);
         assert_eq!(p, "/opt/sweagent-configs/hbench-effective.yaml");
-        assert!(cmd.contains("cp '/opt/custom config.yaml'") && cmd.contains("kwargs['reasoning_effort'] = effort") && cmd.contains(" none 1 0 <<'PY'\n"));
+        assert!(
+            cmd.contains("cp '/opt/custom config.yaml'")
+                && cmd.contains("kwargs['reasoning_effort'] = effort")
+                && cmd.contains(" none 1 0 <<'PY'\n")
+        );
     }
 
     #[test]
@@ -412,15 +430,29 @@ mod tests {
         ]))
         .unwrap();
         let (cmd, redacted, _) = a.command("Solve the task.").unwrap();
-        assert!(cmd.contains("Solve the task.\n\nMCP Servers:") && cmd.contains("- remote-tools: streamable-http transport, url: http://remote-tools:8000/mcp\n"));
+        assert!(
+            cmd.contains("Solve the task.\n\nMCP Servers:")
+                && cmd.contains("- remote-tools: streamable-http transport, url: http://remote-tools:8000/mcp\n")
+        );
         assert!(cmd.contains("- local-tools: stdio transport, command: python -c 'print('\\''hello world'\\'')'\n"));
         assert!(cmd.contains("sweagent run --agent.model.name=openai/gpt-5 --problem_statement.path=/logs/agent/problem_statement.md --env.deployment.type=local"));
-        assert!(cmd.contains("--config=/opt/sweagent-configs/default.yaml") && cmd.ends_with(" 2>&1 | stdbuf -oL tee /logs/agent/swe-agent.txt\n"));
+        assert!(
+            cmd.contains("--config=/opt/sweagent-configs/default.yaml")
+                && cmd.ends_with(" 2>&1 | stdbuf -oL tee /logs/agent/swe-agent.txt\n")
+        );
         assert!(cmd.contains("CF-SECRET-abc123") && !redacted.contains("CF-SECRET-abc123") && redacted.contains("****"));
 
-        let a = agent(json!({}), &[("OPENAI_API_KEY", "vllm-key"), ("OPENAI_API_BASE", "https://vllm.example.test/v1")], "hosted_vllm/local-model").unwrap();
+        let a = agent(
+            json!({}),
+            &[("OPENAI_API_KEY", "vllm-key"), ("OPENAI_API_BASE", "https://vllm.example.test/v1")],
+            "hosted_vllm/local-model",
+        )
+        .unwrap();
         let (cmd, _, env) = a.command("task").unwrap();
-        assert_eq!((env["OPENAI_API_KEY"].as_str(), env["OPENAI_BASE_URL"].as_str(), env["OPENAI_API_BASE"].as_str()), ("vllm-key", "https://vllm.example.test/v1", "https://vllm.example.test/v1"));
+        assert_eq!(
+            (env["OPENAI_API_KEY"].as_str(), env["OPENAI_BASE_URL"].as_str(), env["OPENAI_API_BASE"].as_str()),
+            ("vllm-key", "https://vllm.example.test/v1", "https://vllm.example.test/v1")
+        );
         assert!(cmd.contains("--agent.model.per_instance_cost_limit=0 --agent.model.total_cost_limit=0 --agent.model.max_input_tokens=0 --agent.model.api_base=https://vllm.example.test/v1"));
     }
 
@@ -428,7 +460,11 @@ mod tests {
     fn clone_and_usage() {
         assert_eq!(clone_command(Some("  ")), "git clone --depth 1 https://github.com/SWE-agent/SWE-agent.git /opt/sweagent-repo");
         let c = clone_command(Some("abc123"));
-        assert!(c.contains("revision=abc123") && c.contains("fetch --depth 1 origin -- \"refs/tags/$revision\"") && c.contains("checkout --detach FETCH_HEAD"));
+        assert!(
+            c.contains("revision=abc123")
+                && c.contains("fetch --depth 1 origin -- \"refs/tags/$revision\"")
+                && c.contains("checkout --detach FETCH_HEAD")
+        );
         assert!(py_json(&json!({"k": "é"})) == r#"{"k": "\u00e9"}"#);
 
         let dir = std::env::temp_dir().join(format!("hbench-swe-{}", uuid::Uuid::new_v4()));

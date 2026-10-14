@@ -15,9 +15,14 @@ fn err(msg: impl Into<String>) -> anyhow::Error {
 /// None if every verifier in the task runs in separate mode, else the reason it can't be regraded.
 pub fn check_task_regradable(task: &Task) -> Option<String> {
     if task.has_steps() {
-        let shared: Vec<&str> = task.steps().iter().filter(|s| task.verifier_mode(Some(s)) != VerifierMode::Separate).map(|s| s.name.as_str()).collect();
+        let shared: Vec<&str> =
+            task.steps().iter().filter(|s| task.verifier_mode(Some(s)) != VerifierMode::Separate).map(|s| s.name.as_str()).collect();
         if !shared.is_empty() {
-            return Some(format!("Task '{}' has steps with shared verifiers ({}); regrade needs separate verifiers", task.name(), shared.join(", ")));
+            return Some(format!(
+                "Task '{}' has steps with shared verifiers ({}); regrade needs separate verifiers",
+                task.name(),
+                shared.join(", ")
+            ));
         }
         None
     } else if task.verifier_mode(None) != VerifierMode::Separate {
@@ -41,7 +46,10 @@ fn coverage_problems(src_artifacts: &Path, record_dir: &Path, declared: &[Artifa
     let mut problems = vec![];
     for a in with_convention(declared) {
         let key_src = a.source.trim_end_matches('/');
-        let cands: Vec<&ManifestEntry> = entries.iter().filter(|e| e.service.as_deref().unwrap_or("main") == a.service() && e.source.trim_end_matches('/') == key_src).collect();
+        let cands: Vec<&ManifestEntry> = entries
+            .iter()
+            .filter(|e| e.service.as_deref().unwrap_or("main") == a.service() && e.source.trim_end_matches('/') == key_src)
+            .collect();
         if cands.is_empty() {
             problems.push(format!("{}: never collected (no manifest entry); the verifier would silently grade without it", a.source));
             continue;
@@ -58,7 +66,10 @@ fn coverage_problems(src_artifacts: &Path, record_dir: &Path, declared: &[Artifa
             "empty" => {}
             _ => {
                 if e.kind == "directory" && e.exclude.as_ref().is_some_and(|x| *x != a.exclude) {
-                    problems.push(format!("{}: recorded with exclusion filters {:?}, but the new declaration uses {:?}", a.source, e.exclude, a.exclude));
+                    problems.push(format!(
+                        "{}: recorded with exclusion filters {:?}, but the new declaration uses {:?}",
+                        a.source, e.exclude, a.exclude
+                    ));
                 } else if !replay.exists() {
                     problems.push(format!("{}: collected artifact no longer exists on disk", a.source));
                 } else if (e.kind == "directory") != replay.is_dir() {
@@ -111,7 +122,8 @@ fn source_agent_exception(s: &StepResult) -> Option<ExceptionInfo> {
 }
 
 pub async fn run(trial: &mut Trial) -> Result<()> {
-    let src_dir: PathBuf = trial.cfg.source_trial.as_ref().and_then(|s| s.path.clone()).ok_or_else(|| err("regrade needs source_trial.path"))?;
+    let src_dir: PathBuf =
+        trial.cfg.source_trial.as_ref().and_then(|s| s.path.clone()).ok_or_else(|| err("regrade needs source_trial.path"))?;
     let task = trial.task().clone();
     let source: TrialResult = std::fs::read_to_string(src_dir.join("result.json"))
         .ok()
@@ -152,7 +164,8 @@ pub async fn run(trial: &mut Trial) -> Result<()> {
         return Ok(());
     }
 
-    let src_steps = source.step_results.clone().ok_or_else(|| err("Source trial has no step_results; it is not a recorded multi-step trial."))?;
+    let src_steps =
+        source.step_results.clone().ok_or_else(|| err("Source trial has no step_results; it is not a recorded multi-step trial."))?;
     let expected: Vec<&str> = task.steps().iter().map(|s| s.name.as_str()).collect();
     let recorded: Vec<&str> = src_steps.iter().map(|s| s.step_name.as_str()).collect();
     if expected != recorded {

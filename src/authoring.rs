@@ -285,14 +285,24 @@ fn put(out: &mut Map<String, Value>, src: &Map<String, Value>, key: &str, k: K, 
     }
 }
 
-fn put_model(out: &mut Map<String, Value>, src: &Map<String, Value>, key: &str, f: fn(&Map<String, Value>) -> Result<Map<String, Value>>) -> Result<()> {
+fn put_model(
+    out: &mut Map<String, Value>,
+    src: &Map<String, Value>,
+    key: &str,
+    f: fn(&Map<String, Value>) -> Result<Map<String, Value>>,
+) -> Result<()> {
     if let Some(Value::Object(m)) = src.get(key) {
         out.insert(key.into(), Value::Object(f(m)?));
     }
     Ok(())
 }
 
-fn put_models(out: &mut Map<String, Value>, src: &Map<String, Value>, key: &str, f: fn(&Map<String, Value>) -> Result<Map<String, Value>>) -> Result<()> {
+fn put_models(
+    out: &mut Map<String, Value>,
+    src: &Map<String, Value>,
+    key: &str,
+    f: fn(&Map<String, Value>) -> Result<Map<String, Value>>,
+) -> Result<()> {
     let mut items = vec![];
     for v in src.get(key).and_then(Value::as_array).into_iter().flatten() {
         let Value::Object(m) = v else { bail!("{key} entries must be tables") };
@@ -621,9 +631,17 @@ pub fn collect_files(task_dir: &Path) -> Result<Vec<String>> {
         }
     }
     let gi = task_dir.join(".gitignore");
-    let lines: Vec<String> = if gi.exists() { std::fs::read_to_string(&gi)?.lines().map(String::from).collect() } else { DEFAULT_IGNORES.iter().map(|s| s.to_string()).collect() };
+    let lines: Vec<String> = if gi.exists() {
+        std::fs::read_to_string(&gi)?.lines().map(String::from).collect()
+    } else {
+        DEFAULT_IGNORES.iter().map(|s| s.to_string()).collect()
+    };
     let spec: Vec<_> = lines.iter().filter_map(|l| gitignore_regex(l)).collect();
-    let mut rels: Vec<String> = files.iter().map(|f| f.strip_prefix(task_dir).unwrap().to_string_lossy().replace('\\', "/")).filter(|r| !ignored(&spec, r)).collect();
+    let mut rels: Vec<String> = files
+        .iter()
+        .map(|f| f.strip_prefix(task_dir).unwrap().to_string_lossy().replace('\\', "/"))
+        .filter(|r| !ignored(&spec, r))
+        .collect();
     rels.sort();
     Ok(rels)
 }
@@ -669,7 +687,8 @@ fn check_digest(d: &str) -> Result<()> {
 
 impl Manifest {
     fn new(name: &str, description: &str, authors: &[Author], header: String) -> Manifest {
-        let dataset = json!({"name": name, "version": "1.0.0", "description": description, "authors": authors_json(authors), "keywords": []});
+        let dataset =
+            json!({"name": name, "version": "1.0.0", "description": description, "authors": authors_json(authors), "keywords": []});
         Manifest { header, dataset: dataset.as_object().unwrap().clone(), tasks: vec![], files: vec![] }
     }
 
@@ -682,7 +701,13 @@ impl Manifest {
             bail!("Dataset name must be in 'org/name' format. Got: {name}");
         }
         let mut dataset = Map::new();
-        for (k, default) in [("name", None), ("version", None), ("description", Some(json!(""))), ("authors", Some(json!([]))), ("keywords", Some(json!([])))] {
+        for (k, default) in [
+            ("name", None),
+            ("version", None),
+            ("description", Some(json!(""))),
+            ("authors", Some(json!([]))),
+            ("keywords", Some(json!([]))),
+        ] {
             put(&mut dataset, src, k, K::Raw, default);
         }
         if let Some(Value::Array(a)) = dataset.get_mut("authors") {
@@ -886,7 +911,9 @@ pub fn init_task(name: &str, output_dir: &Path, o: &TaskOpts) -> Result<PathBuf>
     }
     std::fs::write(task_dir.join(".gitignore"), T_GITIGNORE)?;
     if !o.no_package && !valid_name(name) {
-        bail!("Package name must be in 'org/name' format with alphanumeric characters, hyphens, underscores, and dots. Cannot start with a dot or contain '..'. Got: {name}");
+        bail!(
+            "Package name must be in 'org/name' format with alphanumeric characters, hyphens, underscores, and dots. Cannot start with a dot or contain '..'. Got: {name}"
+        );
     }
 
     let template: Map<String, Value> = match &o.metadata_template {
@@ -922,7 +949,8 @@ pub fn init_task(name: &str, output_dir: &Path, o: &TaskOpts) -> Result<PathBuf>
         steps: step_names.clone(),
     })?;
 
-    let tests: &[(&str, &str)] = if o.no_pytest { &[("test.sh", T_TEST_SH)] } else { &[("test.sh", T_PYTEST_SH), ("test_outputs.py", T_PYTEST_PY)] };
+    let tests: &[(&str, &str)] =
+        if o.no_pytest { &[("test.sh", T_TEST_SH)] } else { &[("test.sh", T_PYTEST_SH), ("test_outputs.py", T_PYTEST_PY)] };
     let canary = |text: &str, prefix: &str| if o.include_canary_strings { format!("{prefix}{text}") } else { text.to_string() };
     let after_shebang = |text: &str| -> String {
         if !o.include_canary_strings {
@@ -933,7 +961,8 @@ pub fn init_task(name: &str, output_dir: &Path, o: &TaskOpts) -> Result<PathBuf>
             None => format!("{text}\n{CANARY}"),
         }
     };
-    let content_dirs: Vec<PathBuf> = if multi { step_names.iter().map(|s| task_dir.join("steps").join(s)).collect() } else { vec![task_dir.clone()] };
+    let content_dirs: Vec<PathBuf> =
+        if multi { step_names.iter().map(|s| task_dir.join("steps").join(s)).collect() } else { vec![task_dir.clone()] };
 
     write_new(&task_dir.join("task.toml"), &canary(&toml_text, CANARY))?;
     write_new(&task_dir.join("README.md"), &format!("# {name}\n"))?;
@@ -1007,7 +1036,9 @@ pub fn init_dataset(name: &str, output_dir: &Path, description: &str, with_metri
         if !valid_name(name) {
             bail!("Invalid dataset name: {name}. Must be in 'org/name' format.");
         }
-        let header = format!("# Dataset manifest for {name}\n# Add tasks using: hbench dataset add <org>/<name>\n# Publish using: hbench publish\n\n");
+        let header = format!(
+            "# Dataset manifest for {name}\n# Add tasks using: hbench dataset add <org>/<name>\n# Publish using: hbench publish\n\n"
+        );
         let mut m = Manifest::new(name, description, authors, header);
         m.save(&manifest_path)?;
         println!("✓ Dataset initialized at {}", manifest_path.display());

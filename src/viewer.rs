@@ -38,9 +38,37 @@ const STREAM_HANDLE_NAME: &str = "stream.json";
 const NOT_AUTHENTICATED: &str = "Not authenticated: hub sign-in is not supported by hbench.";
 /// upstream's `EnvironmentType` values.
 const ENVIRONMENTS: &[&str] = &[
-    "docker", "podman", "daytona", "e2b", "modal", "runloop", "langsmith", "ec2", "gke", "ack", "openshift", "novita", "apple-container",
-    "singularity", "islo", "tensorlake", "cwsandbox", "use-computer", "cua-cloud", "blaxel", "opensandbox", "beam", "skypilot", "hf-sandbox",
-    "hyperbrowser", "vercel", "runta", "prime", "kata", "mosaic", "smol",
+    "docker",
+    "podman",
+    "daytona",
+    "e2b",
+    "modal",
+    "runloop",
+    "langsmith",
+    "ec2",
+    "gke",
+    "ack",
+    "openshift",
+    "novita",
+    "apple-container",
+    "singularity",
+    "islo",
+    "tensorlake",
+    "cwsandbox",
+    "use-computer",
+    "cua-cloud",
+    "blaxel",
+    "opensandbox",
+    "beam",
+    "skypilot",
+    "hf-sandbox",
+    "hyperbrowser",
+    "vercel",
+    "runta",
+    "prime",
+    "kata",
+    "mosaic",
+    "smol",
 ];
 const RESOURCE_MODES: &[&str] = &["auto", "limit", "request", "guarantee", "ignore"];
 
@@ -133,7 +161,13 @@ struct Query(Vec<(String, String)>);
 
 impl Query {
     fn parse(q: &str) -> Query {
-        Query(q.split('&').filter(|kv| !kv.is_empty()).map(|kv| kv.split_once('=').unwrap_or((kv, ""))).map(|(k, v)| (pct_decode(k, true), pct_decode(v, true))).collect())
+        Query(
+            q.split('&')
+                .filter(|kv| !kv.is_empty())
+                .map(|kv| kv.split_once('=').unwrap_or((kv, "")))
+                .map(|(k, v)| (pct_decode(k, true), pct_decode(v, true)))
+                .collect(),
+        )
     }
     fn get(&self, k: &str) -> Option<&str> {
         self.0.iter().rev().find(|(x, _)| x == k).map(|(_, v)| v.as_str())
@@ -151,7 +185,10 @@ impl Query {
             }
             (422, json!([d]))
         };
-        let n: i64 = raw.trim().parse().map_err(|_| detail("int_parsing", "Input should be a valid integer, unable to parse string as an integer".into(), None))?;
+        let n: i64 = raw
+            .trim()
+            .parse()
+            .map_err(|_| detail("int_parsing", "Input should be a valid integer, unable to parse string as an integer".into(), None))?;
         if let Some(g) = ge.filter(|g| n < *g) {
             return Err(detail("greater_than_equal", format!("Input should be greater than or equal to {g}"), Some(json!({"ge": g}))));
         }
@@ -161,7 +198,9 @@ impl Query {
         Ok(n)
     }
     fn required(&self, k: &str) -> std::result::Result<String, Err> {
-        self.get(k).map(String::from).ok_or_else(|| (422, json!([{"type": "missing", "loc": ["query", k], "msg": "Field required", "input": null}])))
+        self.get(k)
+            .map(String::from)
+            .ok_or_else(|| (422, json!([{"type": "missing", "loc": ["query", k], "msg": "Field required", "input": null}])))
     }
 }
 
@@ -206,7 +245,10 @@ fn truthy(v: &Value) -> bool {
 /// A pydantic datetime: aware timestamps as given, naive ones taken as UTC (upstream's `_started_at_sort_key`).
 fn parse_dt(v: &Value) -> Option<DateTime<Utc>> {
     let t = v.as_str()?;
-    DateTime::parse_from_rfc3339(t).map(|d| d.with_timezone(&Utc)).ok().or_else(|| NaiveDateTime::parse_from_str(t, "%Y-%m-%dT%H:%M:%S%.f").ok().map(|n| n.and_utc()))
+    DateTime::parse_from_rfc3339(t)
+        .map(|d| d.with_timezone(&Utc))
+        .ok()
+        .or_else(|| NaiveDateTime::parse_from_str(t, "%Y-%m-%dT%H:%M:%S%.f").ok().map(|n| n.and_utc()))
 }
 
 fn ts(d: &DateTime<Utc>) -> f64 {
@@ -229,7 +271,11 @@ fn norm_dt(v: &Value) -> Value {
         let us = d.timestamp_subsec_micros();
         let frac = if us == 0 { String::new() } else { format!(".{us:06}") };
         let off = d.offset().local_minus_utc();
-        let tz = if off == 0 { "Z".to_string() } else { format!("{}{:02}:{:02}", if off < 0 { '-' } else { '+' }, off.abs() / 3600, off.abs() % 3600 / 60) };
+        let tz = if off == 0 {
+            "Z".to_string()
+        } else {
+            format!("{}{:02}:{:02}", if off < 0 { '-' } else { '+' }, off.abs() / 3600, off.abs() % 3600 / 60)
+        };
         return json!(format!("{}{frac}{tz}", d.format("%Y-%m-%dT%H:%M:%S")));
     }
     match NaiveDateTime::parse_from_str(t, "%Y-%m-%dT%H:%M:%S%.f") {
@@ -385,7 +431,12 @@ fn serve_file(full: &Path) -> Res {
     }
     if let Some(m) = media {
         let body = std::fs::read(full).map_err(|e| err(500, e.to_string()))?;
-        return Ok(Resp { status: 200, ctype: m.into(), body, headers: vec![("Content-Disposition", format!("attachment; filename=\"{}\"", name_of(full)))] });
+        return Ok(Resp {
+            status: 200,
+            ctype: m.into(),
+            body,
+            headers: vec![("Content-Disposition", format!("attachment; filename=\"{}\"", name_of(full)))],
+        });
     }
     match read_text(full) {
         Ok(Some(t)) => ok_text(t),
@@ -449,7 +500,10 @@ fn job_result(job_dir: &Path) -> Option<Value> {
     let status = o.remove("status");
     if o.get("updated_at").is_none_or(Value::is_null) {
         let from_status = status.as_ref().and_then(|s| s.get("updated_at")).filter(|v| truthy(v)).cloned();
-        let v = from_status.or_else(|| o.get("finished_at").filter(|v| truthy(v)).cloned()).or_else(|| o.get("started_at").cloned()).unwrap_or(Value::Null);
+        let v = from_status
+            .or_else(|| o.get("finished_at").filter(|v| truthy(v)).cloned())
+            .or_else(|| o.get("started_at").cloned())
+            .unwrap_or(Value::Null);
         o.insert("updated_at".into(), v);
     }
     if !(o.contains_key("id") && o.contains_key("started_at") && o.contains_key("n_total_trials")) {
@@ -506,7 +560,10 @@ fn job_stats(s: &Value) -> Value {
 fn trial_result(trial_dir: &Path) -> Option<Value> {
     let mut r = read_json_object(&trial_dir.join("result.json"))?;
     norm_dts(&mut r);
-    ["id", "task_name", "trial_name", "trial_uri", "task_id", "task_checksum", "config", "agent_info"].iter().all(|k| r.get(k).is_some()).then_some(r)
+    ["id", "task_name", "trial_name", "trial_uri", "task_id", "task_checksum", "config", "agent_info"]
+        .iter()
+        .all(|k| r.get(k).is_some())
+        .then_some(r)
 }
 
 /// `TrialConfig.model_validate_json(config.json)`: pruned defaults restored.
@@ -529,7 +586,11 @@ fn agent_name_from_config(agent: &Value) -> String {
 
 fn agent_name_from_result(r: &Value) -> String {
     let agent = &r["config"]["agent"];
-    if agent.get("import_path").is_some_and(truthy) { agent_name_from_config(agent) } else { r["agent_info"]["name"].as_str().unwrap_or_default().into() }
+    if agent.get("import_path").is_some_and(truthy) {
+        agent_name_from_config(agent)
+    } else {
+        r["agent_info"]["name"].as_str().unwrap_or_default().into()
+    }
 }
 
 fn reasoning_effort(config: &Value) -> Option<String> {
@@ -551,7 +612,11 @@ fn task_name_from_config(task: &Value) -> String {
     }
     // LocalTaskId/GitTaskId.get_name(): the path's (resolved, for local tasks) final component.
     let p = PathBuf::from(task.get("path").and_then(s).unwrap_or_default());
-    let p = if task.get("git_url").is_some_and(truthy) { p } else { std::path::absolute(&p).map(|a| a.canonicalize().unwrap_or(a)).unwrap_or(p) };
+    let p = if task.get("git_url").is_some_and(truthy) {
+        p
+    } else {
+        std::path::absolute(&p).map(|a| a.canonicalize().unwrap_or(a)).unwrap_or(p)
+    };
     name_of(&p)
 }
 
@@ -560,16 +625,26 @@ fn token_totals(r: &Value) -> (Option<i64>, Option<i64>, Option<i64>, Option<f64
     let ctxs: Vec<&Value> = if r.get("agent_result").is_some_and(|a| !a.is_null()) {
         vec![&r["agent_result"]]
     } else {
-        r.get("step_results").and_then(Value::as_array).map(|s| s.iter().map(|x| &x["agent_result"]).filter(|a| !a.is_null()).collect()).unwrap_or_default()
+        r.get("step_results")
+            .and_then(Value::as_array)
+            .map(|s| s.iter().map(|x| &x["agent_result"]).filter(|a| !a.is_null()).collect())
+            .unwrap_or_default()
     };
-    let sum = |k: &str| ctxs.iter().filter_map(|c| c.get(k).and_then(Value::as_i64)).fold(None, |acc: Option<i64>, x| Some(acc.unwrap_or(0) + x));
-    let cost = ctxs.iter().filter_map(|c| c.get("cost_usd").and_then(Value::as_f64)).fold(None, |acc: Option<f64>, x| Some(acc.unwrap_or(0.0) + x));
+    let sum =
+        |k: &str| ctxs.iter().filter_map(|c| c.get(k).and_then(Value::as_i64)).fold(None, |acc: Option<i64>, x| Some(acc.unwrap_or(0) + x));
+    let cost = ctxs
+        .iter()
+        .filter_map(|c| c.get("cost_usd").and_then(Value::as_f64))
+        .fold(None, |acc: Option<f64>, x| Some(acc.unwrap_or(0.0) + x));
     (sum("n_input_tokens"), sum("n_cache_tokens"), sum("n_output_tokens"), cost)
 }
 
 /// Numeric (non-bool) rewards as floats.
 fn numeric_rewards(rewards: &Value) -> Vec<(String, f64)> {
-    rewards.as_object().map(|m| m.iter().filter_map(|(k, v)| if v.is_number() { v.as_f64().map(|f| (k.clone(), f)) } else { None }).collect()).unwrap_or_default()
+    rewards
+        .as_object()
+        .map(|m| m.iter().filter_map(|(k, v)| if v.is_number() { v.as_f64().map(|f| (k.clone(), f)) } else { None }).collect())
+        .unwrap_or_default()
 }
 
 /// `evals_from_rewards`: one `{key: {metrics: [{key: value}]}}` per numeric reward, `reward` first.
@@ -594,7 +669,11 @@ impl App {
         if job.is_empty() || job.contains('/') || !dir.is_dir() {
             return vec![];
         }
-        sorted_entries(&dir).into_iter().filter(|d| d.is_dir() && (d.join("config.json").exists() || d.join("result.json").exists())).map(|p| name_of(&p)).collect()
+        sorted_entries(&dir)
+            .into_iter()
+            .filter(|d| d.is_dir() && (d.join("config.json").exists() || d.join("result.json").exists()))
+            .map(|p| name_of(&p))
+            .collect()
     }
 
     fn validate_job(&self, job: &str) -> std::result::Result<PathBuf, Err> {
@@ -640,7 +719,8 @@ impl App {
             let dir = self.folder.join(&name);
             let result = job_result(&dir);
             let config = job_config(&dir);
-            let (mut agents, mut providers, mut models, mut sources): (Vec<String>, Vec<String>, Vec<String>, Vec<String>) = Default::default();
+            let (mut agents, mut providers, mut models, mut sources): (Vec<String>, Vec<String>, Vec<String>, Vec<String>) =
+                Default::default();
             let mut environment_type = Value::Null;
             if let Some(c) = &config {
                 let mut src: HashSet<String> = HashSet::new();
@@ -662,7 +742,8 @@ impl App {
                 }
                 sources = src.into_iter().collect();
                 sources.sort();
-                let mut a: Vec<String> = c["agents"].as_array().into_iter().flatten().filter_map(|a| a.get("name").and_then(s).map(String::from)).collect();
+                let mut a: Vec<String> =
+                    c["agents"].as_array().into_iter().flatten().filter_map(|a| a.get("name").and_then(s).map(String::from)).collect();
                 a.sort();
                 a.dedup();
                 agents = a;
@@ -686,8 +767,13 @@ impl App {
             let summary = match &result {
                 Some(r) => {
                     let st = &r["stats"];
-                    let evals: Map<String, Value> =
-                        st["evals"].as_object().into_iter().flatten().filter(|(_, e)| truthy(&e["metrics"])).map(|(k, e)| (k.clone(), json!({"metrics": e["metrics"]}))).collect();
+                    let evals: Map<String, Value> = st["evals"]
+                        .as_object()
+                        .into_iter()
+                        .flatten()
+                        .filter(|(_, e)| truthy(&e["metrics"]))
+                        .map(|(k, e)| (k.clone(), json!({"metrics": e["metrics"]})))
+                        .collect();
                     json!({
                         "name": name, "id": r["id"], "started_at": r["started_at"], "updated_at": r["updated_at"], "finished_at": r["finished_at"],
                         "n_total_trials": r["n_total_trials"], "n_completed_trials": st["n_completed_trials"], "n_errored_trials": st["n_errored_trials"],
@@ -705,7 +791,9 @@ impl App {
             out.push((parse_dt(&summary["started_at"]).map(|d| ts(&d)), summary));
         }
         // Most recent first; jobs without started_at last (stable, like Python's reverse sort).
-        out.sort_by(|a, b| (b.0.is_some(), b.0.unwrap_or(0.0)).partial_cmp(&(a.0.is_some(), a.0.unwrap_or(0.0))).unwrap_or(std::cmp::Ordering::Equal));
+        out.sort_by(|a, b| {
+            (b.0.is_some(), b.0.unwrap_or(0.0)).partial_cmp(&(a.0.is_some(), a.0.unwrap_or(0.0))).unwrap_or(std::cmp::Ordering::Equal)
+        });
         out.into_iter().map(|x| x.1).collect()
     }
 
@@ -862,7 +950,11 @@ impl App {
             };
             let mi = &r["agent_info"]["model_info"];
             let evals = evals_from_rewards(numeric_rewards(&r["verifier_result"]["rewards"]));
-            let reward = evals.as_object().and_then(|m| m.values().next()).map(|e| e["metrics"][0].as_object().and_then(|m| m.values().next().cloned()).unwrap_or(Value::Null)).unwrap_or(Value::Null);
+            let reward = evals
+                .as_object()
+                .and_then(|m| m.values().next())
+                .map(|e| e["metrics"][0].as_object().and_then(|m| m.values().next().cloned()).unwrap_or(Value::Null))
+                .unwrap_or(Value::Null);
             let (ni, nc, no, cost) = token_totals(&r);
             out.push(json!({
                 "name": name, "task_name": r["task_name"], "id": r["id"], "source": r.get("source").cloned().unwrap_or(Value::Null),
@@ -899,7 +991,9 @@ impl App {
                 let any_in = |v: &Value, needle: &str| v.as_array().into_iter().flatten().any(|x| lower(x).contains(needle));
                 if let Some(qs) = q.get("q").filter(|x| !x.is_empty()) {
                     let n = qs.to_lowercase();
-                    items.retain(|s| lower(&s["name"]).contains(&n) || ["datasets", "agents", "providers", "models"].iter().any(|k| any_in(&s[*k], &n)));
+                    items.retain(|s| {
+                        lower(&s["name"]).contains(&n) || ["datasets", "agents", "providers", "models"].iter().any(|k| any_in(&s[*k], &n))
+                    });
                 }
                 for (param, field) in [("agent", "agents"), ("provider", "providers"), ("model", "models")] {
                     let want = q.all(param);
@@ -921,7 +1015,12 @@ impl App {
                         .collect();
                     if let Some(cutoff) = cutoffs.into_iter().min() {
                         // `started_at.replace(tzinfo=None) >= cutoff`: the timestamp's own wall clock vs local now.
-                        let wall = |t: &str| DateTime::parse_from_rfc3339(t).map(|d| d.naive_local()).ok().or_else(|| NaiveDateTime::parse_from_str(t, "%Y-%m-%dT%H:%M:%S%.f").ok());
+                        let wall = |t: &str| {
+                            DateTime::parse_from_rfc3339(t)
+                                .map(|d| d.naive_local())
+                                .ok()
+                                .or_else(|| NaiveDateTime::parse_from_str(t, "%Y-%m-%dT%H:%M:%S%.f").ok())
+                        };
                         items.retain(|s| s["started_at"].as_str().and_then(wall).is_some_and(|d| d >= cutoff));
                     }
                 }
@@ -992,7 +1091,9 @@ impl App {
                 let mut efforts = BTreeMap::new();
                 for name in self.list_trials(job) {
                     let dir = self.folder.join(job).join(&name);
-                    let cfg = trial_result(&dir).map(|r| r["config"].clone()).or_else(|| trial_config(&dir).and_then(|c| serde_json::to_value(c).ok()));
+                    let cfg = trial_result(&dir)
+                        .map(|r| r["config"].clone())
+                        .or_else(|| trial_config(&dir).and_then(|c| serde_json::to_value(c).ok()));
                     if let Some(c) = cfg {
                         *efforts.entry(metadata_filter_value(reasoning_effort(&c).as_deref())).or_insert(0) += 1;
                     }
@@ -1010,7 +1111,11 @@ impl App {
                 let mut items = self.task_summaries(job);
                 if let Some(qs) = q.get("q").filter(|x| !x.is_empty()) {
                     let n = qs.to_lowercase();
-                    items.retain(|s| ["task_name", "agent_name", "model_provider", "model_name", "source"].iter().any(|k| s[*k].as_str().is_some_and(|v| v.to_lowercase().contains(&n))));
+                    items.retain(|s| {
+                        ["task_name", "agent_name", "model_provider", "model_name", "source"]
+                            .iter()
+                            .any(|k| s[*k].as_str().is_some_and(|v| v.to_lowercase().contains(&n)))
+                    });
                 }
                 for (param, field) in [("agent", "agent_name"), ("provider", "model_provider"), ("model", "model_name")] {
                     let want = q.all(param);
@@ -1034,9 +1139,18 @@ impl App {
                 let mut items = self.trial_summaries(job)?;
                 if let Some(qs) = q.get("q").filter(|x| !x.is_empty()) {
                     let n = qs.to_lowercase();
-                    items.retain(|s| ["name", "task_name", "agent_name", "model_provider", "model_name", "source"].iter().any(|k| s[*k].as_str().is_some_and(|v| v.to_lowercase().contains(&n))));
+                    items.retain(|s| {
+                        ["name", "task_name", "agent_name", "model_provider", "model_name", "source"]
+                            .iter()
+                            .any(|k| s[*k].as_str().is_some_and(|v| v.to_lowercase().contains(&n)))
+                    });
                 }
-                for (param, field) in [("reasoning_effort", "reasoning_effort"), ("agent", "agent_name"), ("provider", "model_provider"), ("model", "model_name")] {
+                for (param, field) in [
+                    ("reasoning_effort", "reasoning_effort"),
+                    ("agent", "agent_name"),
+                    ("provider", "model_provider"),
+                    ("model", "model_name"),
+                ] {
                     let want = q.all(param);
                     if !want.is_empty() {
                         items.retain(|s| want.contains(&metadata_filter_value(s[field].as_str())));
@@ -1056,7 +1170,9 @@ impl App {
                 ok_json(paginate(items, page, page_size))
             }
             ["jobs", job, "trials", trial] => {
-                if let Some(r) = (!job.contains('/') && !trial.contains('/')).then(|| trial_result(&self.folder.join(job).join(trial))).flatten() {
+                if let Some(r) =
+                    (!job.contains('/') && !trial.contains('/')).then(|| trial_result(&self.folder.join(job).join(trial))).flatten()
+                {
                     return ok_json(r);
                 }
                 let not_found = || err(404, format!("Trial '{trial}' not found in job '{job}'"));
@@ -1123,7 +1239,12 @@ impl App {
                     return Err(err(404, "Recording not found"));
                 }
                 let body = std::fs::read(&p).map_err(|e| err(500, e.to_string()))?;
-                Ok(Resp { status: 200, ctype: "video/mp4".into(), body, headers: vec![("Content-Disposition", "inline; filename=\"recording.mp4\"".into())] })
+                Ok(Resp {
+                    status: 200,
+                    ctype: "video/mp4".into(),
+                    body,
+                    headers: vec![("Content-Disposition", "inline; filename=\"recording.mp4\"".into())],
+                })
             }
             ["jobs", job, "trials", trial, "files", rest @ ..] => {
                 let dir = self.existing_trial(job, trial)?;
@@ -1206,9 +1327,13 @@ impl App {
                 items.sort_by(|a, b| b.0.cmp(&a.0));
                 let n = items.len() as i64;
                 let end = if limit >= 0 { limit.min(n) } else { (n + limit).max(0) };
-                ok_json(Value::Array(items.into_iter().take(end as usize).map(|(_, name, config)| json!({"job_name": name, "config": config})).collect()))
+                ok_json(Value::Array(
+                    items.into_iter().take(end as usize).map(|(_, name, config)| json!({"job_name": name, "config": config})).collect(),
+                ))
             }
-            ["run", "models"] => ok_json(json!({"models": serde_json::from_str::<Value>(include_str!("../assets/litellm/models.json")).unwrap_or_default()})),
+            ["run", "models"] => {
+                ok_json(json!({"models": serde_json::from_str::<Value>(include_str!("../assets/litellm/models.json")).unwrap_or_default()}))
+            }
             ["run", job, "status"] => {
                 let job_ready = self.folder.join(job).join("result.json").exists();
                 let mut runs = self.runs.lock().unwrap();
@@ -1241,7 +1366,8 @@ impl App {
             if req.body.is_empty() {
                 return Ok(Value::Null);
             }
-            serde_json::from_slice(req.body).map_err(|e| (422, json!([{"type": "json_invalid", "loc": ["body", 0], "msg": format!("JSON decode error: {e}")}])))
+            serde_json::from_slice(req.body)
+                .map_err(|e| (422, json!([{"type": "json_invalid", "loc": ["body", 0], "msg": format!("JSON decode error: {e}")}])))
         };
         match (method, segs) {
             ("DELETE", ["jobs", job]) => {
@@ -1252,13 +1378,18 @@ impl App {
             ("POST", ["jobs", job, "upload"]) => {
                 let dir = self.existing_job(job)?;
                 if !dir.join("result.json").exists() || !dir.join("config.json").exists() {
-                    return Err(err(400, format!("Job '{job}' is missing result.json / config.json — it may still be running or the run was interrupted.")));
+                    return Err(err(
+                        400,
+                        format!("Job '{job}' is missing result.json / config.json — it may still be running or the run was interrupted."),
+                    ));
                 }
                 let b = body()?;
                 match b.get("visibility") {
                     None | Some(Value::Null) => {}
                     Some(v) if v == "public" || v == "private" => {}
-                    Some(v) => return Err(err(400, format!("Invalid visibility {}; must be 'public', 'private', or omitted.", py_repr(v)))),
+                    Some(v) => {
+                        return Err(err(400, format!("Invalid visibility {}; must be 'public', 'private', or omitted.", py_repr(v))));
+                    }
                 }
                 Err(err(401, NOT_AUTHENTICATED))
             }
@@ -1272,7 +1403,8 @@ impl App {
                 }
                 let report = self.run_analyze(&dir, args)?;
                 let Some(report) = report else { return ok_json(json!({"n_trials_analyzed": 0})) };
-                std::fs::write(dir.join("analysis.json"), serde_json::to_string_pretty(&report).unwrap()).map_err(|e| err(500, e.to_string()))?;
+                std::fs::write(dir.join("analysis.json"), serde_json::to_string_pretty(&report).unwrap())
+                    .map_err(|e| err(500, e.to_string()))?;
                 let n = report["results"].as_array().into_iter().flatten().filter(|r| !truthy(&r["error"])).count();
                 ok_json(json!({"n_trials_analyzed": n}))
             }
@@ -1324,9 +1456,18 @@ impl App {
     /// `hbench analyze <path>` (upstream's `run_analyze`); returns its `analysis.json` report.
     fn run_analyze(&self, path: &Path, args: Vec<String>) -> std::result::Result<Option<Value>, Err> {
         let exe = std::env::current_exe().map_err(|e| err(500, e.to_string()))?;
-        let out = std::process::Command::new(exe).arg("analyze").arg(path).args(args).arg("-o").arg(&self.folder).output().map_err(|e| err(500, e.to_string()))?;
+        let out = std::process::Command::new(exe)
+            .arg("analyze")
+            .arg(path)
+            .args(args)
+            .arg("-o")
+            .arg(&self.folder)
+            .output()
+            .map_err(|e| err(500, e.to_string()))?;
         let stdout = String::from_utf8_lossy(&out.stdout);
-        if stdout.contains("No trial directories found") || stdout.contains("trial directories found") && !out.status.success() && !stdout.contains("Report: ") {
+        if stdout.contains("No trial directories found")
+            || stdout.contains("trial directories found") && !out.status.success() && !stdout.contains("Report: ")
+        {
             return Ok(None);
         }
         let report = stdout.lines().find_map(|l| l.strip_prefix("Report: ")).map(PathBuf::from).and_then(|p| read_json(&p));
@@ -1466,7 +1607,9 @@ fn partial_trial_result(trial_name: &str, dir: &Path, cfg: &crate::config::Trial
 fn interaction(root: &Path) -> std::result::Result<Value, Err> {
     let user_traj = root.join("user-agent/trajectory.json");
     let bridge = root.join("agent/bridge-trajectory.json");
-    let user_runtime = sorted_entries(&root.join("user-agent")).into_iter().find(|p| p.is_file() && *p != user_traj && p.extension().is_some_and(|e| e == "jsonl" || e == "txt"));
+    let user_runtime = sorted_entries(&root.join("user-agent"))
+        .into_iter()
+        .find(|p| p.is_file() && *p != user_traj && p.extension().is_some_and(|e| e == "jsonl" || e == "txt"));
     let obj = |p: &Path, label: &str| -> std::result::Result<Value, Err> {
         if !p.exists() {
             return Ok(Value::Null);
@@ -1482,7 +1625,8 @@ fn interaction(root: &Path) -> std::result::Result<Value, Err> {
     let bridge_trajectory = obj(&bridge, "bridge trajectory export")?;
     let session = bridge_trajectory["session"]["state"]["acp_session_id"].as_str().filter(|x| !x.is_empty());
     let target_log = session.and_then(|id| {
-        let mut found: Vec<PathBuf> = walk_files(&root.join("agent/sessions/projects")).into_iter().filter(|p| name_of(p) == format!("{id}.jsonl")).collect();
+        let mut found: Vec<PathBuf> =
+            walk_files(&root.join("agent/sessions/projects")).into_iter().filter(|p| name_of(p) == format!("{id}.jsonl")).collect();
         found.sort();
         found.into_iter().next()
     });
@@ -1503,7 +1647,8 @@ fn interaction(root: &Path) -> std::result::Result<Value, Err> {
     };
     let (user_events, user_errors) = lines(&user_runtime, "user-agent runtime log")?;
     let (target_events, target_errors) = lines(&target_log, "target runtime log")?;
-    let rel = |p: Option<&Path>| p.filter(|p| p.exists()).and_then(|p| p.strip_prefix(root).ok()).map(|r| r.to_string_lossy().replace('\\', "/"));
+    let rel =
+        |p: Option<&Path>| p.filter(|p| p.exists()).and_then(|p| p.strip_prefix(root).ok()).map(|r| r.to_string_lossy().replace('\\', "/"));
     Ok(json!({
         "available": !user_trajectory.is_null() || !bridge_trajectory.is_null(),
         "sources": {
@@ -1541,7 +1686,12 @@ fn compare(app: &App, jobs: &[String]) -> Res {
             let (source, task) = (opt(&sm["source"]), sm["task_name"].as_str().unwrap_or_default().to_string());
             let (agent, provider, model) = (opt(&sm["agent_name"]), opt(&sm["model_provider"]), opt(&sm["model_name"]));
             let task_key = format!("{}::{task}", source.clone().unwrap_or_default());
-            let am_key = format!("{job}::{}::{}::{}", agent.clone().unwrap_or_default(), provider.clone().unwrap_or_default(), model.clone().unwrap_or_default());
+            let am_key = format!(
+                "{job}::{}::{}::{}",
+                agent.clone().unwrap_or_default(),
+                provider.clone().unwrap_or_default(),
+                model.clone().unwrap_or_default()
+            );
             if !tasks.contains(&(source.clone(), task.clone())) {
                 tasks.push((source, task));
             }
@@ -1569,12 +1719,21 @@ fn compare(app: &App, jobs: &[String]) -> Res {
         })
         .collect();
     task_list.sort_by(|a, b| {
-        (-a.0).partial_cmp(&-b.0).unwrap_or(std::cmp::Ordering::Equal).then_with(|| a.1["source"].as_str().unwrap_or("").cmp(b.1["source"].as_str().unwrap_or(""))).then_with(|| a.1["task_name"].as_str().cmp(&b.1["task_name"].as_str()))
+        (-a.0)
+            .partial_cmp(&-b.0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.1["source"].as_str().unwrap_or("").cmp(b.1["source"].as_str().unwrap_or("")))
+            .then_with(|| a.1["task_name"].as_str().cmp(&b.1["task_name"].as_str()))
     });
     let mut am_list: Vec<(f64, Value)> = ams
         .into_iter()
         .map(|(job, agent, provider, model)| {
-            let key = format!("{job}::{}::{}::{}", agent.clone().unwrap_or_default(), provider.clone().unwrap_or_default(), model.clone().unwrap_or_default());
+            let key = format!(
+                "{job}::{}::{}::{}",
+                agent.clone().unwrap_or_default(),
+                provider.clone().unwrap_or_default(),
+                model.clone().unwrap_or_default()
+            );
             let rs: Vec<f64> = cells.values().filter_map(|tc| tc.get(&key)).map(reward_of).collect();
             let avg = if rs.is_empty() { 0.0 } else { rs.iter().sum::<f64>() / rs.len() as f64 };
             (avg, json!({"job_name": job, "agent_name": agent, "model_provider": provider, "model_name": model, "key": key}))
@@ -1582,12 +1741,18 @@ fn compare(app: &App, jobs: &[String]) -> Res {
         .collect();
     let k = |v: &Value, f: &str| v[f].as_str().unwrap_or("").to_string();
     am_list.sort_by(|a, b| {
-        (-a.0)
-            .partial_cmp(&-b.0)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| [k(&a.1, "job_name"), k(&a.1, "agent_name"), k(&a.1, "model_provider"), k(&a.1, "model_name")].cmp(&[k(&b.1, "job_name"), k(&b.1, "agent_name"), k(&b.1, "model_provider"), k(&b.1, "model_name")]))
+        (-a.0).partial_cmp(&-b.0).unwrap_or(std::cmp::Ordering::Equal).then_with(|| {
+            [k(&a.1, "job_name"), k(&a.1, "agent_name"), k(&a.1, "model_provider"), k(&a.1, "model_name")].cmp(&[
+                k(&b.1, "job_name"),
+                k(&b.1, "agent_name"),
+                k(&b.1, "model_provider"),
+                k(&b.1, "model_name"),
+            ])
+        })
     });
-    ok_json(json!({"tasks": task_list.into_iter().map(|x| x.1).collect::<Vec<_>>(), "agent_models": am_list.into_iter().map(|x| x.1).collect::<Vec<_>>(), "cells": cells}))
+    ok_json(
+        json!({"tasks": task_list.into_iter().map(|x| x.1).collect::<Vec<_>>(), "agent_models": am_list.into_iter().map(|x| x.1).collect::<Vec<_>>(), "cells": cells}),
+    )
 }
 
 /// Python `sort(key=..., reverse=...)` (stable; reverse keeps equal items in order).
@@ -1605,15 +1770,32 @@ fn sort_task_summaries(items: &mut [Value], by: &str, reverse: bool) {
     match by {
         "task_name" | "agent_name" | "model_provider" | "model_name" | "source" => py_sort(items, reverse, |v| st(v, by)),
         "n_trials" | "n_errors" => py_sort(items, reverse, |v| v[by].as_f64().unwrap_or(0.0)),
-        "avg_duration_ms" | "avg_reward" | "avg_input_tokens" | "avg_cached_input_tokens" | "avg_output_tokens" | "avg_cost_usd" => py_sort(items, reverse, |v| opt(v, by)),
+        "avg_duration_ms" | "avg_reward" | "avg_input_tokens" | "avg_cached_input_tokens" | "avg_output_tokens" | "avg_cost_usd" => {
+            py_sort(items, reverse, |v| opt(v, by))
+        }
         "exception_types" => py_sort(items, reverse, |v| v["exception_types"][0].as_str().unwrap_or("").to_string()),
         _ => {}
     }
 }
 
 const TRIAL_SUMMARY_FIELDS: &[&str] = &[
-    "name", "task_name", "id", "source", "agent_name", "reported_agent_name", "reasoning_effort", "model_provider", "model_name", "reward", "error_type",
-    "started_at", "finished_at", "input_tokens", "cached_input_tokens", "output_tokens", "cost_usd",
+    "name",
+    "task_name",
+    "id",
+    "source",
+    "agent_name",
+    "reported_agent_name",
+    "reasoning_effort",
+    "model_provider",
+    "model_name",
+    "reward",
+    "error_type",
+    "started_at",
+    "finished_at",
+    "input_tokens",
+    "cached_input_tokens",
+    "output_tokens",
+    "cost_usd",
 ];
 
 /// A sortable form of a TrialSummary field (datetimes compare as instants, numbers numerically).
@@ -1694,7 +1876,9 @@ fn pricing(model: &str) -> Res {
     let Some(e) = entry else { return Err(err(404, format!("No pricing entry for model '{model}'"))) };
     let input = e.get("input_cost_per_token").cloned().unwrap_or(Value::Null);
     let cache = e.get("cache_read_input_token_cost").filter(|v| !v.is_null()).cloned().unwrap_or_else(|| input.clone());
-    ok_json(json!({"model_name": model, "input_cost_per_token": input, "cache_read_input_token_cost": cache, "output_cost_per_token": e.get("output_cost_per_token").cloned().unwrap_or(Value::Null)}))
+    ok_json(
+        json!({"model_name": model, "input_cost_per_token": input, "cache_read_input_token_cost": cache, "output_cost_per_token": e.get("output_cost_per_token").cloned().unwrap_or(Value::Null)}),
+    )
 }
 
 // ---------------------------------------------------------------- tasks mode
@@ -1789,7 +1973,10 @@ fn dump_value(v: &Value, prop: &Value, root: &Value) -> Option<Value> {
             let d = deref(var, root);
             match (v, d.get("type").and_then(s)) {
                 (Value::Object(_), _) if d.get("properties").is_some() => true,
-                (Value::Object(_), Some("object")) | (Value::Array(_), Some("array")) | (Value::String(_), Some("string")) | (Value::Bool(_), Some("boolean")) => true,
+                (Value::Object(_), Some("object"))
+                | (Value::Array(_), Some("array"))
+                | (Value::String(_), Some("string"))
+                | (Value::Bool(_), Some("boolean")) => true,
                 (Value::Number(n), Some("integer")) => n.is_i64() || n.is_u64(),
                 (Value::Number(_), Some("number")) => true,
                 (Value::String(_), None) => d.get("enum").is_some(),
@@ -1843,12 +2030,15 @@ struct TaskInfo {
 
 fn task_info(dir: &Path) -> TaskInfo {
     let toml_text = std::fs::read_to_string(dir.join("task.toml")).ok();
-    let has_steps = toml_text.as_deref().and_then(|t| toml::from_str::<toml::Table>(t).ok()).and_then(|t| t.get("steps").cloned()).is_some_and(|s| match s {
-        toml::Value::Array(a) => !a.is_empty(),
-        toml::Value::Table(t) => !t.is_empty(),
-        toml::Value::String(x) => !x.is_empty(),
-        _ => true,
-    });
+    let has_steps =
+        toml_text.as_deref().and_then(|t| toml::from_str::<toml::Table>(t).ok()).and_then(|t| t.get("steps").cloned()).is_some_and(|s| {
+            match s {
+                toml::Value::Array(a) => !a.is_empty(),
+                toml::Value::Table(t) => !t.is_empty(),
+                toml::Value::String(x) => !x.is_empty(),
+                _ => true,
+            }
+        });
     TaskInfo {
         config: toml_text.as_deref().and_then(task_config_dump),
         has_instruction: dir.join("instruction.md").exists() || has_steps,
@@ -1890,7 +2080,13 @@ impl App {
             .map(|name| {
                 let i = task_info(&self.folder.join(&name));
                 let flags = |mut v: Value| {
-                    for (k, b) in [("has_instruction", i.has_instruction), ("has_environment", i.has_environment), ("has_tests", i.has_tests), ("has_solution", i.has_solution), ("has_docker_compose", i.has_docker_compose)] {
+                    for (k, b) in [
+                        ("has_instruction", i.has_instruction),
+                        ("has_environment", i.has_environment),
+                        ("has_tests", i.has_tests),
+                        ("has_solution", i.has_solution),
+                        ("has_docker_compose", i.has_docker_compose),
+                    ] {
                         v[k] = json!(b);
                     }
                     v
@@ -1972,7 +2168,11 @@ impl App {
                 }
                 let tags = q.all("tag");
                 if !tags.is_empty() {
-                    items.retain(|s| tags.iter().any(|t| s["metadata"].get("tags").and_then(Value::as_array).is_some_and(|a| a.iter().any(|x| x.as_str() == Some(t)))));
+                    items.retain(|s| {
+                        tags.iter().any(|t| {
+                            s["metadata"].get("tags").and_then(Value::as_array).is_some_and(|a| a.iter().any(|x| x.as_str() == Some(t)))
+                        })
+                    });
                 }
                 ok_json(paginate(items, page, page_size))
             }
@@ -2051,7 +2251,12 @@ fn write_allowed(req: &Req) -> bool {
 }
 
 pub fn handle(app: &App, req: &Req) -> Resp {
-    route(app, req).unwrap_or_else(|(status, detail)| Resp { status, ctype: "application/json".into(), body: serde_json::to_vec(&json!({"detail": detail})).unwrap(), headers: vec![] })
+    route(app, req).unwrap_or_else(|(status, detail)| Resp {
+        status,
+        ctype: "application/json".into(),
+        body: serde_json::to_vec(&json!({"detail": detail})).unwrap(),
+        headers: vec![],
+    })
 }
 
 fn route(app: &App, req: &Req) -> Res {
@@ -2069,15 +2274,23 @@ fn route(app: &App, req: &Req) -> Res {
         }
         if path == "/auth/callback" {
             let msg = q.get("error").unwrap_or("Hub sign-in is not supported by hbench");
-            return Ok(Resp { status: 400, ctype: "text/html; charset=utf-8".into(), body: format!("<h1>Sign-in failed</h1><p>{}</p>", html_escape(msg)).into_bytes(), headers: vec![] });
+            return Ok(Resp {
+                status: 400,
+                ctype: "text/html; charset=utf-8".into(),
+                body: format!("<h1>Sign-in failed</h1><p>{}</p>", html_escape(msg)).into_bytes(),
+                headers: vec![],
+            });
         }
-        return static_file(if path == "/favicon.ico" || path == "/favicon.svg" { path } else { "/index.html" }).ok_or_else(|| err(404, "Not Found"));
+        return static_file(if path == "/favicon.ico" || path == "/favicon.svg" { path } else { "/index.html" })
+            .ok_or_else(|| err(404, "Not Found"));
     };
     let decoded: Vec<String> = api.split('/').map(|x| pct_decode(x, false)).collect();
     let segs: Vec<&str> = decoded.iter().map(String::as_str).collect();
     match (req.method, segs.as_slice()) {
         ("GET", ["health"]) => ok_json(json!({"status": "ok"})),
-        ("GET", ["config"]) => ok_json(json!({"folder": app.folder.to_string_lossy(), "mode": app.mode.as_str(), "environments": ENVIRONMENTS})),
+        ("GET", ["config"]) => {
+            ok_json(json!({"folder": app.folder.to_string_lossy(), "mode": app.mode.as_str(), "environments": ENVIRONMENTS}))
+        }
         ("GET", ["pricing"]) => pricing(&q.required("model")?),
         ("GET", ["auth", "status"]) => ok_json(json!({"authenticated": false, "username": null})),
         ("GET", ["auth", "organizations"]) => Err(err(401, NOT_AUTHENTICATED)),
@@ -2142,14 +2355,29 @@ pub fn serve(folder: &Path, mode: Option<Mode>, host: &str, ports: (u16, u16)) -
             let (server, app) = (server.clone(), app.clone());
             std::thread::spawn(move || {
                 for mut rq in server.incoming_requests() {
-                    let header = |name: &str| rq.headers().iter().find(|h| h.field.as_str().as_str().eq_ignore_ascii_case(name)).map(|h| h.value.as_str().to_string());
+                    let header = |name: &str| {
+                        rq.headers()
+                            .iter()
+                            .find(|h| h.field.as_str().as_str().eq_ignore_ascii_case(name))
+                            .map(|h| h.value.as_str().to_string())
+                    };
                     let (origin, host) = (header("origin"), header("host"));
                     let loopback = rq.remote_addr().is_some_and(|a| a.ip().is_loopback());
                     let method = rq.method().as_str().to_uppercase();
                     let url = rq.url().to_string();
                     let mut body = vec![];
                     let _ = rq.as_reader().read_to_end(&mut body);
-                    let r = handle(&app, &Req { method: &method, url: &url, origin: origin.as_deref(), host: host.as_deref(), client_loopback: loopback, body: &body });
+                    let r = handle(
+                        &app,
+                        &Req {
+                            method: &method,
+                            url: &url,
+                            origin: origin.as_deref(),
+                            host: host.as_deref(),
+                            client_loopback: loopback,
+                            body: &body,
+                        },
+                    );
                     let mut resp = tiny_http::Response::from_data(r.body).with_status_code(r.status);
                     resp.add_header(tiny_http::Header::from_bytes(&b"Content-Type"[..], r.ctype.as_bytes()).unwrap());
                     for (k, v) in &r.headers {
@@ -2200,8 +2428,14 @@ mod tests {
     fn fixture() -> App {
         let root = std::env::temp_dir().join(format!("hbench-view-{}", uuid::Uuid::new_v4()));
         let new = root.join("2026-01-02__00-00-00");
-        write(&new.join("config.json"), r#"{"job_name":"n","agents":[{"name":"claude-code","model_name":"anthropic/m"}],"datasets":[{"name":"ds","version":2}]}"#);
-        write(&new.join("result.json"), r#"{"id":"00000000-0000-0000-0000-000000000001","started_at":"2026-01-02T00:00:00Z","finished_at":null,"n_total_trials":4,"stats":{"n_trials":3,"n_errors":1,"evals":{"k":{"metrics":[{"mean":0.5}]}},"n_input_tokens":300,"n_cache_tokens":90,"cost_usd":0.6}}"#);
+        write(
+            &new.join("config.json"),
+            r#"{"job_name":"n","agents":[{"name":"claude-code","model_name":"anthropic/m"}],"datasets":[{"name":"ds","version":2}]}"#,
+        );
+        write(
+            &new.join("result.json"),
+            r#"{"id":"00000000-0000-0000-0000-000000000001","started_at":"2026-01-02T00:00:00Z","finished_at":null,"n_total_trials":4,"stats":{"n_trials":3,"n_errors":1,"evals":{"k":{"metrics":[{"mean":0.5}]}},"n_input_tokens":300,"n_cache_tokens":90,"cost_usd":0.6}}"#,
+        );
         trial(&new.join("a__1"), "a", Some(1.0), None, "2026-01-02T00:00:00Z", Some("2026-01-02T00:00:10Z"), 0.1);
         trial(&new.join("a__2"), "a", Some(0.0), Some("AgentTimeoutError"), "2026-01-02T00:00:00Z", Some("2026-01-02T00:00:30Z"), 0.2);
         trial(&new.join("b__1"), "b", Some(0.75), None, "2026-01-02T00:00:00Z", Some("2026-01-02T00:00:20Z"), 0.3);
@@ -2219,15 +2453,24 @@ mod tests {
         assert_eq!((j["total"].as_i64(), j["total_pages"].as_i64()), (Some(2), Some(1)));
         let first = &j["items"][0];
         assert_eq!(first["name"], "2026-01-02__00-00-00");
-        assert_eq!((first["n_completed_trials"].as_i64(), first["n_errored_trials"].as_i64(), first["total_input_tokens"].as_i64()), (Some(3), Some(1), Some(210)));
-        assert_eq!((first["datasets"].clone(), first["providers"].clone(), first["models"].clone()), (json!(["ds"]), json!(["anthropic"]), json!(["m"])));
+        assert_eq!(
+            (first["n_completed_trials"].as_i64(), first["n_errored_trials"].as_i64(), first["total_input_tokens"].as_i64()),
+            (Some(3), Some(1), Some(210))
+        );
+        assert_eq!(
+            (first["datasets"].clone(), first["providers"].clone(), first["models"].clone()),
+            (json!(["ds"]), json!(["anthropic"]), json!(["m"]))
+        );
         assert_eq!(j["items"][1]["agents"], json!(["oracle"])); // default agent, no result -> sorted last
         assert_eq!(get(&app, "/api/jobs?q=ANTHROPIC").1["total"], 1);
         assert_eq!(get(&app, "/api/jobs?agent=oracle&agent=nope").1["items"][0]["name"], "2025-01-01__00-00-00");
         let p = get(&app, "/api/jobs?page=2&page_size=1").1;
         assert_eq!((p["items"][0]["name"].as_str(), p["total_pages"].as_i64()), (Some("2025-01-01__00-00-00"), Some(2)));
         assert_eq!(get(&app, "/api/jobs?page_size=101").0, 422);
-        assert_eq!(get(&app, "/api/jobs/filters").1["agents"], json!([{"value": "claude-code", "count": 1}, {"value": "oracle", "count": 1}]));
+        assert_eq!(
+            get(&app, "/api/jobs/filters").1["agents"],
+            json!([{"value": "claude-code", "count": 1}, {"value": "oracle", "count": 1}])
+        );
     }
 
     #[test]
@@ -2238,19 +2481,31 @@ mod tests {
         let names: Vec<&str> = t["items"].as_array().unwrap().iter().map(|x| x["task_name"].as_str().unwrap()).collect();
         assert_eq!(names, ["c", "b", "a"]); // in-progress group (avg None) first when descending
         let a = &t["items"][2];
-        assert_eq!((a["n_trials"].as_i64(), a["n_errors"].as_i64(), a["avg_reward"].as_f64(), a["avg_duration_ms"].as_f64()), (Some(2), Some(1), Some(0.5), Some(20000.0)));
-        assert_eq!((a["avg_input_tokens"].as_f64(), a["avg_tokens"].as_f64(), a["evals"]["aux"]["metrics"][0]["aux"].as_f64()), (Some(70.0), Some(105.0), Some(2.0)));
+        assert_eq!(
+            (a["n_trials"].as_i64(), a["n_errors"].as_i64(), a["avg_reward"].as_f64(), a["avg_duration_ms"].as_f64()),
+            (Some(2), Some(1), Some(0.5), Some(20000.0))
+        );
+        assert_eq!(
+            (a["avg_input_tokens"].as_f64(), a["avg_tokens"].as_f64(), a["evals"]["aux"]["metrics"][0]["aux"].as_f64()),
+            (Some(70.0), Some(105.0), Some(2.0))
+        );
         assert_eq!(a["exception_types"], json!(["AgentTimeoutError"]));
         let (_, tr) = get(&app, &format!("/api/jobs/{job}/trials?sort_by=cost_usd&sort_order=desc"));
         let names: Vec<&str> = tr["items"].as_array().unwrap().iter().map(|x| x["name"].as_str().unwrap()).collect();
         assert_eq!(names, ["c__1", "b__1", "a__2", "a__1"]); // None first when descending
         assert_eq!((tr["items"][1]["reward"].as_f64(), tr["items"][1]["reasoning_effort"].as_str()), (Some(0.75), Some("high")));
         assert_eq!(get(&app, &format!("/api/jobs/{job}/trials?reasoning_effort=__missing__")).1["total"], 1);
-        assert_eq!(get(&app, &format!("/api/jobs/{job}/tasks/filters")).1["reasoning_efforts"], json!([{"value": "__missing__", "count": 1}, {"value": "high", "count": 3}]));
+        assert_eq!(
+            get(&app, &format!("/api/jobs/{job}/tasks/filters")).1["reasoning_efforts"],
+            json!([{"value": "__missing__", "count": 1}, {"value": "high", "count": 3}])
+        );
         let nav = get(&app, &format!("/api/jobs/{job}/trials/a__2/navigation")).1;
         assert_eq!((nav["previous"].as_str(), nav["next"].as_str(), nav["total"].as_i64()), (Some("a__1"), Some("b__1"), Some(4)));
         let partial = get(&app, &format!("/api/jobs/{job}/trials/c__1")).1;
-        assert_eq!((partial["task_name"].as_str(), partial["agent_info"]["name"].as_str(), partial["finished_at"].is_null()), (Some("c"), Some("oracle"), true));
+        assert_eq!(
+            (partial["task_name"].as_str(), partial["agent_info"]["name"].as_str(), partial["finished_at"].is_null()),
+            (Some("c"), Some("oracle"), true)
+        );
         assert_eq!(get(&app, &format!("/api/jobs/{job}/trials/a__1/files/agent/x.txt")).1, "a\nb");
         let cmp = get(&app, &format!("/api/compare?job={job}")).1;
         assert_eq!(cmp["tasks"][0]["task_name"], "b"); // highest avg reward first
@@ -2260,24 +2515,44 @@ mod tests {
     fn path_guards_and_spa() {
         let app = fixture();
         let job = "2026-01-02__00-00-00";
-        for url in [format!("/api/jobs/{job}/trials/a__1/files/../../../secret.txt"), format!("/api/jobs/{job}/trials/a__1/files/%2E%2E/%2E%2E/%2E%2E/secret.txt")] {
+        for url in [
+            format!("/api/jobs/{job}/trials/a__1/files/../../../secret.txt"),
+            format!("/api/jobs/{job}/trials/a__1/files/%2E%2E/%2E%2E/%2E%2E/secret.txt"),
+        ] {
             let (s, body) = get(&app, &url);
             assert_eq!(s, 403, "{url} -> {body}");
         }
         assert_eq!(get(&app, "/api/jobs/..").0, 400);
         assert_eq!(get(&app, "/api/jobs/nope").0, 404);
         assert_eq!(get(&app, &format!("/api/jobs/{job}/trials/a__1/verifier-output?step=../../..")).0, 400);
-        let r = handle(&app, &Req { method: "DELETE", url: &format!("/api/jobs/{job}"), origin: Some("http://evil.example"), host: Some("127.0.0.1:8080"), client_loopback: true, body: b"" });
+        let r = handle(
+            &app,
+            &Req {
+                method: "DELETE",
+                url: &format!("/api/jobs/{job}"),
+                origin: Some("http://evil.example"),
+                host: Some("127.0.0.1:8080"),
+                client_loopback: true,
+                body: b"",
+            },
+        );
         assert_eq!(r.status, 403);
         assert!(app.folder.join(job).exists());
-        let page = handle(&app, &Req { method: "GET", url: "/jobs/x/trials/y", origin: None, host: None, client_loopback: true, body: b"" });
+        let page =
+            handle(&app, &Req { method: "GET", url: "/jobs/x/trials/y", origin: None, host: None, client_loopback: true, body: b"" });
         assert!(String::from_utf8(page.body).unwrap().contains(r#"<div id="root">"#));
     }
 
     #[test]
     fn task_config_dump_fills_defaults_and_migrates() {
-        let c = task_config_dump("version = \"1.0\"\n[environment]\nmemory = \"2G\"\nos = \"LINUX\"\nallow_internet = false\n[agent]\ntimeout_sec = 600\n").unwrap();
-        assert_eq!((c["schema_version"].as_str(), c["environment"]["memory_mb"].as_i64(), c["environment"]["os"].as_str()), (Some("1.0"), Some(2048), Some("linux")));
+        let c = task_config_dump(
+            "version = \"1.0\"\n[environment]\nmemory = \"2G\"\nos = \"LINUX\"\nallow_internet = false\n[agent]\ntimeout_sec = 600\n",
+        )
+        .unwrap();
+        assert_eq!(
+            (c["schema_version"].as_str(), c["environment"]["memory_mb"].as_i64(), c["environment"]["os"].as_str()),
+            (Some("1.0"), Some(2048), Some("linux"))
+        );
         assert_eq!(c["environment"]["network_mode"], "no-network");
         assert!(c["environment"].get("allow_internet").is_none() && c["agent"]["timeout_sec"].is_f64());
         assert_eq!(c["artifacts"], json!([]));

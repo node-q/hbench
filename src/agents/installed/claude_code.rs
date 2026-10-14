@@ -1,8 +1,8 @@
 //! Claude Code (port of upstream's agents/installed/claude_code.py).
 
 use super::{
-    connection, ensure_acp_node_command, ensure_system_dependencies, exec_agent, exec_error, exec_root, filter_jsonl_events, parse_version, pinned_bin_wrapper_command,
-    safe_bin_symlink_command, upload_text,
+    connection, ensure_acp_node_command, ensure_system_dependencies, exec_agent, exec_error, exec_root, filter_jsonl_events, parse_version,
+    pinned_bin_wrapper_command, safe_bin_symlink_command, upload_text,
 };
 use crate::agents::model_connection::Spec;
 use crate::agents::{Agent, AgentArgs, AgentContext, AgentCtx, ModelUsage};
@@ -84,7 +84,12 @@ impl ClaudeCode {
             }
             f.push(format!("--thinking-display {v}"));
         }
-        for (kw, flag) in [("max_budget_usd", "--max-budget-usd"), ("fallback_model", "--fallback-model"), ("append_system_prompt", "--append-system-prompt"), ("allowed_tools", "--allowedTools")] {
+        for (kw, flag) in [
+            ("max_budget_usd", "--max-budget-usd"),
+            ("fallback_model", "--fallback-model"),
+            ("append_system_prompt", "--append-system-prompt"),
+            ("allowed_tools", "--allowedTools"),
+        ] {
             if let Some(v) = self.args.kw(kw) {
                 f.push(format!("{flag} {}", quote(&v)));
             }
@@ -120,7 +125,9 @@ impl ClaudeCode {
         let force_oauth = truthy(self.args.get_env("CLAUDE_FORCE_OAUTH"));
         let oauth = self.args.get_env("CLAUDE_CODE_OAUTH_TOKEN").map(|s| s.trim().to_string()).unwrap_or_default();
         if force_oauth && oauth.is_empty() {
-            bail!("CLAUDE_FORCE_OAUTH is set but CLAUDE_CODE_OAUTH_TOKEN is not. Run `claude setup-token` to get one, or unset CLAUDE_FORCE_OAUTH.");
+            bail!(
+                "CLAUDE_FORCE_OAUTH is set but CLAUDE_CODE_OAUTH_TOKEN is not. Run `claude setup-token` to get one, or unset CLAUDE_FORCE_OAUTH."
+            );
         }
         let conn = connection(&self.args, SPEC);
         let mut env = BTreeMap::new();
@@ -133,7 +140,14 @@ impl ClaudeCode {
         env.insert("CLAUDE_CODE_OAUTH_TOKEN".into(), oauth);
         if bedrock {
             env.insert("CLAUDE_CODE_USE_BEDROCK".into(), "1".into());
-            for k in ["AWS_BEARER_TOKEN_BEDROCK", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_PROFILE", "ANTHROPIC_SMALL_FAST_MODEL_AWS_REGION"] {
+            for k in [
+                "AWS_BEARER_TOKEN_BEDROCK",
+                "AWS_ACCESS_KEY_ID",
+                "AWS_SECRET_ACCESS_KEY",
+                "AWS_SESSION_TOKEN",
+                "AWS_PROFILE",
+                "ANTHROPIC_SMALL_FAST_MODEL_AWS_REGION",
+            ] {
                 env.insert(k.into(), self.args.get_env(k).unwrap_or_default());
             }
             env.insert("AWS_REGION".into(), self.args.get_env("AWS_REGION").unwrap_or_else(|| "us-east-1".into()));
@@ -173,7 +187,13 @@ fn session_text(m: &Value) -> String {
         Value::String(s) => s.clone(),
         Value::Array(parts) => parts
             .iter()
-            .map(|p| if p["type"] == "text" && p["text"].as_str().is_some_and(|t| !t.is_empty()) { p["text"].as_str().unwrap().to_string() } else { "[image omitted]".into() })
+            .map(|p| {
+                if p["type"] == "text" && p["text"].as_str().is_some_and(|t| !t.is_empty()) {
+                    p["text"].as_str().unwrap().to_string()
+                } else {
+                    "[image omitted]".into()
+                }
+            })
             .collect::<Vec<_>>()
             .join("\n"),
         _ => String::new(),
@@ -238,7 +258,11 @@ pub fn atif_to_native(traj: &Value, session_id: &str) -> String {
                 let content = match r {
                     Some(r) => {
                         let raw = &r["extra"]["tool_result_metadata"]["raw_tool_result"];
-                        if raw.is_object() && raw.get("content").is_some() { raw["content"].clone() } else { json!(session_text(&r["content"])) }
+                        if raw.is_object() && raw.get("content").is_some() {
+                            raw["content"].clone()
+                        } else {
+                            json!(session_text(&r["content"]))
+                        }
                     }
                     None => json!("[no output recorded]"),
                 };
@@ -281,7 +305,9 @@ pub fn parse_stream_result(text: &str) -> Option<AgentContext> {
         cost_usd: v["total_cost_usd"].as_f64(),
         model_usage: (!model_usage.is_empty()).then_some(model_usage),
         rollout_details: None,
-        metadata: Some(json!({"num_turns": v["num_turns"], "is_error": v["is_error"], "duration_ms": v["duration_ms"], "subtype": v["subtype"], "session_id": v["session_id"]})),
+        metadata: Some(
+            json!({"num_turns": v["num_turns"], "is_error": v["is_error"], "duration_ms": v["duration_ms"], "subtype": v["subtype"], "session_id": v["session_id"]}),
+        ),
     })
 }
 
@@ -349,7 +375,9 @@ impl Agent for ClaudeCode {
         .await?;
         let last = r.stdout.trim().lines().last().unwrap_or_default().to_string();
         let parts: Vec<&str> = last.split(':').collect();
-        let [system_node, node, adapter, claude] = parts.as_slice() else { bail!("Could not locate node/claude-code-acp binaries for ACP mode (got {last:?})") };
+        let [system_node, node, adapter, claude] = parts.as_slice() else {
+            bail!("Could not locate node/claude-code-acp binaries for ACP mode (got {last:?})")
+        };
         if node.is_empty() || adapter.is_empty() {
             bail!("Could not locate node/claude-code-acp binaries for ACP mode (got {last:?})");
         }
@@ -367,7 +395,10 @@ impl Agent for ClaudeCode {
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
         cx.env.exec_root("[ -d /installed-agent ] || mkdir -p /installed-agent", None).await?;
         let check = match &self.version {
-            None => cx.exec("export PATH=\"$HOME/.local/bin:$PATH\"; command -v claude >/dev/null 2>&1", &BTreeMap::new(), None).await?.code == 0,
+            None => {
+                cx.exec("export PATH=\"$HOME/.local/bin:$PATH\"; command -v claude >/dev/null 2>&1", &BTreeMap::new(), None).await?.code
+                    == 0
+            }
             Some(v) => {
                 let r = cx.exec("export PATH=\"$HOME/.local/bin:$PATH\"; claude --version", &BTreeMap::new(), None).await?;
                 r.code == 0 && parse_version(&r.stdout) == *v
@@ -410,7 +441,12 @@ impl Agent for ClaudeCode {
         if env.contains_key("ANTHROPIC_BASE_URL")
             && let Some(m) = env.get("ANTHROPIC_MODEL").cloned()
         {
-            for k in ["ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL", "CLAUDE_CODE_SUBAGENT_MODEL"] {
+            for k in [
+                "ANTHROPIC_DEFAULT_SONNET_MODEL",
+                "ANTHROPIC_DEFAULT_OPUS_MODEL",
+                "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+                "CLAUDE_CODE_SUBAGENT_MODEL",
+            ] {
                 env.insert(k.into(), m.clone());
             }
         }
@@ -435,7 +471,10 @@ impl Agent for ClaudeCode {
             setup += &format!(" && (cp -r {}/* $CLAUDE_CONFIG_DIR/skills/ 2>/dev/null || true)", quote(&d));
         }
         if let Some(m) = self.args.kw("memory_dir") {
-            setup += &format!(" && (mkdir -p $CLAUDE_CONFIG_DIR/projects/-app/memory && cp -r {}/* $CLAUDE_CONFIG_DIR/projects/-app/memory/ 2>/dev/null || true)", quote(&m));
+            setup += &format!(
+                " && (mkdir -p $CLAUDE_CONFIG_DIR/projects/-app/memory && cp -r {}/* $CLAUDE_CONFIG_DIR/projects/-app/memory/ 2>/dev/null || true)",
+                quote(&m)
+            );
         }
         if let Some(m) = self.mcp_command() {
             setup += &format!(" && {m}");
@@ -452,12 +491,19 @@ impl Agent for ClaudeCode {
             self.loaded = true;
             let (name, content) = if src.extension().is_some_and(|e| e == "json") {
                 let traj: Value = serde_json::from_str(&std::fs::read_to_string(&src)?)?;
-                let sid = traj["session_id"].as_str().filter(|s| uuid::Uuid::parse_str(s).is_ok()).map(String::from).unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+                let sid = traj["session_id"]
+                    .as_str()
+                    .filter(|s| uuid::Uuid::parse_str(s).is_ok())
+                    .map(String::from)
+                    .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
                 (format!("{sid}.jsonl"), atif_to_native(&traj, &sid))
             } else {
                 let stem = src.file_stem().unwrap_or_default().to_string_lossy().into_owned();
                 if src.extension().is_none_or(|e| e != "jsonl") || uuid::Uuid::parse_str(&stem).is_err() {
-                    bail!("Claude Code load_trajectory must be a native session file named <session-id>.jsonl or an ATIF trajectory .json file; got {:?}", src.file_name().unwrap_or_default());
+                    bail!(
+                        "Claude Code load_trajectory must be a native session file named <session-id>.jsonl or an ATIF trajectory .json file; got {:?}",
+                        src.file_name().unwrap_or_default()
+                    );
                 }
                 (format!("{stem}.jsonl"), std::fs::read_to_string(&src)?)
             };
@@ -480,7 +526,8 @@ impl Agent for ClaudeCode {
         if r.code != 0 {
             // Classify only harness-emitted events: model text and tool output can echo error phrases.
             let evidence = filter_jsonl_events(&r.stdout, |e| {
-                e["type"] == "error" || (e["type"] == "result" && (e["is_error"] == true || e["subtype"].as_str().is_some_and(|s| s.starts_with("error"))))
+                e["type"] == "error"
+                    || (e["type"] == "result" && (e["is_error"] == true || e["subtype"].as_str().is_some_and(|s| s.starts_with("error"))))
             });
             return Err(exec_error(&cmd, &r, Some(&format!("{evidence}\n{}", r.stderr))));
         }
@@ -530,14 +577,20 @@ mod tests {
 
     #[test]
     fn flags_and_auth() {
-        let a = agent(json!({"max_turns": 5, "reasoning_effort": "high", "disable_web_search": true, "allowed_tools": "Bash,Edit"}), &[("ANTHROPIC_API_KEY", "sk")], Some("anthropic/claude-opus-5-5")).unwrap();
+        let a = agent(
+            json!({"max_turns": 5, "reasoning_effort": "high", "disable_web_search": true, "allowed_tools": "Bash,Edit"}),
+            &[("ANTHROPIC_API_KEY", "sk")],
+            Some("anthropic/claude-opus-5-5"),
+        )
+        .unwrap();
         let f = a.cli_flags().unwrap();
         assert!(f.contains("--permission-mode=bypassPermissions") && f.contains("--max-turns 5") && f.contains("--effort high"));
         assert!(f.contains("--disallowedTools WebSearch,WebFetch") && f.contains("--allowedTools Bash,Edit"));
         assert_eq!(a.resolved_model().unwrap(), "claude-opus-5-5");
         assert_eq!(a.auth_env().unwrap()["ANTHROPIC_API_KEY"], "sk");
         assert!(agent(json!({"reasoning_effort": "huge"}), &[], None).is_err());
-        let o = agent(json!({}), &[("CLAUDE_CODE_OAUTH_TOKEN", "oat"), ("CLAUDE_FORCE_OAUTH", "1"), ("ANTHROPIC_API_KEY", "sk")], None).unwrap();
+        let o = agent(json!({}), &[("CLAUDE_CODE_OAUTH_TOKEN", "oat"), ("CLAUDE_FORCE_OAUTH", "1"), ("ANTHROPIC_API_KEY", "sk")], None)
+            .unwrap();
         let e = o.auth_env().unwrap();
         assert_eq!(e.get("CLAUDE_CODE_OAUTH_TOKEN").map(String::as_str), Some("oat"));
         assert!(!e.contains_key("ANTHROPIC_API_KEY"));
@@ -549,16 +602,19 @@ mod tests {
     #[test]
     fn atif_round_trip_shape() {
         let traj = json!({"schema_version": "ATIF-v1.4", "session_id": "not-a-uuid", "agent": {"name": "x", "version": "2.0.0", "model_name": "m"},
-            "steps": [
-                {"step_id": 1, "source": "system", "message": "sys"},
-                {"step_id": 2, "source": "user", "message": "create a file"},
-                {"step_id": 3, "source": "agent", "message": "ok", "tool_calls": [{"tool_call_id": "t1", "function_name": "Bash", "arguments": {"command": "touch x"}}],
-                 "observation": {"results": [{"source_call_id": "t1", "content": "done"}]}, "metrics": {"prompt_tokens": 5, "completion_tokens": 2}}
-            ]});
+        "steps": [
+            {"step_id": 1, "source": "system", "message": "sys"},
+            {"step_id": 2, "source": "user", "message": "create a file"},
+            {"step_id": 3, "source": "agent", "message": "ok", "tool_calls": [{"tool_call_id": "t1", "function_name": "Bash", "arguments": {"command": "touch x"}}],
+             "observation": {"results": [{"source_call_id": "t1", "content": "done"}]}, "metrics": {"prompt_tokens": 5, "completion_tokens": 2}}
+        ]});
         let out = atif_to_native(&traj, "sid");
         let ev: Vec<Value> = out.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
         assert_eq!(ev.len(), 3);
-        assert_eq!((ev[0]["type"].as_str(), ev[1]["type"].as_str(), ev[2]["type"].as_str()), (Some("user"), Some("assistant"), Some("user")));
+        assert_eq!(
+            (ev[0]["type"].as_str(), ev[1]["type"].as_str(), ev[2]["type"].as_str()),
+            (Some("user"), Some("assistant"), Some("user"))
+        );
         assert!(ev[0]["parentUuid"].is_null() && ev[1]["parentUuid"] == ev[0]["uuid"] && ev[2]["parentUuid"] == ev[1]["uuid"]);
         assert_eq!(ev[1]["message"]["content"][1]["name"], "Bash");
         assert_eq!(ev[1]["message"]["usage"]["input_tokens"], 5);

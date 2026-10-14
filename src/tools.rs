@@ -60,7 +60,13 @@ pub async fn start_env(path: &Path, all: bool, interactive: bool, agent: Option<
             eprintln!("setting up agent {} ...", a.name());
             let mut ag = agents::create(&a, tmp.join("agent"), task.clone(), None)?;
             let overlay = ag.extra_env().map(Ok).unwrap_or_else(|| resolve_env_vars(&a.env))?;
-            let cx = AgentCtx { env: &env, user: task.config.agent.user.as_ref().map(|u| u.to_string()), overlay, logs_dir: tmp.join("agent"), step: None };
+            let cx = AgentCtx {
+                env: &env,
+                user: task.config.agent.user.as_ref().map(|u| u.to_string()),
+                overlay,
+                logs_dir: tmp.join("agent"),
+                step: None,
+            };
             ag.setup(&cx).await?;
             eprintln!("agent setup complete");
         }
@@ -83,7 +89,11 @@ pub async fn cache_clean(force: bool, dry: bool, no_docker: bool, no_cache_dir: 
     if !no_docker {
         match tokio::process::Command::new("docker").args(["images", "--format", "{{.Repository}}:{{.Tag}}"]).output().await {
             Ok(o) if o.status.success() => {
-                images = String::from_utf8_lossy(&o.stdout).lines().filter(|i| i.starts_with("hb__") || i.starts_with("hbench-egress-sidecar")).map(String::from).collect();
+                images = String::from_utf8_lossy(&o.stdout)
+                    .lines()
+                    .filter(|i| i.starts_with("hb__") || i.starts_with("hbench-egress-sidecar"))
+                    .map(String::from)
+                    .collect();
             }
             _ => eprintln!("could not list Docker images; skipping image cleanup"),
         }
@@ -120,7 +130,12 @@ pub async fn cache_clean(force: bool, dry: bool, no_docker: bool, no_cache_dir: 
 }
 
 fn walk_size(p: &Path) -> u64 {
-    std::fs::read_dir(p).into_iter().flatten().flatten().map(|e| if e.path().is_dir() { walk_size(&e.path()) } else { e.metadata().map(|m| m.len()).unwrap_or(0) }).sum()
+    std::fs::read_dir(p)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| if e.path().is_dir() { walk_size(&e.path()) } else { e.metadata().map(|m| m.len()).unwrap_or(0) })
+        .sum()
 }
 
 fn which(bin: &str) -> bool {
@@ -129,7 +144,10 @@ fn which(bin: &str) -> bool {
 
 /// Install a finished trial's native session for the local agent CLI; returns the resume command.
 pub fn handoff_command(trial_dir: &Path, cwd: &Path) -> Result<Vec<String>> {
-    let cfg: Value = serde_json::from_str(&std::fs::read_to_string(trial_dir.join("config.json")).with_context(|| format!("{} is not a trial directory (missing config.json).", trial_dir.display()))?)?;
+    let cfg: Value = serde_json::from_str(
+        &std::fs::read_to_string(trial_dir.join("config.json"))
+            .with_context(|| format!("{} is not a trial directory (missing config.json).", trial_dir.display()))?,
+    )?;
     let agent = cfg["agent"]["name"].as_str().unwrap_or("oracle");
     match agent {
         "claude-code" => {
@@ -146,10 +164,17 @@ pub fn handoff_command(trial_dir: &Path, cwd: &Path) -> Result<Vec<String>> {
                 }
             }
             if sessions.len() != 1 {
-                bail!("Expected exactly 1 session in {}, found {}; handoff supports single-session trials only", trial_dir.join("agent/sessions").display(), sessions.len());
+                bail!(
+                    "Expected exactly 1 session in {}, found {}; handoff supports single-session trials only",
+                    trial_dir.join("agent/sessions").display(),
+                    sessions.len()
+                );
             }
-            let config_dir = std::env::var_os("CLAUDE_CONFIG_DIR").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".claude"));
-            let slug: String = cwd.display().to_string().chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '-' }).collect();
+            let config_dir = std::env::var_os("CLAUDE_CONFIG_DIR")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".claude"));
+            let slug: String =
+                cwd.display().to_string().chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '-' }).collect();
             let project = config_dir.join("projects").join(slug);
             std::fs::create_dir_all(&project)?;
             std::fs::copy(&sessions[0], project.join(sessions[0].file_name().unwrap()))?;
@@ -160,7 +185,8 @@ pub fn handoff_command(trial_dir: &Path, cwd: &Path) -> Result<Vec<String>> {
                 bail!("muse CLI not found on PATH; install Muse Code first");
             }
             let logs = trial_dir.join("agent");
-            let manifest: Value = serde_json::from_str(&std::fs::read_to_string(logs.join(crate::agents::installed::muse_code::MANIFEST))?)?;
+            let manifest: Value =
+                serde_json::from_str(&std::fs::read_to_string(logs.join(crate::agents::installed::muse_code::MANIFEST))?)?;
             let sid = uuid::Uuid::parse_str(manifest["session_id"].as_str().unwrap_or_default())?.to_string();
             let mut found = vec![];
             for e in walkdir(&logs.join("sessions")) {
@@ -171,7 +197,9 @@ pub fn handoff_command(trial_dir: &Path, cwd: &Path) -> Result<Vec<String>> {
             if found.len() != 1 {
                 bail!("Expected exactly one matching Muse session for handoff");
             }
-            let data = std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".local/share"));
+            let data = std::env::var_os("XDG_DATA_HOME")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".local/share"));
             let store = data.join("muse/sessions");
             if walkdir(&store).iter().any(|p| p.to_string_lossy().contains(&format!("/{sid}/"))) {
                 bail!("Muse session {sid} already exists locally");

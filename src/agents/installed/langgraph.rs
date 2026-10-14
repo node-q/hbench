@@ -21,7 +21,8 @@ const INSTRUCTION_PATH: &str = "/installed-agent/instruction.txt";
 const DEFAULT_NODE_LOADER: &str = "/opt/hbench-langgraph-node-tools/node_modules/tsx/dist/loader.mjs";
 const NODE_SHELL_PREFIX: &str = "export NVM_DIR=\"$HOME/.nvm\"; . \"$NVM_DIR/nvm.sh\"; ";
 const MAX_SUMMARY_BYTES: usize = 1_000_000;
-const IGNORE_NAMES: [&str; 10] = [".env", ".git", ".hg", ".mypy_cache", ".pytest_cache", ".ruff_cache", ".tox", ".venv", "__pycache__", "node_modules"];
+const IGNORE_NAMES: [&str; 10] =
+    [".env", ".git", ".hg", ".mypy_cache", ".pytest_cache", ".ruff_cache", ".tox", ".venv", "__pycache__", "node_modules"];
 const NODE_SUFFIXES: [&str; 8] = [".js", ".mjs", ".cjs", ".ts", ".mts", ".cts", ".jsx", ".tsx"];
 /// manager -> (lockfiles, locked install, unlocked install), matched in this order.
 const NODE_PACKAGE_MANAGERS: [(&str, &[&str], &str, &str); 4] = [
@@ -76,7 +77,11 @@ fn split_graph_path(spec: &str) -> Result<(String, String)> {
     if module.is_empty() || attr.is_empty() {
         return Err(bad());
     }
-    let (re, dialect) = if NODE_SUFFIXES.contains(&suffix(module)) { (r"^[A-Za-z_$][A-Za-z0-9_$]*$", "JavaScript") } else { (r"^[A-Za-z_][A-Za-z0-9_]*$", "Python") };
+    let (re, dialect) = if NODE_SUFFIXES.contains(&suffix(module)) {
+        (r"^[A-Za-z_$][A-Za-z0-9_$]*$", "JavaScript")
+    } else {
+        (r"^[A-Za-z_][A-Za-z0-9_]*$", "Python")
+    };
     let re = Regex::new(re).unwrap();
     if !attr.split('.').all(|p| re.is_match(p)) {
         bail!("Invalid graph attribute path '{attr}'. Expected dot-separated {dialect} identifiers");
@@ -97,7 +102,9 @@ fn graph_runtime(spec: &str) -> Result<&'static str> {
 }
 
 fn select_graph(config: &Value, name: Option<&str>) -> Result<(String, String)> {
-    let Some(graphs) = config["graphs"].as_object().filter(|g| !g.is_empty()) else { bail!("langgraph.json must define at least one graph") };
+    let Some(graphs) = config["graphs"].as_object().filter(|g| !g.is_empty()) else {
+        bail!("langgraph.json must define at least one graph")
+    };
     let available = || graphs.keys().cloned().collect::<Vec<_>>().join(", ");
     let name = match name {
         Some(n) => n.to_string(),
@@ -208,9 +215,13 @@ impl LangGraph {
             Ok(rest) => PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(rest),
             Err(_) => raw,
         };
-        let project_path = std::fs::canonicalize(&raw).ok().filter(|p| p.is_dir()).ok_or_else(|| anyhow::anyhow!("LangGraph project_path does not exist: {}", raw.display()))?;
+        let project_path = std::fs::canonicalize(&raw)
+            .ok()
+            .filter(|p| p.is_dir())
+            .ok_or_else(|| anyhow::anyhow!("LangGraph project_path does not exist: {}", raw.display()))?;
         let config = args.kw("config").unwrap_or_else(|| "langgraph.json".into());
-        let config_abs = std::fs::canonicalize(project_path.join(&config)).map_err(|_| anyhow::anyhow!("LangGraph config file not found: {}", project_path.join(&config).display()))?;
+        let config_abs = std::fs::canonicalize(project_path.join(&config))
+            .map_err(|_| anyhow::anyhow!("LangGraph config file not found: {}", project_path.join(&config).display()))?;
         if !config_abs.starts_with(&project_path) {
             bail!("LangGraph config file must resolve within the LangGraph project: {config}");
         }
@@ -246,7 +257,14 @@ impl LangGraph {
             args,
         };
         if runtime == "node" {
-            let v = a.args.kwargs.get("node_version").filter(|v| !v.is_null()).or(a.lg_config.get("node_version").filter(|v| !v.is_null())).cloned().unwrap_or(json!(22));
+            let v = a
+                .args
+                .kwargs
+                .get("node_version")
+                .filter(|v| !v.is_null())
+                .or(a.lg_config.get("node_version").filter(|v| !v.is_null()))
+                .cloned()
+                .unwrap_or(json!(22));
             a.node_version = match &v {
                 Value::Number(n) if matches!(n.as_i64(), Some(20 | 22 | 24)) => n.as_i64().unwrap() as u32,
                 Value::String(s) if ["20", "22", "24"].contains(&s.as_str()) => s.parse().unwrap(),
@@ -280,7 +298,12 @@ impl LangGraph {
 
     fn yarn_major(&self) -> u64 {
         match self.package_manager_field().split_once('@') {
-            Some(("yarn", v)) => v.split('.').next().filter(|m| !m.is_empty() && m.chars().all(|c| c.is_ascii_digit())).and_then(|m| m.parse().ok()).unwrap_or(1),
+            Some(("yarn", v)) => v
+                .split('.')
+                .next()
+                .filter(|m| !m.is_empty() && m.chars().all(|c| c.is_ascii_digit()))
+                .and_then(|m| m.parse().ok())
+                .unwrap_or(1),
             _ => 1,
         }
     }
@@ -298,7 +321,8 @@ impl LangGraph {
             }
         }
         let names_yarn = self.package_manager_field().starts_with("yarn@");
-        ((names_yarn || self.project_path.join("yarn.lock").exists()) && self.yarn_major() >= 2).then(|| "Yarn 2+ defaults to Plug'n'Play".into())
+        ((names_yarn || self.project_path.join("yarn.lock").exists()) && self.yarn_major() >= 2)
+            .then(|| "Yarn 2+ defaults to Plug'n'Play".into())
     }
 
     fn has_lockfile(&self, lockfiles: &[&str]) -> bool {
@@ -370,14 +394,23 @@ impl LangGraph {
     fn configurable_json(&self) -> String {
         let mut c = self.configurable.clone();
         if !self.args.mcp_servers.is_empty() && c.get("mcp_servers").is_none() {
-            c["mcp_servers"] = json!(self.args.mcp_servers.iter().map(|s| json!({"name": s.name, "transport": s.transport(), "url": s.url, "command": s.command, "args": s.args})).collect::<Vec<_>>());
+            c["mcp_servers"] = json!(
+                self.args
+                    .mcp_servers
+                    .iter()
+                    .map(|s| json!({"name": s.name, "transport": s.transport(), "url": s.url, "command": s.command, "args": s.args}))
+                    .collect::<Vec<_>>()
+            );
         }
         c.to_string()
     }
 
     fn runtime_env(&self, model: Option<&str>, model_kwargs_json: &str) -> BTreeMap<String, String> {
         let session = self.args.logs_dir.parent().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-        let mut env = BTreeMap::from([("HBENCH_SESSION_ID".to_string(), session), ("HBENCH_MODEL_KWARGS_JSON".to_string(), model_kwargs_json.to_string())]);
+        let mut env = BTreeMap::from([
+            ("HBENCH_SESSION_ID".to_string(), session),
+            ("HBENCH_MODEL_KWARGS_JSON".to_string(), model_kwargs_json.to_string()),
+        ]);
         if let Some(m) = model {
             env.insert("HBENCH_MODEL".into(), m.into());
         }
@@ -511,7 +544,8 @@ impl Agent for LangGraph {
         cx.env.exec_root("[ -d /installed-agent ] || mkdir -p /installed-agent", None).await?;
         let none = BTreeMap::new();
         let node = self.runtime == "node";
-        let (runner, runner_path, runtime_dir) = if node { (NODE_RUNNER, NODE_RUNNER_PATH, NODE_TOOLS_DIR) } else { (PY_RUNNER, PY_RUNNER_PATH, VENV_DIR) };
+        let (runner, runner_path, runtime_dir) =
+            if node { (NODE_RUNNER, NODE_RUNNER_PATH, NODE_TOOLS_DIR) } else { (PY_RUNNER, PY_RUNNER_PATH, VENV_DIR) };
         let _ = std::fs::write(self.args.logs_dir.join(runner_path.rsplit('/').next().unwrap()), runner);
         let staged = self.args.logs_dir.join("langgraph_project");
         let _ = std::fs::remove_dir_all(&staged);
@@ -617,7 +651,12 @@ mod tests {
     fn python_project() {
         assert!(lg(&[("langgraph.json", r#"{"graphs": {"agent": "./missing.py:graph"}}"#)], json!({}), None).is_err());
         assert!(lg(&[PY, ("agent.py", "")], json!({"config": "../langgraph.json"}), None).is_err());
-        let a = lg(&[PY, ("agent.py", ""), (".env", "SECRET"), ("node_modules/x.js", "")], json!({"model_kwargs": {"temperature": 0}, "python_version": 3.1}), Some("anthropic/claude-sonnet-4-5")).unwrap();
+        let a = lg(
+            &[PY, ("agent.py", ""), (".env", "SECRET"), ("node_modules/x.js", "")],
+            json!({"model_kwargs": {"temperature": 0}, "python_version": 3.1}),
+            Some("anthropic/claude-sonnet-4-5"),
+        )
+        .unwrap();
         assert_eq!((a.graph.as_str(), a.runtime, a.python_version.as_str()), ("agent", "python", "3.1"));
         assert_eq!(a.normalized_model().as_deref(), Some("anthropic:claude-sonnet-4-5"));
         let cmd = a.run_command(Some("anthropic:claude-sonnet-4-5"), "{}", "{}").unwrap();
@@ -633,7 +672,8 @@ mod tests {
     #[test]
     fn node_project() {
         let ts = ("langgraph.json", r#"{"graphs": {"typescript": "./agent.ts:graph"}, "node_version": "20"}"#);
-        let a = lg(&[ts, ("agent.ts", ""), ("package.json", r#"{"packageManager": "yarn@1.22.22"}"#), ("yarn.lock", "")], json!({}), None).unwrap();
+        let a = lg(&[ts, ("agent.ts", ""), ("package.json", r#"{"packageManager": "yarn@1.22.22"}"#), ("yarn.lock", "")], json!({}), None)
+            .unwrap();
         assert_eq!((a.runtime, a.node_version), ("node", 20));
         assert_eq!(a.node_install_command(), "corepack enable && yarn install --frozen-lockfile");
         assert_eq!(a.node_loader().unwrap(), DEFAULT_NODE_LOADER);
@@ -641,12 +681,34 @@ mod tests {
         assert!(cmd.contains("node --import /opt/hbench-langgraph-node-tools/node_modules/tsx/dist/loader.mjs /installed-agent/langgraphjs_runner.mjs --project-dir"));
         assert!(cmd.contains("--runner-tools-dir /opt/hbench-langgraph-node-tools"));
         assert!(lg(&[ts, ("agent.ts", "")], json!({"node_version": 21}), None).is_err());
-        assert!(lg(&[ts, ("agent.ts", ""), ("package.json", r#"{"packageManager": "yarn@4.1.0"}"#), ("yarn.lock", "")], json!({}), None).is_err());
-        assert_eq!(lg(&[ts, ("agent.ts", ""), ("package.json", r#"{"packageManager": "npm@not-a-version"}"#), ("pnpm-lock.yaml", "")], json!({}), None).unwrap().node_install_command(), "corepack enable && pnpm install --frozen-lockfile");
+        assert!(
+            lg(&[ts, ("agent.ts", ""), ("package.json", r#"{"packageManager": "yarn@4.1.0"}"#), ("yarn.lock", "")], json!({}), None)
+                .is_err()
+        );
+        assert_eq!(
+            lg(
+                &[ts, ("agent.ts", ""), ("package.json", r#"{"packageManager": "npm@not-a-version"}"#), ("pnpm-lock.yaml", "")],
+                json!({}),
+                None
+            )
+            .unwrap()
+            .node_install_command(),
+            "corepack enable && pnpm install --frozen-lockfile"
+        );
         assert_eq!(lg(&[ts, ("agent.ts", "")], json!({}), None).unwrap().node_install_command(), "npm install");
-        let pkg = lg(&[("langgraph.json", r#"{"graphs": {"g": "./agent.ts:graph"}, "node_loader": "conditional-loader"}"#), ("agent.ts", "")], json!({}), None).unwrap();
+        let pkg = lg(
+            &[("langgraph.json", r#"{"graphs": {"g": "./agent.ts:graph"}, "node_loader": "conditional-loader"}"#), ("agent.ts", "")],
+            json!({}),
+            None,
+        )
+        .unwrap();
         assert!(pkg.run_command(None, "{}", "{}").unwrap().contains("console.log(import.meta.resolve(\"conditional-loader\"))"));
-        let esc = lg(&[("langgraph.json", r#"{"graphs": {"g": "./agent.ts:graph"}, "node_loader": "/etc/x.mjs"}"#), ("agent.ts", "")], json!({}), None).unwrap();
+        let esc = lg(
+            &[("langgraph.json", r#"{"graphs": {"g": "./agent.ts:graph"}, "node_loader": "/etc/x.mjs"}"#), ("agent.ts", "")],
+            json!({}),
+            None,
+        )
+        .unwrap();
         assert!(esc.node_loader().is_err());
         assert!(NODE_RUNNER.contains("splitGraphPath") && PY_RUNNER.contains("def _select_graph"));
     }

@@ -34,10 +34,8 @@ exit $_EXIT_CODE
 
 const DOCKERFILE_FIELDS: &[&str] = &["environment", "working_dir", "expose", "entrypoint", "platform"];
 const IGNORED_FIELDS: &[&str] = &["build", "image", "container_name", "command", "volumes", "environment"];
-const TBENCH_DEFAULT_VOLUMES: &[&str] = &[
-    "${T_BENCH_TASK_LOGS_PATH}:${T_BENCH_CONTAINER_LOGS_PATH}",
-    "${T_BENCH_TASK_AGENT_LOGS_PATH}:${T_BENCH_CONTAINER_AGENT_LOGS_PATH}",
-];
+const TBENCH_DEFAULT_VOLUMES: &[&str] =
+    &["${T_BENCH_TASK_LOGS_PATH}:${T_BENCH_CONTAINER_LOGS_PATH}", "${T_BENCH_TASK_AGENT_LOGS_PATH}:${T_BENCH_CONTAINER_AGENT_LOGS_PATH}"];
 const TBENCH_DEFAULT_ENV: &str = "TEST_DIR=${T_BENCH_TEST_DIR}";
 const HBENCH_REPLACES: &[&str] = &["build", "image", "container_name", "command", "environment", "volumes", "deploy"];
 
@@ -410,7 +408,8 @@ fn append_to_dockerfile(path: &Path, svc: &Mapping, task: &str) -> Result<()> {
         let platform = py_str(p);
         let mut count = PLATFORM_RE.find_iter(&content).count();
         if count > 0 {
-            content = PLATFORM_RE.replace_all(&content, |c: &regex::Captures| format!("{}--platform={platform} {}", &c[1], &c[2])).into_owned();
+            content =
+                PLATFORM_RE.replace_all(&content, |c: &regex::Captures| format!("{}--platform={platform} {}", &c[1], &c[2])).into_owned();
         } else {
             (content, count) = add_platform(&content, &platform);
         }
@@ -650,7 +649,9 @@ fn py_str(v: &Value) -> String {
         Value::Number(n) if n.is_f64() => py_float_repr(n.as_f64().unwrap()),
         Value::Number(n) => n.to_string(),
         Value::Sequence(s) => format!("[{}]", s.iter().map(py_repr).collect::<Vec<_>>().join(", ")),
-        Value::Mapping(m) => format!("{{{}}}", m.iter().map(|(k, v)| format!("{}: {}", py_repr(k), py_repr(v))).collect::<Vec<_>>().join(", ")),
+        Value::Mapping(m) => {
+            format!("{{{}}}", m.iter().map(|(k, v)| format!("{}: {}", py_repr(k), py_repr(v))).collect::<Vec<_>>().join(", "))
+        }
         Value::Tagged(t) => py_str(&t.value),
     }
 }
@@ -821,7 +822,8 @@ fn analyze_scalar(s: &[char]) -> Analysis {
         preceded_ws = is_ws0(ch);
         followed_ws = i + 2 >= s.len() || is_ws0(s[i + 2]);
     }
-    let abp = !(lead_space || lead_break || trail_space || trail_break || break_space || space_break || special || line_breaks || block_ind);
+    let abp =
+        !(lead_space || lead_break || trail_space || trail_break || break_space || space_break || special || line_breaks || block_ind);
     let asq = !(break_space || space_break || special);
     Analysis { empty: false, multiline: line_breaks, allow_block_plain: abp, allow_single_quoted: asq }
 }
@@ -1374,10 +1376,7 @@ networks:
         let out = migrate(&root.join("src"), &root.join("out"), Overrides::default()).unwrap();
         assert_eq!(out.len(), 1);
         let t = &out[0];
-        assert_eq!(
-            files(&t.join("environment")),
-            ["Dockerfile", "docker-compose.yaml", "worker/Dockerfile", "worker/worker.py"]
-        );
+        assert_eq!(files(&t.join("environment")), ["Dockerfile", "docker-compose.yaml", "worker/Dockerfile", "worker/worker.py"]);
         assert_eq!(
             read(t.join("environment/Dockerfile")),
             "FROM python:3.12\n\n# Mapped from docker-compose.yaml\nENV TEST_DIR=/tests\nENV DB_HOST=db\n"
@@ -1467,10 +1466,7 @@ networks:
         assert!(read(t.join("task.toml")).ends_with(
             "os = \"linux\"\ncpus = 4\nmemory_mb = 8192\nstorage_mb = 20480\ngpus = 1\nmcp_servers = []\n\n[environment.env]\n\n[solution.env]\n"
         ));
-        assert_eq!(
-            read(t.join("environment/Dockerfile")),
-            "FROM python:3.13\n\n# Mapped from docker-compose.yaml\nENV TEST_DIR=/tests\n"
-        );
+        assert_eq!(read(t.join("environment/Dockerfile")), "FROM python:3.13\n\n# Mapped from docker-compose.yaml\nENV TEST_DIR=/tests\n");
         fs::remove_dir_all(root).ok();
     }
 

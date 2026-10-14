@@ -109,7 +109,8 @@ impl MiMo {
             let mut mcp = Map::new();
             for s in &self.args.mcp_servers {
                 let v = if s.transport() == "stdio" {
-                    let cmd: Vec<String> = s.command.as_ref().map(|c| std::iter::once(c.clone()).chain(s.args.clone()).collect()).unwrap_or_default();
+                    let cmd: Vec<String> =
+                        s.command.as_ref().map(|c| std::iter::once(c.clone()).chain(s.args.clone()).collect()).unwrap_or_default();
                     json!({"type": "local", "command": cmd})
                 } else {
                     json!({"type": "remote", "url": s.url})
@@ -148,7 +149,10 @@ impl MiMo {
         if c.as_object().is_some_and(|o| o.is_empty()) {
             return None;
         }
-        Some(format!("mkdir -p ~/.config/mimocode && echo {} > ~/.config/mimocode/mimocode.json", quote(&serde_json::to_string_pretty(&c).unwrap())))
+        Some(format!(
+            "mkdir -p ~/.config/mimocode && echo {} > ~/.config/mimocode/mimocode.json",
+            quote(&serde_json::to_string_pretty(&c).unwrap())
+        ))
     }
 
     fn cli_flags(&self) -> String {
@@ -259,7 +263,10 @@ impl Agent for MiMo {
         .await?;
         let msgs = error_messages(&r.stdout);
         if !msgs.is_empty() {
-            return Err(kind_err("NonZeroAgentExitCodeError", format!("MiMo emitted error event(s): {}", msgs[..msgs.len().min(3)].join("; "))));
+            return Err(kind_err(
+                "NonZeroAgentExitCodeError",
+                format!("MiMo emitted error event(s): {}", msgs[..msgs.len().min(3)].join("; ")),
+            ));
         }
         Ok(())
     }
@@ -286,7 +293,8 @@ pub(crate) mod tests {
         std::fs::write(dir.join("task.toml"), "[environment]\ndocker_image='x'\n").unwrap();
         std::fs::write(dir.join("instruction.md"), "x").unwrap();
         let task = Arc::new(crate::task::Task::load(&dir).unwrap());
-        AgentArgs { load_trajectory: None,
+        AgentArgs {
+            load_trajectory: None,
             model_name: model.map(String::from),
             kwargs: serde_json::from_value(kwargs).unwrap(),
             extra_env: env.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect(),
@@ -304,7 +312,11 @@ pub(crate) mod tests {
 
     #[test]
     fn config_and_flags() {
-        let m = mimo(json!({"variant": "high", "disable_web_search": true, "mimo_config": {"permission": "allow", "experimental": {"x": 1}}}), &[("CUSTOM_BASE_URL", "https://custom.example.test/v1")], Some("custom/model"));
+        let m = mimo(
+            json!({"variant": "high", "disable_web_search": true, "mimo_config": {"permission": "allow", "experimental": {"x": 1}}}),
+            &[("CUSTOM_BASE_URL", "https://custom.example.test/v1")],
+            Some("custom/model"),
+        );
         let c = m.config();
         assert_eq!(c["provider"]["custom"]["options"]["baseURL"], "https://custom.example.test/v1");
         assert_eq!(c["provider"]["custom"]["npm"], "@ai-sdk/openai-compatible");

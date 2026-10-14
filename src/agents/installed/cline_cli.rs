@@ -85,7 +85,9 @@ impl ClineCli {
         let pick = |names: &[&str]| -> Option<Value> { names.iter().find_map(|n| args.kwargs.get(*n).filter(|v| !v.is_null()).cloned()) };
         let pick_s = |names: &[&str]| pick(names).map(|v| pystr(&v));
         if pick(&["double_check_completion", "double-check-completion", "double_check_completions", "double-check-completions"]).is_some() {
-            bail!("double_check_completion is not supported by cline-cli; the new Cline CLI does not expose a --double-check-completion flag.");
+            bail!(
+                "double_check_completion is not supported by cline-cli; the new Cline CLI does not expose a --double-check-completion flag."
+            );
         }
         let mut thinking = pick(&["thinking"]);
         let reasoning = pick(&["reasoning_effort", "reasoning-effort"]);
@@ -121,28 +123,39 @@ impl ClineCli {
         }
 
         let agent_timeout = pick(&["agent_timeout_sec"]).map(|v| parse_positive_int(&v, "agent_timeout_sec")).transpose()?;
-        let explicit = [("cline_timeout_sec", &["cline_timeout_sec", "cline-timeout-sec", "cline-timeout"][..]), ("timeout_sec", &["timeout_sec", "timeout-sec"]), ("timeout", &["timeout", "timeout-seconds"])]
-            .into_iter()
-            .find_map(|(name, aliases)| pick(aliases).map(|v| (name, v)));
+        let explicit = [
+            ("cline_timeout_sec", &["cline_timeout_sec", "cline-timeout-sec", "cline-timeout"][..]),
+            ("timeout_sec", &["timeout_sec", "timeout-sec"]),
+            ("timeout", &["timeout", "timeout-seconds"]),
+        ]
+        .into_iter()
+        .find_map(|(name, aliases)| pick(aliases).map(|v| (name, v)));
         let cline_timeout_sec = match explicit {
             Some((name, v)) => Some(parse_positive_int(&v, name)?),
             None => agent_timeout,
         };
-        let setup_retries = pick(&["setup_retries", "setup-retries"]).map(|v| parse_positive_int(&v, "setup_retries")).transpose()?.unwrap_or(2);
+        let setup_retries =
+            pick(&["setup_retries", "setup-retries"]).map(|v| parse_positive_int(&v, "setup_retries")).transpose()?.unwrap_or(2);
         let setup_retry_delay_sec = pick(&["setup_retry_delay_sec", "setup-retry-delay-sec", "setup-retry-delay-seconds"])
             .map(|v| parse_nonneg_f64(&v, "setup_retry_delay_sec", "Must be >= 0 seconds."))
             .transpose()?
             .unwrap_or(2.0);
-        let setup_command_timeout_sec = match pick(&["setup_command_timeout_sec", "setup-command-timeout-sec", "setup-command-timeout-seconds"]) {
-            None => Some(240.0),
-            Some(v) => Some(parse_nonneg_f64(&v, "setup_command_timeout_sec", "Must be >= 0 seconds, or 0 to disable.")?).filter(|t| *t > 0.0),
+        let setup_command_timeout_sec =
+            match pick(&["setup_command_timeout_sec", "setup-command-timeout-sec", "setup-command-timeout-seconds"]) {
+                None => Some(240.0),
+                Some(v) => {
+                    Some(parse_nonneg_f64(&v, "setup_command_timeout_sec", "Must be >= 0 seconds, or 0 to disable.")?).filter(|t| *t > 0.0)
+                }
+            };
+        let expand = |p: String| {
+            PathBuf::from(match p.strip_prefix("~/") {
+                Some(rest) => format!("{}/{rest}", std::env::var("HOME").unwrap_or_default()),
+                None => p,
+            })
         };
-        let expand = |p: String| PathBuf::from(match p.strip_prefix("~/") {
-            Some(rest) => format!("{}/{rest}", std::env::var("HOME").unwrap_or_default()),
-            None => p,
-        });
         let commit_hash = pick_s(&["commit_hash", "commit-hash"]);
-        let github_user = pick_s(&["github_user", "github-user"]).or_else(|| commit_hash.as_ref().filter(|c| !c.is_empty()).map(|_| "cline".to_string()));
+        let github_user =
+            pick_s(&["github_user", "github-user"]).or_else(|| commit_hash.as_ref().filter(|c| !c.is_empty()).map(|_| "cline".to_string()));
         Ok(ClineCli {
             version: args.version_kw(),
             flags: f.join(" "),
@@ -153,7 +166,9 @@ impl ClineCli {
             cline_version: pick_s(&["cline_version", "cline-version"]).filter(|s| !s.is_empty()),
             plugin_source: pick_s(&["plugin_source", "plugin-source"]).filter(|s| !s.is_empty()),
             plugin_tarball_url: pick_s(&["plugin_tarball_url", "plugin-tarball-url"]).filter(|s| !s.is_empty()),
-            plugin_tarball_path: pick_s(&["plugin_tarball_path", "plugin-tarball-path", "local-plugin-tarball-path"]).filter(|s| !s.is_empty()).map(expand),
+            plugin_tarball_path: pick_s(&["plugin_tarball_path", "plugin-tarball-path", "local-plugin-tarball-path"])
+                .filter(|s| !s.is_empty())
+                .map(expand),
             remote_plugin_tarball: None,
             cline_timeout_sec,
             setup_retries,
@@ -186,7 +201,8 @@ impl ClineCli {
     }
 
     fn npm_install_command(&self, spec: &str) -> String {
-        let fallback = self.source_install_command("Cline npm binary smoke test failed; installing Cline from source with Bun as a fallback.");
+        let fallback =
+            self.source_install_command("Cline npm binary smoke test failed; installing Cline from source with Bun as a fallback.");
         format!(
             "npm install -g {spec} && sleep 0.5 && if cline --version || cline version; then echo 'Cline npm binary smoke test passed.'; \
              else status=\"$?\"; echo \"Cline npm binary smoke test failed with exit ${{status}}.\"; {fallback}; fi"
@@ -194,13 +210,23 @@ impl ClineCli {
     }
 
     /// Exec with per-attempt timeout + exponential-backoff retries, logging each attempt to logs_dir/setup.
-    async fn exec_with_retries(&self, cx: &AgentCtx<'_>, cmd: &str, label: &str, as_root: bool, env: &BTreeMap<String, String>, timeout: Option<f64>) -> Result<()> {
+    async fn exec_with_retries(
+        &self,
+        cx: &AgentCtx<'_>,
+        cmd: &str,
+        label: &str,
+        as_root: bool,
+        env: &BTreeMap<String, String>,
+        timeout: Option<f64>,
+    ) -> Result<()> {
         for attempt in 1..=self.setup_retries {
             let started = chrono::Utc::now();
             let label = if attempt == 1 { label.to_string() } else { format!("{label}.attempt-{attempt}") };
             let fut = async { if as_root { exec_root(cx, cmd, env).await } else { exec_agent(cx, cmd, env).await } };
             let res = match timeout {
-                Some(t) => tokio::time::timeout(Duration::from_secs_f64(t), fut).await.unwrap_or_else(|_| Err(anyhow!("timed out after {t}s"))),
+                Some(t) => {
+                    tokio::time::timeout(Duration::from_secs_f64(t), fut).await.unwrap_or_else(|_| Err(anyhow!("timed out after {t}s")))
+                }
                 None => fut.await,
             };
             let err = match res {
@@ -311,7 +337,16 @@ impl ClineCli {
         } else if let Some(s) = &self.plugin_source {
             setup += &format!(" && {NVM_LOAD}cline plugin install {} --git --force", quote(s));
         }
-        let mut flags = vec!["-P".to_string(), cline_provider.into(), "-k".into(), "$API_KEY".into(), "-m".into(), "$MODELID".into(), "--json".into(), "--yolo".into()];
+        let mut flags = vec![
+            "-P".to_string(),
+            cline_provider.into(),
+            "-k".into(),
+            "$API_KEY".into(),
+            "-m".into(),
+            "$MODELID".into(),
+            "--json".into(),
+            "--yolo".into(),
+        ];
         if let Some(t) = self.cline_timeout_sec {
             flags.extend(["-t".into(), t.to_string()]);
         }
@@ -411,8 +446,19 @@ impl Agent for ClineCli {
             self.remote_plugin_tarball = Some("/tmp/hbench-cline-plugin.tgz");
         }
         // Host-only GitHub tokens (upstream reads os.environ, not --ae).
-        let install_env: BTreeMap<String, String> = ["GITHUB_TOKEN", "GH_TOKEN"].iter().filter_map(|k| std::env::var(k).ok().filter(|v| !v.is_empty()).map(|v| (k.to_string(), v))).collect();
-        self.exec_with_retries(cx, &format!("set -e; {}", parts.join(" && ")), "install-agent-runtime", false, &install_env, self.setup_command_timeout_sec).await?;
+        let install_env: BTreeMap<String, String> = ["GITHUB_TOKEN", "GH_TOKEN"]
+            .iter()
+            .filter_map(|k| std::env::var(k).ok().filter(|v| !v.is_empty()).map(|v| (k.to_string(), v)))
+            .collect();
+        self.exec_with_retries(
+            cx,
+            &format!("set -e; {}", parts.join(" && ")),
+            "install-agent-runtime",
+            false,
+            &install_env,
+            self.setup_command_timeout_sec,
+        )
+        .await?;
 
         if self.version.is_none() {
             let r: ExecResult = cx.exec(". ~/.nvm/nvm.sh 2>/dev/null; cline --version || cline version", &BTreeMap::new(), None).await?;
@@ -458,7 +504,8 @@ mod tests {
         std::fs::write(dir.join("task.toml"), "[environment]\ndocker_image='x'\n").unwrap();
         std::fs::write(dir.join("instruction.md"), "x").unwrap();
         let task = Arc::new(crate::task::Task::load(&dir).unwrap());
-        ClineCli::new(AgentArgs { load_trajectory: None,
+        ClineCli::new(AgentArgs {
+            load_trajectory: None,
             model_name: model.map(String::from),
             kwargs: serde_json::from_value(kwargs).unwrap(),
             extra_env: env.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect(),
@@ -471,7 +518,12 @@ mod tests {
 
     #[test]
     fn options_and_validation() {
-        let a = agent(json!({"reasoning-effort": " HIGH ", "max-consecutive-mistakes": "3", "timeout-sec": "120", "agent_timeout_sec": 900}), &[], None).unwrap();
+        let a = agent(
+            json!({"reasoning-effort": " HIGH ", "max-consecutive-mistakes": "3", "timeout-sec": "120", "agent_timeout_sec": 900}),
+            &[],
+            None,
+        )
+        .unwrap();
         assert_eq!(a.flags, "--thinking high --max-consecutive-mistakes 3");
         assert_eq!(a.cline_timeout_sec, Some(120));
         assert_eq!((a.setup_retries, a.setup_retry_delay_sec, a.setup_command_timeout_sec), (2, 2.0, Some(240.0)));
@@ -489,11 +541,21 @@ mod tests {
 
     #[test]
     fn run_commands_and_auth() {
-        let a = agent(json!({"thinking": "medium", "timeout": 600}), &[("OPENROUTER_API_KEY", "or"), ("API_KEY", "generic")], Some("openrouter:anthropic/claude-opus-4.5")).unwrap();
+        let a = agent(
+            json!({"thinking": "medium", "timeout": 600}),
+            &[("OPENROUTER_API_KEY", "or"), ("API_KEY", "generic")],
+            Some("openrouter:anthropic/claude-opus-4.5"),
+        )
+        .unwrap();
         let (setup, run, env) = a.run_commands("  Fix `foo` $(x)  ").unwrap();
-        assert_eq!((env["API_KEY"].as_str(), env["PROVIDER"].as_str(), env["MODELID"].as_str()), ("or", "openrouter", "anthropic/claude-opus-4.5"));
+        assert_eq!(
+            (env["API_KEY"].as_str(), env["PROVIDER"].as_str(), env["MODELID"].as_str()),
+            ("or", "openrouter", "anthropic/claude-opus-4.5")
+        );
         assert!(setup.starts_with("mkdir -p /logs/agent ~/.cline/data && echo '{\"welcomeViewCompleted\": true, \"isNewUser\": false}' > ~/.cline/data/globalState.json"));
-        assert!(run.contains("cline -P openrouter -k $API_KEY -m $MODELID --json --yolo -t 600 --thinking medium -- 'Fix `foo` $(x)' < /dev/null 2>&1"));
+        assert!(run.contains(
+            "cline -P openrouter -k $API_KEY -m $MODELID --json --yolo -t 600 --thinking medium -- 'Fix `foo` $(x)' < /dev/null 2>&1"
+        ));
         let v = agent(json!({}), &[("API_KEY", "g")], Some("vercel:m")).unwrap();
         assert!(v.run_commands("x").unwrap().1.contains("-P vercel-ai-gateway"));
         let n = agent(json!({}), &[], Some("openrouter:m")).unwrap();

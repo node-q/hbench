@@ -51,11 +51,15 @@ fn parse_version(stdout: &str) -> String {
 
 impl KimiCode {
     fn runtime_env(&self) -> BTreeMap<String, String> {
-        let mut env: BTreeMap<String, String> =
-            [("KIMI_CODE_HOME", KIMI_CODE_HOME), ("KIMI_DISABLE_TELEMETRY", "true"), ("KIMI_CODE_NO_AUTO_UPDATE", "true"), ("NO_COLOR", "true")]
-                .into_iter()
-                .map(|(k, v)| (k.to_string(), v.to_string()))
-                .collect();
+        let mut env: BTreeMap<String, String> = [
+            ("KIMI_CODE_HOME", KIMI_CODE_HOME),
+            ("KIMI_DISABLE_TELEMETRY", "true"),
+            ("KIMI_CODE_NO_AUTO_UPDATE", "true"),
+            ("NO_COLOR", "true"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
         if let Some(m) = &self.args.model_name {
             env.insert("KIMI_MODEL_NAME".into(), m.clone());
         }
@@ -112,7 +116,12 @@ impl Agent for KimiCode {
 
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
         cx.env.exec_root("[ -d /installed-agent ] || mkdir -p /installed-agent", None).await?;
-        exec_root(cx, &format!("{}{SYSTEM_INSTALL}", super::APT_INSTALL_FN), &BTreeMap::from([("DEBIAN_FRONTEND".to_string(), "noninteractive".to_string())])).await?;
+        exec_root(
+            cx,
+            &format!("{}{SYSTEM_INSTALL}", super::APT_INSTALL_FN),
+            &BTreeMap::from([("DEBIAN_FRONTEND".to_string(), "noninteractive".to_string())]),
+        )
+        .await?;
         let spec = self.version.as_ref().map(|v| format!("@{v}")).unwrap_or_else(|| "@latest".into());
         exec_agent(
             cx,
@@ -200,7 +209,8 @@ fn wire_candidates(logs_dir: &Path, session_id: Option<&str>) -> Vec<(String, Pa
     }
     let index = read_jsonl(&home.join("session_index.jsonl"));
     let mut ordered = vec![];
-    for sid in session_id.map(String::from).into_iter().chain(index.iter().rev().filter_map(|r| r["sessionId"].as_str().map(String::from))) {
+    for sid in session_id.map(String::from).into_iter().chain(index.iter().rev().filter_map(|r| r["sessionId"].as_str().map(String::from)))
+    {
         if let Some(p) = by_sid.remove(&sid) {
             ordered.push((sid, p));
         }
@@ -345,7 +355,12 @@ pub fn usage(logs_dir: &Path, model_name: Option<&str>) -> Option<AgentContext> 
         .steps
         .iter()
         .filter(|s| s.agent && s.turn == last_turn)
-        .filter_map(|s| s.usage.as_ref().filter(|u| u.as_object().is_some_and(|o| !o.is_empty())).map(|u| (u, s.model.as_deref().or(parsed.model.as_deref()).or(model_name))))
+        .filter_map(|s| {
+            s.usage
+                .as_ref()
+                .filter(|u| u.as_object().is_some_and(|o| !o.is_empty()))
+                .map(|u| (u, s.model.as_deref().or(parsed.model.as_deref()).or(model_name)))
+        })
         .collect();
     if used.is_empty() {
         return None;
@@ -364,7 +379,13 @@ pub fn usage(logs_dir: &Path, model_name: Option<&str>) -> Option<AgentContext> 
             None => priceable = false,
         }
     }
-    Some(AgentContext { n_input_tokens: Some(prompt), n_output_tokens: Some(out), n_cache_tokens: Some(cache), cost_usd: cost.filter(|_| priceable), ..Default::default() })
+    Some(AgentContext {
+        n_input_tokens: Some(prompt),
+        n_output_tokens: Some(out),
+        n_cache_tokens: Some(cache),
+        cost_usd: cost.filter(|_| priceable),
+        ..Default::default()
+    })
 }
 
 #[cfg(test)]
@@ -492,7 +513,11 @@ mod tests {
         let var = cmd.split("hbench_kimi_code_instruction_").nth(1).unwrap()[..32].to_string();
         let upper = format!("HBENCH_KIMI_CODE_INSTRUCTION_{}", var.to_uppercase());
         assert!(cmd.contains(&format!("unset {upper}")) && cmd.contains(&format!("kimi --prompt \"$hbench_kimi_code_instruction_{var}\"")));
-        assert!(!cmd.contains("solve the task") && cmd.contains("2>&1 | tee /logs/agent/kimi-code.txt") && cmd.contains("--output-format stream-json"));
+        assert!(
+            !cmd.contains("solve the task")
+                && cmd.contains("2>&1 | tee /logs/agent/kimi-code.txt")
+                && cmd.contains("--output-format stream-json")
+        );
         assert_eq!(env.remove(&upper).as_deref(), Some("solve the task"));
         assert_eq!(env, a.runtime_env());
         assert_eq!(env["KIMI_MODEL_NAME"], "kimi/kimi-for-coding");
@@ -514,7 +539,11 @@ mod tests {
             command: cmd.map(String::from),
             args: if cmd.is_some() { vec!["-y".into(), "server".into()] } else { vec![] },
         };
-        a.mcp_servers = vec![srv("local", "stdio", None, Some("npx")), srv("remote", "streamable-http", Some("https://e/mcp"), None), srv("legacy", "sse", Some("https://e/sse"), None)];
+        a.mcp_servers = vec![
+            srv("local", "stdio", None, Some("npx")),
+            srv("remote", "streamable-http", Some("https://e/mcp"), None),
+            srv("legacy", "sse", Some("https://e/sse"), None),
+        ];
         let k = KimiCode { version: None, args: a };
         let v: Value = serde_json::from_str(&k.mcp_config_json().unwrap()).unwrap();
         assert_eq!(

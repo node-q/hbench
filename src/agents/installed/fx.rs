@@ -80,11 +80,15 @@ impl Fx {
             None => args.extra_env.get("FX_MAX_AGENT_STEPS").cloned().or_else(|| std::env::var("FX_MAX_AGENT_STEPS").ok()),
         };
         if let Some(s) = steps {
-            let n: i64 = s.trim().parse().map_err(|_| anyhow!("Invalid kwargs for agent '{name}':\n  max_agent_steps: Input should be a valid integer"))?;
+            let n: i64 = s
+                .trim()
+                .parse()
+                .map_err(|_| anyhow!("Invalid kwargs for agent '{name}':\n  max_agent_steps: Input should be a valid integer"))?;
             option_env.insert("FX_MAX_AGENT_STEPS".into(), n.to_string());
         }
         if dev {
-            for (kw, env, default) in [("trace_log", "FX_TRACE_LOG", DEV_TRACE_LOG), ("trace_scopes", "FX_TRACE_SCOPES", DEV_TRACE_SCOPES)] {
+            for (kw, env, default) in [("trace_log", "FX_TRACE_LOG", DEV_TRACE_LOG), ("trace_scopes", "FX_TRACE_SCOPES", DEV_TRACE_SCOPES)]
+            {
                 let v = match args.kwargs.get(kw) {
                     Some(Value::Null) => None,
                     Some(_) => args.kw(kw),
@@ -166,7 +170,12 @@ impl Fx {
     /// Upload a private profile file the way upstream does: /tmp staging, then mv into ~/.fx.
     async fn install_profile_file(cx: &AgentCtx<'_>, staging: &str, name: &str, content: &str) -> Result<()> {
         upload_text(cx, staging, content).await?;
-        exec_agent(cx, &format!("mkdir -p \"$HOME/.fx\" && mv {staging} \"$HOME/.fx/{name}\" && chmod 600 \"$HOME/.fx/{name}\""), &BTreeMap::new()).await?;
+        exec_agent(
+            cx,
+            &format!("mkdir -p \"$HOME/.fx\" && mv {staging} \"$HOME/.fx/{name}\" && chmod 600 \"$HOME/.fx/{name}\""),
+            &BTreeMap::new(),
+        )
+        .await?;
         Ok(())
     }
 }
@@ -201,7 +210,12 @@ impl Agent for Fx {
         }
         if let Some(d) = self.skills_dir() {
             let src = quote(&d);
-            exec_agent(cx, &format!("if [ -d {src} ]; then mkdir -p \"$HOME/.fx/skills\" && cp -R {src}/. \"$HOME/.fx/skills/\"; fi"), &BTreeMap::new()).await?;
+            exec_agent(
+                cx,
+                &format!("if [ -d {src} ]; then mkdir -p \"$HOME/.fx/skills\" && cp -R {src}/. \"$HOME/.fx/skills/\"; fi"),
+                &BTreeMap::new(),
+            )
+            .await?;
         }
         if !self.args.mcp_servers.is_empty() {
             let cfg = self.mcp_config().map_err(|e| anyhow!("Agent install failed: {e}"))?;
@@ -240,7 +254,8 @@ pub(crate) mod tests {
         std::fs::write(dir.join("task.toml"), "[environment]\ndocker_image='x'\n").unwrap();
         std::fs::write(dir.join("instruction.md"), "x").unwrap();
         let task = Arc::new(crate::task::Task::load(&dir).unwrap());
-        AgentArgs { load_trajectory: None,
+        AgentArgs {
+            load_trajectory: None,
             model_name: model.map(String::from),
             kwargs: serde_json::from_value(kwargs).unwrap(),
             extra_env: env.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect(),
@@ -252,43 +267,75 @@ pub(crate) mod tests {
     }
 
     fn mcp(name: &str, transport: &str, url: Option<&str>, command: Option<&str>, a: &[&str]) -> crate::task::McpServer {
-        crate::task::McpServer { name: name.into(), transport: transport.into(), url: url.map(String::from), command: command.map(String::from), args: a.iter().map(|s| s.to_string()).collect() }
+        crate::task::McpServer {
+            name: name.into(),
+            transport: transport.into(),
+            url: url.map(String::from),
+            command: command.map(String::from),
+            args: a.iter().map(|s| s.to_string()).collect(),
+        }
     }
 
     #[test]
     fn options_validation() {
-        assert!(Fx::new(args(json!({"reasoning_effort": "ultra"}), &[], None, vec![]), false).err().unwrap().to_string().contains("reasoning_effort"));
-        assert!(Fx::new(args(json!({"permission_mode": "dangerous"}), &[], None, vec![]), false).err().unwrap().to_string().contains("permission_mode"));
+        assert!(
+            Fx::new(args(json!({"reasoning_effort": "ultra"}), &[], None, vec![]), false)
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("reasoning_effort")
+        );
+        assert!(
+            Fx::new(args(json!({"permission_mode": "dangerous"}), &[], None, vec![]), false)
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("permission_mode")
+        );
         assert!(Fx::new(args(json!({"bogus": 1}), &[], None, vec![]), false).err().unwrap().to_string().contains("Unknown option 'bogus'"));
         assert!(Fx::new(args(json!({"trace_log": "x"}), &[], None, vec![]), false).is_err());
         assert!(Fx::new(args(json!({"max_agent_steps": "abc"}), &[], None, vec![]), false).is_err());
-        assert!(Fx::new(args(json!({"config": {}}), &[], None, vec![]), false).err().unwrap().to_string().contains("does not support config"));
+        assert!(
+            Fx::new(args(json!({"config": {}}), &[], None, vec![]), false).err().unwrap().to_string().contains("does not support config")
+        );
     }
 
     #[test]
     fn install_pins_version() {
         for v in ["0.3.72", "v0.3.72"] {
             let a = Fx::new(args(json!({"version": v}), &[], None, vec![]), false).unwrap();
-            assert!(a.install_command().contains("curl -fsSL https://fx.sh/setup.sh | bash -s -- v0.3.72 && export PATH=\"$HOME/.local/bin:$PATH\" && fx --version"));
+            assert!(a.install_command().contains(
+                "curl -fsSL https://fx.sh/setup.sh | bash -s -- v0.3.72 && export PATH=\"$HOME/.local/bin:$PATH\" && fx --version"
+            ));
         }
     }
 
     #[test]
     fn run_env_and_command() {
-        let a = Fx::new(args(json!({"max_agent_steps": 32}), &[("AI_GATEWAY_API_KEY", "test-key")], Some("anthropic/claude-opus-4-6"), vec![]), false).unwrap();
+        let a = Fx::new(
+            args(json!({"max_agent_steps": 32}), &[("AI_GATEWAY_API_KEY", "test-key")], Some("anthropic/claude-opus-4-6"), vec![]),
+            false,
+        )
+        .unwrap();
         let env = a.run_env().unwrap();
-        let expect: BTreeMap<String, String> =
-            [("AI_GATEWAY_API_KEY", "test-key"), ("FX_AUTO_UPGRADE", "0"), ("FX_MAX_AGENT_STEPS", "32"), ("FX_MODEL", "anthropic/claude-opus-4-6"), ("FX_SOUND", "0")]
-                .iter()
-                .map(|(k, v)| (k.to_string(), v.to_string()))
-                .collect();
+        let expect: BTreeMap<String, String> = [
+            ("AI_GATEWAY_API_KEY", "test-key"),
+            ("FX_AUTO_UPGRADE", "0"),
+            ("FX_MAX_AGENT_STEPS", "32"),
+            ("FX_MODEL", "anthropic/claude-opus-4-6"),
+            ("FX_SOUND", "0"),
+        ]
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
         assert_eq!(env, expect);
         assert_eq!(
             a.run_command("do the task"),
             "export PATH=\"$HOME/.local/bin:$PATH\"; fx ask --yolo --json -- 'do the task' < /dev/null | stdbuf -oL tee /logs/agent/fx.json"
         );
 
-        let g = Fx::new(args(json!({}), &[("AI_GATEWAY_API_KEY", "k")], Some("vercel_ai_gateway/openai/gpt-5.6-luna"), vec![]), false).unwrap();
+        let g =
+            Fx::new(args(json!({}), &[("AI_GATEWAY_API_KEY", "k")], Some("vercel_ai_gateway/openai/gpt-5.6-luna"), vec![]), false).unwrap();
         assert_eq!(g.run_env().unwrap()["FX_MODEL"], "openai/gpt-5.6-luna");
         let e = Fx::new(args(json!({}), &[("AI_GATEWAY_API_KEY", "k")], Some("vercel_ai_gateway/"), vec![]), false).unwrap();
         assert!(e.run_env().unwrap_err().to_string().contains("model name is required after prefix"));
@@ -296,7 +343,8 @@ pub(crate) mod tests {
         assert!(nm.run_env().unwrap_err().to_string().contains("Model name is required"));
 
         for (mode, expected) in [("ask", "fx ask --json"), ("auto", "fx ask --auto --json"), ("yolo", "fx ask --yolo --json")] {
-            let a = Fx::new(args(json!({"permission_mode": mode}), &[("VERCEL_OIDC_TOKEN", "tok")], Some("anthropic/x"), vec![]), false).unwrap();
+            let a = Fx::new(args(json!({"permission_mode": mode}), &[("VERCEL_OIDC_TOKEN", "tok")], Some("anthropic/x"), vec![]), false)
+                .unwrap();
             assert!(a.run_command("t").contains(expected));
             assert_eq!(a.run_env().unwrap()["VERCEL_OIDC_TOKEN"], "tok");
         }

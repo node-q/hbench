@@ -51,8 +51,14 @@ pub fn find<'a>(datasets: &'a [Dataset], name: &str, version: Option<&str>) -> R
     let matches: Vec<&Dataset> = datasets.iter().filter(|d| d.name == name && version.is_none_or(|v| d.version == v)).collect();
     match matches.as_slice() {
         [d] => Ok(d),
-        [] => bail!("dataset {name:?}{} not found in registry (try `hbench datasets list`)", version.map(|v| format!("@{v}")).unwrap_or_default()),
-        many => bail!("dataset {name:?} has several versions ({}); use {name}@<version>", many.iter().map(|d| d.version.as_str()).collect::<Vec<_>>().join(", ")),
+        [] => bail!(
+            "dataset {name:?}{} not found in registry (try `hbench datasets list`)",
+            version.map(|v| format!("@{v}")).unwrap_or_default()
+        ),
+        many => bail!(
+            "dataset {name:?} has several versions ({}); use {name}@<version>",
+            many.iter().map(|d| d.version.as_str()).collect::<Vec<_>>().join(", ")
+        ),
     }
 }
 
@@ -69,7 +75,11 @@ pub fn filter_names<T>(items: Vec<T>, name: impl Fn(&T) -> String, d: &DatasetCo
         if v.is_empty() {
             let mut sorted = all.clone();
             sorted.sort();
-            bail!("No tasks matched the filter(s) {inc:?}. There are {} tasks available in this dataset. Example task names: {:?}", all.len(), &sorted[..sorted.len().min(5)]);
+            bail!(
+                "No tasks matched the filter(s) {inc:?}. There are {} tasks available in this dataset. Example task names: {:?}",
+                all.len(),
+                &sorted[..sorted.len().min(5)]
+            );
         }
     }
     if let Some(exc) = &d.exclude_task_names {
@@ -89,7 +99,9 @@ pub fn dataset_tasks(d: &DatasetConfig, disable_verification: bool) -> Result<Ve
         let mut dirs: Vec<PathBuf> = std::fs::read_dir(&p)?.filter_map(|e| e.ok().map(|e| e.path())).collect();
         dirs.sort();
         // upstream's Task.is_valid_dir: silently skip dirs that aren't runnable tasks.
-        dirs.retain(|t| t.join("environment").is_dir() && Task::load(t).is_ok_and(|task| disable_verification || task.validate_tests().is_ok()));
+        dirs.retain(|t| {
+            t.join("environment").is_dir() && Task::load(t).is_ok_and(|task| disable_verification || task.validate_tests().is_ok())
+        });
         let dirs = filter_names(dirs, |t| t.file_name().unwrap().to_string_lossy().into_owned(), d)?;
         return Ok(dirs.into_iter().map(|t| TaskRef { path: Some(t), source: source.clone(), ..Default::default() }).collect());
     }
@@ -162,7 +174,8 @@ pub fn download(tasks: &[TaskRef]) -> Result<()> {
             eprintln!("downloading {} task(s) from {url}@{commit}", ts.len());
             git(&dir, &["init", "-q"])?;
             git(&dir, &["remote", "add", "origin", &url])?;
-            let paths: Vec<String> = ts.iter().map(|t| format!("/{}/", t.path.as_ref().unwrap().display().to_string().trim_matches('/'))).collect();
+            let paths: Vec<String> =
+                ts.iter().map(|t| format!("/{}/", t.path.as_ref().unwrap().display().to_string().trim_matches('/'))).collect();
             let mut sparse = vec!["sparse-checkout", "set", "--no-cone"];
             sparse.extend(paths.iter().map(String::as_str));
             git(&dir, &sparse)?;

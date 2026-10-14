@@ -65,8 +65,10 @@ impl GrokBuild {
             Some(Value::Object(o)) => Some(o.clone()),
             Some(_) => bail!("Invalid grok_config: expected a dict of config.toml sections"),
         };
-        let disable_web_search = args.kwargs.get("disable_web_search").map(|v| parse_bool(v, "disable_web_search")).transpose()?.unwrap_or(true);
-        let kill_leftover_processes = args.kwargs.get("kill_leftover_processes").map(|v| parse_bool(v, "kill_leftover_processes")).transpose()?.unwrap_or(true);
+        let disable_web_search =
+            args.kwargs.get("disable_web_search").map(|v| parse_bool(v, "disable_web_search")).transpose()?.unwrap_or(true);
+        let kill_leftover_processes =
+            args.kwargs.get("kill_leftover_processes").map(|v| parse_bool(v, "kill_leftover_processes")).transpose()?.unwrap_or(true);
         let background_wait_sec = match args.kwargs.get("background_wait_sec") {
             None => Some(DEFAULT_BG_WAIT),
             Some(Value::Null) => None,
@@ -126,7 +128,8 @@ impl GrokBuild {
         if let (Some(p), Some(slug)) = (&self.provider, &self.model_slug) {
             let (base_url, env_key, api_backend) = provider(p).unwrap();
             config["models"] = json!({"default": slug, "session_summary": slug, "image_description": slug, "web_search": slug});
-            config["model"] = json!({slug: {"name": slug, "model": slug, "base_url": base_url, "env_key": env_key, "api_backend": api_backend}});
+            config["model"] =
+                json!({slug: {"name": slug, "model": slug, "base_url": base_url, "env_key": env_key, "api_backend": api_backend}});
         }
         if !self.args.mcp_servers.is_empty() {
             let mut servers = Map::new();
@@ -341,7 +344,9 @@ type Usage = [i64; 5];
 fn parse_usage(v: &Value) -> Option<Usage> {
     let o = v.as_object()?;
     let mut u = [0i64; 5];
-    for (i, k) in ["input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "reasoning_tokens"].iter().enumerate() {
+    for (i, k) in
+        ["input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "reasoning_tokens"].iter().enumerate()
+    {
         if let Some(x) = o.get(*k) {
             let n = x.as_i64().or_else(|| x.as_f64().filter(|f| f.fract() == 0.0).map(|f| f as i64))?;
             if n < 0 {
@@ -415,12 +420,14 @@ pub fn usage_from_output(text: &str, model: Option<&str>) -> Option<AgentContext
             }
         }
     }
-    let summed = (!calls.is_empty()).then(|| calls.iter().fold([0i64; 5], |mut a, u| {
-        for i in 0..5 {
-            a[i] += u[i];
-        }
-        a
-    }));
+    let summed = (!calls.is_empty()).then(|| {
+        calls.iter().fold([0i64; 5], |mut a, u| {
+            for i in 0..5 {
+                a[i] += u[i];
+            }
+            a
+        })
+    });
     let u = total.or(summed);
     if u.is_none() && cost.is_none() {
         return None;
@@ -452,10 +459,20 @@ impl Agent for GrokBuild {
         ensure_system_dependencies(cx, &["curl", "bash", "ca_certificates", "coreutils", "procps"]).await?;
         let version_arg = self.version.as_ref().map(|v| format!(" -s {}", quote(v))).unwrap_or_default();
         let none = BTreeMap::new();
-        exec_agent(cx, &format!("set -euo pipefail; curl -fsSL https://x.ai/cli/install.sh | bash{version_arg} && {PATH_EXPORT} && grok --version"), &none).await?;
+        exec_agent(
+            cx,
+            &format!("set -euo pipefail; curl -fsSL https://x.ai/cli/install.sh | bash{version_arg} && {PATH_EXPORT} && grok --version"),
+            &none,
+        )
+        .await?;
         if let Some(d) = self.skills_dir() {
             let d = quote(&d);
-            exec_agent(cx, &format!("if [ -d {d} ]; then mkdir -p ~/.grok/skills && cp -r {d}/* ~/.grok/skills/ 2>/dev/null || true; fi"), &none).await?;
+            exec_agent(
+                cx,
+                &format!("if [ -d {d} ]; then mkdir -p ~/.grok/skills && cp -r {d}/* ~/.grok/skills/ 2>/dev/null || true; fi"),
+                &none,
+            )
+            .await?;
         }
         if self.version.is_none() {
             let r = cx.exec(&format!("{PATH_EXPORT}; grok --version"), &none, None).await?;
@@ -471,7 +488,8 @@ impl Agent for GrokBuild {
     async fn run(&mut self, instruction: &str, cx: &AgentCtx<'_>, _ctx: &mut AgentContext, _resume: bool) -> Result<()> {
         let instruction = self.args.render_instruction(instruction)?;
         let env = self.run_env()?;
-        exec_agent(cx, &format!("mkdir -p ~/.grok && printf '%s' {} > ~/.grok/config.toml", quote(&self.config_toml()?)), &BTreeMap::new()).await?;
+        exec_agent(cx, &format!("mkdir -p ~/.grok && printf '%s' {} > ~/.grok/config.toml", quote(&self.config_toml()?)), &BTreeMap::new())
+            .await?;
         let cmd = self.run_script(&quote(&instruction));
         let r = cx.exec(&format!("set -o pipefail; {cmd}"), &env, None).await;
         // Copy session data (best effort) even on failure.
@@ -492,7 +510,9 @@ impl Agent for GrokBuild {
     }
 
     fn populate_context_post_run(&self, logs_dir: &std::path::Path, ctx: &mut AgentContext) {
-        if let Some(c) = std::fs::read_to_string(logs_dir.join(OUTPUT)).ok().and_then(|t| usage_from_output(&t, self.args.model_name.as_deref())) {
+        if let Some(c) =
+            std::fs::read_to_string(logs_dir.join(OUTPUT)).ok().and_then(|t| usage_from_output(&t, self.args.model_name.as_deref()))
+        {
             *ctx = c;
         }
     }
@@ -509,7 +529,8 @@ mod tests {
         std::fs::write(dir.join("task.toml"), "[environment]\ndocker_image='x'\n").unwrap();
         std::fs::write(dir.join("instruction.md"), "x").unwrap();
         let task = Arc::new(crate::task::Task::load(&dir).unwrap());
-        GrokBuild::new(AgentArgs { load_trajectory: None,
+        GrokBuild::new(AgentArgs {
+            load_trajectory: None,
             model_name: model.map(String::from),
             kwargs: serde_json::from_value(kwargs).unwrap(),
             extra_env: env.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect(),
@@ -533,7 +554,12 @@ mod tests {
         assert_eq!(a.run_env().unwrap()["XAI_API_KEY"], "xk");
         assert_eq!(a.run_env().unwrap()["RUST_LOG"], "warn");
 
-        let b = agent(json!({"background_wait_sec": null, "kill_leftover_processes": "false"}), &[("GROK_BUILD_MAX_TURNS", "3")], Some("grok-4")).unwrap();
+        let b = agent(
+            json!({"background_wait_sec": null, "kill_leftover_processes": "false"}),
+            &[("GROK_BUILD_MAX_TURNS", "3")],
+            Some("grok-4"),
+        )
+        .unwrap();
         assert_eq!(b.flags, "--max-turns 3");
         let s = b.run_script("x");
         assert!(!s.contains("--background-wait-timeout") && !s.contains("kill_pids"));
@@ -547,7 +573,12 @@ mod tests {
 
     #[test]
     fn provider_routing_config() {
-        let a = agent(json!({"grok_config": {"cli": {"extra": 1}, "disable_web_search": false}}), &[("OPENROUTER_API_KEY", "ok")], Some("openrouter/openai/gpt-4o-mini")).unwrap();
+        let a = agent(
+            json!({"grok_config": {"cli": {"extra": 1}, "disable_web_search": false}}),
+            &[("OPENROUTER_API_KEY", "ok")],
+            Some("openrouter/openai/gpt-4o-mini"),
+        )
+        .unwrap();
         assert_eq!((a.provider.as_deref(), a.model_slug.as_deref()), (Some("openrouter"), Some("openai/gpt-4o-mini")));
         assert_eq!(a.run_env().unwrap()["OPENROUTER_API_KEY"], "ok");
         let t: toml::Value = toml::from_str(&a.config_toml().unwrap()).unwrap();
@@ -575,11 +606,21 @@ mod tests {
 
         let ticks = [rec(json!({"input_tokens": 100, "output_tokens": 20})), json!({"type": "end", "usage": {"input_tokens": 100, "output_tokens": 20}, "total_cost_usd": 9.99, "total_cost_usd_ticks": 261_300_000}).to_string()].join("\n");
         assert_eq!(usage_from_output(&ticks, None).unwrap().cost_usd, Some(0.02613));
-        let partial = [rec(json!({"input_tokens": 100})), json!({"type": "end", "usage": {"input_tokens": 100}, "cost_is_partial": true, "total_cost_usd": 9.99}).to_string()].join("\n");
+        let partial = [
+            rec(json!({"input_tokens": 100})),
+            json!({"type": "end", "usage": {"input_tokens": 100}, "cost_is_partial": true, "total_cost_usd": 9.99}).to_string(),
+        ]
+        .join("\n");
         assert_eq!(usage_from_output(&partial, None).unwrap().cost_usd, None);
 
         // Malformed records are skipped; no terminal event -> per-call sum.
-        let calls = [rec(json!({"input_tokens": null})), rec(json!({"output_tokens": 12.5})), rec(json!({"input_tokens": -1})), rec(json!({"input_tokens": 100, "output_tokens": 10}))].join("\n");
+        let calls = [
+            rec(json!({"input_tokens": null})),
+            rec(json!({"output_tokens": 12.5})),
+            rec(json!({"input_tokens": -1})),
+            rec(json!({"input_tokens": 100, "output_tokens": 10})),
+        ]
+        .join("\n");
         let c = usage_from_output(&calls, None).unwrap();
         assert_eq!((c.n_input_tokens, c.n_output_tokens, c.cost_usd), (Some(100), Some(10), None));
         assert!(usage_from_output("", None).is_none());
@@ -593,7 +634,12 @@ mod tests {
         let b = json!({"input_tokens": 128_000});
         let want = 1000.0 * 3e-6 + 100.0 * 1.5e-5 + 50.0 * 3e-6 + 128_000.0 * 6e-6; // second call tiers at the xAI boundary
         let end = |u: Value| json!({"type": "end", "usage": u}).to_string();
-        let out = [rec(a.clone()), rec(b.clone()), end(json!({"input_tokens": 129_000, "output_tokens": 100, "cache_read_input_tokens": 200, "cache_creation_input_tokens": 50}))].join("\n");
+        let out = [
+            rec(a.clone()),
+            rec(b.clone()),
+            end(json!({"input_tokens": 129_000, "output_tokens": 100, "cache_read_input_tokens": 200, "cache_creation_input_tokens": 50})),
+        ]
+        .join("\n");
         let c = usage_from_output(&out, Some("xai/grok-4-0709")).unwrap().cost_usd.unwrap();
         assert!((c - want).abs() < 1e-9, "{c} vs {want}");
         // Terminal total differs from the per-call sum (subagents): no estimate. Unpriced model: None.

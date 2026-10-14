@@ -64,7 +64,13 @@ pub fn parse_trajectory(text: &str, model_name: Option<&str>) -> Option<AgentCon
     let n = |k: &str| m[k].as_i64().unwrap_or(0);
     let (input, output, cache) = (n("total_prompt_tokens"), n("total_completion_tokens"), n("total_cached_tokens"));
     let cost = m["total_cost_usd"].as_f64().filter(|c| *c != 0.0).or_else(|| cost_from_pricing(model_name, input, output, cache));
-    Some(AgentContext { n_input_tokens: Some(input), n_cache_tokens: Some(cache), n_output_tokens: Some(output), cost_usd: cost, ..Default::default() })
+    Some(AgentContext {
+        n_input_tokens: Some(input),
+        n_cache_tokens: Some(cache),
+        n_output_tokens: Some(output),
+        cost_usd: cost,
+        ..Default::default()
+    })
 }
 
 impl AntigravitySdk {
@@ -78,7 +84,9 @@ impl AntigravitySdk {
             None | Some(Value::Null) => None,
             Some(Value::Array(a)) => Some(
                 a.iter()
-                    .map(|p| p.as_str().map(String::from).ok_or_else(|| anyhow!("Invalid value for 'skill_paths': expected a list of strings")))
+                    .map(|p| {
+                        p.as_str().map(String::from).ok_or_else(|| anyhow!("Invalid value for 'skill_paths': expected a list of strings"))
+                    })
                     .collect::<Result<Vec<_>>>()?,
             ),
             Some(_) => bail!("Invalid value for 'skill_paths': expected a list of strings"),
@@ -233,7 +241,9 @@ impl Agent for AntigravitySdk {
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
         cx.env.exec_root("[ -d /installed-agent ] || mkdir -p /installed-agent", None).await?;
         // upstream re-raises exec (RuntimeError) failures as-is and wraps anything else.
-        self.install(cx).await.map_err(|e| if e.downcast_ref::<crate::env::KindError>().is_some() { e } else { anyhow!("Agent install failed: {e:#}") })?;
+        self.install(cx)
+            .await
+            .map_err(|e| if e.downcast_ref::<crate::env::KindError>().is_some() { e } else { anyhow!("Agent install failed: {e:#}") })?;
         if self.version.is_none() {
             let r = cx.exec("/installed-agent/run_agent.py --version", &BTreeMap::new(), None).await?;
             if r.code == 0 && !r.stdout.is_empty() {
@@ -251,7 +261,10 @@ impl Agent for AntigravitySdk {
     }
 
     fn populate_context_post_run(&self, logs_dir: &Path, ctx: &mut AgentContext) {
-        if let Some(c) = std::fs::read_to_string(logs_dir.join(TRAJECTORY_FILENAME)).ok().and_then(|t| parse_trajectory(&t, self.args.model_name.as_deref())) {
+        if let Some(c) = std::fs::read_to_string(logs_dir.join(TRAJECTORY_FILENAME))
+            .ok()
+            .and_then(|t| parse_trajectory(&t, self.args.model_name.as_deref()))
+        {
             ctx.n_input_tokens = c.n_input_tokens;
             ctx.n_cache_tokens = c.n_cache_tokens;
             ctx.n_output_tokens = c.n_output_tokens;
@@ -271,7 +284,8 @@ mod tests {
 
     #[test]
     fn run_env_and_command() {
-        let a = agent(json!({"reasoning_effort": "high"}), &[("GEMINI_API_KEY", "k"), ("GOOGLE_GEMINI_BASE_URL", "https://via-ae.test/genai")]);
+        let a =
+            agent(json!({"reasoning_effort": "high"}), &[("GEMINI_API_KEY", "k"), ("GOOGLE_GEMINI_BASE_URL", "https://via-ae.test/genai")]);
         let env = a.run_env().unwrap();
         assert_eq!(env["GOOGLE_GEMINI_BASE_URL"], "https://via-ae.test/genai");
         assert_eq!(env["MODEL_NAME"], "google/gemini-3.5-flash");
@@ -305,7 +319,12 @@ mod tests {
         assert!(validate_base_url("https://x.test:0", &none).is_err());
         assert!(validate_base_url("https://x.test:99999", &none).is_err());
         assert!(validate_base_url("https://a b", &none).unwrap_err().to_string().contains("whitespace"));
-        assert!(validate_base_url("http://host.docker.internal:8080", &none).unwrap_err().to_string().contains("HBENCH_ALLOW_INSECURE_MODEL_BASE_URL"));
+        assert!(
+            validate_base_url("http://host.docker.internal:8080", &none)
+                .unwrap_err()
+                .to_string()
+                .contains("HBENCH_ALLOW_INSECURE_MODEL_BASE_URL")
+        );
         assert!(validate_base_url("http://host.docker.internal:8080", &allow).is_ok());
         assert!(validate_base_url("ftp://x.test", &none).is_err());
     }

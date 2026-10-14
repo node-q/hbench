@@ -157,7 +157,8 @@ async fn egress_kernel_support() -> bool {
     static CACHE: tokio::sync::OnceCell<bool> = tokio::sync::OnceCell::const_new();
     *CACHE
         .get_or_init(|| async {
-            let script = "if [ ! -f /proc/config.gz ]; then exit 0; fi; zcat /proc/config.gz 2>/dev/null | grep -qE '^CONFIG_NFT_FIB_INET=[ym]'";
+            let script =
+                "if [ ! -f /proc/config.gz ]; then exit 0; fi; zcat /proc/config.gz 2>/dev/null | grep -qE '^CONFIG_NFT_FIB_INET=[ym]'";
             let out = tokio::time::timeout(
                 Duration::from_secs(120),
                 Command::new("docker").args(["container", "run", "--rm", "alpine:3.23", "sh", "-c", script]).kill_on_drop(true).output(),
@@ -254,7 +255,10 @@ impl DockerEnv {
             if ec.gpu_types.as_ref().is_some_and(|t| !t.is_empty()) {
                 log.line("warning: docker cannot select a GPU type; ignoring gpu_types");
             }
-            main.insert("deploy".into(), json!({"resources": {"reservations": {"devices": [{"driver": "nvidia", "count": g, "capabilities": ["gpu"]}]}}}));
+            main.insert(
+                "deploy".into(),
+                json!({"resources": {"reservations": {"devices": [{"driver": "nvidia", "count": g, "capabilities": ["gpu"]}]}}}),
+            );
         }
 
         // Network: egress sidecar when any phase needs no-network/allowlist; plain
@@ -293,7 +297,8 @@ impl DockerEnv {
         // /logs dirs are named volumes (upstream bind-mounts host dirs): services that mount
         // ${HOST_*_PATH} share them with main, and it works on remote daemons too.
         let log_volume = |dir: &str| format!("hb-logs-{}", dir.trim_start_matches("/logs/"));
-        let mut volumes: Vec<Value> = spec.log_dirs.iter().map(|d| json!({"type": "volume", "source": log_volume(d), "target": d})).collect();
+        let mut volumes: Vec<Value> =
+            spec.log_dirs.iter().map(|d| json!({"type": "volume", "source": log_volume(d), "target": d})).collect();
         volumes.extend(spec.mounts.iter().cloned());
         if !volumes.is_empty() {
             let decl: serde_json::Map<String, Value> = spec.log_dirs.iter().map(|d| (log_volume(d), json!({}))).collect();
@@ -338,7 +343,11 @@ impl DockerEnv {
         }
         for (dir, name) in [("verifier", "VERIFIER_LOGS"), ("agent", "AGENT_LOGS"), ("artifacts", "ARTIFACTS")] {
             compose_env.insert(format!("ENV_{name}_PATH"), format!("/logs/{dir}"));
-            let host = if spec.log_dirs.contains(&format!("/logs/{dir}").as_str()) { format!("hb-logs-{dir}") } else { trial_dir.join(dir).display().to_string() };
+            let host = if spec.log_dirs.contains(&format!("/logs/{dir}").as_str()) {
+                format!("hb-logs-{dir}")
+            } else {
+                trial_dir.join(dir).display().to_string()
+            };
             compose_env.insert(format!("HOST_{name}_PATH"), host);
         }
         compose_env.insert(
@@ -426,7 +435,10 @@ impl DockerEnv {
         match tokio::time::timeout(self.spec.build_timeout, started).await {
             Ok(r) => r.map_err(|e| kind_err("EnvironmentStartError", format!("{e:#}")))?,
             Err(_) => {
-                return Err(kind_err("EnvironmentStartTimeoutError", format!("Environment start timed out after {} seconds", self.spec.build_timeout.as_secs_f64())));
+                return Err(kind_err(
+                    "EnvironmentStartTimeoutError",
+                    format!("Environment start timed out after {} seconds", self.spec.build_timeout.as_secs_f64()),
+                ));
             }
         }
         if !self.spec.log_dirs.is_empty() {
@@ -451,7 +463,13 @@ impl DockerEnv {
     }
 
     /// `bash -c command` in main, with persistent env < `env`. Non-zero exit is not an error.
-    pub async fn exec(&self, command: &str, user: Option<&str>, env: &BTreeMap<String, String>, timeout: Option<Duration>) -> Result<ExecResult> {
+    pub async fn exec(
+        &self,
+        command: &str,
+        user: Option<&str>,
+        env: &BTreeMap<String, String>,
+        timeout: Option<Duration>,
+    ) -> Result<ExecResult> {
         self.exec_in(command, user, env, timeout, self.workdir()).await
     }
 
@@ -510,7 +528,9 @@ impl DockerEnv {
         if r.code != 0 {
             bail!("mkdir {dst} failed: {}", r.stderr);
         }
-        self.run_ok(vec!["cp".into(), format!("{}/.", src.display()), format!("main:{dst}")], Some(Duration::from_secs(600))).await.map(|_| ())
+        self.run_ok(vec!["cp".into(), format!("{}/.", src.display()), format!("main:{dst}")], Some(Duration::from_secs(600)))
+            .await
+            .map(|_| ())
     }
 
     pub async fn upload_file(&self, src: &Path, dst: &str) -> Result<()> {
@@ -522,16 +542,21 @@ impl DockerEnv {
 
     pub async fn download_dir(&self, service: &str, src: &str, dst: &Path) -> Result<()> {
         std::fs::create_dir_all(dst)?;
-        self.run_ok(vec!["cp".into(), format!("{service}:{}/.", src.trim_end_matches('/')), dst.display().to_string()], Some(Duration::from_secs(600)))
-            .await
-            .map(|_| ())
+        self.run_ok(
+            vec!["cp".into(), format!("{service}:{}/.", src.trim_end_matches('/')), dst.display().to_string()],
+            Some(Duration::from_secs(600)),
+        )
+        .await
+        .map(|_| ())
     }
 
     pub async fn download_file(&self, service: &str, src: &str, dst: &Path) -> Result<()> {
         if let Some(p) = dst.parent() {
             std::fs::create_dir_all(p)?;
         }
-        self.run_ok(vec!["cp".into(), format!("{service}:{src}"), dst.display().to_string()], Some(Duration::from_secs(600))).await.map(|_| ())
+        self.run_ok(vec!["cp".into(), format!("{service}:{src}"), dst.display().to_string()], Some(Duration::from_secs(600)))
+            .await
+            .map(|_| ())
     }
 
     /// Tar inside the service with `--exclude` patterns, copy the archive out, extract locally.
@@ -539,7 +564,12 @@ impl DockerEnv {
         let tmp = format!("/tmp/hbench-transfer-{}.tar.gz", uuid::Uuid::new_v4().simple());
         let flags: Vec<String> = exclude.iter().map(|p| format!("--exclude={}", quote(p))).collect();
         let r = self
-            .service_exec(service, &format!("tar czf {tmp} {} -C {} .", flags.join(" "), quote(src)), Some("root"), Some(Duration::from_secs(600)))
+            .service_exec(
+                service,
+                &format!("tar czf {tmp} {} -C {} .", flags.join(" "), quote(src)),
+                Some("root"),
+                Some(Duration::from_secs(600)),
+            )
             .await?;
         if r.code != 0 {
             bail!("tar in {service} failed: {}", r.stderr);
@@ -613,7 +643,10 @@ impl DockerEnv {
             } else {
                 failures += 1;
                 if failures >= hc.retries {
-                    return Err(kind_err("HealthcheckError", format!("Healthcheck failed after {} consecutive retries: {}", hc.retries, hc.command)));
+                    return Err(kind_err(
+                        "HealthcheckError",
+                        format!("Healthcheck failed after {} consecutive retries: {}", hc.retries, hc.command),
+                    ));
                 }
                 tokio::time::sleep(Duration::from_secs_f64(hc.interval_sec)).await;
             }

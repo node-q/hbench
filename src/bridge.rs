@@ -60,7 +60,8 @@ fn validate_overrides(o: &serde_json::Map<String, Value>) -> Result<()> {
 
 /// Last token-usage mapping in an ACP session export.
 pub fn extract_target_usage(v: &Value) -> Option<Value> {
-    const KEYS: [&str; 8] = ["inputTokens", "outputTokens", "totalTokens", "input_tokens", "output_tokens", "total_tokens", "cachedTokens", "cached_tokens"];
+    const KEYS: [&str; 8] =
+        ["inputTokens", "outputTokens", "totalTokens", "input_tokens", "output_tokens", "total_tokens", "cachedTokens", "cached_tokens"];
     fn walk(v: &Value, last: &mut Option<Value>) {
         match v {
             Value::Object(m) => {
@@ -81,7 +82,10 @@ pub fn extract_target_usage(v: &Value) -> Option<Value> {
 /// Render the simulated user's prompt (validates template variables like upstream).
 pub fn render_user_prompt(instruction: &str, bridge_instructions: &str, template: Option<&Path>, persona: Option<&Path>) -> Result<String> {
     let (tpl, source) = match template {
-        Some(p) => (std::fs::read_to_string(p).with_context(|| format!("User prompt template not found: {}", p.display()))?, p.display().to_string()),
+        Some(p) => (
+            std::fs::read_to_string(p).with_context(|| format!("User prompt template not found: {}", p.display()))?,
+            p.display().to_string(),
+        ),
         None => (DEFAULT_USER_PROMPT_TEMPLATE.to_string(), "built-in default".into()),
     };
     let env = minijinja::Environment::new();
@@ -126,7 +130,9 @@ impl Bridge {
         let overrides = match cfg.kwargs.get("acpx_config_path").and_then(Value::as_str) {
             None => serde_json::Map::new(),
             Some(p) => {
-                let v: Value = serde_json::from_str(&std::fs::read_to_string(p).with_context(|| format!("ACPX config path given but file not found: {p}"))?)?;
+                let v: Value = serde_json::from_str(
+                    &std::fs::read_to_string(p).with_context(|| format!("ACPX config path given but file not found: {p}"))?,
+                )?;
                 let Value::Object(m) = v else { bail!("ACPX config must contain a JSON object: {p}") };
                 validate_overrides(&m)?;
                 m
@@ -145,7 +151,14 @@ impl Bridge {
             if [ -n \"$_hb_missing\" ]; then set -- $_hb_missing; if command -v apt-get >/dev/null 2>&1; then hb_apt_install \"$@\"; \
             elif command -v apk >/dev/null 2>&1; then apk add --no-cache \"$@\"; elif command -v dnf >/dev/null 2>&1; then dnf install -y \"$@\"; fi; fi; \
             for _hb_prerequisite in curl bash; do if ! command -v \"$_hb_prerequisite\" >/dev/null 2>&1; then echo \"Missing ACPX prerequisite: $_hb_prerequisite\" >&2; exit 1; fi; done";
-        let r = cx.exec_as(&format!("{}{prep}", crate::agents::installed::APT_INSTALL_FN), Some("root"), &BTreeMap::from([("DEBIAN_FRONTEND".to_string(), "noninteractive".to_string())]), None).await?;
+        let r = cx
+            .exec_as(
+                &format!("{}{prep}", crate::agents::installed::APT_INSTALL_FN),
+                Some("root"),
+                &BTreeMap::from([("DEBIAN_FRONTEND".to_string(), "noninteractive".to_string())]),
+                None,
+            )
+            .await?;
         if r.code != 0 {
             bail!("Failed to prepare container for ACPX install: {}", r.stderr);
         }
@@ -178,7 +191,14 @@ impl Bridge {
         let cmd = target.acp_command().context("target agent does not support the 'acp' bridge")?;
         let config = build_acpx_config(&cmd, &self.overrides)?;
         let r = cx
-            .exec(&format!("printf '%s' {} > \"$(pwd)/.acpxrc.json\"; echo \"$(pwd)/.acpxrc.json\"", quote(&serde_json::to_string_pretty(&config)?)), &BTreeMap::new(), None)
+            .exec(
+                &format!(
+                    "printf '%s' {} > \"$(pwd)/.acpxrc.json\"; echo \"$(pwd)/.acpxrc.json\"",
+                    quote(&serde_json::to_string_pretty(&config)?)
+                ),
+                &BTreeMap::new(),
+                None,
+            )
             .await?;
         if r.code != 0 {
             bail!("Failed to write .acpxrc.json: {}", r.stderr);

@@ -28,7 +28,9 @@ const IGNORE: [&str; 6] = [".git", ".venv", "__pycache__", ".pytest_cache", ".ru
 
 /// PEP 440 subset normalization (`str(Version(v))` for common release/pre/post/dev forms).
 fn normalize_version(v: &str) -> Result<String> {
-    let re = Regex::new(r"^v?(\d+(?:\.\d+)*)(?:[-_.]?(a|b|rc|alpha|beta|c)[-_.]?(\d*))?(?:[-_.]?post[-_.]?(\d*))?(?:[-_.]?dev[-_.]?(\d*))?$").unwrap();
+    let re =
+        Regex::new(r"^v?(\d+(?:\.\d+)*)(?:[-_.]?(a|b|rc|alpha|beta|c)[-_.]?(\d*))?(?:[-_.]?post[-_.]?(\d*))?(?:[-_.]?dev[-_.]?(\d*))?$")
+            .unwrap();
     let lower = v.trim().to_lowercase();
     let Some(c) = re.captures(&lower) else { bail!("version must be an exact PEP 440 version, for example '1.54.0'") };
     let release: Vec<String> = c[1].split('.').map(|p| p.parse::<u64>().unwrap_or(0).to_string()).collect();
@@ -117,7 +119,9 @@ impl Strands {
                     Some(rest) => PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(rest),
                     None => PathBuf::from(&p),
                 };
-                let Ok(abs) = std::fs::canonicalize(&expanded) else { bail!("Strands factory_path does not exist: {}", expanded.display()) };
+                let Ok(abs) = std::fs::canonicalize(&expanded) else {
+                    bail!("Strands factory_path does not exist: {}", expanded.display())
+                };
                 Some(abs)
             }
         };
@@ -132,7 +136,8 @@ impl Strands {
     }
 
     fn connection(&self) -> Resolved {
-        let spec = Spec { default_provider: self.args.model_name.is_none().then_some("amazon-bedrock"), passthrough: true, ..Default::default() };
+        let spec =
+            Spec { default_provider: self.args.model_name.is_none().then_some("amazon-bedrock"), passthrough: true, ..Default::default() };
         with_canonical_provider_envs(connection(&self.args, spec))
     }
 
@@ -201,15 +206,17 @@ fn usage_counts(u: &Value, provider: Option<&str>) -> Option<(i64, Option<i64>, 
     }
     let n = |k: &str| u[k].as_i64().unwrap_or(0);
     let (input, output, cr, cw) = (n("inputTokens"), n("outputTokens"), n("cacheReadInputTokens"), n("cacheWriteInputTokens"));
-    let separate = provider == Some(ANTHROPIC_MODEL_PROVIDER) || u["totalTokens"].is_null() || u["totalTokens"].as_i64() == Some(input + output + cr + cw);
+    let separate = provider == Some(ANTHROPIC_MODEL_PROVIDER)
+        || u["totalTokens"].is_null()
+        || u["totalTokens"].as_i64() == Some(input + output + cr + cw);
     Some((input + if separate { cr + cw } else { 0 }, u["outputTokens"].as_i64(), cr, cw))
 }
 
 /// Strands result + events -> AgentContext (final_metrics totals + metadata).
 pub fn parse_context(result: Option<&str>, events: Option<&str>) -> AgentContext {
-    let result = result.and_then(|r| serde_json::from_str::<Value>(r).ok()).filter(Value::is_object).unwrap_or_else(|| {
-        json!({"output": "", "usage": {}, "error": {"type": "MissingResult", "message": "Strands result was unavailable"}})
-    });
+    let result = result.and_then(|r| serde_json::from_str::<Value>(r).ok()).filter(Value::is_object).unwrap_or_else(
+        || json!({"output": "", "usage": {}, "error": {"type": "MissingResult", "message": "Strands result was unavailable"}}),
+    );
     let provider = result["observed_model"]["provider"].as_str();
     let mut totals: (Option<i64>, Option<i64>, Option<i64>) = (None, None, None);
     if let Some((p, c, cr, _)) = usage_counts(&result["usage"], provider) {
@@ -227,7 +234,9 @@ pub fn parse_context(result: Option<&str>, events: Option<&str>) -> AgentContext
             if e["kind"] != "message" || m["role"] != "assistant" || !m["content"].is_array() || e["is_preexisting_context"] == true {
                 continue;
             }
-            if let Some((p, c, cr, _)) = m["metadata"]["usage"].is_object().then(|| usage_counts(&m["metadata"]["usage"], provider)).flatten() {
+            if let Some((p, c, cr, _)) =
+                m["metadata"]["usage"].is_object().then(|| usage_counts(&m["metadata"]["usage"], provider)).flatten()
+            {
                 add(&mut totals.0, Some(p));
                 add(&mut totals.1, c);
                 add(&mut totals.2, Some(cr));
@@ -286,7 +295,13 @@ impl Agent for Strands {
         }
         exec_agent(cx, &self.install_command(editable), &none).await?;
         if self.version.is_none()
-            && let Ok(r) = cx.exec(&format!("{PYTHON} -c \"import importlib.metadata; print(importlib.metadata.version('strands-agents'))\""), &none, None).await
+            && let Ok(r) = cx
+                .exec(
+                    &format!("{PYTHON} -c \"import importlib.metadata; print(importlib.metadata.version('strands-agents'))\""),
+                    &none,
+                    None,
+                )
+                .await
             && r.code == 0
             && !r.stdout.is_empty()
         {
@@ -310,7 +325,13 @@ impl Agent for Strands {
         let r = exec_agent(cx, &cmd, &self.runner_env(&conn)).await;
         // Always leave a result artifact, even when the runner died early.
         let fallback = r#"{"output":"","usage":{},"error":{"type":"IncompleteInvocation","message":"Strands runner stopped before writing a result"}}"#;
-        let _ = cx.exec(&format!("test -f {RESULT_PATH} || printf %s {} > {RESULT_PATH}", quote(fallback)), &BTreeMap::new(), Some(Duration::from_secs(5))).await;
+        let _ = cx
+            .exec(
+                &format!("test -f {RESULT_PATH} || printf %s {} > {RESULT_PATH}", quote(fallback)),
+                &BTreeMap::new(),
+                Some(Duration::from_secs(5)),
+            )
+            .await;
         r.map(|_| ())
     }
 
@@ -338,7 +359,12 @@ mod tests {
         assert!(Strands::new(args(json!({"version": "nope"}), &[], None)).is_err());
         assert!(Strands::new(args(json!({"factory_path": "/definitely/missing/path"}), &[], None)).is_err());
         assert!(Strands::new(args(json!({"factory_kwargs": [1]}), &[], None)).is_err());
-        let s = Strands::new(args(json!({"version": "1.55.0", "factory_kwargs": {"a": [1, {"b": null}]}}), &[("AWS_ACCESS_KEY_ID", "ak"), ("AWS_REGION", "us-west-2")], None)).unwrap();
+        let s = Strands::new(args(
+            json!({"version": "1.55.0", "factory_kwargs": {"a": [1, {"b": null}]}}),
+            &[("AWS_ACCESS_KEY_ID", "ak"), ("AWS_REGION", "us-west-2")],
+            None,
+        ))
+        .unwrap();
         assert!(s.install_command(true).ends_with("uv pip install --python /installed-agent/strands/venv/bin/python 'strands-agents[all]==1.55.0' -e /installed-agent/strands/factory"));
         let conn = s.connection();
         assert_eq!(conn.provider.as_deref(), Some("amazon-bedrock"));

@@ -74,7 +74,8 @@ fn run_metadata(raw: &Value) -> Option<RunMeta> {
     let agent_cfg = if config["agent"].is_object() { &config["agent"] } else { &config["agents"][0] };
     let info = &raw["agent_info"];
     let model = &info["model_info"];
-    let s = |v: Option<&Value>, d: &str| v.map(|v| v.as_str().map(str::to_string).unwrap_or_else(|| v.to_string())).unwrap_or_else(|| d.into());
+    let s =
+        |v: Option<&Value>, d: &str| v.map(|v| v.as_str().map(str::to_string).unwrap_or_else(|| v.to_string())).unwrap_or_else(|| d.into());
     let agent_name = s(first_truthy([&agent_cfg["name"], &info["name"], &config["agent_name"], &raw["agent_name"]]), "unknown-agent");
     if agent_name == "unknown-agent" {
         return None;
@@ -83,8 +84,13 @@ fn run_metadata(raw: &Value) -> Option<RunMeta> {
     Some(RunMeta {
         agent_name,
         model_name: s(first_truthy([&model["name"], &agent_cfg["model_name"], &info["model_name"], &config["engine"]]), "unknown-model"),
-        model_provider: s(first_truthy([&model["provider"], &agent_cfg["provider"], &info["provider"], &config["engine"]]), "unknown-provider"),
-        run_id: first_truthy([&config["job_id"], &config["job_name"], &raw["job_id"], &raw["run_id"], &raw["trial_name"]]).cloned().unwrap_or(unknown("unknown-run")),
+        model_provider: s(
+            first_truthy([&model["provider"], &agent_cfg["provider"], &info["provider"], &config["engine"]]),
+            "unknown-provider",
+        ),
+        run_id: first_truthy([&config["job_id"], &config["job_name"], &raw["job_id"], &raw["run_id"], &raw["trial_name"]])
+            .cloned()
+            .unwrap_or(unknown("unknown-run")),
         start_time: first_truthy([&raw["started_at"], &raw["startedAt"]]).cloned().unwrap_or(unknown("")),
         task_name: first_truthy([&raw["task_name"], &config["task_name"]]).cloned().unwrap_or(unknown("unknown-task")),
         trial_name: first_truthy([&raw["trial_name"], &config["trial_name"]]).cloned().unwrap_or(unknown("unknown-trial")),
@@ -146,7 +152,8 @@ fn episodes_from_trajectory(traj: &Value, meta: &RunMeta) -> Vec<Map<String, Val
     let agent_name = first_truthy([&traj["agent"]["name"]]).cloned().unwrap_or(meta.agent_name.clone().into());
     let model_name = first_truthy([&traj["agent"]["model_name"]]).cloned().unwrap_or(meta.model_name.clone().into());
     let tools = first_truthy([&traj["agent"]["tool_definitions"]]).cloned();
-    let ends: Vec<usize> = steps.iter().enumerate().filter(|(_, s)| s["source"] == "agent" && s["is_copied_context"] != true).map(|(i, _)| i).collect();
+    let ends: Vec<usize> =
+        steps.iter().enumerate().filter(|(_, s)| s["source"] == "agent" && s["is_copied_context"] != true).map(|(i, _)| i).collect();
     let mut out = vec![];
     for (ep, &end) in ends.iter().enumerate() {
         let window = &steps[..=end];
@@ -160,7 +167,11 @@ fn episodes_from_trajectory(traj: &Value, meta: &RunMeta) -> Vec<Map<String, Val
                     let content = match (&tools, tools_added) {
                         (Some(t), false) => {
                             tools_added = true;
-                            Value::String(format!("<tools>\n{}\n</tools>\n\n{}", serde_json::to_string_pretty(t).unwrap(), normalize_content(&message)))
+                            Value::String(format!(
+                                "<tools>\n{}\n</tools>\n\n{}",
+                                serde_json::to_string_pretty(t).unwrap(),
+                                normalize_content(&message)
+                            ))
                         }
                         _ => message,
                     };
@@ -182,12 +193,22 @@ fn episodes_from_trajectory(traj: &Value, meta: &RunMeta) -> Vec<Map<String, Val
                     for tc in s["tool_calls"].as_array().into_iter().flatten() {
                         let args = tc.get("arguments").cloned().unwrap_or(json!({}));
                         // name before arguments, as Python's insertion-ordered dict dumps it
-                        let call = format!("{{\"name\": {}, \"arguments\": {}}}", crate::atif::py_dumps(&tc["function_name"]), crate::atif::py_dumps(&args));
+                        let call = format!(
+                            "{{\"name\": {}, \"arguments\": {}}}",
+                            crate::atif::py_dumps(&tc["function_name"]),
+                            crate::atif::py_dumps(&args)
+                        );
                         parts.push(format!("<tool_call>\n{call}\n</tool_call>"));
                     }
                     conv.push(json!({"role": "assistant", "content": parts.join("\n")}));
                     if Some(i) != last_agent {
-                        let obs: Vec<String> = s["observation"]["results"].as_array().into_iter().flatten().filter(|r| r.get("content").is_some()).map(|r| normalize_content(&r["content"])).collect();
+                        let obs: Vec<String> = s["observation"]["results"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .filter(|r| r.get("content").is_some())
+                            .map(|r| normalize_content(&r["content"]))
+                            .collect();
                         if !obs.is_empty() {
                             conv.push(json!({"role": "user", "content": obs.join("\n")}));
                         }
@@ -247,7 +268,9 @@ fn trial_rows(trial_dir: &Path, meta: &RunMeta, o: &ExportOpts) -> Result<Vec<Ma
     // Follow the continuation chain (`continued_trajectory_ref`), numbering episodes globally.
     for _ in 0..1000 {
         let Some(traj) = read_json(&path) else { break };
-        if traj["steps"].as_array().into_iter().flatten().any(|s| has_media(&s["message"]) || s["observation"]["results"].as_array().into_iter().flatten().any(|r| has_media(&r["content"]))) {
+        if traj["steps"].as_array().into_iter().flatten().any(|s| {
+            has_media(&s["message"]) || s["observation"]["results"].as_array().into_iter().flatten().any(|r| has_media(&r["content"]))
+        }) {
             bail!("trajectory {} contains multimodal content; text-only export is not supported", path.display());
         }
         let offset = rows.len();
@@ -290,7 +313,11 @@ fn instruction(agent_dir: &Path) -> Option<String> {
         .ok()?
         .flatten()
         .map(|e| e.path())
-        .filter(|p| p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with("trajectory") && n.ends_with(".json") && !n.contains(".summarization")))
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("trajectory") && n.ends_with(".json") && !n.contains(".summarization"))
+        })
         .collect();
     paths.sort();
     let t = read_json(paths.first()?)?;
@@ -298,7 +325,11 @@ fn instruction(agent_dir: &Path) -> Option<String> {
 }
 
 fn verifier_output(trial_dir: &Path) -> Option<String> {
-    let parts: Vec<String> = ["test-stdout.txt", "test-stderr.txt"].iter().filter_map(|f| std::fs::read(trial_dir.join("verifier").join(f)).ok()).map(|b| String::from_utf8_lossy(&b).into_owned()).collect();
+    let parts: Vec<String> = ["test-stdout.txt", "test-stderr.txt"]
+        .iter()
+        .filter_map(|f| std::fs::read(trial_dir.join("verifier").join(f)).ok())
+        .map(|b| String::from_utf8_lossy(&b).into_owned())
+        .collect();
     (!parts.is_empty()).then(|| parts.concat())
 }
 
@@ -340,7 +371,14 @@ mod tests {
     use super::*;
 
     fn opts() -> ExportOpts {
-        ExportOpts { recursive: true, episodes: "all".into(), success_filter: None, sharegpt: false, include_instruction: false, include_verifier_output: false }
+        ExportOpts {
+            recursive: true,
+            episodes: "all".into(),
+            success_filter: None,
+            sharegpt: false,
+            include_instruction: false,
+            include_verifier_output: false,
+        }
     }
 
     fn fixture() -> PathBuf {
@@ -369,13 +407,13 @@ mod tests {
         std::fs::write(
             trial.join("agent/trajectory.json"),
             json!({"schema_version": "ATIF-v1.7", "agent": {"name": "claude-code", "version": "2", "model_name": "claude-m"},
-                "steps": [
-                    {"step_id": 1, "source": "user", "message": "Make hello.txt"},
-                    {"step_id": 2, "source": "agent", "message": "Looking", "reasoning_content": "think",
-                     "tool_calls": [{"tool_call_id": "t1", "function_name": "Bash", "arguments": {"command": "ls"}}],
-                     "observation": {"results": [{"source_call_id": "t1", "content": "a.txt"}]}},
-                    {"step_id": 3, "source": "agent", "message": "Done."}
-                ]})
+            "steps": [
+                {"step_id": 1, "source": "user", "message": "Make hello.txt"},
+                {"step_id": 2, "source": "agent", "message": "Looking", "reasoning_content": "think",
+                 "tool_calls": [{"tool_call_id": "t1", "function_name": "Bash", "arguments": {"command": "ls"}}],
+                 "observation": {"results": [{"source_call_id": "t1", "content": "a.txt"}]}},
+                {"step_id": 3, "source": "agent", "message": "Done."}
+            ]})
             .to_string(),
         )
         .unwrap();
@@ -406,7 +444,14 @@ mod tests {
         assert_eq!(c1[2], json!({"role": "user", "content": "a.txt"}));
         assert_eq!(c1[3], json!({"role": "assistant", "content": "Done."}));
 
-        let o = ExportOpts { episodes: "last".into(), sharegpt: true, include_instruction: true, include_verifier_output: true, success_filter: Some("success".into()), ..opts() };
+        let o = ExportOpts {
+            episodes: "last".into(),
+            sharegpt: true,
+            include_instruction: true,
+            include_verifier_output: true,
+            success_filter: Some("success".into()),
+            ..opts()
+        };
         let rows = export(&job.join("hello__abc1234"), &o).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0]["episode"], "episode-1");

@@ -12,13 +12,29 @@ use std::path::Path;
 const RUNNER: &str = include_str!("../../../assets/agents/openhands-sdk/openhands_sdk_runner.py");
 const N: &str = "openhands-sdk";
 const KNOWN: &[&str] = &[
-    "version", "prompt_template_path", "config", "reasoning_effort", "load_skills", "skill_paths", "collect_token_ids", "max_iterations",
-    "temperature", "python_version",
+    "version",
+    "prompt_template_path",
+    "config",
+    "reasoning_effort",
+    "load_skills",
+    "skill_paths",
+    "collect_token_ids",
+    "max_iterations",
+    "temperature",
+    "python_version",
 ];
 const INSTRUCTION_PATH: &str = "/installed-agent/instruction.txt";
 const VERSION_CMD: &str = "/opt/openhands-sdk-venv/bin/python -c 'import openhands.sdk; print(openhands.sdk.__version__)' 2>/dev/null";
-const DEFAULT_SKILL_PATHS: &[&str] =
-    &["~/.openhands-sdk/skills", "~/.claude/skills", "~/.codex/skills", "~/.agents/skills", "~/.goose/skills", "~/.gemini/skills", "~/.factory/skills", "~/.opencode/skill"];
+const DEFAULT_SKILL_PATHS: &[&str] = &[
+    "~/.openhands-sdk/skills",
+    "~/.claude/skills",
+    "~/.codex/skills",
+    "~/.agents/skills",
+    "~/.goose/skills",
+    "~/.gemini/skills",
+    "~/.factory/skills",
+    "~/.opencode/skill",
+];
 /// upstream's command literal; its `\`-newlines are Python line continuations, so only the spaces survive.
 const RUN_CMD: &str = "/opt/openhands-sdk-venv/bin/python /installed-agent/run_agent.py     --instruction-file=/installed-agent/instruction.txt     \
                        --logs-dir=\"$AGENT_LOGS_DIR\"     --trajectory-path=\"$TRAJECTORY_PATH\"     2>&1 | stdbuf -oL tee /logs/agent/openhands_sdk.txt";
@@ -184,7 +200,11 @@ impl Agent for OpenHandsSdk {
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
         cx.env.exec_root("[ -d /installed-agent ] || mkdir -p /installed-agent", None).await?;
         let installed = cx
-            .exec("[ -f /opt/openhands-sdk-venv/bin/python ] && /opt/openhands-sdk-venv/bin/python -c \"import openhands.sdk\" 2>/dev/null", &BTreeMap::new(), None)
+            .exec(
+                "[ -f /opt/openhands-sdk-venv/bin/python ] && /opt/openhands-sdk-venv/bin/python -c \"import openhands.sdk\" 2>/dev/null",
+                &BTreeMap::new(),
+                None,
+            )
             .await?
             .code
             == 0;
@@ -245,9 +265,14 @@ mod tests {
     fn options_and_install() {
         let a = agent(json!({}), &[], Some("test/model")).unwrap();
         assert!(a.load_skills && !a.collect_token_ids && a.python_version == "3.12");
-        assert!(a.install_cmd().contains("--python 3.12 --clear") && a.install_cmd().ends_with("uv pip install openhands-sdk openhands-tools fastapi"));
+        assert!(
+            a.install_cmd().contains("--python 3.12 --clear")
+                && a.install_cmd().ends_with("uv pip install openhands-sdk openhands-tools fastapi")
+        );
         let v = agent(json!({"version": "1.2.3", "python_version": "3.13"}), &[], None).unwrap();
-        assert!(v.install_cmd().contains("openhands-sdk==1.2.3 openhands-tools==1.2.3") && v.install_cmd().contains("uv python install 3.13"));
+        assert!(
+            v.install_cmd().contains("openhands-sdk==1.2.3 openhands-tools==1.2.3") && v.install_cmd().contains("uv python install 3.13")
+        );
         assert!(agent(json!({"max_iterations": "x"}), &[], None).is_err());
         assert!(agent(json!({"skill_paths": "/a"}), &[], None).is_err());
         assert!(agent(json!({"unknown": 1}), &[], None).is_err());
@@ -257,17 +282,33 @@ mod tests {
 
     #[test]
     fn run_env() {
-        let a = agent(json!({"reasoning_effort": "max", "max_iterations": 15, "temperature": 0.7, "collect_token_ids": true, "load_skills": false}), &[("LLM_API_KEY", "k"), ("LLM_BASE_URL", "https://custom.api")], Some("anthropic/claude-sonnet-4-5")).unwrap();
+        let a = agent(
+            json!({"reasoning_effort": "max", "max_iterations": 15, "temperature": 0.7, "collect_token_ids": true, "load_skills": false}),
+            &[("LLM_API_KEY", "k"), ("LLM_BASE_URL", "https://custom.api")],
+            Some("anthropic/claude-sonnet-4-5"),
+        )
+        .unwrap();
         let e = a.run_env().unwrap();
-        assert_eq!((e["LLM_API_KEY"].as_str(), e["LLM_BASE_URL"].as_str(), e["LLM_MODEL"].as_str()), ("k", "https://custom.api", "anthropic/claude-sonnet-4-5"));
+        assert_eq!(
+            (e["LLM_API_KEY"].as_str(), e["LLM_BASE_URL"].as_str(), e["LLM_MODEL"].as_str()),
+            ("k", "https://custom.api", "anthropic/claude-sonnet-4-5")
+        );
         assert_eq!((e["LLM_REASONING_EFFORT"].as_str(), e["MAX_ITERATIONS"].as_str(), e["LLM_TEMPERATURE"].as_str()), ("max", "15", "0.7"));
         assert_eq!(e["LITELLM_EXTRA_BODY"], "{\"return_token_ids\": true}");
         assert_eq!(e["LOAD_SKILLS"], "0");
         assert_eq!(e["SKILL_PATHS"], DEFAULT_SKILL_PATHS.join(":"));
         assert!(!e.contains_key("MCP_SERVERS_JSON"));
-        assert_eq!(agent(json!({"temperature": 1}), &[("LLM_API_KEY", "k")], Some("m")).unwrap().run_env().unwrap()["LLM_TEMPERATURE"], "1.0");
+        assert_eq!(
+            agent(json!({"temperature": 1}), &[("LLM_API_KEY", "k")], Some("m")).unwrap().run_env().unwrap()["LLM_TEMPERATURE"],
+            "1.0"
+        );
 
-        let mut s = args(json!({"skill_paths": ["/custom/skills", "/hbench/skills", "/hbench/skills"]}), &[("LLM_API_KEY", "k")], Some("m"), vec![]);
+        let mut s = args(
+            json!({"skill_paths": ["/custom/skills", "/hbench/skills", "/hbench/skills"]}),
+            &[("LLM_API_KEY", "k")],
+            Some("m"),
+            vec![],
+        );
         s.skills = vec!["x".into()];
         assert_eq!(OpenHandsSdk::new(s).unwrap().run_env().unwrap()["SKILL_PATHS"], "/hbench/skills:/custom/skills");
 
@@ -276,13 +317,28 @@ mod tests {
             &[("LLM_API_KEY", "k")],
             Some("m"),
             vec![
-                McpServer { name: "test-server".into(), transport: "stdio".into(), url: None, command: Some("node".into()), args: vec!["server.js".into(), "--port=3000".into()] },
-                McpServer { name: "sse-server".into(), transport: "sse".into(), url: Some("http://localhost:8080/sse".into()), command: None, args: vec![] },
+                McpServer {
+                    name: "test-server".into(),
+                    transport: "stdio".into(),
+                    url: None,
+                    command: Some("node".into()),
+                    args: vec!["server.js".into(), "--port=3000".into()],
+                },
+                McpServer {
+                    name: "sse-server".into(),
+                    transport: "sse".into(),
+                    url: Some("http://localhost:8080/sse".into()),
+                    command: None,
+                    args: vec![],
+                },
             ],
         ))
         .unwrap();
         let p: Value = serde_json::from_str(&m.run_env().unwrap()["MCP_SERVERS_JSON"]).unwrap();
-        assert_eq!(p, json!([{"name": "test-server", "transport": "stdio", "command": "node", "args": ["server.js", "--port=3000"]}, {"name": "sse-server", "transport": "sse", "url": "http://localhost:8080/sse"}]));
+        assert_eq!(
+            p,
+            json!([{"name": "test-server", "transport": "stdio", "command": "node", "args": ["server.js", "--port=3000"]}, {"name": "sse-server", "transport": "sse", "url": "http://localhost:8080/sse"}])
+        );
 
         if std::env::var("LLM_API_KEY").is_err() {
             assert!(agent(json!({}), &[], Some("m")).unwrap().run_env().unwrap_err().to_string().contains("LLM_API_KEY"));

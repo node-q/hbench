@@ -113,11 +113,18 @@ fn write_entry(p: &Value, path: &Path) -> Result<()> {
 
 /// urllib's `quote(s, safe="")`.
 fn url_quote(s: &str) -> String {
-    s.bytes().map(|b| if b.is_ascii_alphanumeric() || b"_.-~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect()
+    s.bytes()
+        .map(|b| if b.is_ascii_alphanumeric() || b"_.-~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") })
+        .collect()
 }
 
 /// Fetch the registry entry for `spec`; a pinned version is searched in the entry's git history.
-pub fn resolve_registry_entry_payload(spec: &str, registry_ref: &str, cache_dir: &Path, fetch: &dyn Fn(&str) -> Result<Value>) -> Result<Value> {
+pub fn resolve_registry_entry_payload(
+    spec: &str,
+    registry_ref: &str,
+    cache_dir: &Path,
+    fetch: &dyn Fn(&str) -> Result<Value>,
+) -> Result<Value> {
     let (id, requested) = parse_registry_spec(spec)?;
     let cache_dir = std::path::absolute(cache_dir)?;
     let latest = entry_payload(fetch, &id, registry_ref)?;
@@ -491,7 +498,9 @@ fn source_askpass_env(askpass_dir: &Path, repo_url: &str, token: Option<String>)
     let script = askpass_dir.join("acp-source-askpass.sh");
     std::fs::write(
         &script,
-        format!("#!/bin/sh\ncase \"$1\" in\n  *Username*|*username*) printf '%s\\n' 'x-access-token' ;;\n  *Password*|*password*) printf '%s\\n' \"${SOURCE_TOKEN_ENV}\" ;;\n  *) exit 1 ;;\nesac\n"),
+        format!(
+            "#!/bin/sh\ncase \"$1\" in\n  *Username*|*username*) printf '%s\\n' 'x-access-token' ;;\n  *Password*|*password*) printf '%s\\n' \"${SOURCE_TOKEN_ENV}\" ;;\n  *) exit 1 ;;\nesac\n"
+        ),
     )?;
     #[cfg(unix)]
     {
@@ -550,7 +559,12 @@ async fn fetch_source(source: &AcpSource, checkout: &Path) -> Result<String> {
         let none = BTreeMap::new();
         run_git(&["init", "--quiet", &checkout.to_string_lossy()], None, &none).await?;
         run_git(&["remote", "add", "origin", "--", &source.repo_url], Some(checkout), &none).await?;
-        run_git(&["-c", "protocol.file.allow=never", "fetch", "--quiet", "--depth", "1", "--no-tags", "origin", &source.git_ref], Some(checkout), &fetch_env).await?;
+        run_git(
+            &["-c", "protocol.file.allow=never", "fetch", "--quiet", "--depth", "1", "--no-tags", "origin", &source.git_ref],
+            Some(checkout),
+            &fetch_env,
+        )
+        .await?;
         run_git(&["checkout", "--quiet", "--detach", "FETCH_HEAD"], Some(checkout), &none).await?;
         run_git(&["rev-parse", "HEAD"], Some(checkout), &none).await
     }
@@ -602,7 +616,10 @@ fn parse_distribution_preference(v: Option<&Value>) -> Result<Vec<String>> {
     let raw: Vec<String> = match v {
         None | Some(Value::Null) => return Ok(["binary", "npx", "uvx", "local"].map(String::from).to_vec()),
         Some(Value::String(s)) => s.split(',').map(String::from).collect(),
-        Some(Value::Array(a)) => a.iter().map(|x| x.as_str().map(String::from).ok_or_else(|| anyhow!("distribution_preference: expected strings"))).collect::<Result<_>>()?,
+        Some(Value::Array(a)) => a
+            .iter()
+            .map(|x| x.as_str().map(String::from).ok_or_else(|| anyhow!("distribution_preference: expected strings")))
+            .collect::<Result<_>>()?,
         Some(_) => bail!("distribution_preference: expected a string or list of strings"),
     };
     let values: Vec<String> = raw.iter().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
@@ -642,7 +659,8 @@ impl Acp {
                 Some(RegistryEntry::from_value(serde_json::from_str(&raw)?)?)
             }
             (Some(Value::String(s)), None) => {
-                let v: Value = serde_json::from_str(s).map_err(|_| anyhow!("registry_entry must be a JSON object when passed as a string"))?;
+                let v: Value =
+                    serde_json::from_str(s).map_err(|_| anyhow!("registry_entry must be a JSON object when passed as a string"))?;
                 Some(RegistryEntry::from_value(v)?)
             }
             (Some(v @ Value::Object(_)), None) => Some(RegistryEntry::from_value(v.clone())?),
@@ -730,7 +748,8 @@ impl Acp {
             o => o,
         };
         let id = format!("{s}-{m}");
-        if !["linux-x86_64", "linux-aarch64", "darwin-x86_64", "darwin-aarch64", "windows-x86_64", "windows-aarch64"].contains(&id.as_str()) {
+        if !["linux-x86_64", "linux-aarch64", "darwin-x86_64", "darwin-aarch64", "windows-x86_64", "windows-aarch64"].contains(&id.as_str())
+        {
             bail!("Unsupported ACP platform '{id}' for registry entry {}", self.entry.as_ref().map(|e| e.id.as_str()).unwrap_or(""));
         }
         Ok(id)
@@ -838,7 +857,8 @@ impl Acp {
             bail!("Could not determine the ACP execution user's numeric UID");
         }
         cx.env.upload_dir(&root, "/installed-agent/source").await?;
-        exec_root(cx, &format!("chown -R {uid} /installed-agent/source && chmod -R u+rwX,go-w /installed-agent/source"), &BTreeMap::new()).await?;
+        exec_root(cx, &format!("chown -R {uid} /installed-agent/source && chmod -R u+rwX,go-w /installed-agent/source"), &BTreeMap::new())
+            .await?;
         exec_root(cx, &dependencies_command("uvx"), &debian_env()).await?;
         let project = quote(&remote_project);
         let lockfile = quote(&format!("{remote_project}/{}", manifest.runtime.lockfile));
@@ -1012,7 +1032,9 @@ rm -f \"$tmp_archive\""
 
 fn launcher_script(target: &Target) -> String {
     let (env, parts): (&BTreeMap<String, String>, Vec<String>) = match target {
-        Target::Binary(b) => (&b.env, [vec![format!("{BINARY_INSTALL_DIR}/dist/{}", binary_command_name(&b.cmd))], b.args.clone()].concat()),
+        Target::Binary(b) => {
+            (&b.env, [vec![format!("{BINARY_INSTALL_DIR}/dist/{}", binary_command_name(&b.cmd))], b.args.clone()].concat())
+        }
         Target::Npx(p) => (&p.env, [vec!["npx".into(), "-y".into(), p.package.clone()], p.args.clone()].concat()),
         Target::Uvx(p) => (&p.env, [vec![format!("{RUNNER_VENV_PATH}/bin/uvx"), p.package.clone()], p.args.clone()].concat()),
         Target::Local(l) => (&l.env, [vec![l.cmd.clone()], l.args.clone()].concat()),
@@ -1090,7 +1112,9 @@ impl Agent for Acp {
         }
         cx.env.exec_root("[ -d /installed-agent ] || mkdir -p /installed-agent", None).await?;
         // upstream wraps non-RuntimeError install failures; exec failures pass through classified.
-        self.install(cx).await.map_err(|e| if crate::env::error_kind(&e) == "RuntimeError" { anyhow!("Agent install failed: {e:#}") } else { e })
+        self.install(cx)
+            .await
+            .map_err(|e| if crate::env::error_kind(&e) == "RuntimeError" { anyhow!("Agent install failed: {e:#}") } else { e })
     }
 
     async fn run(&mut self, instruction: &str, cx: &AgentCtx<'_>, _ctx: &mut AgentContext, _resume: bool) -> Result<()> {
@@ -1104,7 +1128,11 @@ impl Agent for Acp {
     }
 
     fn populate_context_post_run(&self, logs_dir: &Path, ctx: &mut AgentContext) {
-        let Some(summary) = std::fs::read_to_string(logs_dir.join(SUMMARY_FILENAME)).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()).filter(Value::is_object) else {
+        let Some(summary) = std::fs::read_to_string(logs_dir.join(SUMMARY_FILENAME))
+            .ok()
+            .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+            .filter(Value::is_object)
+        else {
             return;
         };
         let (id, version) = self.identity();
@@ -1140,7 +1168,8 @@ mod tests {
         std::fs::write(dir.join("task.toml"), "[environment]\ndocker_image='x'\n").unwrap();
         std::fs::write(dir.join("instruction.md"), "x").unwrap();
         let task = Arc::new(crate::task::Task::load(&dir).unwrap());
-        Acp::new(AgentArgs { load_trajectory: None,
+        Acp::new(AgentArgs {
+            load_trajectory: None,
             model_name: model.map(String::from),
             kwargs: serde_json::from_value(kwargs).unwrap(),
             extra_env: BTreeMap::new(),
@@ -1166,7 +1195,10 @@ mod tests {
         assert!(err(json!({"registry_entry": entry(), "distribution_preference": "npx,bogus"})).contains("preference(s): bogus"));
         assert!(err(json!({"registry_entry": entry(), "permission_mode": "maybe"})).contains("permission_mode"));
         assert!(err(json!({"registry_entry": entry(), "config": {}})).contains("does not support config"));
-        assert!(err(json!({"source": {"repo_url": "https://github.com/o/r", "ref": "main"}, "registry_spec": "x"})).contains("cannot be combined"));
+        assert!(
+            err(json!({"source": {"repo_url": "https://github.com/o/r", "ref": "main"}, "registry_spec": "x"}))
+                .contains("cannot be combined")
+        );
         let mut e = entry();
         e["distribution"]["binary"]["linux-x86_64"]["archive"] = json!("http://x");
         assert!(err(json!({"registry_entry": e})).contains("HTTPS"));
@@ -1192,7 +1224,10 @@ mod tests {
         assert_eq!(a.select_distribution("linux-x86_64").unwrap().kind(), "binary");
         assert_eq!(a.select_distribution("linux-aarch64").unwrap().kind(), "npx");
         let b = agent(json!({"registry_entry": entry(), "distribution_preference": ["uvx"]}), None).unwrap();
-        assert_eq!(format!("{}", b.select_distribution("linux-x86_64").unwrap_err()), "No compatible ACP distribution found for codex-acp on linux-x86_64. Available: binary[linux-x86_64], npx");
+        assert_eq!(
+            format!("{}", b.select_distribution("linux-x86_64").unwrap_err()),
+            "No compatible ACP distribution found for codex-acp on linux-x86_64. Available: binary[linux-x86_64], npx"
+        );
         assert_eq!(a.normalize_platform("Linux", "arm64").unwrap(), "linux-aarch64");
         assert_eq!(a.normalize_platform("MINGW64_NT", "AMD64").unwrap(), "windows-x86_64");
         assert!(a.normalize_platform("Linux", "riscv64").is_err());
@@ -1210,30 +1245,55 @@ mod tests {
         let l = launcher_script(&Target::Binary(bin.clone()));
         assert!(l.contains("export OPENAI_API_KEY='test key'") && l.contains("exec /opt/hbench-acp-agent/dist/codex-acp --stdio \"$@\""));
         assert!(!l.contains("/usr/local/bin"));
-        let l = launcher_script(&Target::Uvx(PackageDistribution { package: "fast-agent-acp==0.6.10".into(), args: vec!["serve".into()], env: BTreeMap::new() }));
+        let l = launcher_script(&Target::Uvx(PackageDistribution {
+            package: "fast-agent-acp==0.6.10".into(),
+            args: vec!["serve".into()],
+            env: BTreeMap::new(),
+        }));
         assert!(l.contains("/opt/hbench-acp-venv/bin/uvx fast-agent-acp==0.6.10 serve"));
-        let l = launcher_script(&Target::Npx(PackageDistribution { package: "@zed-industries/codex-acp@0.10.0".into(), args: vec![], env: BTreeMap::new() }));
-        assert!(l.contains("\"${NVM_DIR:-$HOME/.nvm}\"/versions/node/*/bin") && l.contains("exec npx -y @zed-industries/codex-acp@0.10.0 \"$@\""));
-        let l = launcher_script(&Target::Local(LocalTarget { cmd: "node".into(), args: vec!["/opt/local acp/server.js".into()], env: BTreeMap::new() }));
+        let l = launcher_script(&Target::Npx(PackageDistribution {
+            package: "@zed-industries/codex-acp@0.10.0".into(),
+            args: vec![],
+            env: BTreeMap::new(),
+        }));
+        assert!(
+            l.contains("\"${NVM_DIR:-$HOME/.nvm}\"/versions/node/*/bin")
+                && l.contains("exec npx -y @zed-industries/codex-acp@0.10.0 \"$@\"")
+        );
+        let l = launcher_script(&Target::Local(LocalTarget {
+            cmd: "node".into(),
+            args: vec!["/opt/local acp/server.js".into()],
+            env: BTreeMap::new(),
+        }));
         assert_eq!(l, "#!/usr/bin/env sh\nset -eu\nexec node '/opt/local acp/server.js' \"$@\"\n");
 
         let d = dependencies_command("npx");
         let line = |k: &str| d.lines().find(|l| l.contains(k)).unwrap().to_string();
         assert!(!line("hb_apt_install python3").contains("nodejs") && line("apk add").contains("nodejs npm"));
         let d = dependencies_command("uvx");
-        assert!(d.starts_with(&format!("set -euo pipefail\n{}            export UV_PYTHON_INSTALL_DIR=/opt/hbench-acp-python\n", super::super::APT_INSTALL_FN)));
+        assert!(d.starts_with(&format!(
+            "set -euo pipefail\n{}            export UV_PYTHON_INSTALL_DIR=/opt/hbench-acp-python\n",
+            super::super::APT_INSTALL_FN
+        )));
         assert!(d.contains("curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/opt/hbench-acp-tools sh"));
         assert!(d.contains("/opt/hbench-acp-tools/uv venv --python 3.12 /opt/hbench-acp-venv") && d.contains("[ \"1\" = \"1\" ]"));
         assert!(dependencies_command("binary").contains("xz-utils"));
         let n = node_install_command();
         assert!(n.contains("nvm install 22") && n.contains("musl"));
         let c = binary_install_command(&BinaryTarget { checksum: Some("ab".repeat(32)), ..bin });
-        assert!(c.contains(&format!("expected_checksum={}", "ab".repeat(32))) && c.contains("cp \"$tmp_archive\" /opt/hbench-acp-agent/dist/codex-acp"));
+        assert!(
+            c.contains(&format!("expected_checksum={}", "ab".repeat(32)))
+                && c.contains("cp \"$tmp_archive\" /opt/hbench-acp-agent/dist/codex-acp")
+        );
     }
 
     #[test]
     fn run_env_and_registry_spec() {
-        let a = agent(json!({"registry_entry": entry(), "auth_policy": "Explicit", "authenticate_method_id": "openai-api-key"}), Some("openai/gpt-5.4")).unwrap();
+        let a = agent(
+            json!({"registry_entry": entry(), "auth_policy": "Explicit", "authenticate_method_id": "openai-api-key"}),
+            Some("openai/gpt-5.4"),
+        )
+        .unwrap();
         let e = a.run_env();
         assert_eq!(e["HBENCH_ACP_AUTH_POLICY"], "explicit");
         assert_eq!(e["HBENCH_ACP_AUTHENTICATE_METHOD_ID"], "openai-api-key");
@@ -1270,11 +1330,14 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("hbench-acp-reg-{}", uuid::Uuid::new_v4()));
         let p = resolve_registry_entry_payload("opencode@1.2.0", "main", &dir, &fetch).unwrap();
         assert_eq!(p["version"], "1.2.0");
-        let cached: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("versions/opencode/1.2.0/agent.json")).unwrap()).unwrap();
+        let cached: Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("versions/opencode/1.2.0/agent.json")).unwrap()).unwrap();
         assert_eq!(cached["version"], "1.2.0");
         resolve_registry_entry_payload("opencode", "main", &dir, &fetch).unwrap();
         assert!(dir.join("main/opencode/agent.json").is_file());
-        assert!(resolve_registry_entry_payload("opencode@9.9", "main", &dir, &fetch).unwrap_err().to_string().contains("version not found"));
+        assert!(
+            resolve_registry_entry_payload("opencode@9.9", "main", &dir, &fetch).unwrap_err().to_string().contains("version not found")
+        );
     }
 
     #[test]
@@ -1328,11 +1391,20 @@ mod tests {
         std::fs::write(co.join("hbench-agent.json"), &manifest).unwrap();
         std::fs::write(co.join("pyproject.toml"), "").unwrap();
         std::fs::write(co.join("uv.lock"), "").unwrap();
-        let src = |sha: Option<&str>| AcpSource { repo_url: "https://github.com/o/r".into(), git_ref: "main".into(), source_dir: ".".into(), manifest_path: "hbench-agent.json".into(), manifest_sha256: sha.map(String::from) };
+        let src = |sha: Option<&str>| AcpSource {
+            repo_url: "https://github.com/o/r".into(),
+            git_ref: "main".into(),
+            source_dir: ".".into(),
+            manifest_path: "hbench-agent.json".into(),
+            manifest_sha256: sha.map(String::from),
+        };
         let (m, digest) = load_verified_manifest(&src(None), &co).unwrap();
         assert_eq!(digest, crate::task::hex(&Sha256::digest(manifest.as_bytes())));
         assert_eq!(source_remote_project(&m, &co).unwrap(), "/installed-agent/source");
-        assert_eq!(source_launcher_script(&m, "/installed-agent/source"), "#!/usr/bin/env sh\nset -eu\ncd /installed-agent/source\nPATH=/installed-agent/source/.venv/bin:$PATH\nexport PATH\nexec my-agent --acp \"$@\"\n");
+        assert_eq!(
+            source_launcher_script(&m, "/installed-agent/source"),
+            "#!/usr/bin/env sh\nset -eu\ncd /installed-agent/source\nPATH=/installed-agent/source/.venv/bin:$PATH\nexport PATH\nexec my-agent --acp \"$@\"\n"
+        );
         assert!(load_verified_manifest(&src(Some(&"0".repeat(64))), &co).unwrap_err().to_string().contains("digest does not match"));
         #[cfg(unix)]
         {

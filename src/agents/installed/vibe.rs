@@ -13,7 +13,18 @@ use std::sync::OnceLock;
 const VIBE_HOME: &str = "/logs/agent/vibe-home";
 const PROVIDER_NAME: &str = "hbench-openai";
 const DEFAULT_API_BASE: &str = "https://api.mistral.ai/v1";
-const OPTION_KEYS: &[&str] = &["version", "prompt_template_path", "config", "max_turns", "max_price", "max_tokens", "thinking", "reasoning_effort", "temperature", "backend"];
+const OPTION_KEYS: &[&str] = &[
+    "version",
+    "prompt_template_path",
+    "config",
+    "max_turns",
+    "max_price",
+    "max_tokens",
+    "thinking",
+    "reasoning_effort",
+    "temperature",
+    "backend",
+];
 
 pub fn create(args: AgentArgs) -> Result<AgentBox> {
     Ok(Box::new(Vibe::new(args)?))
@@ -101,7 +112,9 @@ fn vibe_classify(output: &str) -> &'static str {
 
 impl Vibe {
     pub fn new(args: AgentArgs) -> Result<Vibe> {
-        let bad = |k: &str, why: &str| anyhow!("Invalid kwargs for agent 'vibe':\n  {k}: {why}\nSee `hbench agents schema vibe` for available options.");
+        let bad = |k: &str, why: &str| {
+            anyhow!("Invalid kwargs for agent 'vibe':\n  {k}: {why}\nSee `hbench agents schema vibe` for available options.")
+        };
         if let Some(k) = args.kwargs.keys().find(|k| !OPTION_KEYS.contains(&k.as_str())) {
             bail!("Invalid kwargs for agent 'vibe':\n  Unknown option '{k}'.\nSee `hbench agents schema vibe` for available options.");
         }
@@ -182,9 +195,16 @@ impl Vibe {
     }
 
     fn backend_and_key_env(&self) -> Result<(String, String)> {
-        let backend = self.args.get_env("VIBE_BACKEND").or_else(|| self.opts.backend.clone().filter(|b| !b.is_empty())).unwrap_or_else(|| "mistral".into()).to_lowercase();
+        let backend = self
+            .args
+            .get_env("VIBE_BACKEND")
+            .or_else(|| self.opts.backend.clone().filter(|b| !b.is_empty()))
+            .unwrap_or_else(|| "mistral".into())
+            .to_lowercase();
         if backend != "mistral" && backend != "generic" {
-            bail!("Unknown Vibe backend '{backend}'; valid backends are 'mistral' and 'generic' (use 'generic' for any OpenAI-compatible endpoint).");
+            bail!(
+                "Unknown Vibe backend '{backend}'; valid backends are 'mistral' and 'generic' (use 'generic' for any OpenAI-compatible endpoint)."
+            );
         }
         let default_key = if backend == "generic" { "OPENAI_API_KEY" } else { "MISTRAL_API_KEY" };
         let key_env = self.args.get_env("VIBE_API_KEY_ENV").unwrap_or_else(|| default_key.into());
@@ -228,11 +248,21 @@ impl Vibe {
         };
         let provider_name = if backend == "mistral" { "mistral" } else { PROVIDER_NAME };
         let alias = self.model_id()?;
-        let mut provider = vec![("name", toml_str(provider_name)), ("api_base", toml_str(&api_base)), ("api_key_env_var", toml_str(&key_env)), ("backend", toml_str(&backend))];
+        let mut provider = vec![
+            ("name", toml_str(provider_name)),
+            ("api_base", toml_str(&api_base)),
+            ("api_key_env_var", toml_str(&key_env)),
+            ("backend", toml_str(&backend)),
+        ];
         if backend != "mistral" {
             provider.push(("api_style", toml_str("openai")));
         }
-        let mut model = vec![("name", toml_str(&alias)), ("provider", toml_str(provider_name)), ("alias", toml_str(&alias)), ("temperature", py_float(self.opts.temperature))];
+        let mut model = vec![
+            ("name", toml_str(&alias)),
+            ("provider", toml_str(provider_name)),
+            ("alias", toml_str(&alias)),
+            ("temperature", py_float(self.opts.temperature)),
+        ];
         if let Some(t) = &self.opts.thinking {
             model.push(("thinking", toml_str(t)));
         }
@@ -298,7 +328,11 @@ impl Vibe {
 }
 
 fn read_meta(dir: &Path) -> Map<String, Value> {
-    std::fs::read_to_string(dir.join("meta.json")).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()).and_then(|v| v.as_object().cloned()).unwrap_or_default()
+    std::fs::read_to_string(dir.join("meta.json"))
+        .ok()
+        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+        .and_then(|v| v.as_object().cloned())
+        .unwrap_or_default()
 }
 
 fn read_messages(dir: &Path) -> Vec<Value> {
@@ -317,13 +351,15 @@ fn str_field<'a>(m: &'a Map<String, Value>, k: &str) -> Option<&'a str> {
 /// Session dirs for this run, root→latest, following `parent_session_id` from the newest leaf.
 fn session_chain(logs_dir: &Path) -> Vec<PathBuf> {
     let Ok(rd) = std::fs::read_dir(logs_dir.join("vibe-home/logs/session")) else { return vec![] };
-    let dirs: Vec<PathBuf> = rd.filter_map(|e| e.ok().map(|e| e.path())).filter(|d| d.is_dir() && d.join("messages.jsonl").is_file()).collect();
+    let dirs: Vec<PathBuf> =
+        rd.filter_map(|e| e.ok().map(|e| e.path())).filter(|d| d.is_dir() && d.join("messages.jsonl").is_file()).collect();
     if dirs.is_empty() {
         return vec![];
     }
     let metas: Vec<Map<String, Value>> = dirs.iter().map(|d| read_meta(d)).collect();
     let parents: Vec<&str> = metas.iter().filter_map(|m| str_field(m, "parent_session_id")).collect();
-    let mut leaves: Vec<usize> = (0..dirs.len()).filter(|&i| str_field(&metas[i], "session_id").is_none_or(|id| !parents.contains(&id))).collect();
+    let mut leaves: Vec<usize> =
+        (0..dirs.len()).filter(|&i| str_field(&metas[i], "session_id").is_none_or(|id| !parents.contains(&id))).collect();
     if leaves.is_empty() {
         leaves = (0..dirs.len()).collect();
     }
@@ -456,7 +492,11 @@ impl Agent for Vibe {
 /// "vibe 2.17.1" -> "2.17.1" (first non-empty line).
 fn parse_vibe_version(stdout: &str) -> String {
     let text = stdout.trim();
-    text.lines().map(str::trim).find(|l| !l.is_empty()).map(|l| l.strip_prefix("vibe").unwrap_or(l).trim().to_string()).unwrap_or_else(|| text.to_string())
+    text.lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .map(|l| l.strip_prefix("vibe").unwrap_or(l).trim().to_string())
+        .unwrap_or_else(|| text.to_string())
 }
 
 #[cfg(test)]
@@ -471,7 +511,8 @@ mod tests {
         std::fs::write(dir.join("task.toml"), "[environment]\ndocker_image='x'\n").unwrap();
         std::fs::write(dir.join("instruction.md"), "x").unwrap();
         let task = Arc::new(crate::task::Task::load(&dir).unwrap());
-        Vibe::new(AgentArgs { load_trajectory: None,
+        Vibe::new(AgentArgs {
+            load_trajectory: None,
             model_name: model.map(String::from),
             kwargs: serde_json::from_value(kwargs).unwrap(),
             extra_env: env.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect(),
@@ -489,7 +530,14 @@ mod tests {
     fn config_and_flags() {
         let a = agent(json!({}), &[], Some("mistral/mistral-medium-3-5"));
         let c = a.config_toml().unwrap();
-        for s in ["active_model = \"mistral-medium-3-5\"", "api_base = \"https://api.mistral.ai/v1\"", "backend = \"mistral\"", "name = \"mistral\"", "api_key_env_var = \"MISTRAL_API_KEY\"", "temperature = 0.2"] {
+        for s in [
+            "active_model = \"mistral-medium-3-5\"",
+            "api_base = \"https://api.mistral.ai/v1\"",
+            "backend = \"mistral\"",
+            "name = \"mistral\"",
+            "api_key_env_var = \"MISTRAL_API_KEY\"",
+            "temperature = 0.2",
+        ] {
             assert!(c.contains(s), "{s} missing in {c}");
         }
         assert!(!c.contains("api_style") && !c.contains("thinking"));
@@ -498,27 +546,65 @@ mod tests {
         assert!(c.starts_with("active_model = \"mistral-medium-3-5\"\nenable_telemetry = false\n"));
         assert_eq!(agent(json!({}), &[], Some("together_ai/openai/gpt-oss-120b")).model_id().unwrap(), "openai/gpt-oss-120b");
 
-        let g = agent(json!({"backend": "generic", "reasoning_effort": "low", "temperature": 1}), &[("VIBE_API_BASE", "https://x/v1"), ("VIBE_INPUT_PRICE", "1.5"), ("VIBE_OUTPUT_PRICE", "7")], Some("m"));
+        let g = agent(
+            json!({"backend": "generic", "reasoning_effort": "low", "temperature": 1}),
+            &[("VIBE_API_BASE", "https://x/v1"), ("VIBE_INPUT_PRICE", "1.5"), ("VIBE_OUTPUT_PRICE", "7")],
+            Some("m"),
+        );
         let c = g.config_toml().unwrap();
-        for s in ["api_style = \"openai\"", "name = \"hbench-openai\"", "api_key_env_var = \"OPENAI_API_KEY\"", "thinking = \"low\"", "temperature = 1.0", "input_price = 1.5", "output_price = 7.0"] {
+        for s in [
+            "api_style = \"openai\"",
+            "name = \"hbench-openai\"",
+            "api_key_env_var = \"OPENAI_API_KEY\"",
+            "thinking = \"low\"",
+            "temperature = 1.0",
+            "input_price = 1.5",
+            "output_price = 7.0",
+        ] {
             assert!(c.contains(s), "{s} missing in {c}");
         }
         let e = agent(json!({"backend": "generic"}), &[("OPENAI_BASE_URL", "")], Some("m")).config_toml();
         if std::env::var("OPENAI_BASE_URL").is_err() && std::env::var("VIBE_API_BASE").is_err() {
             assert!(e.unwrap_err().to_string().contains("requires an explicit endpoint"));
         }
-        assert!(agent(json!({}), &[("VIBE_BACKEND", "openai")], Some("m")).config_toml().unwrap_err().to_string().contains("Unknown Vibe backend 'openai'"));
+        assert!(
+            agent(json!({}), &[("VIBE_BACKEND", "openai")], Some("m"))
+                .config_toml()
+                .unwrap_err()
+                .to_string()
+                .contains("Unknown Vibe backend 'openai'")
+        );
 
         // pricing validation
-        assert!(agent(json!({"max_price": "2.50"}), &[], Some("m")).config_toml().unwrap_err().to_string().contains("max-price cannot be enforced"));
-        assert!(agent(json!({"max_price": "2.50"}), &[("VIBE_INPUT_PRICE", "0"), ("VIBE_OUTPUT_PRICE", "0")], Some("m")).config_toml().is_err());
+        assert!(
+            agent(json!({"max_price": "2.50"}), &[], Some("m"))
+                .config_toml()
+                .unwrap_err()
+                .to_string()
+                .contains("max-price cannot be enforced")
+        );
+        assert!(
+            agent(json!({"max_price": "2.50"}), &[("VIBE_INPUT_PRICE", "0"), ("VIBE_OUTPUT_PRICE", "0")], Some("m")).config_toml().is_err()
+        );
         // LiteLLM fallback (mistral/devstral-medium-2507: in 4e-7, out 2e-6 per token) makes --max-price enforceable.
         let p = agent(json!({"max_price": "2.50"}), &[], Some("mistral/devstral-medium-2507"));
         let (i, o) = p.pricing().unwrap().unwrap();
         assert!((i - 0.4).abs() < 1e-9 && (o - 2.0).abs() < 1e-9);
         assert!(p.config_toml().unwrap().contains("input_price = "));
-        assert!(agent(json!({}), &[("VIBE_INPUT_PRICE", "1.5")], Some("m")).config_toml().unwrap_err().to_string().contains("both VIBE_INPUT_PRICE"));
-        assert!(agent(json!({}), &[("VIBE_INPUT_PRICE", "$1.5"), ("VIBE_OUTPUT_PRICE", "7")], Some("m")).config_toml().unwrap_err().to_string().contains("must be numbers"));
+        assert!(
+            agent(json!({}), &[("VIBE_INPUT_PRICE", "1.5")], Some("m"))
+                .config_toml()
+                .unwrap_err()
+                .to_string()
+                .contains("both VIBE_INPUT_PRICE")
+        );
+        assert!(
+            agent(json!({}), &[("VIBE_INPUT_PRICE", "$1.5"), ("VIBE_OUTPUT_PRICE", "7")], Some("m"))
+                .config_toml()
+                .unwrap_err()
+                .to_string()
+                .contains("must be numbers")
+        );
 
         // flags + env fallbacks + option validation
         let f = agent(json!({"max_turns": 5, "max_tokens": "100"}), &[("VIBE_MAX_PRICE", "2.50")], Some("m"));
@@ -534,7 +620,13 @@ mod tests {
     fn toml_and_mcp() {
         let t = to_toml(&[("api_base", toml_str("https://host/v1\n")), ("name", toml_str("a\tb\u{1}c"))], &[]);
         assert!(t.contains("api_base = \"https://host/v1\\n\"") && t.contains("name = \"a\\tb\\u0001c\""));
-        let srv = |name: &str, transport: &str| crate::task::McpServer { name: name.into(), transport: transport.into(), url: Some("http://m:8000/mcp".into()), command: Some("run-server".into()), args: vec!["--x".into()] };
+        let srv = |name: &str, transport: &str| crate::task::McpServer {
+            name: name.into(),
+            transport: transport.into(),
+            url: Some("http://m:8000/mcp".into()),
+            command: Some("run-server".into()),
+            args: vec!["--x".into()],
+        };
         let a = agent_with(json!({}), &[], Some("m"), vec![srv("h", "http"), srv("l", "stdio")]).unwrap();
         let c = a.mcp_command("/cfg/config.toml").unwrap().unwrap();
         assert!(c.starts_with("cat >> /cfg/config.toml <<'VIBE_MCP_EOF'\n[[mcp_servers]]\nname = \"h\"\ntransport = \"streamable-http\"\nurl = \"http://m:8000/mcp\"\n"));
@@ -576,14 +668,26 @@ mod tests {
         assert!(ctx.is_empty());
 
         // Compaction: s2 continues s1; an unrelated newer-looking old session is ignored.
-        write_session(&root, "s1", &[json!({"role": "user", "content": "hi"}), json!("stray")], Some(json!({"session_id": "a", "start_time": "2026-07-13T10:00:00+00:00", "stats": {"session_prompt_tokens": 1}})));
+        write_session(
+            &root,
+            "s1",
+            &[json!({"role": "user", "content": "hi"}), json!("stray")],
+            Some(json!({"session_id": "a", "start_time": "2026-07-13T10:00:00+00:00", "stats": {"session_prompt_tokens": 1}})),
+        );
         write_session(
             &root,
             "s2",
             &[json!({"role": "user", "content": "summary"}), json!({"role": "assistant", "content": "done"})],
-            Some(json!({"session_id": "b", "parent_session_id": "a", "start_time": "2026-07-13T11:00:00+00:00", "stats": {"session_prompt_tokens": 100, "session_completion_tokens": 50, "session_cost": 0.0012}})),
+            Some(
+                json!({"session_id": "b", "parent_session_id": "a", "start_time": "2026-07-13T11:00:00+00:00", "stats": {"session_prompt_tokens": 100, "session_completion_tokens": 50, "session_cost": 0.0012}}),
+            ),
         );
-        write_session(&root, "s0", &[json!({"role": "user", "content": "old"})], Some(json!({"session_id": "z", "start_time": "2026-07-12T00:00:00+00:00"})));
+        write_session(
+            &root,
+            "s0",
+            &[json!({"role": "user", "content": "old"})],
+            Some(json!({"session_id": "z", "start_time": "2026-07-12T00:00:00+00:00"})),
+        );
         let chain = session_chain(&root);
         assert_eq!(chain.iter().map(|p| p.file_name().unwrap().to_str().unwrap()).collect::<Vec<_>>(), ["s1", "s2"]);
         a.populate_context_post_run(&root, &mut ctx);
@@ -591,7 +695,12 @@ mod tests {
 
         // $0 cost without configured pricing is unknown; with explicit zero prices it's real.
         let root2 = std::env::temp_dir().join(format!("hbench-vibe-logs-{}", uuid::Uuid::new_v4()));
-        write_session(&root2, "s", &[json!({"role": "user", "content": "hi"})], Some(json!({"stats": {"session_prompt_tokens": 10, "session_completion_tokens": 0, "session_cost": 0.0}})));
+        write_session(
+            &root2,
+            "s",
+            &[json!({"role": "user", "content": "hi"})],
+            Some(json!({"stats": {"session_prompt_tokens": 10, "session_completion_tokens": 0, "session_cost": 0.0}})),
+        );
         let mut c2 = AgentContext::default();
         a.populate_context_post_run(&root2, &mut c2);
         assert_eq!((c2.n_input_tokens, c2.n_output_tokens, c2.cost_usd), (Some(10), Some(0), None));

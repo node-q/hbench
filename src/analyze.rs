@@ -138,7 +138,10 @@ pub fn analyze_schema(r: &Rubric) -> Value {
     let checks = object_schema("AnalyzeResultChecks", criteria_props(r));
     let root = object_schema(
         "AnalyzeResultResponse",
-        vec![("summary".into(), json!({"title": "Summary", "type": "string"})), ("checks".into(), json!({"$ref": "#/$defs/AnalyzeResultChecks"}))],
+        vec![
+            ("summary".into(), json!({"title": "Summary", "type": "string"})),
+            ("checks".into(), json!({"$ref": "#/$defs/AnalyzeResultChecks"})),
+        ],
     );
     with_defs(vec![("AnalyzeResultChecks", Value::Object(checks))], root, !r.criteria.is_empty())
 }
@@ -215,7 +218,12 @@ fn parse_checks(v: &Value, r: &Rubric) -> Result<Checks, String> {
 fn extract_result(r: &TrialResult, trial_dir: &Path, t: &Template) -> Result<(Value, Option<f64>), String> {
     let label = t.label;
     if let Some(e) = &r.exception_info {
-        return Err(format!("{label} trial failed with {}: {}\nTrial artifacts: {}", e.exception_type, e.exception_message, trial_dir.display()));
+        return Err(format!(
+            "{label} trial failed with {}: {}\nTrial artifacts: {}",
+            e.exception_type,
+            e.exception_message,
+            trial_dir.display()
+        ));
     }
     let result_path = trial_dir.join("artifacts").join(t.result_filename);
     let reward_one = r.reward().and_then(|rw| rw.get("reward")).and_then(|n| n.as_f64()) == Some(1.0);
@@ -291,7 +299,8 @@ fn is_passing(trial_dir: &Path) -> bool {
 
 /// Trial dirs of a job dir (sorted); `filter_passing`: Some(true) passing only, Some(false) failing only.
 pub fn get_trial_dirs(job_dir: &Path, filter_passing: Option<bool>) -> Vec<PathBuf> {
-    let mut dirs: Vec<PathBuf> = std::fs::read_dir(job_dir).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| p.is_dir() && is_trial_dir(p)).collect();
+    let mut dirs: Vec<PathBuf> =
+        std::fs::read_dir(job_dir).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| p.is_dir() && is_trial_dir(p)).collect();
     dirs.sort();
     match filter_passing {
         None => dirs,
@@ -348,7 +357,8 @@ pub fn resolve_task_dirs(path: &Path, include: &[String], exclude: &[String], n_
             path.display()
         );
     }
-    let mut dirs: Vec<PathBuf> = std::fs::read_dir(path)?.flatten().map(|e| e.path()).filter(|d| d.is_dir() && is_valid_task_dir(d)).collect();
+    let mut dirs: Vec<PathBuf> =
+        std::fs::read_dir(path)?.flatten().map(|e| e.path()).filter(|d| d.is_dir() && is_valid_task_dir(d)).collect();
     dirs.sort();
     if !include.is_empty() {
         dirs.retain(|d| include.iter().any(|p| crate::glob_match(p, &dir_name(d))));
@@ -460,13 +470,21 @@ fn posix_join(base: &str, name: &str) -> String {
 }
 
 fn write_instruction(dest: &Path, rendered: &str, t: &Template, schema: &Value) -> Result<()> {
-    let output = py_format(t.output_prompt, &[("result_filename", t.result_filename), ("output_schema", &serde_json::to_string_pretty(schema)?)])?;
+    let output =
+        py_format(t.output_prompt, &[("result_filename", t.result_filename), ("output_schema", &serde_json::to_string_pretty(schema)?)])?;
     std::fs::write(dest.join("instruction.md"), format!("{}\n\n{}\n", rendered.trim_end(), output.trim()))?;
     Ok(())
 }
 
 /// Wrapper task analyzing `trial_dir` (and its task, when available locally).
-pub fn assemble_analyze_task(trial_dir: &Path, task_dir: Option<&Path>, rubric: &Rubric, template: &str, schema: &Value, dest: &Path) -> Result<PathBuf> {
+pub fn assemble_analyze_task(
+    trial_dir: &Path,
+    task_dir: Option<&Path>,
+    rubric: &Rubric,
+    template: &str,
+    schema: &Value,
+    dest: &Path,
+) -> Result<PathBuf> {
     let workdir = write_skeleton(dest, &ANALYZE, rubric)?;
     // exclude a prior run's analysis so the agent can't read its own output
     copy_tree(trial_dir, &dest.join("environment/trial"), &[".git", "analysis.json", "analysis.md"])?;
@@ -487,7 +505,10 @@ pub fn assemble_analyze_task(trial_dir: &Path, task_dir: Option<&Path>, rubric: 
         }
         None => "The task definition is not available. Use the trajectory and test output to infer what the task required.".into(),
     };
-    let rendered = py_format(template, &[("trial_path", &trial_path), ("task_section", &task_section), ("criteria_guidance", &criteria_guidance(rubric))])?;
+    let rendered = py_format(
+        template,
+        &[("trial_path", &trial_path), ("task_section", &task_section), ("criteria_guidance", &criteria_guidance(rubric))],
+    )?;
     write_instruction(dest, &rendered, &ANALYZE, schema)?;
     Ok(dest.to_path_buf())
 }
@@ -499,7 +520,11 @@ pub fn assemble_check_task(task_dir: &Path, rubric: &Rubric, template: &str, sch
     copy_tree(task_dir, &review, &[".git"])?;
     let rendered = py_format(
         template,
-        &[("file_tree", &build_file_tree(&review)), ("criteria_guidance", &criteria_guidance(rubric)), ("task_path", &posix_join(&workdir, "task"))],
+        &[
+            ("file_tree", &build_file_tree(&review)),
+            ("criteria_guidance", &criteria_guidance(rubric)),
+            ("task_path", &posix_join(&workdir, "task")),
+        ],
     )?;
     write_instruction(dest, &rendered, &CHECK, schema)?;
     Ok(dest.to_path_buf())
@@ -612,7 +637,11 @@ fn wrapper_job_config(wrappers: &[PathBuf], o: &CommonArgs, model: &str) -> Resu
         env: o.agent_env.iter().cloned().collect(),
         ..Default::default()
     }];
-    cfg.environment = EnvConfig { kind: Some(o.env.clone()), kwargs: o.environment_kwargs.iter().map(|(k, v)| (k.clone(), crate::kwarg_value(v))).collect(), ..Default::default() };
+    cfg.environment = EnvConfig {
+        kind: Some(o.env.clone()),
+        kwargs: o.environment_kwargs.iter().map(|(k, v)| (k.clone(), crate::kwarg_value(v))).collect(),
+        ..Default::default()
+    };
     cfg.tasks = wrappers.iter().map(|w| TaskRef::local(w.clone(), None)).collect();
     cfg.datasets = vec![];
     cfg.validate()?;
@@ -755,15 +784,20 @@ fn title_case(name: &str) -> String {
 
 fn render_table(title: &str, headers: &[&str], rows: &[Vec<String>]) -> String {
     let rows: Vec<Vec<String>> = rows.iter().map(|r| r.iter().map(|c| c.replace('\n', " ")).collect()).collect();
-    let widths: Vec<usize> = (0..headers.len()).map(|i| rows.iter().map(|r| r[i].chars().count()).chain([headers[i].chars().count()]).max().unwrap_or(0)).collect();
-    let line = |cells: Vec<&str>| cells.iter().zip(&widths).map(|(c, w)| format!("{c:<w$}")).collect::<Vec<_>>().join(" | ").trim_end().to_string();
+    let widths: Vec<usize> = (0..headers.len())
+        .map(|i| rows.iter().map(|r| r[i].chars().count()).chain([headers[i].chars().count()]).max().unwrap_or(0))
+        .collect();
+    let line = |cells: Vec<&str>| {
+        cells.iter().zip(&widths).map(|(c, w)| format!("{c:<w$}")).collect::<Vec<_>>().join(" | ").trim_end().to_string()
+    };
     let mut out = vec![title.to_string(), line(headers.to_vec()), widths.iter().map(|w| "-".repeat(*w)).collect::<Vec<_>>().join("-+-")];
     out.extend(rows.iter().map(|r| line(r.iter().map(String::as_str).collect())));
     out.join("\n")
 }
 
 fn checks_table(title: &str, checks: &Checks) -> String {
-    let rows: Vec<Vec<String>> = checks.iter().map(|(n, c)| vec![title_case(n), outcome_str(c.outcome).into(), c.explanation.clone()]).collect();
+    let rows: Vec<Vec<String>> =
+        checks.iter().map(|(n, c)| vec![title_case(n), outcome_str(c.outcome).into(), c.explanation.clone()]).collect();
     render_table(title, &["Check", "Outcome", "Explanation"], &rows)
 }
 
@@ -802,7 +836,13 @@ pub async fn analyze_command(a: AnalyzeArgs) -> Result<()> {
     if a.passing && a.failing {
         fail(anyhow::anyhow!("Cannot use both --passing and --failing"));
     }
-    let filter = if a.passing { Some(true) } else if a.failing { Some(false) } else { None };
+    let filter = if a.passing {
+        Some(true)
+    } else if a.failing {
+        Some(false)
+    } else {
+        None
+    };
     println!("\n🔍 Analyzing trial(s)...");
     let (results, job_dir) = run_analyze(&a, filter).await.unwrap_or_else(|e| fail(e));
     if let [r] = results.as_slice() {
@@ -910,7 +950,10 @@ mod tests {
         assert_eq!(names(&default_rubric()), ["reward_hacking", "task_specification"]);
         assert_eq!(load_rubric(None, CHECK_RUBRIC).unwrap().criteria.len(), 11);
         let d = tmp();
-        write(&d.join("r.toml"), "[[criteria]]\nname = \"custom_check\"\ndescription = \"A custom check\"\nguidance = \"Check custom things.\"\n");
+        write(
+            &d.join("r.toml"),
+            "[[criteria]]\nname = \"custom_check\"\ndescription = \"A custom check\"\nguidance = \"Check custom things.\"\n",
+        );
         write(&d.join("r.YML"), "criteria:\n  - {name: y, description: d, guidance: g}\n");
         write(&d.join("r.json"), r#"{"criteria": [{"name": "j", "description": "d", "guidance": "g"}]}"#);
         write(&d.join("r.txt"), "");
@@ -930,7 +973,9 @@ mod tests {
                 "required": ["explanation", "outcome"], "title": "QualityCheckModel", "type": "object"}"##;
         let props = r##""properties": {"reward_hacking": {"$ref": "#/$defs/QualityCheckModel"}, "task_specification": {"$ref": "#/$defs/QualityCheckModel"}},
             "required": ["reward_hacking", "task_specification"]"##;
-        let check: Value = serde_json::from_str(&format!(r##"{{"$defs": {{{defs}}}, {props}, "title": "QualityCheckResponse", "type": "object"}}"##)).unwrap();
+        let check: Value =
+            serde_json::from_str(&format!(r##"{{"$defs": {{{defs}}}, {props}, "title": "QualityCheckResponse", "type": "object"}}"##))
+                .unwrap();
         let analyze: Value = serde_json::from_str(&format!(
             r##"{{"$defs": {{"AnalyzeResultChecks": {{{props}, "title": "AnalyzeResultChecks", "type": "object"}}, {defs}}},
                "properties": {{"summary": {{"title": "Summary", "type": "string"}}, "checks": {{"$ref": "#/$defs/AnalyzeResultChecks"}}}},
@@ -1020,30 +1065,57 @@ mod tests {
         let r = default_rubric();
         let tpl = "Analyze {trial_path}.\n\n{task_section}\n\n{criteria_guidance}";
         let w = assemble_analyze_task(&trial, Some(&task), &r, tpl, &analyze_schema(&r), &d.join("work/analyze-task")).unwrap();
-        for f in ["task.toml", "instruction.md", "environment/trial/trial.log", "environment/trial/result.json", "environment/task/instruction.md", "tests/test.sh", "tests/validate.py"] {
+        for f in [
+            "task.toml",
+            "instruction.md",
+            "environment/trial/trial.log",
+            "environment/trial/result.json",
+            "environment/task/instruction.md",
+            "tests/test.sh",
+            "tests/validate.py",
+        ] {
             assert!(w.join(f).is_file(), "{f}");
         }
-        for f in ["environment/Dockerfile", "environment/trial/.git", "environment/trial/analysis.json", "environment/trial/analysis.md", "environment/trial/agent/analysis.json"] {
+        for f in [
+            "environment/Dockerfile",
+            "environment/trial/.git",
+            "environment/trial/analysis.json",
+            "environment/trial/analysis.md",
+            "environment/trial/agent/analysis.json",
+        ] {
             assert!(!w.join(f).exists(), "{f}");
         }
         assert!(std::fs::read_to_string(w.join("task.toml")).unwrap().contains("docker_image = \"python:3.13-slim\""));
-        assert_eq!(std::fs::read_to_string(w.join("tests/criteria.json")).unwrap(), "[\n  \"reward_hacking\",\n  \"task_specification\"\n]");
+        assert_eq!(
+            std::fs::read_to_string(w.join("tests/criteria.json")).unwrap(),
+            "[\n  \"reward_hacking\",\n  \"task_specification\"\n]"
+        );
         let ins = std::fs::read_to_string(w.join("instruction.md")).unwrap();
         assert!(ins.starts_with("Analyze /app/trial.\n\nThe task being attempted is at /app/task."));
         assert!(ins.contains("- /app/task/solution/ — reference solution (if present)\n\n- reward_hacking: Read the agent's"));
-        assert!(ins.contains("write your result to a file named analysis.json") && ins.contains("<output_schema>\n{\n  \"$defs\"") && ins.ends_with("is your only deliverable.\n"));
+        assert!(
+            ins.contains("write your result to a file named analysis.json")
+                && ins.contains("<output_schema>\n{\n  \"$defs\"")
+                && ins.ends_with("is your only deliverable.\n")
+        );
         assert!(!ins.contains("{trial_path}"));
         let t = Task::load(&w).unwrap();
         assert!(t.validate_tests().is_ok() && is_valid_task_dir(&w));
         assert_eq!(t.config.environment.workdir.as_deref(), Some("/app"));
 
         // without a task; default prompt; custom rubric
-        write(&d.join("custom.toml"), "[[criteria]]\nname = \"custom_check\"\ndescription = \"A custom check\"\nguidance = \"Check custom things.\"\n");
+        write(
+            &d.join("custom.toml"),
+            "[[criteria]]\nname = \"custom_check\"\ndescription = \"A custom check\"\nguidance = \"Check custom things.\"\n",
+        );
         let r = load_rubric(Some(&d.join("custom.toml")), "").unwrap();
         let w = assemble_analyze_task(&trial, None, &r, ANALYZE_PROMPT, &analyze_schema(&r), &d.join("work/analyze-task")).unwrap();
         assert!(!w.join("environment/task").exists());
         let ins = std::fs::read_to_string(w.join("instruction.md")).unwrap();
-        assert!(ins.contains("The task definition is not available.") && ins.contains("Guidance:\n- custom_check: Check custom things.\n\n# Output"));
+        assert!(
+            ins.contains("The task definition is not available.")
+                && ins.contains("Guidance:\n- custom_check: Check custom things.\n\n# Output")
+        );
         assert_eq!(std::fs::read_to_string(w.join("tests/criteria.json")).unwrap(), "[\n  \"custom_check\"\n]");
     }
 
@@ -1054,13 +1126,25 @@ mod tests {
         write(&task.join(".git/HEAD"), "ref");
         let r = load_rubric(None, CHECK_RUBRIC).unwrap();
         let w = assemble_check_task(&task, &r, CHECK_PROMPT, &check_schema(&r), &d.join("work/check-task")).unwrap();
-        for f in ["task.toml", "instruction.md", "environment/task/instruction.md", "environment/task/tests/test.sh", "tests/test.sh", "tests/validate.py", "tests/criteria.json"] {
+        for f in [
+            "task.toml",
+            "instruction.md",
+            "environment/task/instruction.md",
+            "environment/task/tests/test.sh",
+            "tests/test.sh",
+            "tests/validate.py",
+            "tests/criteria.json",
+        ] {
             assert!(w.join(f).is_file(), "{f}");
         }
         assert!(!w.join("environment/task/.git").exists() && !w.join("environment/Dockerfile").exists());
         let ins = std::fs::read_to_string(w.join("instruction.md")).unwrap();
         assert!(ins.contains("<file_tree>\nenvironment/Dockerfile\ninstruction.md\ntask.toml\ntests/test.sh\n</file_tree>"));
-        assert!(ins.contains("The task to review is at /app/task.") && ins.contains("- typos: Look closely") && ins.contains("check-result.json"));
+        assert!(
+            ins.contains("The task to review is at /app/task.")
+                && ins.contains("- typos: Look closely")
+                && ins.contains("check-result.json")
+        );
         let criteria: Vec<String> = serde_json::from_str(&std::fs::read_to_string(w.join("tests/criteria.json")).unwrap()).unwrap();
         assert_eq!(criteria.len(), 11);
         assert!(is_valid_task_dir(&w));
@@ -1107,7 +1191,13 @@ mod tests {
     #[test]
     fn report_json_and_rendering() {
         let checks: Checks = vec![("reward_hacking".into(), Check { explanation: "clean".into(), outcome: Outcome::Pass })];
-        let ok = AnalyzeReportResult { trial_name: Some("trial__write".into()), summary: Some("Solved.".into()), checks: checks.clone(), cost_usd: Some(0.05), error: None };
+        let ok = AnalyzeReportResult {
+            trial_name: Some("trial__write".into()),
+            summary: Some("Solved.".into()),
+            checks: checks.clone(),
+            cost_usd: Some(0.05),
+            error: None,
+        };
         let d = tmp();
         write_analysis_json(&d, &ok).unwrap();
         assert_eq!(
@@ -1116,7 +1206,10 @@ mod tests {
         );
         let err = AnalyzeReportResult { trial_name: Some("b".into()), error: Some("boom\nmore".into()), ..Default::default() };
         let report = serde_json::to_value(Report { results: &[ok.clone(), err.clone()] }).unwrap();
-        assert_eq!(report["results"][1], json!({"trial_name": "b", "summary": null, "checks": {}, "cost_usd": null, "error": "boom\nmore"}));
+        assert_eq!(
+            report["results"][1],
+            json!({"trial_name": "b", "summary": null, "checks": {}, "cost_usd": null, "error": "boom\nmore"})
+        );
         let q = serde_json::to_string(&QualityCheckResult { task_name: Some("t".into()), ..Default::default() }).unwrap();
         assert_eq!(q, r#"{"checks":{},"cost_usd":null,"task_name":"t","error":null}"#);
 
@@ -1141,7 +1234,29 @@ mod tests {
 
     #[test]
     fn cli_flags_and_job_config() {
-        let Sub::Analyze(a) = Cli::parse_from(["x", "analyze", "jobs/j", "--failing", "-l", "3", "--ak", "max_turns=5", "--ae", "X=1", "-n", "2", "-o", "out", "--job-name", "an", "-q"]).cmd else { panic!() };
+        let Sub::Analyze(a) = Cli::parse_from([
+            "x",
+            "analyze",
+            "jobs/j",
+            "--failing",
+            "-l",
+            "3",
+            "--ak",
+            "max_turns=5",
+            "--ae",
+            "X=1",
+            "-n",
+            "2",
+            "-o",
+            "out",
+            "--job-name",
+            "an",
+            "-q",
+        ])
+        .cmd
+        else {
+            panic!()
+        };
         assert_eq!((a.model.as_str(), a.failing, a.n_trials, a.common.agent.as_str()), ("claude-haiku-4-5", true, Some(3), "claude-code"));
         let cfg = wrapper_job_config(&[PathBuf::from("/w/a")], &a.common, &a.model).unwrap();
         assert_eq!(cfg.job_dir(), PathBuf::from("out/an"));
@@ -1149,8 +1264,13 @@ mod tests {
         assert_eq!(cfg.agents[0].model_name.as_deref(), Some("claude-haiku-4-5"));
         assert_eq!((cfg.agents[0].kwargs["max_turns"].clone(), cfg.agents[0].env["X"].as_str()), (json!(5), "1"));
         assert_eq!((cfg.environment.kind.as_deref(), cfg.tasks.len(), cfg.datasets.len()), (Some("docker"), 1, 0));
-        let Sub::Check(c) = Cli::parse_from(["x", "check", "tasks", "-i", "a*", "-x", "b", "-l", "1", "-e", "daytona"]).cmd else { panic!() };
-        assert_eq!((c.model.as_str(), c.include.as_slice(), c.exclude.as_slice(), c.n_tasks), ("claude-sonnet-4-6", &["a*".to_string()][..], &["b".to_string()][..], Some(1)));
+        let Sub::Check(c) = Cli::parse_from(["x", "check", "tasks", "-i", "a*", "-x", "b", "-l", "1", "-e", "daytona"]).cmd else {
+            panic!()
+        };
+        assert_eq!(
+            (c.model.as_str(), c.include.as_slice(), c.exclude.as_slice(), c.n_tasks),
+            ("claude-sonnet-4-6", &["a*".to_string()][..], &["b".to_string()][..], Some(1))
+        );
         assert!(wrapper_job_config(&[], &c.common, &c.model).is_err());
     }
 }

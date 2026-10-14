@@ -62,7 +62,9 @@ pub fn provider(name: &str) -> Option<ProviderAccess> {
         "nvidia_nim" => p(&["NVIDIA_NIM_API_KEY"], None, &[], &[]),
         "novita" => p(&["NOVITA_API_KEY"], None, &[], &[]),
         "ollama" => p(&["OLLAMA_API_KEY"], None, &["OLLAMA_BASE_URL", "OLLAMA_API_BASE"], &[]),
-        "openai" | "openai-responses" => p(&["OPENAI_API_KEY"], Some("https://api.openai.com/v1"), &["OPENAI_BASE_URL", "OPENAI_API_BASE"], &[]),
+        "openai" | "openai-responses" => {
+            p(&["OPENAI_API_KEY"], Some("https://api.openai.com/v1"), &["OPENAI_BASE_URL", "OPENAI_API_BASE"], &[])
+        }
         "opencode" => p(&["OPENCODE_API_KEY"], None, &[], &[]),
         "openrouter" => p(&["OPENROUTER_API_KEY"], Some("https://openrouter.ai/api/v1"), &["OPENROUTER_BASE_URL"], &[]),
         "ovhcloud" => p(&["OVHCLOUD_API_KEY"], Some("https://oai.endpoints.kepler.ai.cloud.ovh.net/v1"), &["OVHCLOUD_BASE_URL"], &[]),
@@ -233,7 +235,12 @@ mod tests {
 
     #[test]
     fn resolves_like_hbench() {
-        let claude = Spec { default_provider: Some("anthropic"), api_key_envs: &["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"], base_url_envs: &["ANTHROPIC_BASE_URL"], passthrough: false };
+        let claude = Spec {
+            default_provider: Some("anthropic"),
+            api_key_envs: &["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"],
+            base_url_envs: &["ANTHROPIC_BASE_URL"],
+            passthrough: false,
+        };
         let r = resolve(Some("anthropic/claude-x"), claude, &getter(&[("ANTHROPIC_AUTH_TOKEN", "tok")]));
         assert_eq!(r.provider.as_deref(), Some("anthropic"));
         assert_eq!(r.env["ANTHROPIC_API_KEY"], "tok"); // renamed to the spec's first env

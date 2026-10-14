@@ -34,7 +34,17 @@ struct Options {
 
 impl Options {
     fn parse(kwargs: &BTreeMap<String, Value>) -> Result<Options> {
-        let known = ["signature", "max_iterations", "max_llm_calls", "max_output_chars", "verbose", "tool_timeout_sec", "working_dir", "extra_tools", "sub_model_name"];
+        let known = [
+            "signature",
+            "max_iterations",
+            "max_llm_calls",
+            "max_output_chars",
+            "verbose",
+            "tool_timeout_sec",
+            "working_dir",
+            "extra_tools",
+            "sub_model_name",
+        ];
         let mut kw = Kw::new(kwargs, &known);
         let o = Options {
             signature: kw.string("signature").unwrap_or_else(|| "instruction, file_tree -> solution".into()),
@@ -57,7 +67,8 @@ impl Options {
 /// Map upstream's (instruction, file_tree) onto the signature's two input fields, by position.
 fn input_kwargs(signature: &str, instruction: &str, file_tree: &str) -> Result<Map<String, Value>> {
     let inputs = signature.split_once("->").map_or(signature, |(i, _)| i);
-    let fields: Vec<&str> = inputs.split(',').filter(|f| !f.trim().is_empty()).map(|f| f.trim().split(':').next().unwrap_or("").trim()).collect();
+    let fields: Vec<&str> =
+        inputs.split(',').filter(|f| !f.trim().is_empty()).map(|f| f.trim().split(':').next().unwrap_or("").trim()).collect();
     if fields.len() != 2 {
         bail!("dspy-rlm signature must define exactly two input fields (instruction + file_tree semantics), got: {}", pyrepr(signature));
     }
@@ -168,7 +179,9 @@ impl DspyRlm {
         match done["error"].as_str() {
             // The Python exception class is the trial's exception type, as in upstream.
             // ponytail: leaks the (short) class name once per failed run; kind_err wants &'static str.
-            Some(e) => Err(kind_err(Box::leak(done["kind"].as_str().unwrap_or("RuntimeError").to_string().into_boxed_str()), e.to_string())),
+            Some(e) => {
+                Err(kind_err(Box::leak(done["kind"].as_str().unwrap_or("RuntimeError").to_string().into_boxed_str()), e.to_string()))
+            }
             None => Ok(()),
         }
     }
@@ -209,9 +222,18 @@ mod tests {
         assert_eq!(Value::Object(k), json!({"task": "Solve it", "tree": "./main.py"}));
         let e = input_kwargs("question -> answer", "a", "b").unwrap_err().to_string();
         assert!(e.contains("exactly two input fields") && e.contains("'question -> answer'"));
-        let o = Options::parse(&serde_json::from_value(json!({"signature": "context, question -> answer", "max_iterations": 10, "working_dir": "/workspace"})).unwrap()).unwrap();
+        let o = Options::parse(
+            &serde_json::from_value(json!({"signature": "context, question -> answer", "max_iterations": 10, "working_dir": "/workspace"}))
+                .unwrap(),
+        )
+        .unwrap();
         assert_eq!((o.max_iterations, o.max_llm_calls, o.working_dir.as_str()), (10, 50, "/workspace"));
-        assert!(Options::parse(&serde_json::from_value(json!({"nope": 1})).unwrap()).unwrap_err().to_string().contains("Unknown option 'nope'."));
+        assert!(
+            Options::parse(&serde_json::from_value(json!({"nope": 1})).unwrap())
+                .unwrap_err()
+                .to_string()
+                .contains("Unknown option 'nope'.")
+        );
         assert!(Options::parse(&serde_json::from_value(json!({"extra_tools": ["x"]})).unwrap()).is_err());
     }
 
@@ -271,7 +293,8 @@ class RLM:
         std::fs::create_dir_all(task_dir.join("environment")).unwrap();
         std::fs::write(task_dir.join("task.toml"), "[environment]\ndocker_image='x'\n").unwrap();
         std::fs::write(task_dir.join("instruction.md"), "x").unwrap();
-        let args = AgentArgs { load_trajectory: None,
+        let args = AgentArgs {
+            load_trajectory: None,
             model_name: Some("openai/gpt-4o".into()),
             kwargs,
             extra_env: BTreeMap::from([("PYTHONPATH".to_string(), root.join("pkg").display().to_string())]),
