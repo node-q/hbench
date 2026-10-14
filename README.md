@@ -128,8 +128,9 @@ are in the registry.
   compares rewards, exceptions, the `result.json` key structure, the trial file layout, and artifact manifests.
 - `scripts/install-matrix.sh`: installs every installed agent into a real container (`install_only`).
 
-CI (`.github/workflows/ci.yml`) runs build + `cargo test` on Linux and macOS, clippy, a check that the committed
-`viewer/dist` matches `viewer/src`, and `scripts/e2e.sh` on pushes to `master`.
+CI (`.github/workflows/ci.yml`) runs on the org's self-hosted Linux runners (`[self-hosted, linux, x64, hpg]`): build +
+`cargo test`, clippy, and a check that the committed `viewer/dist` matches `viewer/src`. Those runners have no docker
+access, so run `scripts/e2e.sh` locally before a release.
 
 ## Releases
 
@@ -139,6 +140,11 @@ Bump `version` in `Cargo.toml`, commit, then push a matching tag:
 git tag v0.2.0 && git push origin v0.2.0
 ```
 
-`.github/workflows/release.yml` checks the tag against `Cargo.toml`, runs the tests, and builds `hbench` for
-x86_64/aarch64 Linux (static musl) and macOS. It then publishes a GitHub release with `.tar.gz` archives, `SHA256SUMS`,
-and generated notes. Tags with a suffix (`v0.2.0-rc.1`) are published as prereleases.
+`.github/workflows/release.yml` checks the tag against `Cargo.toml`, runs the tests, builds static x86_64/aarch64 Linux
+binaries, and publishes a GitHub release with `.tar.gz` archives, `SHA256SUMS`, and generated notes. Tags with a suffix
+(`v0.2.0-rc.1`) are published as prereleases. The runners are Linux-only, so add the macOS binaries from a Mac with the
+tag checked out:
+
+```bash
+scripts/release-macos.sh v0.2.0
+```

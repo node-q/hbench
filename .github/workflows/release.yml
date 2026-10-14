@@ -1,6 +1,8 @@
 name: Release
 
 # Bump `version` in Cargo.toml, commit, then: git tag vX.Y.Z && git push origin vX.Y.Z
+# This publishes the Linux binaries; then run scripts/release-macos.sh vX.Y.Z on a Mac
+# (the self-hosted pool is Linux-only and macOS builds need Apple's SDK).
 on:
   push:
     tags: ["v[0-9]+.[0-9]+.[0-9]+*"]
@@ -10,10 +12,16 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # Every dependency is pure Rust on Linux, so rust-lld links static musl binaries
+  # for both arches without musl-tools or a cross gcc (the runner has no sudo).
+  CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: rust-lld
+  CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: rust-lld
 
 jobs:
-  verify:
-    runs-on: ubuntu-latest
+  release:
+    runs-on: [self-hosted, linux, x64, hpg]
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - name: Tag matches Cargo.toml version
@@ -21,62 +29,27 @@ jobs:
           v=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
           [ "v$v" = "$GITHUB_REF_NAME" ] || { echo "::error::tag $GITHUB_REF_NAME != Cargo.toml version v$v"; exit 1; }
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl,aarch64-unknown-linux-musl
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --locked
-
-  build:
-    needs: verify
-    name: build (${{ matrix.target }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { target: x86_64-unknown-linux-musl, os: ubuntu-latest }
-          - { target: aarch64-unknown-linux-musl, os: ubuntu-24.04-arm }
-          - { target: x86_64-apple-darwin, os: macos-latest }
-          - { target: aarch64-apple-darwin, os: macos-latest }
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: ${{ matrix.target }}
-      - if: contains(matrix.target, 'musl')
-        run: sudo apt-get update && sudo apt-get install -y musl-tools
-      - run: cargo build --release --locked --target ${{ matrix.target }}
-      - name: Package
+      - name: Build and package
         run: |
-          name=hbench-${GITHUB_REF_NAME}-${{ matrix.target }}
-          mkdir -p "dist/$name"
-          cp "target/${{ matrix.target }}/release/hbench" README.md "dist/$name/"
-          tar -C dist -czf "dist/$name.tar.gz" "$name"
-          echo "ASSET=dist/$name.tar.gz" >> "$GITHUB_ENV"
-      - uses: actions/upload-artifact@v4
+          rm -rf dist && mkdir dist
+          for target in x86_64-unknown-linux-musl aarch64-unknown-linux-musl; do
+            cargo build --release --locked --target "$target"
+            name="hbench-$GITHUB_REF_NAME-$target"
+            mkdir "dist/$name"
+            cp "target/$target/release/hbench" README.md "dist/$name/"
+            tar -C dist -czf "dist/$name.tar.gz" "$name"
+          done
+          cd dist && sha256sum -- *.tar.gz > SHA256SUMS
+      - uses: softprops/action-gh-release@v2
         with:
-          name: ${{ matrix.target }}
-          path: ${{ env.ASSET }}
-          if-no-files-found: error
-
-  release:
-    needs: build
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          path: dist
-          merge-multiple: true
-      - name: Checksums
-        run: cd dist && sha256sum -- *.tar.gz > SHA256SUMS
-      - name: Create GitHub release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          flags=(--title "hbench $GITHUB_REF_NAME" --generate-notes --verify-tag)
-          [[ "$GITHUB_REF_NAME" == *-* ]] && flags+=(--prerelease)
-          gh release create "$GITHUB_REF_NAME" dist/*.tar.gz dist/SHA256SUMS "${flags[@]}"
+          name: hbench ${{ github.ref_name }}
+          generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          fail_on_unmatched_files: true
+          files: |
+            dist/*.tar.gz
+            dist/SHA256SUMS

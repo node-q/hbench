@@ -14,14 +14,13 @@ env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
 
+# Every job runs on the org's self-hosted pool (starship-hpg-1..4, VM 201 in
+# sapphirestudio-infra): GitHub refuses hosted jobs for this organisation over billing.
+# The pool is Linux x64 only, has no sudo and no docker access, so macOS and
+# scripts/e2e.sh are not covered here; run e2e locally before a release.
 jobs:
   test:
-    name: test (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
+    runs-on: [self-hosted, linux, x64, hpg]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -30,7 +29,7 @@ jobs:
       - run: cargo test --locked
 
   clippy:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, hpg]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -44,7 +43,7 @@ jobs:
 
   viewer:
     # viewer/dist is committed and embedded by build.rs, so it must match viewer/src.
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, hpg]
     defaults:
       run:
         working-directory: viewer
@@ -61,15 +60,3 @@ jobs:
         run: |
           git status --porcelain -- dist
           test -z "$(git status --porcelain -- dist)" || { echo "::error::viewer/dist is stale; run 'npm run build' in viewer/ and commit"; exit 1; }
-
-  e2e:
-    # Fixture suite against a real docker daemon; slower, so only on master and on demand.
-    if: github.event_name != 'pull_request'
-    needs: test
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - run: scripts/e2e.sh
