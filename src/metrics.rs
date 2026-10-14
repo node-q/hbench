@@ -73,8 +73,8 @@ pub fn pass_at_k(results: &[&TrialResult]) -> BTreeMap<usize, f64> {
             None => 0,
             Some(rw) if rw.len() != 1 => return BTreeMap::new(),
             Some(rw) => match rw.values().next().and_then(|n| n.as_f64()) {
-                Some(x) if x == 0.0 => 0,
-                Some(x) if x == 1.0 => 1,
+                Some(0.0) => 0,
+                Some(1.0) => 1,
                 _ => return BTreeMap::new(),
             },
         };

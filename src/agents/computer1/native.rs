@@ -1215,12 +1215,11 @@ impl Computer1 {
                             if text.is_empty() { "OK".into() } else { text },
                         );
                         r.screenshot_paths = paths;
-                        match r.screenshot_paths.last().cloned().filter(|_| matches!(a.kind.as_str(), "screenshot" | "zoom")) {
-                            Some(p) => match self.payload_ref(sh, &p).await {
+                        if let Some(p) = r.screenshot_paths.last().cloned().filter(|_| matches!(a.kind.as_str(), "screenshot" | "zoom")) {
+                            match self.payload_ref(sh, &p).await {
                                 Ok(s) => r.screenshot_ref = Some(s),
                                 Err(e) => r = ExecResult::new(&call.call_id, "error", e.to_string()),
-                            },
-                            None => {}
+                            }
                         }
                         r
                     }

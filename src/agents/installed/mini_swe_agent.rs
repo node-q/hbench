@@ -370,13 +370,12 @@ pub(crate) mod tests {
         assert_eq!(env["MSWEA_COST_TRACKING"], "ignore_errors");
         assert!(agent(json!({}), &[], Some("no-slash")).unwrap().commands("t").unwrap_err().to_string().contains("provider/model_name"));
         assert!(
-            agent(json!({"cost_limit": null}), &[("MSWEA_API_KEY", "k")], SONNET)
+            !agent(json!({"cost_limit": null}), &[("MSWEA_API_KEY", "k")], SONNET)
                 .unwrap()
                 .commands("t")
                 .unwrap()
                 .1
                 .contains("--cost-limit")
-                == false
         );
     }
 

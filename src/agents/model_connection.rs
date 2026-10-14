@@ -138,8 +138,11 @@ pub struct Resolved {
     pub env: BTreeMap<String, String>,
 }
 
+/// Looks up the first of `names` that is set, returning `(name, value)`.
+pub type EnvLookup<'a> = dyn Fn(&[&str]) -> Option<(String, String)> + 'a;
+
 /// `get(names)` returns the first (name, value) found in precedence order.
-pub fn resolve(model: Option<&str>, spec: Spec, get: &dyn Fn(&[&str]) -> Option<(String, String)>) -> Resolved {
+pub fn resolve(model: Option<&str>, spec: Spec, get: &EnvLookup) -> Resolved {
     let provider: Option<String> = spec
         .default_provider
         .map(String::from)

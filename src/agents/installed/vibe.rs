@@ -71,8 +71,11 @@ fn toml_str(s: &str) -> String {
     out
 }
 
+/// One `[[key]]` table: its `(field, pre-rendered value)` pairs.
+type TomlTable<'a> = Vec<(&'a str, String)>;
+
 /// upstream's `_to_toml`: top-level scalars, then `[[key]]` table arrays; values are pre-rendered.
-fn to_toml(scalars: &[(&str, String)], tables: &[(&str, Vec<Vec<(&str, String)>>)]) -> String {
+fn to_toml(scalars: &[(&str, String)], tables: &[(&str, Vec<TomlTable>)]) -> String {
     let mut lines: Vec<String> = scalars.iter().map(|(k, v)| format!("{k} = {v}")).collect();
     let mut blocks = vec![];
     for (key, entries) in tables {

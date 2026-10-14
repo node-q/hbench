@@ -285,24 +285,17 @@ fn put(out: &mut Map<String, Value>, src: &Map<String, Value>, key: &str, k: K, 
     }
 }
 
-fn put_model(
-    out: &mut Map<String, Value>,
-    src: &Map<String, Value>,
-    key: &str,
-    f: fn(&Map<String, Value>) -> Result<Map<String, Value>>,
-) -> Result<()> {
+/// Validates and normalizes one model table.
+type ModelFn = fn(&Map<String, Value>) -> Result<Map<String, Value>>;
+
+fn put_model(out: &mut Map<String, Value>, src: &Map<String, Value>, key: &str, f: ModelFn) -> Result<()> {
     if let Some(Value::Object(m)) = src.get(key) {
         out.insert(key.into(), Value::Object(f(m)?));
     }
     Ok(())
 }
 
-fn put_models(
-    out: &mut Map<String, Value>,
-    src: &Map<String, Value>,
-    key: &str,
-    f: fn(&Map<String, Value>) -> Result<Map<String, Value>>,
-) -> Result<()> {
+fn put_models(out: &mut Map<String, Value>, src: &Map<String, Value>, key: &str, f: ModelFn) -> Result<()> {
     let mut items = vec![];
     for v in src.get(key).and_then(Value::as_array).into_iter().flatten() {
         let Value::Object(m) = v else { bail!("{key} entries must be tables") };
@@ -600,7 +593,7 @@ fn glob_segment(p: &str) -> Option<String> {
 }
 
 fn ignored(spec: &[(regex::Regex, bool)], rel: &str) -> bool {
-    spec.iter().filter(|(r, _)| r.is_match(rel)).last().is_some_and(|(_, inc)| *inc)
+    spec.iter().rfind(|(r, _)| r.is_match(rel)).is_some_and(|(_, inc)| *inc)
 }
 
 fn rglob_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {

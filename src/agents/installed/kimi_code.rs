@@ -44,7 +44,7 @@ pub fn create(args: AgentArgs) -> Result<AgentBox> {
 
 /// Last whitespace token of the last non-empty line ("kimi 0.28.1" -> "0.28.1").
 fn parse_version(stdout: &str) -> String {
-    stdout.lines().map(str::trim).filter(|l| !l.is_empty()).last().and_then(|l| l.split_whitespace().last()).unwrap_or("").to_string()
+    stdout.lines().map(str::trim).rfind(|l| !l.is_empty()).and_then(|l| l.split_whitespace().last()).unwrap_or("").to_string()
 }
 
 impl KimiCode {

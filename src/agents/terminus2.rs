@@ -190,7 +190,9 @@ pub mod json_parser {
         if result.error.is_empty() {
             return result;
         }
-        let fixes: [(&str, fn(&str, &str) -> Option<String>); 2] = [
+        /// `fix(response, parse_error)` returns corrected JSON text, if it can.
+        type JsonFix = fn(&str, &str) -> Option<String>;
+        let fixes: [(&str, JsonFix); 2] = [
             ("Fixed incomplete JSON by adding missing closing brace", fix_incomplete_json),
             ("Extracted JSON from mixed content", fix_mixed_content),
         ];
@@ -1183,8 +1185,8 @@ impl<'a> Kw<'a> {
             None => return default,
             Some(Value::Bool(b)) => Some(*b),
             Some(Value::Number(n)) => match n.as_f64() {
-                Some(x) if x == 0.0 => Some(false),
-                Some(x) if x == 1.0 => Some(true),
+                Some(0.0) => Some(false),
+                Some(1.0) => Some(true),
                 _ => None,
             },
             Some(Value::String(s)) => match s.trim().to_lowercase().as_str() {
