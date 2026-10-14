@@ -467,10 +467,10 @@ fn read_session(text: &str) -> Records {
         if !row["payload"].is_object() || row["schema_version"] != json!(1) {
             continue;
         }
-        if let Some(id) = row["id"].as_str().filter(|s| !s.is_empty()) {
-            if !seen.insert(id.to_string()) {
-                continue;
-            }
+        if let Some(id) = row["id"].as_str().filter(|s| !s.is_empty())
+            && !seen.insert(id.to_string())
+        {
+            continue;
         }
         out.push((i + 1, row));
     }

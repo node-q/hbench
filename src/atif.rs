@@ -358,7 +358,7 @@ enum Norm {
         timestamp: Option<String>,
         text: String,
         reasoning: Option<String>,
-        metrics: Option<Metrics>,
+        metrics: Option<Box<Metrics>>,
         extra: Option<Obj>,
         model_name: Option<String>,
         calls: Vec<CallSpec>,
@@ -512,7 +512,7 @@ pub fn convert_session(session_dir: &Path, logs_dir: &Path) -> Option<Trajectory
                     });
                 }
                 if m.is_none() {
-                    *m = metrics.take();
+                    *m = metrics.take().map(Box::new);
                 }
                 for tb in tool_blocks {
                     let Some(call_id) = nonempty_str(tb.get("id")).or_else(|| nonempty_str(tb.get("tool_use_id"))) else { continue };
@@ -664,7 +664,7 @@ pub fn convert_session(session_dir: &Path, logs_dir: &Path) -> Option<Trajectory
                     reasoning_content: reasoning,
                     tool_calls: (!tool_calls.is_empty()).then_some(tool_calls),
                     observation: (!results.is_empty()).then_some(Observation { results }),
-                    metrics,
+                    metrics: metrics.map(|m| *m),
                     llm_call_count: Some(1),
                     extra,
                     ..Default::default()

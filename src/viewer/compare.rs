@@ -9,7 +9,9 @@ pub(super) fn compare(app: &App, jobs: &[String]) -> Res {
         return Err(err(404, format!("Job '{j}' not found")));
     }
     let mut tasks: Vec<(Option<String>, String)> = vec![];
-    let mut ams: Vec<(String, Option<String>, Option<String>, Option<String>)> = vec![];
+    // (job, agent, provider, model)
+    type AgentModel = (String, Option<String>, Option<String>, Option<String>);
+    let mut ams: Vec<AgentModel> = vec![];
     let mut cells: Map<String, Value> = Map::new();
     let opt = |v: &Value| v.as_str().map(String::from);
     for job in jobs {

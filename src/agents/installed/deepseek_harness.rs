@@ -305,7 +305,7 @@ impl Agent for DeepSeekHarness {
         }
         if r.code != 0 {
             let out = format!("{}\n{}", r.stdout, r.stderr);
-            let detail = out.lines().filter(|l| l.starts_with("dsh: ")).last().unwrap_or("dsh exited non-zero").to_string();
+            let detail = out.lines().rfind(|l| l.starts_with("dsh: ")).unwrap_or("dsh exited non-zero").to_string();
             return Err(kind_err(failure_kind(&out), format!("Command failed (exit {}): {detail}", r.code)));
         }
         Ok(())

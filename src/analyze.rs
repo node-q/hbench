@@ -801,8 +801,11 @@ fn checks_table(title: &str, checks: &Checks) -> String {
     render_table(title, &["Check", "Outcome", "Explanation"], &rows)
 }
 
+/// One summary row: (name, checks, cost, error).
+type SummaryRow<'a> = (Option<&'a str>, &'a Checks, Option<f64>, Option<&'a str>);
+
 /// One row per trial/task: (name, checks, cost, error) -> summary table + error lines + total cost.
-fn summary_table(title: &str, first_col: &str, rows: &[(Option<&str>, &Checks, Option<f64>, Option<&str>)]) -> String {
+fn summary_table(title: &str, first_col: &str, rows: &[SummaryRow]) -> String {
     let table_rows: Vec<Vec<String>> = rows
         .iter()
         .map(|(name, checks, cost, err)| {

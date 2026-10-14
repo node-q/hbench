@@ -303,14 +303,8 @@ impl Agent for Junie {
         if self.version.is_none() {
             let r = cx.exec(&format!("{PATH_EXPORT}junie --version"), &none, None).await?;
             if r.code == 0 && !r.stdout.is_empty() {
-                self.version = r
-                    .stdout
-                    .lines()
-                    .map(str::trim)
-                    .filter(|l| !l.is_empty())
-                    .last()
-                    .map(String::from)
-                    .or_else(|| Some(r.stdout.trim().into()));
+                self.version =
+                    r.stdout.lines().map(str::trim).rfind(|l| !l.is_empty()).map(String::from).or_else(|| Some(r.stdout.trim().into()));
             }
         }
         Ok(())

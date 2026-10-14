@@ -421,7 +421,7 @@ impl App {
                     let Some(cfg) = job_config_value(raw) else { continue };
                     items.push((mtime, name_of(&p), cfg));
                 }
-                items.sort_by(|a, b| b.0.cmp(&a.0));
+                items.sort_by_key(|item| std::cmp::Reverse(item.0));
                 let n = items.len() as i64;
                 let end = if limit >= 0 { limit.min(n) } else { (n + limit).max(0) };
                 ok_json(Value::Array(

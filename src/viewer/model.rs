@@ -58,7 +58,7 @@ pub(super) fn job_result(job_dir: &Path) -> Option<Value> {
 /// `JobStats` with defaults filled and legacy `n_trials`/`n_errors` migrated.
 pub(super) fn job_stats(s: &Value) -> Value {
     let g = |k: &str| s.get(k).cloned();
-    let int = |k: &str, legacy: Option<&str>| g(k).or_else(|| legacy.and_then(|l| g(l))).unwrap_or(json!(0));
+    let int = |k: &str, legacy: Option<&str>| g(k).or_else(|| legacy.and_then(&g)).unwrap_or(json!(0));
     let evals: Map<String, Value> = s
         .get("evals")
         .and_then(Value::as_object)

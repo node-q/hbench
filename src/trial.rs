@@ -473,11 +473,14 @@ impl Trial {
                 bail!("Agent '{}' does not support the '{}' bridge.", self.cfg.agent.name(), u.bridge.kind);
             }
             let (tv, uv) = (self.cfg.agent.kwargs.get("version"), u.agent.kwargs.get("version"));
-            if u.agent.name() == self.cfg.agent.name() && uv.is_some() && uv != tv {
+            if u.agent.name() == self.cfg.agent.name()
+                && let Some(pinned) = uv
+                && uv != tv
+            {
                 bail!(
                     "user_agent pins {}@{} but the target agent is {}@{}: both roles share one container install.",
                     u.agent.name(),
-                    uv.unwrap(),
+                    pinned,
                     self.cfg.agent.name(),
                     tv.map(|v| v.to_string()).unwrap_or("latest".into())
                 );

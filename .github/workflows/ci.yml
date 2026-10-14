@@ -44,9 +44,8 @@ jobs:
           components: clippy, rustfmt
       - name: Check formatting
         run: cargo fmt --check
-      # Clippy's deny-by-default lints fail the job; style warnings are reported but not (yet) enforced.
       - name: Run Clippy
-        run: cargo clippy --locked --all-targets
+        run: cargo clippy --locked --all-targets -- -D warnings
         env:
           RUSTFLAGS: ""
 
