@@ -15,46 +15,60 @@ env:
   RUSTFLAGS: -D warnings
 
 # Every job runs on the org's self-hosted pool (starship-hpg-1..4, VM 201 in
-# sapphirestudio-infra): GitHub refuses hosted jobs for this organisation over billing.
+# the infra repository): GitHub refuses hosted jobs for this organisation over billing.
 # The pool is Linux x64 only, has no sudo and no docker access, so macOS and
 # scripts/e2e.sh are not covered here; run e2e locally before a release.
 jobs:
   test:
+    name: Build & Test
     runs-on: [self-hosted, linux, x64, hpg]
     steps:
-      - uses: actions/checkout@v5
-      - uses: ./.github/actions/setup-rust
-      - run: cargo build --locked --all-targets
-      - run: cargo test --locked
+      - name: Checkout repository
+        uses: actions/checkout@v5
+      - name: Set up Rust toolchain
+        uses: ./.github/actions/setup-rust
+      - name: Build all targets
+        run: cargo build --locked --all-targets
+      - name: Run unit tests
+        run: cargo test --locked
 
-  clippy:
+  lint:
+    name: Lint
     runs-on: [self-hosted, linux, x64, hpg]
     steps:
-      - uses: actions/checkout@v5
-      - uses: ./.github/actions/setup-rust
+      - name: Checkout repository
+        uses: actions/checkout@v5
+      - name: Set up Rust toolchain
+        uses: ./.github/actions/setup-rust
         with:
           components: clippy
       # Clippy's deny-by-default lints fail the job; style warnings are reported but not (yet) enforced.
-      - run: cargo clippy --locked --all-targets
+      - name: Run Clippy
+        run: cargo clippy --locked --all-targets
         env:
           RUSTFLAGS: ""
 
   viewer:
     # viewer/dist is committed and embedded by build.rs, so it must match viewer/src.
+    name: Viewer Bundle
     runs-on: [self-hosted, linux, x64, hpg]
     defaults:
       run:
         working-directory: viewer
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - name: Checkout repository
+        uses: actions/checkout@v5
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: viewer/package-lock.json
-      - run: npm ci
-      - run: npm run build
-      - name: Check committed viewer/dist is up to date
+      - name: Install dependencies
+        run: npm ci
+      - name: Type-check and build bundle
+        run: npm run build
+      - name: Verify committed bundle is up to date
         run: |
           git status --porcelain -- dist
           test -z "$(git status --porcelain -- dist)" || { echo "::error::viewer/dist is stale; run 'npm run build' in viewer/ and commit"; exit 1; }

@@ -12,6 +12,7 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  TARGETS: x86_64-unknown-linux-musl aarch64-unknown-linux-musl
   # Every dependency is pure Rust on Linux, so rust-lld links static musl binaries
   # for both arches without musl-tools or a cross gcc (the runner has no sudo).
   CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: rust-lld
@@ -19,31 +20,42 @@ env:
 
 jobs:
   release:
+    name: Build & Publish Release
     runs-on: [self-hosted, linux, x64, hpg]
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v5
-      - name: Tag matches Cargo.toml version
+      - name: Checkout repository
+        uses: actions/checkout@v5
+      - name: Verify tag matches Cargo.toml version
         run: |
           v=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
           [ "v$v" = "$GITHUB_REF_NAME" ] || { echo "::error::tag $GITHUB_REF_NAME != Cargo.toml version v$v"; exit 1; }
-      - uses: ./.github/actions/setup-rust
+      - name: Set up Rust toolchain
+        uses: ./.github/actions/setup-rust
         with:
           targets: x86_64-unknown-linux-musl,aarch64-unknown-linux-musl
-      - run: cargo test --locked
-      - name: Build and package
+      - name: Run unit tests
+        run: cargo test --locked
+      - name: Build release binaries
+        run: |
+          for target in $TARGETS; do
+            cargo build --release --locked --target "$target"
+          done
+      - name: Package release archives
         run: |
           rm -rf dist && mkdir dist
-          for target in x86_64-unknown-linux-musl aarch64-unknown-linux-musl; do
-            cargo build --release --locked --target "$target"
+          for target in $TARGETS; do
             name="hbench-$GITHUB_REF_NAME-$target"
             mkdir "dist/$name"
             cp "target/$target/release/hbench" README.md "dist/$name/"
             tar -C dist -czf "dist/$name.tar.gz" "$name"
           done
-          cd dist && sha256sum -- *.tar.gz > SHA256SUMS
-      - uses: softprops/action-gh-release@v2
+      - name: Generate checksums
+        working-directory: dist
+        run: sha256sum -- *.tar.gz > SHA256SUMS
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
         with:
           name: hbench ${{ github.ref_name }}
           generate_release_notes: true
