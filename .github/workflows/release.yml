@@ -23,15 +23,14 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Tag matches Cargo.toml version
         run: |
           v=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
           [ "v$v" = "$GITHUB_REF_NAME" ] || { echo "::error::tag $GITHUB_REF_NAME != Cargo.toml version v$v"; exit 1; }
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/setup-rust
         with:
           targets: x86_64-unknown-linux-musl,aarch64-unknown-linux-musl
-      - uses: Swatinem/rust-cache@v2
       - run: cargo test --locked
       - name: Build and package
         run: |

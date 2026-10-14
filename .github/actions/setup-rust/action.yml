@@ -1,0 +1,22 @@
+name: Setup Rust
+description: >
+  Rust toolchain + cargo cache for the self-hosted pool. starship-hpg-1..4 share one
+  user (runner-hpg), so a shared ~/.rustup gets corrupted by concurrent installs;
+  keep rustup/cargo homes in each runner instance's own tool cache instead.
+inputs:
+  components:
+    default: ""
+  targets:
+    default: ""
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        echo "RUSTUP_HOME=$RUNNER_TOOL_CACHE/rustup" >> "$GITHUB_ENV"
+        echo "CARGO_HOME=$RUNNER_TOOL_CACHE/cargo" >> "$GITHUB_ENV"
+    - uses: dtolnay/rust-toolchain@stable
+      with:
+        components: ${{ inputs.components }}
+        targets: ${{ inputs.targets }}
+    - uses: Swatinem/rust-cache@v2

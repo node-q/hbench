@@ -22,20 +22,18 @@ jobs:
   test:
     runs-on: [self-hosted, linux, x64, hpg]
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup-rust
       - run: cargo build --locked --all-targets
       - run: cargo test --locked
 
   clippy:
     runs-on: [self-hosted, linux, x64, hpg]
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup-rust
         with:
           components: clippy
-      - uses: Swatinem/rust-cache@v2
       # Clippy's deny-by-default lints fail the job; style warnings are reported but not (yet) enforced.
       - run: cargo clippy --locked --all-targets
         env:
@@ -48,8 +46,8 @@ jobs:
       run:
         working-directory: viewer
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
