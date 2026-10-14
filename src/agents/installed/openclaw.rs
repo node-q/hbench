@@ -274,7 +274,7 @@ impl Agent for OpenClaw {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agents::installed::mimo::tests::args;
+    use crate::agents::installed::common::test_args as args;
 
     fn oc(kwargs: Value, env: &[(&str, &str)]) -> OpenClaw {
         OpenClaw::new(args(kwargs, env, Some("openai/gpt-4.1"))).unwrap()

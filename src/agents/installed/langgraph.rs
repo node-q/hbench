@@ -614,7 +614,7 @@ impl Agent for LangGraph {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agents::installed::mimo::tests::args;
+    use crate::agents::installed::common::test_args as args;
 
     fn project(files: &[(&str, &str)]) -> PathBuf {
         let d = std::env::temp_dir().join(format!("hbench-lg-{}", uuid::Uuid::new_v4()));

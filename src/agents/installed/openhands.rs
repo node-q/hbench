@@ -462,26 +462,12 @@ impl Agent for OpenHands {
 #[cfg(test)]
 pub(super) mod tests {
     use super::*;
+    use crate::agents::installed::common;
     use crate::task::McpServer;
     use serde_json::json;
-    use std::sync::Arc;
 
     pub fn args(kwargs: Value, env: &[(&str, &str)], model: Option<&str>, mcp: Vec<McpServer>) -> AgentArgs {
-        let dir = std::env::temp_dir().join(format!("hbench-oh-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(dir.join("environment")).unwrap();
-        std::fs::write(dir.join("task.toml"), "[environment]\ndocker_image='x'\n").unwrap();
-        std::fs::write(dir.join("instruction.md"), "x").unwrap();
-        let task = Arc::new(crate::task::Task::load(&dir).unwrap());
-        AgentArgs {
-            load_trajectory: None,
-            model_name: model.map(String::from),
-            kwargs: serde_json::from_value(kwargs).unwrap(),
-            extra_env: env.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect(),
-            mcp_servers: mcp,
-            skills: vec![],
-            logs_dir: dir,
-            task,
-        }
+        AgentArgs { mcp_servers: mcp, ..common::test_args(kwargs, env, model) }
     }
 
     fn agent(kwargs: Value, env: &[(&str, &str)], model: Option<&str>) -> Result<OpenHands> {

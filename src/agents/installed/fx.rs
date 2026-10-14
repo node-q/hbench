@@ -227,24 +227,10 @@ impl Agent for Fx {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use std::sync::Arc;
+    use crate::agents::installed::common;
 
     pub(crate) fn args(kwargs: Value, env: &[(&str, &str)], model: Option<&str>, mcp: Vec<crate::task::McpServer>) -> AgentArgs {
-        let dir = std::env::temp_dir().join(format!("hbench-fx-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(dir.join("environment")).unwrap();
-        std::fs::write(dir.join("task.toml"), "[environment]\ndocker_image='x'\n").unwrap();
-        std::fs::write(dir.join("instruction.md"), "x").unwrap();
-        let task = Arc::new(crate::task::Task::load(&dir).unwrap());
-        AgentArgs {
-            load_trajectory: None,
-            model_name: model.map(String::from),
-            kwargs: serde_json::from_value(kwargs).unwrap(),
-            extra_env: env.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect(),
-            mcp_servers: mcp,
-            skills: vec![],
-            logs_dir: dir,
-            task,
-        }
+        AgentArgs { mcp_servers: mcp, ..common::test_args(kwargs, env, model) }
     }
 
     fn mcp(name: &str, transport: &str, url: Option<&str>, command: Option<&str>, a: &[&str]) -> crate::task::McpServer {

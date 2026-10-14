@@ -218,28 +218,9 @@ impl Agent for MiMo {
 }
 
 #[cfg(test)]
-pub(crate) mod tests {
+mod tests {
     use super::*;
-    use std::sync::Arc;
-
-    /// AgentArgs for tests (shared by this batch of ports).
-    pub(crate) fn args(kwargs: Value, env: &[(&str, &str)], model: Option<&str>) -> AgentArgs {
-        let dir = std::env::temp_dir().join(format!("hbench-test-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(dir.join("environment")).unwrap();
-        std::fs::write(dir.join("task.toml"), "[environment]\ndocker_image='x'\n").unwrap();
-        std::fs::write(dir.join("instruction.md"), "x").unwrap();
-        let task = Arc::new(crate::task::Task::load(&dir).unwrap());
-        AgentArgs {
-            load_trajectory: None,
-            model_name: model.map(String::from),
-            kwargs: serde_json::from_value(kwargs).unwrap(),
-            extra_env: env.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect(),
-            mcp_servers: vec![],
-            skills: vec![],
-            logs_dir: dir,
-            task,
-        }
-    }
+    use crate::agents::installed::common::test_args as args;
 
     fn mimo(kwargs: Value, env: &[(&str, &str)], model: Option<&str>) -> MiMo {
         let a = args(kwargs, env, model);

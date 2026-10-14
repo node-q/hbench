@@ -433,7 +433,7 @@ impl Agent for Pi {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agents::installed::mimo::tests::args;
+    use crate::agents::installed::common::test_args as args;
 
     fn pi(kwargs: Value, env: &[(&str, &str)], model: Option<&str>) -> Result<Pi> {
         Pi::new(args(kwargs, env, model))

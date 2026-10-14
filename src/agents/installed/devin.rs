@@ -132,23 +132,10 @@ impl Agent for Devin {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
+    use crate::agents::installed::common;
 
     fn agent(env: &[(&str, &str)], model: Option<&str>, mcp: Vec<crate::task::McpServer>) -> Devin {
-        let dir = std::env::temp_dir().join(format!("hbench-devin-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(dir.join("environment")).unwrap();
-        std::fs::write(dir.join("task.toml"), "[environment]\ndocker_image='x'\n").unwrap();
-        std::fs::write(dir.join("instruction.md"), "x").unwrap();
-        let args = AgentArgs {
-            load_trajectory: None,
-            model_name: model.map(String::from),
-            kwargs: Default::default(),
-            extra_env: env.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect(),
-            mcp_servers: mcp,
-            skills: vec![],
-            logs_dir: dir.clone(),
-            task: Arc::new(crate::task::Task::load(&dir).unwrap()),
-        };
+        let args = AgentArgs { mcp_servers: mcp, ..common::test_args(json!({}), env, model) };
         Devin { version: None, args }
     }
 

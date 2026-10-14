@@ -720,8 +720,8 @@ fn parse_version(stdout: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agents::installed::common;
     use crate::task::McpServer;
-    use std::sync::Arc;
 
     const SID: &str = "00000000-0000-4000-8000-000000000001";
     const CHILD: &str = "00000000-0000-4000-8000-000000000002";
@@ -734,20 +734,7 @@ mod tests {
     }
 
     fn agent_with(kwargs: Value, env: &[(&str, &str)], model: Option<&str>, mcp: Vec<McpServer>) -> Result<MuseCode> {
-        let dir = tmp();
-        std::fs::write(dir.join("task.toml"), "[environment]\ndocker_image='x'\n").unwrap();
-        std::fs::write(dir.join("instruction.md"), "x").unwrap();
-        let task = Arc::new(crate::task::Task::load(&dir).unwrap());
-        MuseCode::new(AgentArgs {
-            load_trajectory: None,
-            model_name: model.map(String::from),
-            kwargs: serde_json::from_value(kwargs).unwrap(),
-            extra_env: env.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect(),
-            mcp_servers: mcp,
-            skills: vec![],
-            logs_dir: dir,
-            task,
-        })
+        MuseCode::new(AgentArgs { mcp_servers: mcp, ..common::test_args(kwargs, env, model) })
     }
 
     fn agent(kwargs: Value, env: &[(&str, &str)], model: Option<&str>) -> Result<MuseCode> {

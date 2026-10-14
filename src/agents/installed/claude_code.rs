@@ -552,24 +552,10 @@ impl Agent for ClaudeCode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
+    use crate::agents::installed::common;
 
     fn agent(kwargs: Value, env: &[(&str, &str)], model: Option<&str>) -> Result<ClaudeCode> {
-        let dir = std::env::temp_dir().join(format!("hbench-cc-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(dir.join("environment")).unwrap();
-        std::fs::write(dir.join("task.toml"), "[environment]\ndocker_image='x'\n").unwrap();
-        std::fs::write(dir.join("instruction.md"), "x").unwrap();
-        let task = Arc::new(crate::task::Task::load(&dir).unwrap());
-        ClaudeCode::new(AgentArgs {
-            model_name: model.map(String::from),
-            kwargs: serde_json::from_value(kwargs).unwrap(),
-            extra_env: env.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect(),
-            mcp_servers: vec![],
-            skills: vec![],
-            logs_dir: dir.clone(),
-            task,
-            load_trajectory: None,
-        })
+        ClaudeCode::new(common::test_args(kwargs, env, model))
     }
 
     #[test]

@@ -422,7 +422,7 @@ impl Agent for DeerFlow {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agents::installed::mimo::tests::args;
+    use crate::agents::installed::common::test_args as args;
 
     fn df(kwargs: Value, env: &[(&str, &str)], model: &str) -> DeerFlow {
         let mut d = DeerFlow::new(args(kwargs, env, Some(model))).unwrap();

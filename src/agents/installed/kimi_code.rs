@@ -386,7 +386,7 @@ pub fn usage(logs_dir: &Path, model_name: Option<&str>) -> Option<AgentContext> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agents::installed::kimi_cli::tests::args;
+    use crate::agents::installed::common::test_args as args;
 
     const SID: &str = "session_8192ee32-068a-47f4-a145-829f33b1b234";
     const CALL: &str = "call_419963a4c28a47d2bb9d7315";

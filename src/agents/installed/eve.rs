@@ -717,7 +717,7 @@ impl Eve {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
+    use crate::agents::installed::common;
 
     fn project(pkg: Value, flat: bool) -> PathBuf {
         let p = std::env::temp_dir().join(format!("hbench-eve-proj-{}", uuid::Uuid::new_v4()));
@@ -739,20 +739,10 @@ mod tests {
     }
 
     fn agent(kwargs: Value, env: &[(&str, &str)], mcp: Vec<crate::task::McpServer>) -> Result<Eve> {
-        let dir = std::env::temp_dir().join(format!("hbench-eve-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(dir.join("environment")).unwrap();
-        std::fs::write(dir.join("task.toml"), "[environment]\ndocker_image='x'\n").unwrap();
-        std::fs::write(dir.join("instruction.md"), "x").unwrap();
-        let task = Arc::new(crate::task::Task::load(&dir).unwrap());
         Eve::new(AgentArgs {
-            load_trajectory: None,
-            model_name: Some("anthropic/claude-sonnet-4.6".into()),
-            kwargs: serde_json::from_value(kwargs).unwrap(),
-            extra_env: env.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect(),
             mcp_servers: mcp,
             skills: vec!["s".into()],
-            logs_dir: dir,
-            task,
+            ..common::test_args(kwargs, env, Some("anthropic/claude-sonnet-4.6"))
         })
     }
 

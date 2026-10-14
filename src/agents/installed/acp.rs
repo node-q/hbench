@@ -1143,7 +1143,7 @@ impl Agent for Acp {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
+    use crate::agents::installed::common;
 
     fn entry() -> Value {
         json!({
@@ -1156,21 +1156,7 @@ mod tests {
     }
 
     fn agent(kwargs: Value, model: Option<&str>) -> Result<Acp> {
-        let dir = std::env::temp_dir().join(format!("hbench-acp-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(dir.join("environment")).unwrap();
-        std::fs::write(dir.join("task.toml"), "[environment]\ndocker_image='x'\n").unwrap();
-        std::fs::write(dir.join("instruction.md"), "x").unwrap();
-        let task = Arc::new(crate::task::Task::load(&dir).unwrap());
-        Acp::new(AgentArgs {
-            load_trajectory: None,
-            model_name: model.map(String::from),
-            kwargs: serde_json::from_value(kwargs).unwrap(),
-            extra_env: BTreeMap::new(),
-            mcp_servers: vec![],
-            skills: vec![],
-            logs_dir: dir,
-            task,
-        })
+        Acp::new(common::test_args(kwargs, &[], model))
     }
 
     fn err(kwargs: Value) -> String {

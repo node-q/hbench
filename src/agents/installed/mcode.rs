@@ -310,7 +310,7 @@ impl Agent for MCode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agents::installed::mimo::tests::args;
+    use crate::agents::installed::common::test_args as args;
 
     #[test]
     fn options_validation() {

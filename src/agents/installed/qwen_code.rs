@@ -258,7 +258,7 @@ impl Agent for QwenCode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agents::installed::trae_agent::tests::args;
+    use crate::agents::installed::common::test_args as args;
 
     fn user(text: &str, extra: Value) -> Value {
         let mut v = json!({"sessionId": "session-1", "timestamp": "2026-01-01T00:00:00Z", "type": "user", "version": "0.19.11", "message": {"role": "user", "parts": [{"text": text}]}});
