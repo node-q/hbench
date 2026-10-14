@@ -127,3 +127,18 @@ are in the registry.
 - `scripts/parity.py <hbench_job> <hbench_job>`: diffs a real upstream job with an hbench job on the same tasks. It
   compares rewards, exceptions, the `result.json` key structure, the trial file layout, and artifact manifests.
 - `scripts/install-matrix.sh`: installs every installed agent into a real container (`install_only`).
+
+CI (`.github/workflows/ci.yml`) runs build + `cargo test` on Linux and macOS, clippy, a check that the committed
+`viewer/dist` matches `viewer/src`, and `scripts/e2e.sh` on pushes to `master`.
+
+## Releases
+
+Bump `version` in `Cargo.toml`, commit, then push a matching tag:
+
+```bash
+git tag v0.2.0 && git push origin v0.2.0
+```
+
+`.github/workflows/release.yml` checks the tag against `Cargo.toml`, runs the tests, and builds `hbench` for
+x86_64/aarch64 Linux (static musl) and macOS. It then publishes a GitHub release with `.tar.gz` archives, `SHA256SUMS`,
+and generated notes. Tags with a suffix (`v0.2.0-rc.1`) are published as prereleases.

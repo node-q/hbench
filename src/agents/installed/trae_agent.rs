@@ -181,7 +181,7 @@ pub fn trajectory_usage(raw: &Value) -> Option<(i64, i64, i64)> {
 /// upstream's trae-cli version parsing: first non-empty line, strip "trae-cli" / ",", take up to ",".
 pub fn parse_trae_version(stdout: &str) -> String {
     let text = stdout.trim();
-    for line in text.lines().map(str::trim).filter(|l| !l.is_empty()) {
+    if let Some(line) = text.lines().map(str::trim).find(|l| !l.is_empty()) {
         let l = line.strip_prefix("trae-cli").unwrap_or(line);
         let l = l.strip_prefix(',').unwrap_or(l);
         return l.trim().split(',').next().unwrap_or("").trim().to_string();
