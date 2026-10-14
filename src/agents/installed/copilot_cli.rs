@@ -1,6 +1,6 @@
 //! GitHub Copilot CLI (port of upstream's agents/installed/copilot_cli.py).
 
-use super::aider::opts;
+use super::common::{detect_version, installed_dir, opts, skills_dir};
 use super::{ensure_system_dependencies, exec_agent, exec_error, parse_version};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::quote;
@@ -126,7 +126,7 @@ impl Agent for CopilotCli {
     }
 
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
-        opts::installed_dir(cx).await?;
+        installed_dir(cx).await?;
         ensure_system_dependencies(cx, &["curl", "bash", "git"]).await?;
         let v = self.version.as_ref().map(|v| format!(" VERSION={}", quote(v))).unwrap_or_default();
         exec_agent(
@@ -139,7 +139,7 @@ impl Agent for CopilotCli {
         )
         .await?;
         if self.version.is_none() {
-            self.version = opts::detect_version(cx, "export PATH=\"$HOME/.local/bin:$PATH\"; copilot --version", parse_version).await;
+            self.version = detect_version(cx, "export PATH=\"$HOME/.local/bin:$PATH\"; copilot --version", parse_version).await;
         }
         Ok(())
     }
@@ -160,7 +160,7 @@ impl Agent for CopilotCli {
             &env,
         )
         .await?;
-        if let Some(d) = opts::skills_dir(&self.args) {
+        if let Some(d) = skills_dir(&self.args) {
             exec_agent(cx, &format!("mkdir -p ~/.copilot/skills && cp -r {}/* ~/.copilot/skills/ 2>/dev/null || true", quote(&d)), &env)
                 .await?;
         }
@@ -187,11 +187,12 @@ impl Agent for CopilotCli {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agents::installed::common;
 
     #[test]
     fn flags_and_command() {
         let mut args =
-            opts::test_args(json!({"reasoning_effort": "high", "disable_web_search": true}), &[], Some("anthropic/claude-haiku-4-5"));
+            common::test_args(json!({"reasoning_effort": "high", "disable_web_search": true}), &[], Some("anthropic/claude-haiku-4-5"));
         args.mcp_servers = vec![serde_json::from_value(json!({"name": "s", "transport": "http", "url": "http://m"})).unwrap()];
         let a = CopilotCli { version: None, args };
         let c = a.run_command("do it", true).unwrap();
@@ -199,8 +200,8 @@ mod tests {
             "copilot --prompt='do it' --continue --yolo --deny-tool web_fetch --deny-tool web_search --model=claude-haiku-4-5 --effort high"
         ));
         assert!(c.contains(r#"--additional-mcp-config='{"mcpServers":{"s":{"type":"http","url":"http://m"}}}'"#));
-        assert!(create(opts::test_args(json!({"reasoning_effort": "turbo"}), &[], None)).is_err());
-        let fb = CopilotCli { version: None, args: opts::test_args(json!({}), &[("COPILOT_CLI_EFFORT", "max")], None) };
+        assert!(create(common::test_args(json!({"reasoning_effort": "turbo"}), &[], None)).is_err());
+        let fb = CopilotCli { version: None, args: common::test_args(json!({}), &[("COPILOT_CLI_EFFORT", "max")], None) };
         assert_eq!(fb.cli_flags().unwrap(), "--effort max");
     }
 

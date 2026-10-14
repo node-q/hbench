@@ -9,6 +9,7 @@ pub mod claude_code;
 pub mod cline_cli;
 pub mod code_puppy;
 pub mod codex;
+pub mod common;
 pub mod copilot_cli;
 pub mod cortex_code;
 pub mod cursor_cli;
@@ -478,10 +479,10 @@ mod tests {
             assert!(seen.insert(name), "{name} registered twice");
             assert!(crate::agents::allowed_kwargs::allowed(name).is_some(), "{name} missing from allowed_kwargs");
             assert!(crate::schemas::agent(name).is_some(), "{name} has no options schema");
-            let created = create(name, aider::opts::test_args(serde_json::json!({}), &[], None));
+            let created = create(name, common::test_args(serde_json::json!({}), &[], None));
             assert!(!matches!(created, Ok(None)), "{name} not constructed by create");
         }
-        assert!(matches!(create("no-such-agent", aider::opts::test_args(serde_json::json!({}), &[], None)), Ok(None)));
+        assert!(matches!(create("no-such-agent", common::test_args(serde_json::json!({}), &[], None)), Ok(None)));
     }
 
     #[test]

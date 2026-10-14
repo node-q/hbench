@@ -1,6 +1,6 @@
 //! Codex CLI (port of upstream's agents/installed/codex.py), incl. ACP target mode and load_trajectory seeding.
 
-use super::aider::opts;
+use super::common::{detect_version, installed_dir, opts, parse_bool_env, skills_dir};
 use super::{
     connection, ensure_acp_node_command, ensure_system_dependencies, exec_agent, exec_error, exec_root, filter_jsonl_events,
     pinned_bin_wrapper_command, safe_bin_symlink_command, upload_text,
@@ -179,16 +179,6 @@ impl Codex {
         let q = quote(path);
         exec_root(cx, &format!("mkdir -p {q} && chown -R {}:{} {q} && chmod 700 {q}", &c[1], &c[2]), &BTreeMap::new()).await?;
         Ok(())
-    }
-}
-
-/// upstream's `parse_bool_env_value(..., default=False)`.
-pub(super) fn parse_bool_env(v: Option<String>, name: &str) -> Result<bool> {
-    match v.as_deref().map(|s| s.trim().to_lowercase()) {
-        None => Ok(false),
-        Some(s) if ["true", "1", "yes"].contains(&s.as_str()) => Ok(true),
-        Some(s) if ["false", "0", "no"].contains(&s.as_str()) => Ok(false),
-        Some(_) => bail!("Invalid value for '{name}': cannot parse '{}' as bool (expected true/false/1/0/yes/no)", v.unwrap()),
     }
 }
 
@@ -522,7 +512,7 @@ impl Agent for Codex {
         // API-key login can persist credentials; keep them in the temporary home, not a keyring.
         config.insert("cli_auth_credentials_store".into(), json!("file"));
         upload_text(cx, &format!("{ACP_CODEX_HOME}/config.toml"), &toml::to_string(&toml::Value::try_from(&config)?)?).await?;
-        if let Some(d) = opts::skills_dir(&self.args) {
+        if let Some(d) = skills_dir(&self.args) {
             exec_agent(
                 cx,
                 &format!("mkdir -p $HOME/.agents/skills && cp -r {}/* $HOME/.agents/skills/ 2>/dev/null || true", quote(&d)),
@@ -547,7 +537,7 @@ impl Agent for Codex {
     }
 
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
-        opts::installed_dir(cx).await?;
+        installed_dir(cx).await?;
         let none = BTreeMap::new();
         let satisfied = match &self.version {
             None => {
@@ -581,7 +571,7 @@ impl Agent for Codex {
             .await?;
         }
         if self.version.is_none() {
-            self.version = opts::detect_version(cx, VERSION_CMD, parse_codex_version).await;
+            self.version = detect_version(cx, VERSION_CMD, parse_codex_version).await;
         }
         Ok(())
     }
@@ -625,7 +615,7 @@ impl Agent for Codex {
         if !config.is_empty() {
             upload_text(cx, CONFIG_PATH, &toml::to_string(&toml::Value::try_from(&config)?)?).await?;
         }
-        if let Some(d) = opts::skills_dir(&self.args) {
+        if let Some(d) = skills_dir(&self.args) {
             setup += &format!("\nmkdir -p $HOME/.agents/skills && cp -r {}/* $HOME/.agents/skills/ 2>/dev/null || true", quote(&d));
         }
         if resume {
@@ -675,9 +665,10 @@ impl Agent for Codex {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agents::installed::common;
 
     fn agent(kwargs: Value, env: &[(&str, &str)], model: Option<&str>) -> Result<Codex> {
-        Codex::new(opts::test_args(kwargs, env, model))
+        Codex::new(common::test_args(kwargs, env, model))
     }
 
     #[test]
@@ -690,7 +681,7 @@ mod tests {
         assert!(agent(json!({"reasoning_effort": "huge"}), &[], None).is_err());
         assert!(agent(json!({"nope": 1}), &[], None).is_err());
 
-        let mut args = opts::test_args(
+        let mut args = common::test_args(
             json!({"config": {"model_verbosity": "low", "mcp_servers": {"keep": {"url": "http://k"}}}}),
             &[],
             Some("openai/gpt-5"),
@@ -831,7 +822,7 @@ not json
     fn load_trajectory_validation() {
         let dir = std::env::temp_dir().join(format!("hbench-codex-load-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
-        let mut args = opts::test_args(json!({}), &[], Some("openai/gpt-5"));
+        let mut args = common::test_args(json!({}), &[], Some("openai/gpt-5"));
         args.load_trajectory = Some(dir.join("session.jsonl"));
         assert!(Codex::new(args.clone()).is_err());
         args.load_trajectory = Some(dir.join("rollout-2026-01-02T03-04-05-abc.jsonl"));

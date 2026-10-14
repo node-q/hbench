@@ -1,6 +1,6 @@
 //! NVIDIA NeMo Agent Toolkit (port of upstream's agents/installed/nemo_agent.py).
 
-use super::mimo::upload_asset;
+use super::common::{installed_dir, upload_asset};
 use super::{ensure_system_dependencies, exec_agent, exec_error, exec_root};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::quote;
@@ -245,7 +245,7 @@ impl Agent for NemoAgent {
     }
 
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
-        cx.env.exec_root("[ -d /installed-agent ] || mkdir -p /installed-agent", None).await?;
+        installed_dir(cx).await?;
         let none = BTreeMap::new();
         let install = async {
             ensure_system_dependencies(cx, if self.nat_repo.is_some() { &["curl", "git"] } else { &["curl"] }).await?;

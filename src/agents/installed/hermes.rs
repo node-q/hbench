@@ -1,5 +1,6 @@
 //! Hermes (port of upstream's agents/installed/hermes.py).
 
+use super::common::{installed_dir, skills_dir};
 use super::{ensure_system_dependencies, exec_agent, exec_error};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::quote;
@@ -60,10 +61,6 @@ impl Hermes {
             reported: Mutex::new(None),
             args,
         })
-    }
-
-    fn skills_dir(&self) -> Option<String> {
-        self.args.task.config.environment.skills_dir.clone().or_else(|| (!self.args.skills.is_empty()).then(|| "/hbench/skills".into()))
     }
 
     /// (env, --provider flag, cli model) for the configured model.
@@ -220,7 +217,7 @@ impl Agent for Hermes {
     }
 
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
-        cx.env.exec_root("[ -d /installed-agent ] || mkdir -p /installed-agent", None).await?;
+        installed_dir(cx).await?;
         ensure_system_dependencies(cx, &["curl", "git", "ripgrep", "xz"]).await?;
         let branch = self.version.as_ref().map(|v| format!(" --branch {v}")).unwrap_or_default();
         let none = BTreeMap::new();
@@ -253,7 +250,7 @@ impl Agent for Hermes {
         if let Some(c) = self.mcp_command() {
             exec_timeout(cx, &c, &env, 10).await?;
         }
-        if let Some(d) = self.skills_dir() {
+        if let Some(d) = skills_dir(&self.args) {
             exec_timeout(
                 cx,
                 &format!("mkdir -p /tmp/hermes/skills && cp -r {}/* /tmp/hermes/skills/ 2>/dev/null || true", quote(&d)),

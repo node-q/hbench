@@ -1,5 +1,6 @@
 //! Qwen Code (port of upstream's agents/installed/qwen_code.py).
 
+use super::common::{installed_dir, nvm_node_install_snippet, skills_dir};
 use super::trae_agent::{check_kwargs, iso_timestamp_ok, opt_str};
 use super::{connection, ensure_system_dependencies, exec_agent};
 use crate::agents::model_connection::Spec;
@@ -11,11 +12,6 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 const SPEC: Spec = Spec { default_provider: Some("openai"), api_key_envs: &[], base_url_envs: &[], passthrough: true };
-
-/// upstream's nvm_node_install_snippet() (node 22, nvm v0.40.2).
-const NVM_NODE_INSTALL: &str = "curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.2/install.sh | env -u NODE_VERSION bash && \
-    export NVM_DIR=\"$HOME/.nvm\" && \\. \"$NVM_DIR/nvm.sh\" || true && \
-    command -v nvm &>/dev/null || { echo 'Error: NVM failed to load' >&2; exit 1; } && nvm install 22 && nvm alias default 22 && npm -v";
 
 pub struct QwenCode {
     /// Agent args with option env (api_key/base_url) layered on top, upstream's `_resolved_env_vars` source.
@@ -55,14 +51,7 @@ impl QwenCode {
     }
 
     fn skills_command(&self) -> Option<String> {
-        let d = self
-            .args
-            .task
-            .config
-            .environment
-            .skills_dir
-            .clone()
-            .or_else(|| (!self.args.skills.is_empty()).then(|| "/hbench/skills".into()))?;
+        let d = skills_dir(&self.args)?;
         Some(format!("mkdir -p ~/.qwen/skills && cp -r {}/* ~/.qwen/skills/ 2>/dev/null || true", quote(&d)))
     }
 
@@ -224,12 +213,12 @@ impl Agent for QwenCode {
     }
 
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
-        cx.env.exec_root("[ -d /installed-agent ] || mkdir -p /installed-agent", None).await?;
+        installed_dir(cx).await?;
         ensure_system_dependencies(cx, &["curl"]).await?;
         let vs = self.version.as_deref().unwrap_or("latest");
         exec_agent(
             cx,
-            &format!("set -euo pipefail; {NVM_NODE_INSTALL} && npm install -g @qwen-code/qwen-code@{vs} && qwen --version"),
+            &format!("set -euo pipefail; {} && npm install -g @qwen-code/qwen-code@{vs} && qwen --version", nvm_node_install_snippet(22)),
             &BTreeMap::new(),
         )
         .await?;

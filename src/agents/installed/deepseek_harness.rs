@@ -2,8 +2,7 @@
 //! one-shot `headless` profile with the `--json` event stream. Not a upstream agent (upstream has none);
 //! follows the installed-agent conventions of the other ports.
 
-use super::aider::opts;
-use super::gemini_cli::NVM_NODE_INSTALL;
+use super::common::{detect_version, installed_dir, nvm_node_install_snippet, opts};
 use super::{classify, connection, ensure_system_dependencies, exec_agent, upload_text};
 use crate::agents::model_connection::Spec;
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx, pricing};
@@ -278,17 +277,17 @@ impl Agent for DeepSeekHarness {
     }
 
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
-        opts::installed_dir(cx).await?;
+        installed_dir(cx).await?;
         ensure_system_dependencies(cx, &["curl", "bash", "coreutils"]).await?;
         let spec = format!("@{}", self.version.as_deref().unwrap_or("latest"));
         exec_agent(
             cx,
-            &format!("set -euo pipefail; {NVM_NODE_INSTALL} && npm i -g @deepseek-ai/dsh{spec} && dsh --version"),
+            &format!("set -euo pipefail; {} && npm i -g @deepseek-ai/dsh{spec} && dsh --version", nvm_node_install_snippet(22)),
             &BTreeMap::new(),
         )
         .await?;
         if self.version.is_none() {
-            self.version = opts::detect_version(cx, &format!("{NVM} dsh --version"), |s| s.trim().to_string()).await;
+            self.version = detect_version(cx, &format!("{NVM} dsh --version"), |s| s.trim().to_string()).await;
         }
         Ok(())
     }
@@ -349,9 +348,10 @@ impl Agent for DeepSeekHarness {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agents::installed::common;
 
     fn agent(kwargs: Value, model: Option<&str>) -> Result<DeepSeekHarness> {
-        let args = opts::test_args(kwargs, &[("DEEPSEEK_API_KEY", "k")], model);
+        let args = common::test_args(kwargs, &[("DEEPSEEK_API_KEY", "k")], model);
         let a = DeepSeekHarness { version: None, args, session_id: None };
         a.route()?;
         a.effort()?;

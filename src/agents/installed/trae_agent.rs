@@ -1,5 +1,6 @@
 //! trae-agent (port of upstream's agents/installed/trae_agent.py).
 
+use super::common::installed_dir;
 use super::{connection, ensure_system_dependencies, exec_agent};
 use crate::agents::model_connection::{Resolved, Spec, with_canonical_provider_envs};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
@@ -203,7 +204,7 @@ impl Agent for TraeAgent {
     }
 
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
-        cx.env.exec_root("[ -d /installed-agent ] || mkdir -p /installed-agent", None).await?;
+        installed_dir(cx).await?;
         ensure_system_dependencies(cx, &["curl", "git"]).await?;
         let vs = self.version.as_ref().map(|v| format!("@{v}")).unwrap_or_default();
         exec_agent(

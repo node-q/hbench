@@ -1,5 +1,6 @@
 //! Cortex Code (port of upstream's agents/installed/cortex_code.py).
 
+use super::common::installed_dir;
 use super::{ensure_system_dependencies, exec_agent, parse_version};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::quote;
@@ -215,7 +216,7 @@ impl Agent for CortexCode {
     }
 
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
-        cx.env.exec_root("[ -d /installed-agent ] || mkdir -p /installed-agent", None).await?;
+        installed_dir(cx).await?;
         let none = BTreeMap::new();
         if cx.exec(&format!("{PATH_EXPORT}; command -v cortex >/dev/null 2>&1"), &none, None).await?.code != 0 {
             ensure_system_dependencies(cx, &["curl", "bash", "tar", "coreutils", "ca_certificates"]).await?;

@@ -1,5 +1,6 @@
 //! Code Puppy (port of upstream's agents/installed/code_puppy.py).
 
+use super::common::installed_dir;
 use super::{connection, ensure_system_dependencies, exec_agent};
 use crate::agents::model_connection::Spec;
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
@@ -144,7 +145,7 @@ impl Agent for CodePuppy {
     }
 
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
-        cx.env.exec_root("[ -d /installed-agent ] || mkdir -p /installed-agent", None).await?;
+        installed_dir(cx).await?;
         ensure_system_dependencies(cx, &["curl", "ca_certificates", "coreutils", "ripgrep"]).await?;
         let spec = self.version.as_ref().map(|v| format!("=={v}")).unwrap_or_default();
         let none = BTreeMap::new();

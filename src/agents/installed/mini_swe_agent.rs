@@ -1,5 +1,6 @@
 //! mini-swe-agent (port of upstream's agents/installed/mini_swe_agent.py).
 
+use super::common::installed_dir;
 use super::{connection, ensure_system_dependencies, exec_agent};
 use crate::agents::model_connection::{Resolved, Spec};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
@@ -292,7 +293,7 @@ impl Agent for MiniSweAgent {
     }
 
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
-        cx.env.exec_root("[ -d /installed-agent ] || mkdir -p /installed-agent", None).await?;
+        installed_dir(cx).await?;
         ensure_system_dependencies(cx, &["curl", "bash", "build_tools", "git"]).await?;
         let spec = self.version.as_ref().map(|v| format!("=={v}")).unwrap_or_default();
         let py = quote(PYTHON_VERSION);

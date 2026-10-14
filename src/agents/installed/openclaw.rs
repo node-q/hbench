@@ -1,7 +1,7 @@
 //! OpenClaw (port of upstream's agents/installed/openclaw.py).
 
-use super::mcode::kw_int;
-use super::mimo::{deep_merge, skills_dir};
+use super::common::opts::kw_int;
+use super::common::{deep_merge, installed_dir, skills_dir};
 use super::{ensure_system_dependencies, exec_agent, exec_error, upload_text};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::{ExecResult, quote};
@@ -197,7 +197,7 @@ impl Agent for OpenClaw {
     }
 
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
-        cx.env.exec_root("[ -d /installed-agent ] || mkdir -p /installed-agent", None).await?;
+        installed_dir(cx).await?;
         ensure_system_dependencies(cx, &["curl", "ca_certificates"]).await?;
         let pkg = quote(&format!("openclaw@{}", self.version.as_deref().unwrap_or("latest")));
         for cmd in [

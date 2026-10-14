@@ -1,5 +1,6 @@
 //! Muse Code (port of upstream's agents/installed/muse_code.py).
 
+use super::common::{installed_dir, skills_dir};
 use super::{connection, ensure_system_dependencies, exec_agent, exec_root, upload_text};
 use crate::agents::model_connection::{Resolved, Spec};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
@@ -104,10 +105,6 @@ impl MuseCode {
 
     fn model_slug(&self) -> Option<String> {
         self.args.model_name.as_ref().map(|m| m.strip_prefix("meta/").unwrap_or(m).to_string())
-    }
-
-    fn skills_dir(&self) -> Option<String> {
-        self.args.task.config.environment.skills_dir.clone().or_else(|| (!self.args.skills.is_empty()).then(|| "/hbench/skills".into()))
     }
 
     fn effective_config(&self) -> Result<Value> {
@@ -637,7 +634,7 @@ impl Agent for MuseCode {
     }
 
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
-        cx.env.exec_root("[ -d /installed-agent ] || mkdir -p /installed-agent", None).await?;
+        installed_dir(cx).await?;
         if self.version.is_some() {
             bail!(
                 "Agent install failed: muse-code does not support version pinning: the installer always fetches the latest stable release."
@@ -671,7 +668,7 @@ impl Agent for MuseCode {
         ]);
         let sessions = format!("{LOGS}/sessions");
         let mut setup = format!("mkdir -p {config_home}/muse {data_home}/muse {sessions} && ln -sfn {sessions} {data_home}/muse/sessions");
-        if let Some(d) = self.skills_dir() {
+        if let Some(d) = skills_dir(&self.args) {
             setup += &format!(" && mkdir -p {config_home}/muse/skills && cp -R {}/. {config_home}/muse/skills/", quote(&d));
         }
         exec_agent(cx, &setup, &env).await?;

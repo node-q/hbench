@@ -1,7 +1,6 @@
 //! Gemini CLI (port of upstream's agents/installed/gemini_cli.py), incl. ACP target mode.
 
-use super::aider::opts;
-use super::codex::parse_bool_env;
+use super::common::{detect_version, installed_dir, nvm_node_install_snippet, opts, parse_bool_env, skills_dir};
 use super::{connection, ensure_system_dependencies, exec_agent, exec_root, pinned_bin_wrapper_command, safe_bin_symlink_command};
 use crate::agents::model_connection::{Resolved, Spec};
 use crate::agents::pricing;
@@ -19,10 +18,6 @@ const SPEC: Spec = Spec {
     passthrough: true,
 };
 const SECRETS_DIR: &str = "/tmp/gemini-secrets";
-/// upstream's `nvm_node_install_snippet()` (Node 22).
-pub(super) const NVM_NODE_INSTALL: &str = "curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.2/install.sh | env -u NODE_VERSION bash && \
-    export NVM_DIR=\"$HOME/.nvm\" && \\. \"$NVM_DIR/nvm.sh\" || true && \
-    command -v nvm &>/dev/null || { echo 'Error: NVM failed to load' >&2; exit 1; } && nvm install 22 && nvm alias default 22 && npm -v";
 
 pub fn create(args: AgentArgs) -> Result<AgentBox> {
     Ok(Box::new(GeminiCli::new(args)?))
@@ -340,15 +335,16 @@ impl Agent for GeminiCli {
     }
 
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
-        opts::installed_dir(cx).await?;
+        installed_dir(cx).await?;
         ensure_system_dependencies(cx, &["curl"]).await?;
         let none = BTreeMap::new();
         let spec = format!("@{}", self.version.as_deref().unwrap_or("latest"));
-        exec_agent(cx, &format!("set -euo pipefail; {NVM_NODE_INSTALL} && npm install -g @google/gemini-cli{spec}"), &none).await?;
+        exec_agent(cx, &format!("set -euo pipefail; {} && npm install -g @google/gemini-cli{spec}", nvm_node_install_snippet(22)), &none)
+            .await?;
         exec_agent(cx, "mkdir -p ~/.gemini && cat > ~/.gemini/settings.json << 'SETTINGS'\n{\n  \"experimental\": {\n    \"skills\": true\n  }\n}\nSETTINGS", &none).await?;
         exec_agent(cx, ". ~/.nvm/nvm.sh && gemini --version", &none).await?;
         if self.version.is_none() {
-            self.version = opts::detect_version(cx, VERSION_CMD, |s| s.trim().to_string()).await;
+            self.version = detect_version(cx, VERSION_CMD, |s| s.trim().to_string()).await;
         }
         Ok(())
     }
@@ -368,7 +364,7 @@ impl Agent for GeminiCli {
         if let Some(p) = &oauth {
             self.inject_oauth_creds(cx, p, &env).await?;
         }
-        if let Some(d) = opts::skills_dir(&self.args) {
+        if let Some(d) = skills_dir(&self.args) {
             exec_agent(cx, &format!("mkdir -p ~/.gemini/skills && cp -r {}/* ~/.gemini/skills/ 2>/dev/null || true", quote(&d)), &env)
                 .await?;
         }
@@ -423,9 +419,10 @@ impl Agent for GeminiCli {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agents::installed::common;
 
     fn agent(kwargs: Value, env: &[(&str, &str)], model: Option<&str>) -> Result<GeminiCli> {
-        GeminiCli::new(opts::test_args(kwargs, env, model))
+        GeminiCli::new(common::test_args(kwargs, env, model))
     }
 
     #[test]

@@ -1,6 +1,7 @@
 //! Eve (port of upstream's agents/installed/eve.py): runs a local Eve app through
 //! Eve's HTTP session API via the uploaded `eve_runner.mjs`.
 
+use super::common::{installed_dir, parse_bool_env_value, skills_dir};
 use super::{ensure_system_dependencies, exec_agent, exec_error, exec_root};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::quote;
@@ -116,15 +117,6 @@ pub struct Eve {
 
 pub fn create(args: AgentArgs) -> Result<AgentBox> {
     Ok(Box::new(Eve::new(args)?))
-}
-
-/// upstream's parse_bool_env_value.
-fn parse_bool(v: &str, name: &str) -> Result<bool> {
-    match v.trim().to_lowercase().as_str() {
-        "true" | "1" | "yes" => Ok(true),
-        "false" | "0" | "no" => Ok(false),
-        _ => bail!("Invalid value for '{name}': cannot parse '{v}' as bool (expected true/false/1/0/yes/no)"),
-    }
 }
 
 /// Pydantic lax int: ints, integral floats, numeric strings.
@@ -247,7 +239,7 @@ impl Eve {
             None => raw,
         };
         let path = std::fs::canonicalize(&raw).unwrap_or(raw);
-        let auto_env = parse_bool(&args.kw("auto_env").unwrap_or_else(|| "true".into()), "auto_env")?;
+        let auto_env = parse_bool_env_value(&args.kw("auto_env").unwrap_or_else(|| "true".into()), "auto_env")?;
         let a = Eve {
             port: int_opt(&args, "port", 3024)?,
             startup_timeout_ms: int_opt(&args, "startup_timeout_ms", 60_000)?,
@@ -279,10 +271,6 @@ impl Eve {
 
     fn remote_agent_dir(&self) -> String {
         if self.path.join("agent").is_dir() { format!("{PROJECT_DIR}/agent") } else { PROJECT_DIR.into() }
-    }
-
-    fn skills_dir(&self) -> Option<String> {
-        self.args.task.config.environment.skills_dir.clone().or_else(|| (!self.args.skills.is_empty()).then(|| "/hbench/skills".into()))
     }
 
     /// Copy the project (minus heavy dirs and .env files) into `target` and add MCP connections.
@@ -440,7 +428,7 @@ impl Eve {
     }
 
     fn register_skills_command(&self) -> Option<String> {
-        let src = quote(&self.skills_dir()?);
+        let src = quote(&skills_dir(&self.args)?);
         let dst = quote(&format!("{}/skills", self.remote_agent_dir()));
         Some(format!(
             "if [ -d {src} ]; then mkdir -p {dst} && dest_dir={dst}; for skill_path in {src}/*; do [ -e \"$skill_path\" ] || continue; \
@@ -638,7 +626,7 @@ impl Agent for Eve {
     }
 
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
-        cx.env.exec_root("[ -d /installed-agent ] || mkdir -p /installed-agent", None).await?;
+        installed_dir(cx).await?;
         // ponytail: staged in a temp dir, not logs_dir/eve_project, so the project isn't synced back into /logs/agent.
         let staged = temp_path("project");
         self.stage_project(&staged)?;

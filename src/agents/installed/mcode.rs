@@ -1,12 +1,13 @@
 //! MiniMax Code CLI (port of upstream's agents/installed/mcode.py).
 
-use super::mimo::{installed_setup, nvm_node_install_snippet, parse_jsonl, skills_dir, strip};
+use super::common::opts::kw_int;
+use super::common::{installed_setup, nvm_node_install_snippet, parse_jsonl, skills_dir};
 use super::{connection, ensure_system_dependencies, exec_agent};
 use crate::agents::model_connection::{Spec, provider as provider_access};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::quote;
 use anyhow::{Result, anyhow, bail};
-use serde_json::{Map, Value, json};
+use serde_json::{Map, json};
 use std::collections::BTreeMap;
 
 const SPEC: Spec = Spec { default_provider: None, api_key_envs: &[], base_url_envs: &[], passthrough: true };
@@ -40,16 +41,6 @@ in_models && $0 == "      " model ":" && !patched {
 }
 { print }
 END { if (!patched) exit 1 }"#;
-
-/// Optional int kwarg (pydantic lax int: ints or numeric strings, not bools).
-pub(crate) fn kw_int(args: &AgentArgs, k: &str) -> Result<Option<i64>> {
-    match args.kwargs.get(k) {
-        None | Some(Value::Null) => Ok(None),
-        Some(Value::Number(n)) if n.is_i64() => Ok(n.as_i64()),
-        Some(Value::String(s)) if s.trim().parse::<i64>().is_ok() => Ok(s.trim().parse().ok()),
-        Some(_) => bail!("Invalid value for '{k}': expected int"),
-    }
-}
 
 /// Python's `str.title()`.
 fn title(s: &str) -> String {
@@ -296,7 +287,7 @@ impl Agent for MCode {
                 format!("set -euo pipefail; {} && npm install -g @minimax-ai/code{spec} && mcode --version", nvm_node_install_snippet(22));
             exec_agent(cx, &cmd, &BTreeMap::new()).await.map(|_| ())
         };
-        installed_setup(cx, &mut self.version, install, ". ~/.nvm/nvm.sh; mcode --version", strip).await
+        installed_setup(cx, &mut self.version, install, ". ~/.nvm/nvm.sh; mcode --version", |s| s.trim().to_string()).await
     }
 
     async fn run(&mut self, instruction: &str, cx: &AgentCtx<'_>, _ctx: &mut AgentContext, resume: bool) -> Result<()> {

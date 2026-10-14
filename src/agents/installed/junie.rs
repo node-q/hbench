@@ -1,5 +1,6 @@
 //! Junie (port of upstream's agents/installed/junie.py).
 
+use super::common::{installed_dir, skills_dir};
 use super::{ensure_system_dependencies, exec_agent};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::quote;
@@ -124,10 +125,6 @@ impl Junie {
             session_id: None,
             args,
         })
-    }
-
-    fn skills_dir(&self) -> Option<String> {
-        self.args.task.config.environment.skills_dir.clone().or_else(|| (!self.args.skills.is_empty()).then(|| "/hbench/skills".into()))
     }
 
     fn build_config(&self) -> Result<Value> {
@@ -281,7 +278,7 @@ impl Agent for Junie {
     }
 
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
-        cx.env.exec_root("[ -d /installed-agent ] || mkdir -p /installed-agent", None).await?;
+        installed_dir(cx).await?;
         ensure_system_dependencies(cx, &["curl", "bash", "unzip"]).await?;
         let url =
             if self.channel == "eap" { "https://junie.jetbrains.com/install-eap.sh" } else { "https://junie.jetbrains.com/install.sh" };
@@ -331,7 +328,7 @@ impl Agent for Junie {
             }
             exec_agent(cx, &write_json_cmd("$HOME/.junie/mcp/mcp.json", &json!({"mcpServers": servers})), &none).await?;
         }
-        if let Some(d) = self.skills_dir() {
+        if let Some(d) = skills_dir(&self.args) {
             let d = quote(&d);
             exec_agent(
                 cx,

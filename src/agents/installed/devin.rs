@@ -3,6 +3,7 @@
 //! upstream's populate_context_post_run only writes an ATIF trajectory from sessions.db (it never sets
 //! token/cost on the context), so there is no usage parsing to port; sessions.db is still copied to logs.
 
+use super::common::installed_dir;
 use super::{ensure_system_dependencies, exec_agent, upload_text};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::quote;
@@ -73,7 +74,7 @@ impl Agent for Devin {
     }
 
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
-        cx.env.exec_root("[ -d /installed-agent ] || mkdir -p /installed-agent", None).await?;
+        installed_dir(cx).await?;
         ensure_system_dependencies(cx, &["curl", "bash"]).await?;
         let none = BTreeMap::new();
         exec_agent(cx, "CONFIG_DIR=\"${XDG_CONFIG_HOME:-$HOME/.config}/devin\"; mkdir -p \"$CONFIG_DIR\"; echo '{\"shell\":{\"setup_complete\":true}}' > \"$CONFIG_DIR/config.json\"", &none).await?;

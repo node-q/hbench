@@ -1,5 +1,6 @@
 //! grok-build (port of upstream's agents/installed/grok_build.py).
 
+use super::common::{deep_merge, installed_dir, parse_bool_env_value, skills_dir};
 use super::{ensure_system_dependencies, exec_agent, exec_error};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx, pricing};
 use crate::env::{kind_err, quote};
@@ -49,11 +50,7 @@ pub fn create(args: AgentArgs) -> Result<AgentBox> {
 fn parse_bool(v: &Value, name: &str) -> Result<bool> {
     match v {
         Value::Bool(b) => Ok(*b),
-        Value::String(s) => match s.trim().to_lowercase().as_str() {
-            "true" | "1" | "yes" => Ok(true),
-            "false" | "0" | "no" => Ok(false),
-            _ => bail!("Invalid value for '{name}': cannot parse '{s}' as bool (expected true/false/1/0/yes/no)"),
-        },
+        Value::String(s) => parse_bool_env_value(s, name),
         _ => bail!("Invalid value for '{name}': expected bool"),
     }
 }
@@ -110,10 +107,6 @@ impl GrokBuild {
             background_wait_sec,
             kill_leftover_processes,
         })
-    }
-
-    fn skills_dir(&self) -> Option<String> {
-        self.args.task.config.environment.skills_dir.clone().or_else(|| (!self.args.skills.is_empty()).then(|| "/hbench/skills".into()))
     }
 
     fn config_toml(&self) -> Result<String> {
@@ -318,19 +311,6 @@ fn cli_flags(args: &AgentArgs) -> Result<String> {
     Ok(f.join(" "))
 }
 
-fn deep_merge(base: &mut Value, over: &Value) {
-    if let (Value::Object(b), Value::Object(o)) = (base, over) {
-        for (k, v) in o {
-            match b.get_mut(k) {
-                Some(bv) if bv.is_object() && v.is_object() => deep_merge(bv, v),
-                _ => {
-                    b.insert(k.clone(), v.clone());
-                }
-            }
-        }
-    }
-}
-
 /// upstream prepends `resource-exhausted|currently at capacity` (ApiOverloadedError) to ERROR_PATTERNS.
 fn classify_grok(output: &str) -> &'static str {
     static P: OnceLock<Vec<(Regex, &'static str)>> = OnceLock::new();
@@ -455,7 +435,7 @@ impl Agent for GrokBuild {
     }
 
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
-        cx.env.exec_root("[ -d /installed-agent ] || mkdir -p /installed-agent", None).await?;
+        installed_dir(cx).await?;
         ensure_system_dependencies(cx, &["curl", "bash", "ca_certificates", "coreutils", "procps"]).await?;
         let version_arg = self.version.as_ref().map(|v| format!(" -s {}", quote(v))).unwrap_or_default();
         let none = BTreeMap::new();
@@ -465,7 +445,7 @@ impl Agent for GrokBuild {
             &none,
         )
         .await?;
-        if let Some(d) = self.skills_dir() {
+        if let Some(d) = skills_dir(&self.args) {
             let d = quote(&d);
             exec_agent(
                 cx,

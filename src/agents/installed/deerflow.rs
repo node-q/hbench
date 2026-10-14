@@ -1,7 +1,7 @@
 //! DeerFlow (port of upstream's agents/installed/deerflow.py).
 
-use super::mcode::kw_int;
-use super::mimo::upload_asset;
+use super::common::opts::kw_int;
+use super::common::{installed_dir, upload_asset};
 use super::{ensure_system_dependencies, exec_agent, exec_error, exec_root};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::quote;
@@ -338,7 +338,7 @@ impl Agent for DeerFlow {
     }
 
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
-        cx.env.exec_root("[ -d /installed-agent ] || mkdir -p /installed-agent", None).await?;
+        installed_dir(cx).await?;
         let none = BTreeMap::new();
         let r = exec_agent(cx, "pwd -P && id -u && id -g", &none).await?;
         let rt = runtime_context(&r.stdout, self.workdir_opt.as_deref())?;

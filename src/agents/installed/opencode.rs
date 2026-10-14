@@ -1,7 +1,6 @@
 //! OpenCode (port of upstream's agents/installed/opencode.py), incl. ACP target mode.
 
-use super::aider::opts;
-use super::gemini_cli::NVM_NODE_INSTALL;
+use super::common::{deep_merge_maps, detect_version, installed_dir, nvm_node_install_snippet, opts, skills_dir};
 use super::{connection, ensure_system_dependencies, exec_agent, exec_root, safe_bin_symlink_command};
 use crate::agents::model_connection::Spec;
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
@@ -30,17 +29,6 @@ pub struct OpenCode {
     args: AgentArgs,
     version: Option<String>,
     overlay: serde_json::Map<String, Value>,
-}
-
-fn deep_merge(base: &mut serde_json::Map<String, Value>, over: &serde_json::Map<String, Value>) {
-    for (k, v) in over {
-        match (base.get_mut(k), v) {
-            (Some(Value::Object(b)), Value::Object(o)) => deep_merge(b, o),
-            _ => {
-                base.insert(k.clone(), v.clone());
-            }
-        }
-    }
 }
 
 impl OpenCode {
@@ -78,7 +66,7 @@ impl OpenCode {
             }
             c.insert("provider".into(), json!({prov: pc}));
         }
-        deep_merge(&mut c, &self.overlay);
+        deep_merge_maps(&mut c, &self.overlay);
         if self.disable_web_search()? {
             let mut perm = match c.remove("permission") {
                 Some(Value::Object(p)) => p,
@@ -199,7 +187,7 @@ impl Agent for OpenCode {
             )
             .await?;
         }
-        if let Some(d) = opts::skills_dir(&self.args) {
+        if let Some(d) = skills_dir(&self.args) {
             exec_agent(
                 cx,
                 &format!("mkdir -p ~/.config/opencode/skills && cp -r {}/* ~/.config/opencode/skills/ 2>/dev/null || true", quote(&d)),
@@ -214,7 +202,7 @@ impl Agent for OpenCode {
     }
 
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
-        opts::installed_dir(cx).await?;
+        installed_dir(cx).await?;
         // nodejs/npm cover musl images (nvm can't); coreutils provides stdbuf.
         ensure_system_dependencies(cx, &["curl", "bash", "coreutils", "nodejs", "npm"]).await?;
         let spec = format!("@{}", self.version.as_deref().unwrap_or("latest"));
@@ -222,13 +210,14 @@ impl Agent for OpenCode {
             cx,
             &format!(
                 "set -euo pipefail; if ldd --version 2>&1 | grep -qi musl || [ -f /etc/alpine-release ]; then node --version && npm --version; \
-                 else {NVM_NODE_INSTALL}; fi && npm i -g opencode-ai{spec} && opencode --version"
+                 else {nvm}; fi && npm i -g opencode-ai{spec} && opencode --version",
+                nvm = nvm_node_install_snippet(22)
             ),
             &BTreeMap::new(),
         )
         .await?;
         if self.version.is_none() {
-            self.version = opts::detect_version(cx, VERSION_CMD, |s| s.trim().to_string()).await;
+            self.version = detect_version(cx, VERSION_CMD, |s| s.trim().to_string()).await;
         }
         Ok(())
     }
@@ -242,7 +231,7 @@ impl Agent for OpenCode {
         env.insert("OPENCODE_FAKE_VCS".into(), "git".into());
         env.insert("XDG_DATA_HOME".into(), "/logs/agent/opencode/xdg-data".into());
         env.insert("XDG_STATE_HOME".into(), "/logs/agent/opencode/xdg-state".into());
-        if let Some(d) = opts::skills_dir(&self.args) {
+        if let Some(d) = skills_dir(&self.args) {
             exec_agent(
                 cx,
                 &format!("mkdir -p ~/.config/opencode/skills && cp -r {}/* ~/.config/opencode/skills/ 2>/dev/null || true", quote(&d)),
@@ -294,9 +283,10 @@ impl Agent for OpenCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agents::installed::common;
 
     fn agent(kwargs: Value, env: &[(&str, &str)]) -> OpenCode {
-        let args = opts::test_args(kwargs.clone(), env, Some("openai/gpt-5"));
+        let args = common::test_args(kwargs.clone(), env, Some("openai/gpt-5"));
         OpenCode { version: None, overlay: kwargs.get("opencode_config").and_then(Value::as_object).cloned().unwrap_or_default(), args }
     }
 
@@ -318,8 +308,8 @@ mod tests {
                 ["*"],
             "allow"
         );
-        assert!(create(opts::test_args(json!({"opencode_config": "x"}), &[], None)).is_err());
-        assert!(create(opts::test_args(json!({"disable_web_search": "maybe"}), &[], None)).is_err());
+        assert!(create(common::test_args(json!({"opencode_config": "x"}), &[], None)).is_err());
+        assert!(create(common::test_args(json!({"disable_web_search": "maybe"}), &[], None)).is_err());
     }
 
     #[test]

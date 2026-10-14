@@ -1,5 +1,6 @@
 //! Kimi Code (port of upstream's agents/installed/kimi_code.py + kimi_code_trajectory.py usage totals).
 
+use super::common::{installed_dir, nvm_node_install_snippet, skills_dir};
 use super::kimi_cli::{loads_lenient, validate_kwargs};
 use super::{exec_agent, exec_root};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx, pricing};
@@ -13,9 +14,6 @@ const PACKAGE_NAME: &str = "@moonshot-ai/kimi-code";
 const KIMI_CODE_HOME: &str = "/logs/agent/.kimi-code";
 const OUTPUT_PATH: &str = "/logs/agent/kimi-code.txt";
 const NODE_PATH_SETUP: &str = "if [ -s \"$HOME/.nvm/nvm.sh\" ]; then . \"$HOME/.nvm/nvm.sh\"; fi; export PATH=\"$HOME/.local/bin:$PATH\"; ";
-const NVM_NODE_INSTALL: &str = "curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.2/install.sh | env -u NODE_VERSION bash && \
-export NVM_DIR=\"$HOME/.nvm\" && \\. \"$NVM_DIR/nvm.sh\" || true && \
-command -v nvm &>/dev/null || { echo 'Error: NVM failed to load' >&2; exit 1; } && nvm install 22 && nvm alias default 22 && npm -v";
 const SYSTEM_INSTALL: &str = r#"if command -v apk >/dev/null 2>&1; then
   if ! command -v node >/dev/null 2>&1 || \
      ! command -v npm >/dev/null 2>&1; then
@@ -82,14 +80,10 @@ impl KimiCode {
         Some(json!({"mcpServers": servers}).to_string())
     }
 
-    fn skills_dir(&self) -> Option<String> {
-        self.args.task.config.environment.skills_dir.clone().or_else(|| (!self.args.skills.is_empty()).then(|| "/hbench/skills".into()))
-    }
-
     /// (command, env) of the headless stream-json invocation.
     fn run_command(&self, instruction: &str, resume: bool) -> (String, BTreeMap<String, String>) {
         let resume_flag = if resume { "--continue " } else { "" };
-        let skills_flag = self.skills_dir().map(|d| format!("--skills-dir {} ", quote(&d))).unwrap_or_default();
+        let skills_flag = skills_dir(&self.args).map(|d| format!("--skills-dir {} ", quote(&d))).unwrap_or_default();
         let var = format!("hbench_kimi_code_instruction_{}", uuid::Uuid::new_v4().simple());
         let upper = var.to_uppercase();
         let mut env = self.runtime_env();
@@ -115,7 +109,7 @@ impl Agent for KimiCode {
     }
 
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
-        cx.env.exec_root("[ -d /installed-agent ] || mkdir -p /installed-agent", None).await?;
+        installed_dir(cx).await?;
         exec_root(
             cx,
             &format!("{}{SYSTEM_INSTALL}", super::APT_INSTALL_FN),
@@ -126,8 +120,9 @@ impl Agent for KimiCode {
         exec_agent(
             cx,
             &format!(
-                "set -euo pipefail\nif command -v apk >/dev/null 2>&1; then\n  node --version\n  npm --version\nelse\n  {NVM_NODE_INSTALL}\nfi\n\n\
-                 mkdir -p \"$HOME/.local\"\nnpm install --global --prefix \"$HOME/.local\" {PACKAGE_NAME}{spec}\n{NODE_PATH_SETUP}kimi --version"
+                "set -euo pipefail\nif command -v apk >/dev/null 2>&1; then\n  node --version\n  npm --version\nelse\n  {nvm}\nfi\n\n\
+                 mkdir -p \"$HOME/.local\"\nnpm install --global --prefix \"$HOME/.local\" {PACKAGE_NAME}{spec}\n{NODE_PATH_SETUP}kimi --version",
+                nvm = nvm_node_install_snippet(22)
             ),
             &BTreeMap::new(),
         )
