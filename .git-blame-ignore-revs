@@ -1,0 +1,2 @@
+# Mechanical formatting; skip in git blame (git config blame.ignoreRevsFile .git-blame-ignore-revs).
+63a5e083d65ff9727b1e5b321af22922afe312ce

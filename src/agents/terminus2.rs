@@ -3,9 +3,9 @@
 //! to the model through `llm.rs`. Writes an ATIF `trajectory.json` (plus summarization subagent
 //! trajectories) to the agent logs dir; the pane log and asciinema recording land in /logs/agent.
 
-use crate::agents::installed::APT_INSTALL_FN;
 use super::llm::{Chat, LiteLlm, Llm, LlmConfig, LlmError, LlmResponse, content_text};
 use super::{Agent, AgentArgs, AgentContext, AgentCtx, ModelUsage};
+use crate::agents::installed::APT_INSTALL_FN;
 use crate::env::{ExecResult, quote};
 use anyhow::{Result, anyhow, bail};
 use base64::Engine;
@@ -163,7 +163,9 @@ fn auto_corrected(fix: &str, existing: &str) -> String {
 }
 
 fn newline_warning(i: usize) -> String {
-    format!("Command {i} should end with newline when followed by another command. Otherwise the two commands will be concatenated together on the same line.")
+    format!(
+        "Command {i} should end with newline when followed by another command. Otherwise the two commands will be concatenated together on the same line."
+    )
 }
 
 /// Warn when sections/fields appear out of `analysis -> plan -> commands` order.
@@ -188,8 +190,10 @@ pub mod json_parser {
         if result.error.is_empty() {
             return result;
         }
-        let fixes: [(&str, fn(&str, &str) -> Option<String>); 2] =
-            [("Fixed incomplete JSON by adding missing closing brace", fix_incomplete_json), ("Extracted JSON from mixed content", fix_mixed_content)];
+        let fixes: [(&str, fn(&str, &str) -> Option<String>); 2] = [
+            ("Fixed incomplete JSON by adding missing closing brace", fix_incomplete_json),
+            ("Extracted JSON from mixed content", fix_mixed_content),
+        ];
         for (name, fix) in fixes {
             if let Some(corrected) = fix(response, &result.error) {
                 let mut r = try_parse(&corrected);
@@ -238,7 +242,9 @@ pub mod json_parser {
                 ParseResult { is_task_complete: true, warning: warn_join(&w), analysis, plan, ..Default::default() }
             }
             Err(e) => fail(e, &w, analysis, plan),
-            Ok(commands) => ParseResult { commands, is_task_complete: is_complete, error: String::new(), warning: warn_join(&w), analysis, plan },
+            Ok(commands) => {
+                ParseResult { commands, is_task_complete: is_complete, error: String::new(), warning: warn_join(&w), analysis, plan }
+            }
         }
     }
 
@@ -294,7 +300,10 @@ pub mod json_parser {
         if !o["commands"].is_array() {
             return Some("Field 'commands' must be an array".into());
         }
-        let positions = ["analysis", "plan", "commands"].into_iter().filter_map(|f| re(&format!(r#""({f})"\s*:"#)).find(content).map(|m| (f, m.start()))).collect();
+        let positions = ["analysis", "plan", "commands"]
+            .into_iter()
+            .filter_map(|f| re(&format!(r#""({f})"\s*:"#)).find(content).map(|m| (f, m.start())))
+            .collect();
         check_order(positions, "Fields", w);
         if o.get("task_complete").is_some_and(|t| !(t.is_null() || t.is_boolean() || t.is_string())) {
             w.push("Field 'task_complete' should be a boolean or string".into());
@@ -342,7 +351,11 @@ pub mod json_parser {
     }
 
     fn fix_mixed_content(response: &str, _: &str) -> Option<String> {
-        re(r"\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}").find_iter(response).map(|m| m.as_str()).find(|m| serde_json::from_str::<Value>(m).is_ok()).map(String::from)
+        re(r"\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}")
+            .find_iter(response)
+            .map(|m| m.as_str())
+            .find(|m| serde_json::from_str::<Value>(m).is_ok())
+            .map(String::from)
     }
 }
 
@@ -364,7 +377,14 @@ pub mod xml_parser {
         let sections = extract_sections(content, &mut w);
         let analysis = sections.get("analysis").cloned().unwrap_or_default();
         let plan = sections.get("plan").cloned().unwrap_or_default();
-        let ok = |commands, w: &[String], analysis, plan| ParseResult { commands, is_task_complete: is_complete, warning: warn_join(w), analysis, plan, ..Default::default() };
+        let ok = |commands, w: &[String], analysis, plan| ParseResult {
+            commands,
+            is_task_complete: is_complete,
+            warning: warn_join(w),
+            analysis,
+            plan,
+            ..Default::default()
+        };
         match sections.get("commands") {
             Some(c) if !c.is_empty() => {
                 let commands = parse_xml_commands(c, &mut w);
@@ -395,7 +415,9 @@ pub mod xml_parser {
             w.push("Extra text detected after </response> tag".into());
             let total = response.matches("<response>").count();
             if total > 1 {
-                w.push(format!("IMPORTANT: Only issue one <response> block at a time. You issued {total} and only the first was executed."));
+                w.push(format!(
+                    "IMPORTANT: Only issue one <response> block at a time. You issued {total} and only the first was executed."
+                ));
             }
         }
     }
@@ -440,13 +462,15 @@ pub mod xml_parser {
                 });
             }
         }
-        let positions = SECTIONS[..3].iter().filter_map(|n| re(&format!(r"<{n}(?:\s|>|/>)")).find(content).map(|m| (*n, m.start()))).collect();
+        let positions =
+            SECTIONS[..3].iter().filter_map(|n| re(&format!(r"<{n}(?:\s|>|/>)")).find(content).map(|m| (*n, m.start()))).collect();
         check_order(positions, "Sections", w);
         s
     }
 
     fn parse_xml_commands(xml: &str, w: &mut Vec<String>) -> Vec<ParsedCommand> {
-        let matches: Vec<(String, String)> = re(r"(?s)<keystrokes([^>]*)>(.*?)</keystrokes>").captures_iter(xml).map(|c| (c[1].to_string(), c[2].to_string())).collect();
+        let matches: Vec<(String, String)> =
+            re(r"(?s)<keystrokes([^>]*)>(.*?)</keystrokes>").captures_iter(xml).map(|c| (c[1].to_string(), c[2].to_string())).collect();
         let duration_re = re(r#"duration\s*=\s*["']([^"']*)["']"#);
         let mut out = vec![];
         for (i, (attrs, keys)) in matches.iter().enumerate() {
@@ -742,7 +766,13 @@ impl Tmux {
 
     fn send_error(&self, action: &str, cmd: &str, r: &ExecResult) -> anyhow::Error {
         let c: String = pyrepr(cmd).chars().take(100).collect();
-        anyhow!("{}: failed to send {action} keys: command={c}, return_code={}, stderr={}, stdout={}", self.name, r.code, pyrepr(&r.stderr), pyrepr(&r.stdout))
+        anyhow!(
+            "{}: failed to send {action} keys: command={c}, return_code={}, stderr={}, stdout={}",
+            self.name,
+            r.code,
+            pyrepr(&r.stderr),
+            pyrepr(&r.stdout)
+        )
     }
 
     /// Deliver a key too long for send-keys through a paste buffer (staged with base64 chunks).
@@ -762,7 +792,10 @@ impl Tmux {
                     return Err(self.send_error(action, &cmd, &r));
                 }
             }
-            let cmd = format!("tmux load-buffer -b hbench-paste-{token} {path} && tmux paste-buffer -d -b hbench-paste-{token} -t {}", quote(&self.name));
+            let cmd = format!(
+                "tmux load-buffer -b hbench-paste-{token} {path} && tmux paste-buffer -d -b hbench-paste-{token} -t {}",
+                quote(&self.name)
+            );
             let r = sh.sh(&cmd, false, None).await?;
             if r.code != 0 {
                 return Err(self.send_error(action, &cmd, &r));
@@ -822,7 +855,14 @@ impl Tmux {
     }
 
     /// Returns false when a blocking command timed out (upstream raises TimeoutError).
-    pub async fn send_keys(&self, sh: &dyn Shell, mut keys: Vec<String>, block: bool, min_timeout_sec: f64, max_timeout_sec: f64) -> Result<bool> {
+    pub async fn send_keys(
+        &self,
+        sh: &dyn Shell,
+        mut keys: Vec<String>,
+        block: bool,
+        min_timeout_sec: f64,
+        max_timeout_sec: f64,
+    ) -> Result<bool> {
         if block && keys.last().is_some_and(|k| is_executing_command(k)) {
             // Strip the trailing "execute" keys, then run `; tmux wait -S done` with Enter.
             while let Some(last) = keys.last().cloned().filter(|k| is_executing_command(k)) {
@@ -1183,7 +1223,8 @@ impl Options {
         if let Some(e) = &reasoning_effort
             && !["none", "minimal", "low", "medium", "high", "xhigh", "max", "default"].contains(&e.as_str())
         {
-            kw.errors.push("reasoning_effort: Input should be 'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max' or 'default'".into());
+            kw.errors
+                .push("reasoning_effort: Input should be 'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max' or 'default'".into());
         }
         let tc = kw.object("trajectory_config").unwrap_or_default();
         let session_id_headers = match kw.get("session_id_headers").cloned() {
@@ -1224,7 +1265,9 @@ impl Options {
         let parser = ParserKind::from_name(&parser_name)?;
         match llm_backend.as_str() {
             "litellm" => {}
-            "tinker" => bail!("llm_backend 'tinker' needs the Tinker Python SDK, which hbench (Rust) can't load; use the default 'litellm' backend"),
+            "tinker" => {
+                bail!("llm_backend 'tinker' needs the Tinker Python SDK, which hbench (Rust) can't load; use the default 'litellm' backend")
+            }
             other => bail!("Unknown llm_backend: {other:?}. Supported backends: ['litellm', 'tinker']"),
         }
         let header = re(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$");
@@ -1434,7 +1477,12 @@ impl Terminus2 {
         let esc = |s: &str| s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;");
         let mut xml = String::from("\n<available_skills>\n");
         for (n, d, l) in entries {
-            xml += &format!("  <skill>\n    <name>{}</name>\n    <description>{}</description>\n    <location>{}</location>\n  </skill>\n", esc(&n), esc(&d), esc(&l));
+            xml += &format!(
+                "  <skill>\n    <name>{}</name>\n    <description>{}</description>\n    <location>{}</location>\n  </skill>\n",
+                esc(&n),
+                esc(&d),
+                esc(&l)
+            );
         }
         xml += "</available_skills>";
         Ok(Some(xml))
@@ -1488,7 +1536,8 @@ impl Terminus2 {
 
             if let Some(refs) = self.pending_subagent_refs.take().filter(|r| !r.is_empty()) {
                 let mut s = Step::new(self.steps.len() + 1, "system", "Performed context summarization and handoff to continue task.");
-                s.observation = Some(Observation { results: vec![ObsResult { subagent_trajectory_ref: Some(refs), ..Default::default() }] });
+                s.observation =
+                    Some(Observation { results: vec![ObsResult { subagent_trajectory_ref: Some(refs), ..Default::default() }] });
                 s.extra = Some(json!({"context_management": {"type": "compaction", "boundary": "replace"}}));
                 self.steps.push(s);
             }
@@ -1532,7 +1581,10 @@ impl Terminus2 {
             step.metrics = Some(metrics);
 
             if feedback.contains("ERROR:") {
-                prompt = format!("Previous response had parsing errors:\n{feedback}\n\nPlease fix these issues and provide a proper {}.", self.opts.parser.response_type());
+                prompt = format!(
+                    "Previous response had parsing errors:\n{feedback}\n\nPlease fix these issues and provide a proper {}.",
+                    self.opts.parser.response_type()
+                );
                 step.message = resp.content.clone();
                 step.observation = Some(Observation { results: vec![ObsResult { content: Some(prompt.clone()), ..Default::default() }] });
                 self.steps.push(step);
@@ -1577,7 +1629,11 @@ impl Terminus2 {
                     results.push(ObsResult { source_call_id, content: Some(observation.clone()), ..Default::default() });
                 }
                 if is_task_complete {
-                    calls.push(ToolCall { tool_call_id: format!("call_{episode}_task_complete"), function_name: "mark_task_complete", arguments: json!({}) });
+                    calls.push(ToolCall {
+                        tool_call_id: format!("call_{episode}_task_complete"),
+                        function_name: "mark_task_complete",
+                        arguments: json!({}),
+                    });
                 }
                 if commands.is_empty() {
                     results.push(ObsResult { content: Some(observation.clone()), ..Default::default() });
@@ -1598,7 +1654,12 @@ impl Terminus2 {
         Ok(())
     }
 
-    async fn handle_llm_interaction(&mut self, sh: &dyn Shell, prompt: &str, orig: &str) -> Result<(Vec<Command>, bool, String, String, String, LlmResponse)> {
+    async fn handle_llm_interaction(
+        &mut self,
+        sh: &dyn Shell,
+        prompt: &str,
+        orig: &str,
+    ) -> Result<(Vec<Command>, bool, String, String, String, LlmResponse)> {
         let resp = self.query_llm(sh, prompt.to_string(), orig).await?;
         let r = self.opts.parser.parse(&resp.content);
         let feedback = match (r.error.is_empty(), r.warning.is_empty()) {
@@ -1607,7 +1668,8 @@ impl Terminus2 {
             (true, false) => format!("WARNINGS: {}", r.warning),
             (true, true) => String::new(),
         };
-        let commands = r.commands.iter().map(|c| Command { keystrokes: c.keystrokes.clone(), duration_sec: c.duration.min(60.0) }).collect();
+        let commands =
+            r.commands.iter().map(|c| Command { keystrokes: c.keystrokes.clone(), duration_sec: c.duration.min(60.0) }).collect();
         Ok((commands, r.is_task_complete, feedback, r.analysis, r.plan, resp))
     }
 
@@ -1616,7 +1678,10 @@ impl Terminus2 {
         for c in commands {
             if !t.send_keys(sh, vec![c.keystrokes.clone()], false, c.duration_sec, 180.0).await? {
                 let state = limit_output_length(&t.get_incremental_output(sh).await?, 10_000);
-                let msg = py_format(TIMEOUT_TEMPLATE, &[("timeout_sec", &pyf(c.duration_sec)), ("command", &c.keystrokes), ("terminal_state", &state)]);
+                let msg = py_format(
+                    TIMEOUT_TEMPLATE,
+                    &[("timeout_sec", &pyf(c.duration_sec)), ("command", &c.keystrokes), ("terminal_state", &state)],
+                );
                 return Ok((true, msg));
             }
         }
@@ -1664,7 +1729,10 @@ impl Terminus2 {
                 if summary_prompt.is_none() {
                     let short = async {
                         let screen = self.tmux()?.capture_pane(sh, false).await?;
-                        let p = format!("Briefly continue this task: {orig}\n\nCurrent state: {}\n\nNext steps (2-3 sentences):", last_chars(&screen, 1000));
+                        let p = format!(
+                            "Briefly continue this task: {orig}\n\nCurrent state: {}\n\nNext steps (2-3 sentences):",
+                            last_chars(&screen, 1000)
+                        );
                         let r = self.llm.call(&p, &[], &self.call_kwargs, None).await?;
                         anyhow::Ok(format!("{orig}\n\nSummary: {}", r.content))
                     };
@@ -1680,7 +1748,9 @@ impl Terminus2 {
                         self.track(start);
                         r
                     }
-                    Err(_) => LlmResponse { content: "Technical difficulties. Please continue with the task.".into(), ..Default::default() },
+                    Err(_) => {
+                        LlmResponse { content: "Technical difficulties. Please continue with the task.".into(), ..Default::default() }
+                    }
                 })
             }
             LlmError::OutputLength { truncated, .. } => {
@@ -1820,7 +1890,10 @@ so ask everything you need to know.",
         answers_history.push(json!({"role": "assistant", "content": summary.content}));
         let (answers, r) = self
             .run_subagent(
-                &format!("The next agent has a few questions for you, please answer each of them one by one in detail:\n\n{}", questions.content),
+                &format!(
+                    "The next agent has a few questions for you, please answer each of them one by one in detail:\n\n{}",
+                    questions.content
+                ),
                 &answers_history,
                 answer_steps,
                 format!("{}-summarization-{n}-answers", self.session_id),
@@ -1833,7 +1906,8 @@ so ask everything you need to know.",
 
         // Only the questions stay in history; the answers arrive as the handoff prompt.
         let first = self.chat.messages[0].clone();
-        self.chat.messages = vec![first, json!({"role": "user", "content": question_prompt}), json!({"role": "assistant", "content": questions.content})];
+        self.chat.messages =
+            vec![first, json!({"role": "user", "content": question_prompt}), json!({"role": "assistant", "content": questions.content})];
         self.chat.reset_response_chain();
         let handoff = format!(
             "Here are the answers the other agent provided.\n\n{}\n\nContinue working on this task from where the previous agent left off. You can no longer ask questions. Please follow the spec to interact with the terminal.",
@@ -1999,7 +2073,9 @@ pub(crate) fn mcp_info(servers: &[crate::task::McpServer]) -> String {
 fn parse_skill_frontmatter(content: &str) -> Option<(String, String)> {
     let c = re(r"(?s)^---\n(.*?)\n---").captures(content)?;
     let fm: serde_yaml_ng::Value = serde_yaml_ng::from_str(&c[1]).ok()?;
-    let s = |v: &serde_yaml_ng::Value| v.as_str().map(String::from).unwrap_or_else(|| serde_yaml_ng::to_string(v).unwrap_or_default().trim().to_string());
+    let s = |v: &serde_yaml_ng::Value| {
+        v.as_str().map(String::from).unwrap_or_else(|| serde_yaml_ng::to_string(v).unwrap_or_default().trim().to_string())
+    };
     Some((s(fm.get("name")?), s(fm.get("description")?)))
 }
 
@@ -2036,19 +2112,33 @@ mod tests {
         let resp = r#"{"analysis": "Need to list files.", "plan": "Run ls.", "commands": [{"keystrokes": "ls -la\n", "duration": 0.1}, {"keystrokes": "cd project\n", "duration": 0.1}], "task_complete": false}"#;
         let r = json_parser::parse_response(resp);
         assert_eq!((r.error.as_str(), r.warning.as_str(), r.is_task_complete), ("", "", false));
-        assert_eq!(r.commands, vec![ParsedCommand { keystrokes: "ls -la\n".into(), duration: 0.1 }, ParsedCommand { keystrokes: "cd project\n".into(), duration: 0.1 }]);
+        assert_eq!(
+            r.commands,
+            vec![
+                ParsedCommand { keystrokes: "ls -la\n".into(), duration: 0.1 },
+                ParsedCommand { keystrokes: "cd project\n".into(), duration: 0.1 }
+            ]
+        );
         assert_eq!((r.analysis.as_str(), r.plan.as_str()), ("Need to list files.", "Run ls."));
 
         // upstream test_terminus_json_plain_parser: trailing-newline validation.
         let mk = |cmds: Value| json!({"analysis": "test", "plan": "test", "commands": cmds}).to_string();
         let r = json_parser::parse_response(&mk(json!([{"keystrokes": "", "duration": 10.0}, {"keystrokes": "ls\n", "duration": 1.0}])));
         assert!(r.error.is_empty() && !r.warning.contains("should end with newline"));
-        assert!(json_parser::parse_response(&mk(json!([{"keystrokes": "ls", "duration": 1.0}, {"keystrokes": "pwd\n", "duration": 1.0}]))).warning.contains("should end with newline"));
-        let r = json_parser::parse_response(&mk(json!([{"keystrokes": "ls\n", "duration": 1.0}, {"keystrokes": "", "duration": 2.0}, {"keystrokes": "", "duration": 3.0}, {"keystrokes": "pwd\n", "duration": 1.0}])));
+        assert!(
+            json_parser::parse_response(&mk(json!([{"keystrokes": "ls", "duration": 1.0}, {"keystrokes": "pwd\n", "duration": 1.0}])))
+                .warning
+                .contains("should end with newline")
+        );
+        let r = json_parser::parse_response(&mk(
+            json!([{"keystrokes": "ls\n", "duration": 1.0}, {"keystrokes": "", "duration": 2.0}, {"keystrokes": "", "duration": 3.0}, {"keystrokes": "pwd\n", "duration": 1.0}]),
+        ));
         assert!(!r.warning.contains("should end with newline"));
 
         // Extra text, missing duration, unknown fields, wrong order, string task_complete.
-        let r = json_parser::parse_response("Sure!\n{\"plan\": \"p\", \"analysis\": \"a\", \"commands\": [{\"keystrokes\": \"x\\n\", \"foo\": 1}], \"task_complete\": \"yes\"}\nDone.");
+        let r = json_parser::parse_response(
+            "Sure!\n{\"plan\": \"p\", \"analysis\": \"a\", \"commands\": [{\"keystrokes\": \"x\\n\", \"foo\": 1}], \"task_complete\": \"yes\"}\nDone.",
+        );
         assert!(r.error.is_empty() && r.is_task_complete);
         assert_eq!(
             r.warning,
@@ -2057,8 +2147,14 @@ mod tests {
         // Errors.
         assert_eq!(json_parser::parse_response("no json here").error, "No valid JSON found in response");
         assert_eq!(json_parser::parse_response(r#"{"analysis": "a", "plan": "p"}"#).error, "Missing required fields: commands");
-        assert_eq!(json_parser::parse_response(r#"{"analysis": "a", "plan": "p", "commands": "ls"}"#).error, "Field 'commands' must be an array");
-        assert_eq!(json_parser::parse_response(r#"{"analysis": "a", "plan": "p", "commands": [{"duration": 1}]}"#).error, "Command 1 missing required 'keystrokes' field");
+        assert_eq!(
+            json_parser::parse_response(r#"{"analysis": "a", "plan": "p", "commands": "ls"}"#).error,
+            "Field 'commands' must be an array"
+        );
+        assert_eq!(
+            json_parser::parse_response(r#"{"analysis": "a", "plan": "p", "commands": [{"duration": 1}]}"#).error,
+            "Command 1 missing required 'keystrokes' field"
+        );
         // Parse errors become warnings once the task is complete.
         let r = json_parser::parse_response(r#"{"analysis": "a", "plan": "p", "commands": [1], "task_complete": true}"#);
         assert!(r.error.is_empty() && r.is_task_complete && r.warning.contains("Command 1 must be an object"));
@@ -2067,7 +2163,9 @@ mod tests {
         assert!(r.error.is_empty() && r.warning.starts_with("- AUTO-CORRECTED: Fixed incomplete JSON by adding missing closing brace"));
         assert_eq!(r.commands.len(), 1);
         let r = json_parser::parse_response(r#"{"analysis": "a", "plan": "p", "commands": [}"#);
-        assert!(r.error.starts_with("Invalid JSON: ") && r.error.contains(r#" | Content: '{"analysis": "a", "plan": "p", "commands": [}'"#));
+        assert!(
+            r.error.starts_with("Invalid JSON: ") && r.error.contains(r#" | Content: '{"analysis": "a", "plan": "p", "commands": [}'"#)
+        );
     }
 
     const XML_OK: &str = "<response>\n<analysis>\nI see a prompt.\n</analysis>\n<plan>\nList then cd.\n</plan>\n<commands>\n<keystrokes duration=\"0.1\">ls -la\n</keystrokes>\n<keystrokes duration=\"0.1\">cd project\n</keystrokes>\n</commands>\n<task_complete>true</task_complete>\n</response>";
@@ -2076,10 +2174,18 @@ mod tests {
     fn xml_parser_basics() {
         let r = xml_parser::parse_response(XML_OK);
         assert_eq!((r.error.as_str(), r.warning.as_str(), r.is_task_complete), ("", "", true));
-        assert_eq!(r.commands, vec![ParsedCommand { keystrokes: "ls -la\n".into(), duration: 0.1 }, ParsedCommand { keystrokes: "cd project\n".into(), duration: 0.1 }]);
+        assert_eq!(
+            r.commands,
+            vec![
+                ParsedCommand { keystrokes: "ls -la\n".into(), duration: 0.1 },
+                ParsedCommand { keystrokes: "cd project\n".into(), duration: 0.1 }
+            ]
+        );
         assert_eq!((r.analysis.as_str(), r.plan.as_str()), ("I see a prompt.", "List then cd."));
 
-        let r = xml_parser::parse_response("pre <response><plan>p</plan><analysis>a</analysis><commands><keystrokes duration=2 extra='x'>echo &amp; hi</keystrokes><keystrokes>pwd\n</keystrokes></commands><foo/></response> post");
+        let r = xml_parser::parse_response(
+            "pre <response><plan>p</plan><analysis>a</analysis><commands><keystrokes duration=2 extra='x'>echo &amp; hi</keystrokes><keystrokes>pwd\n</keystrokes></commands><foo/></response> post",
+        );
         assert!(r.error.is_empty() && !r.is_task_complete);
         assert_eq!(r.commands[0].duration, 1.0); // unquoted: upstream ignores it too
         assert_eq!(r.commands[1].duration, 1.0);
@@ -2098,10 +2204,15 @@ mod tests {
             assert!(r.warning.contains(w), "missing warning {w:?} in {}", r.warning);
         }
         assert_eq!(xml_parser::parse_response("hello").error, "No <response> tag found");
-        assert_eq!(xml_parser::parse_response("<response><analysis>a</analysis><plan>p</plan></response>").error, "Missing <commands> section");
+        assert_eq!(
+            xml_parser::parse_response("<response><analysis>a</analysis><plan>p</plan></response>").error,
+            "Missing <commands> section"
+        );
         let r = xml_parser::parse_response("<response><analysis>a</analysis><plan>p</plan><commands></commands></response>");
         assert!(r.error.is_empty() && r.commands.is_empty() && r.warning.contains("Commands section is empty"));
-        let r = xml_parser::parse_response("<response><analysis>a</analysis><plan>p</plan><commands><keystrokes duration=\"1\">a\n</keystrokes></commands><commands></commands></response>");
+        let r = xml_parser::parse_response(
+            "<response><analysis>a</analysis><plan>p</plan><commands><keystrokes duration=\"1\">a\n</keystrokes></commands><commands></commands></response>",
+        );
         assert!(r.warning.contains("IMPORTANT: Only issue one <commands> block at a time. You issued 2"));
 
         // Salvage: a clean prefix up to </response> survives truncation.
@@ -2116,7 +2227,10 @@ mod tests {
     fn prompt_rendering_and_helpers() {
         let p = py_format(JSON_TEMPLATE, &[("instruction", "Do {x}"), ("terminal_state", "$ ")]);
         assert!(p.contains("{\n  \"analysis\": \"Analyze") && p.contains("{\"keystrokes\": \"\", \"duration\": 10.0}"));
-        assert!(p.ends_with("Task Description:\nDo {x}\n\nCurrent terminal state:\n$ \n") || p.ends_with("Task Description:\nDo {x}\n\nCurrent terminal state:\n$ "));
+        assert!(
+            p.ends_with("Task Description:\nDo {x}\n\nCurrent terminal state:\n$ \n")
+                || p.ends_with("Task Description:\nDo {x}\n\nCurrent terminal state:\n$ ")
+        );
         let p = py_format(XML_TEMPLATE, &[("instruction", "T"), ("terminal_state", "S")]);
         assert!(p.contains("<keystrokes duration=\"0.1\">ls -la") && p.contains("Task Description:\nT\n"));
         let t = py_format(TIMEOUT_TEMPLATE, &[("timeout_sec", &pyf(5.0)), ("command", "sleep 99\n"), ("terminal_state", "S")]);
@@ -2198,7 +2312,11 @@ mod tests {
     impl Llm for MockLlm {
         async fn call(&self, prompt: &str, history: &[Value], _: &Map<String, Value>, _: Option<&str>) -> Result<LlmResponse, LlmError> {
             self.prompts.lock().unwrap().push((prompt.to_string(), history.len()));
-            self.replies.lock().unwrap().pop_front().unwrap_or_else(|| reply(r#"{"analysis": "", "plan": "", "commands": [], "task_complete": true}"#))
+            self.replies
+                .lock()
+                .unwrap()
+                .pop_front()
+                .unwrap_or_else(|| reply(r#"{"analysis": "", "plan": "", "commands": [], "task_complete": true}"#))
         }
         fn context_limit(&self) -> i64 {
             self.context_limit
@@ -2213,7 +2331,8 @@ mod tests {
         std::fs::create_dir_all(dir.join("environment")).unwrap();
         std::fs::write(dir.join("task.toml"), "[environment]\ndocker_image='x'\n").unwrap();
         std::fs::write(dir.join("instruction.md"), "x").unwrap();
-        AgentArgs { load_trajectory: None,
+        AgentArgs {
+            load_trajectory: None,
             model_name: Some("openai/gpt-4o".into()),
             kwargs: serde_json::from_value(kwargs).unwrap(),
             extra_env: BTreeMap::new(),
@@ -2235,14 +2354,19 @@ mod tests {
     }
 
     fn cmd_json(keys: &str, complete: bool) -> String {
-        json!({"analysis": "looking", "plan": "act", "commands": [{"keystrokes": keys, "duration": 0.01}], "task_complete": complete}).to_string()
+        json!({"analysis": "looking", "plan": "act", "commands": [{"keystrokes": keys, "duration": 0.01}], "task_complete": complete})
+            .to_string()
     }
 
     // ----- episode loop -----
 
     #[tokio::test]
     async fn loop_runs_commands_and_double_confirms_completion() {
-        let llm = MockLlm::new(vec![reply(&cmd_json("ls\n", false)), reply(r#"{"analysis": "done", "plan": "", "commands": [], "task_complete": true}"#), reply(&cmd_json("echo ok\n", true))]);
+        let llm = MockLlm::new(vec![
+            reply(&cmd_json("ls\n", false)),
+            reply(r#"{"analysis": "done", "plan": "", "commands": [], "task_complete": true}"#),
+            reply(&cmd_json("echo ok\n", true)),
+        ]);
         let (mut t, logs) = agent(json!({}), &llm);
         let sh = MockShell::default();
         let mut ctx = AgentContext::default();
@@ -2251,7 +2375,10 @@ mod tests {
         let prompts = llm.prompts();
         assert_eq!(prompts.len(), 3);
         assert!(prompts[0].0.contains("Task Description:\nCreate a file\n\nCurrent terminal state:\nCurrent Terminal Screen:\n$ "));
-        assert!(prompts[2].0.starts_with("Current terminal state:\n") && prompts[2].0.contains("Are you sure you want to mark the task as complete?"));
+        assert!(
+            prompts[2].0.starts_with("Current terminal state:\n")
+                && prompts[2].0.contains("Are you sure you want to mark the task as complete?")
+        );
         assert_eq!(prompts[2].1, 4); // chat history grows by user+assistant per turn
         let cmds = sh.commands();
         assert!(cmds.iter().any(|c| c == "tmux send-keys -t terminus-2 -- 'ls\n'"));
@@ -2264,19 +2391,31 @@ mod tests {
         let traj: Value = serde_json::from_str(&std::fs::read_to_string(logs.join("trajectory.json")).unwrap()).unwrap();
         assert_eq!(traj["schema_version"], "ATIF-v1.8");
         assert_eq!(traj["session_id"], "my-trial__agent");
-        assert_eq!(traj["agent"], json!({"name": "terminus-2", "version": "2.0.0", "model_name": "openai/gpt-4o", "extra": {"parser": "json"}}));
+        assert_eq!(
+            traj["agent"],
+            json!({"name": "terminus-2", "version": "2.0.0", "model_name": "openai/gpt-4o", "extra": {"parser": "json"}})
+        );
         let steps = traj["steps"].as_array().unwrap();
         assert_eq!(steps.len(), 4);
         assert_eq!((steps[0]["source"].as_str(), steps[1]["step_id"].as_i64()), (Some("user"), Some(2)));
         assert_eq!(steps[1]["message"], "Analysis: looking\nPlan: act");
-        assert_eq!(steps[1]["tool_calls"], json!([{"tool_call_id": "call_0_1", "function_name": "bash_command", "arguments": {"keystrokes": "ls\n", "duration": 0.01}}]));
+        assert_eq!(
+            steps[1]["tool_calls"],
+            json!([{"tool_call_id": "call_0_1", "function_name": "bash_command", "arguments": {"keystrokes": "ls\n", "duration": 0.01}}])
+        );
         assert_eq!(steps[1]["observation"]["results"][0]["source_call_id"], "call_0_1");
         assert_eq!(steps[1]["metrics"], json!({"prompt_tokens": 100, "completion_tokens": 10, "cached_tokens": 40, "cost_usd": 0.01}));
-        assert_eq!(steps[2]["tool_calls"], json!([{"tool_call_id": "call_1_task_complete", "function_name": "mark_task_complete", "arguments": {}}]));
+        assert_eq!(
+            steps[2]["tool_calls"],
+            json!([{"tool_call_id": "call_1_task_complete", "function_name": "mark_task_complete", "arguments": {}}])
+        );
         assert!(steps[2]["observation"]["results"][0]["content"].as_str().unwrap().contains("Are you sure"));
         assert_eq!(steps[3]["tool_calls"].as_array().unwrap().len(), 2);
         let fm = &traj["final_metrics"];
-        assert_eq!((fm["total_prompt_tokens"].as_i64(), fm["total_completion_tokens"].as_i64(), fm["total_cached_tokens"].as_i64()), (Some(300), Some(30), Some(120)));
+        assert_eq!(
+            (fm["total_prompt_tokens"].as_i64(), fm["total_completion_tokens"].as_i64(), fm["total_cached_tokens"].as_i64()),
+            (Some(300), Some(30), Some(120))
+        );
         assert!((fm["total_cost_usd"].as_f64().unwrap() - 0.03).abs() < 1e-12);
     }
 
@@ -2320,20 +2459,26 @@ mod tests {
         let mut ctx = AgentContext::default();
         t.run_with("orig task", &MockShell::default(), &mut ctx).await.unwrap();
         let p = llm.prompts();
-        assert!(p[2].0.starts_with("You are about to hand off your work to another AI agent.") && p[2].0.contains("Original Task: orig task"));
+        assert!(
+            p[2].0.starts_with("You are about to hand off your work to another AI agent.") && p[2].0.contains("Original Task: orig task")
+        );
         assert_eq!(p[2].1, 2); // summary subagent sees the (unwound) chat
         assert!(p[3].0.contains("**Summary from Previous Agent:**\nSUMMARY") && p[3].1 == 0);
         assert!(p[4].0.ends_with("one by one in detail:\n\nQUESTIONS?") && p[4].1 == 4);
         assert!(p[5].0.starts_with("Here are the answers the other agent provided.\n\nANSWERS\n\nContinue working"));
         assert_eq!(p[5].1, 3); // [first, question prompt, questions]
         for f in ["summary", "questions", "answers"] {
-            let sub: Value = serde_json::from_str(&std::fs::read_to_string(logs.join(format!("trajectory.summarization-1-{f}.json"))).unwrap()).unwrap();
+            let sub: Value =
+                serde_json::from_str(&std::fs::read_to_string(logs.join(format!("trajectory.summarization-1-{f}.json"))).unwrap()).unwrap();
             assert_eq!(sub["agent"]["extra"]["summarization_index"], 1);
         }
         let traj: Value = serde_json::from_str(&std::fs::read_to_string(logs.join("trajectory.json")).unwrap()).unwrap();
         let steps = traj["steps"].as_array().unwrap();
         let sys = steps.iter().find(|s| s["source"] == "system").unwrap();
-        assert_eq!(sys["observation"]["results"][0]["subagent_trajectory_ref"][1]["trajectory_path"], "trajectory.summarization-1-questions.json");
+        assert_eq!(
+            sys["observation"]["results"][0]["subagent_trajectory_ref"][1]["trajectory_path"],
+            "trajectory.summarization-1-questions.json"
+        );
         assert!(steps.iter().any(|s| s["source"] == "user" && s["message"].as_str().unwrap().starts_with("Here are the answers")));
         assert_eq!(ctx.metadata.as_ref().unwrap()["summarization_count"], 1);
         // Subagent usage is included in the totals.
@@ -2358,7 +2503,10 @@ mod tests {
         assert!(p[1].0.starts_with("ERROR!! NONE of the actions you just requested were performed because you exceeded 4096 tokens."));
         assert_eq!(p[1].1, 2); // truncated exchange was appended to history
 
-        let llm = MockLlm::new(vec![Err(LlmError::OutputLength { msg: "cut".into(), truncated: format!("{XML_OK}<response>trunc") }), reply(XML_OK)]);
+        let llm = MockLlm::new(vec![
+            Err(LlmError::OutputLength { msg: "cut".into(), truncated: format!("{XML_OK}<response>trunc") }),
+            reply(XML_OK),
+        ]);
         let (mut t, _) = agent(json!({"parser_name": "xml"}), &llm);
         let sh = MockShell::default();
         t.run_with("task", &sh, &mut AgentContext::default()).await.unwrap();
@@ -2369,7 +2517,14 @@ mod tests {
 
     #[tokio::test]
     async fn proactive_summarization_when_context_is_nearly_full() {
-        let mut llm = MockLlm::new(vec![reply(&cmd_json("ls\n", false)), reply("S"), reply("Q"), reply("A"), reply(&cmd_json("pwd\n", true)), reply(&cmd_json("pwd\n", true))]);
+        let mut llm = MockLlm::new(vec![
+            reply(&cmd_json("ls\n", false)),
+            reply("S"),
+            reply("Q"),
+            reply("A"),
+            reply(&cmd_json("pwd\n", true)),
+            reply(&cmd_json("pwd\n", true)),
+        ]);
         llm.context_limit = 9000; // after one exchange, free tokens drop below the 8000 threshold
         let (mut t, _) = agent(json!({}), &llm);
         let mut ctx = AgentContext::default();
@@ -2384,8 +2539,17 @@ mod tests {
 
     #[test]
     fn options_validation() {
-        let o = Options::parse(&serde_json::from_value(json!({"max_episodes": "5", "parser_name": "xml", "temperature": 0.2, "trajectory_config": {"raw_content": true}})).unwrap()).unwrap();
-        assert_eq!((o.max_episodes, o.parser, o.temperature, o.raw_content, o.record_terminal_session), (Some(5), ParserKind::Xml, Some(0.2), true, true));
+        let o = Options::parse(
+            &serde_json::from_value(
+                json!({"max_episodes": "5", "parser_name": "xml", "temperature": 0.2, "trajectory_config": {"raw_content": true}}),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            (o.max_episodes, o.parser, o.temperature, o.raw_content, o.record_terminal_session),
+            (Some(5), ParserKind::Xml, Some(0.2), true, true)
+        );
         let o = Options::parse(&serde_json::from_value(json!({"max_turns": 3, "max_episodes": 9, "episodes": 7})).unwrap()).unwrap();
         assert_eq!(o.max_episodes, Some(3));
         let err = |v: Value| Options::parse(&serde_json::from_value(v).unwrap()).unwrap_err().to_string();
@@ -2407,7 +2571,10 @@ mod tests {
     #[test]
     fn session_id_headers_and_reset() {
         let llm = MockLlm::new(vec![]);
-        let (mut t, _) = agent(json!({"session_id_headers": ["Modal-Session-ID"], "llm_call_kwargs": {"extra_headers": {"X-Custom": "unchanged"}}}), &llm);
+        let (mut t, _) = agent(
+            json!({"session_id_headers": ["Modal-Session-ID"], "llm_call_kwargs": {"extra_headers": {"X-Custom": "unchanged"}}}),
+            &llm,
+        );
         t.reset_per_run_state();
         assert_eq!(t.session_id, "my-trial__agent");
         assert_eq!(t.call_kwargs["extra_headers"], json!({"Modal-Session-ID": "my-trial__agent", "X-Custom": "unchanged"}));
@@ -2419,20 +2586,34 @@ mod tests {
     // ----- tmux -----
 
     fn tmux() -> Tmux {
-        Tmux { name: "test-session".into(), logging_path: "/tmp/tmux.log".into(), recording_path: None, width: 160, height: 40, extra_env: BTreeMap::new(), previous_buffer: None }
+        Tmux {
+            name: "test-session".into(),
+            logging_path: "/tmp/tmux.log".into(),
+            recording_path: None,
+            width: 160,
+            height: 40,
+            extra_env: BTreeMap::new(),
+            previous_buffer: None,
+        }
     }
 
     #[test]
     fn tmux_commands() {
         let t = tmux();
-        assert_eq!(t.send_keys_command(&["echo hello world".into(), "Enter".into()]), "tmux send-keys -t test-session -- 'echo hello world' Enter");
+        assert_eq!(
+            t.send_keys_command(&["echo hello world".into(), "Enter".into()]),
+            "tmux send-keys -t test-session -- 'echo hello world' Enter"
+        );
         assert_eq!(t.send_keys_command(&["-x".into()]), "tmux send-keys -t test-session -- -x");
         let keys: Vec<String> = (0..96).map(|i| format!("key{i:04}{}", "x".repeat(490))).collect();
         let batches = t.batch_keys(&keys).unwrap();
         assert!(batches.len() >= 2 && batches.iter().all(|b| t.send_keys_command(b).len() <= MAX_COMMAND_LENGTH));
         assert_eq!(batches.concat(), keys);
         assert!(t.batch_keys(&["x".repeat(MAX_COMMAND_LENGTH * 2)]).is_err());
-        assert!(t.key_requires_paste(&"é".repeat(MAX_COMMAND_LENGTH * 9 / 16)) && !t.key_requires_paste(&"x".repeat(MAX_COMMAND_LENGTH * 9 / 16)));
+        assert!(
+            t.key_requires_paste(&"é".repeat(MAX_COMMAND_LENGTH * 9 / 16))
+                && !t.key_requires_paste(&"x".repeat(MAX_COMMAND_LENGTH * 9 / 16))
+        );
         assert!(t.key_requires_paste(&"a'".repeat(MAX_COMMAND_LENGTH / 3)));
         let mut t = tmux();
         t.extra_env.insert("FOO".into(), "a b".into());
@@ -2457,7 +2638,10 @@ mod tests {
 
         let sh = MockShell::default();
         assert!(t.send_keys(&sh, vec!["make\n".into()], true, 0.0, 30.0).await.unwrap());
-        assert_eq!(sh.commands(), vec!["tmux send-keys -t test-session -- make '; tmux wait -S done' Enter", "timeout 30.0s tmux wait done"]);
+        assert_eq!(
+            sh.commands(),
+            vec!["tmux send-keys -t test-session -- make '; tmux wait -S done' Enter", "timeout 30.0s tmux wait done"]
+        );
     }
 
     #[tokio::test]

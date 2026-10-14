@@ -3,7 +3,11 @@
 use std::path::Path;
 
 fn walk(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
-    let mut entries: Vec<_> = std::fs::read_dir(dir).unwrap_or_else(|e| panic!("{}: {e} (run `npm run build` in viewer/)", dir.display())).flatten().map(|e| e.path()).collect();
+    let mut entries: Vec<_> = std::fs::read_dir(dir)
+        .unwrap_or_else(|e| panic!("{}: {e} (run `npm run build` in viewer/)", dir.display()))
+        .flatten()
+        .map(|e| e.path())
+        .collect();
     entries.sort();
     for p in entries {
         if p.is_dir() {

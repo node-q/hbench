@@ -16,15 +16,55 @@ const PROJECT_DIR: &str = "/installed-agent/eve-project";
 const RUNNER_PATH: &str = "/installed-agent/eve_runner.mjs";
 const INSTRUCTION_PATH: &str = "/installed-agent/eve-instruction.txt";
 const NODE_PREFIX: &str = "export NVM_DIR=\"$HOME/.nvm\"; [ -s \"$NVM_DIR/nvm.sh\" ] && . \"$NVM_DIR/nvm.sh\"; ";
-const OPTIONS: &[&str] = &["version", "prompt_template_path", "config", "path", "install_command", "auto_env", "port", "startup_timeout_ms"];
+const OPTIONS: &[&str] =
+    &["version", "prompt_template_path", "config", "path", "install_command", "auto_env", "port", "startup_timeout_ms"];
 const IGNORE_NAMES: &[&str] = &[
-    ".DS_Store", ".cache", ".eve", ".git", ".hg", ".next", ".nuxt", ".svelte-kit", ".turbo", ".vercel", ".vite", "build", "coverage", "dist", "node_modules", "out", "tmp", "temp", "__pycache__",
+    ".DS_Store",
+    ".cache",
+    ".eve",
+    ".git",
+    ".hg",
+    ".next",
+    ".nuxt",
+    ".svelte-kit",
+    ".turbo",
+    ".vercel",
+    ".vite",
+    "build",
+    "coverage",
+    "dist",
+    "node_modules",
+    "out",
+    "tmp",
+    "temp",
+    "__pycache__",
 ];
 const PROVIDER_ENV_KEYS: &[&str] = &[
-    "AI_GATEWAY_API_KEY", "ANTHROPIC_API_KEY", "AWS_ACCESS_KEY_ID", "AWS_DEFAULT_REGION", "AWS_REGION", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AZURE_API_KEY",
-    "AZURE_OPENAI_API_KEY", "AZURE_OPENAI_ENDPOINT", "AZURE_RESOURCE_NAME", "DEEPSEEK_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_APPLICATION_CREDENTIALS",
-    "GOOGLE_CLOUD_LOCATION", "GOOGLE_CLOUD_PROJECT", "GOOGLE_GENERATIVE_AI_API_KEY", "GROQ_API_KEY", "MISTRAL_API_KEY", "OPENAI_API_KEY", "OPENAI_BASE_URL",
-    "OPENROUTER_API_KEY", "VERCEL_OIDC_TOKEN", "XAI_API_KEY",
+    "AI_GATEWAY_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "AWS_ACCESS_KEY_ID",
+    "AWS_DEFAULT_REGION",
+    "AWS_REGION",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_SESSION_TOKEN",
+    "AZURE_API_KEY",
+    "AZURE_OPENAI_API_KEY",
+    "AZURE_OPENAI_ENDPOINT",
+    "AZURE_RESOURCE_NAME",
+    "DEEPSEEK_API_KEY",
+    "GEMINI_API_KEY",
+    "GOOGLE_API_KEY",
+    "GOOGLE_APPLICATION_CREDENTIALS",
+    "GOOGLE_CLOUD_LOCATION",
+    "GOOGLE_CLOUD_PROJECT",
+    "GOOGLE_GENERATIVE_AI_API_KEY",
+    "GROQ_API_KEY",
+    "MISTRAL_API_KEY",
+    "OPENAI_API_KEY",
+    "OPENAI_BASE_URL",
+    "OPENROUTER_API_KEY",
+    "VERCEL_OIDC_TOKEN",
+    "XAI_API_KEY",
 ];
 const GATEWAY_KEYS: &[&str] = &["AI_GATEWAY_API_KEY", "VERCEL_OIDC_TOKEN"];
 const AUTO_ENV_PACKAGE_KEYS: &[(&str, &[&str])] = &[
@@ -229,7 +269,8 @@ impl Eve {
         if !p.join("package.json").is_file() {
             bail!("Eve path must contain package.json: {}", p.display());
         }
-        let flat = p.join("agent.ts").is_file() && (p.join("instructions.md").is_file() || p.join("instructions.ts").is_file() || p.join("instructions").is_dir());
+        let flat = p.join("agent.ts").is_file()
+            && (p.join("instructions.md").is_file() || p.join("instructions.ts").is_file() || p.join("instructions").is_dir());
         if !p.join("agent").is_dir() && !flat {
             bail!("Eve path must contain an agent/ directory or flat agent.ts/instructions.md files: {}", p.display());
         }
@@ -260,10 +301,17 @@ impl Eve {
         let agent_dir = if project.join("agent").is_dir() { project.join("agent") } else { project.to_path_buf() };
         let dir = agent_dir.join("connections");
         let mut used: BTreeSet<String> = std::fs::read_dir(&dir)
-            .map(|rd| rd.flatten().filter(|e| e.path().is_file()).filter_map(|e| e.path().file_stem().map(|s| s.to_string_lossy().to_string())).collect())
+            .map(|rd| {
+                rd.flatten()
+                    .filter(|e| e.path().is_file())
+                    .filter_map(|e| e.path().file_stem().map(|s| s.to_string_lossy().to_string()))
+                    .collect()
+            })
             .unwrap_or_default();
         for s in &self.args.mcp_servers {
-            let Some(url) = s.url.as_deref().filter(|u| !u.is_empty() && matches!(s.transport(), "sse" | "streamable-http")) else { continue };
+            let Some(url) = s.url.as_deref().filter(|u| !u.is_empty() && matches!(s.transport(), "sse" | "streamable-http")) else {
+                continue;
+            };
             std::fs::create_dir_all(&dir)?;
             let file = connection_filename(&mut used, &s.name);
             let description = format!("hbench-provided MCP server {} via {} transport.", py_repr(&s.name), s.transport());
@@ -289,8 +337,11 @@ impl Eve {
 
     fn inferred_auto_env_keys(&self) -> Result<BTreeSet<String>> {
         let pkg = self.package_json()?;
-        let deps: BTreeSet<&str> =
-            ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"].iter().filter_map(|k| pkg.get(*k)?.as_object()).flat_map(|o| o.keys().map(String::as_str)).collect();
+        let deps: BTreeSet<&str> = ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"]
+            .iter()
+            .filter_map(|k| pkg.get(*k)?.as_object())
+            .flat_map(|o| o.keys().map(String::as_str))
+            .collect();
         let mut keys = BTreeSet::new();
         let add = |ks: &[&str], keys: &mut BTreeSet<String>| keys.extend(ks.iter().map(|k| k.to_string()));
         for (p, ks) in AUTO_ENV_PACKAGE_KEYS {
@@ -410,14 +461,18 @@ struct Metrics {
 fn usage_metrics(data: &Map<String, Value>) -> Option<Metrics> {
     let src = data.get("usage").and_then(Value::as_object).unwrap_or(data);
     // Python isinstance(v, int) accepts bools too.
-    let int = |ks: &[&str]| ks.iter().find_map(|k| match src.get(*k)? {
-        Value::Bool(b) => Some(*b as i64),
-        v => v.as_i64(),
-    });
-    let float = |ks: &[&str]| ks.iter().find_map(|k| match src.get(*k)? {
-        Value::Bool(b) => Some(*b as i64 as f64),
-        v => v.as_f64(),
-    });
+    let int = |ks: &[&str]| {
+        ks.iter().find_map(|k| match src.get(*k)? {
+            Value::Bool(b) => Some(*b as i64),
+            v => v.as_i64(),
+        })
+    };
+    let float = |ks: &[&str]| {
+        ks.iter().find_map(|k| match src.get(*k)? {
+            Value::Bool(b) => Some(*b as i64 as f64),
+            v => v.as_f64(),
+        })
+    };
     let m = Metrics {
         prompt: int(&["inputTokens", "input_tokens", "promptTokens", "prompt_tokens", "totalPromptTokens"]),
         completion: int(&["outputTokens", "output_tokens", "completionTokens", "completion_tokens", "totalCompletionTokens"]),
@@ -435,7 +490,13 @@ fn message_from_data(data: &Map<String, Value>) -> String {
         }
     }
     if let Some(Value::Array(parts)) = data.get("message") {
-        return parts.iter().filter(|p| p["type"] == "text").filter_map(|p| p["text"].as_str()).filter(|s| !s.is_empty()).collect::<Vec<_>>().join("\n");
+        return parts
+            .iter()
+            .filter(|p| p["type"] == "text")
+            .filter_map(|p| p["text"].as_str())
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n");
     }
     String::new()
 }
@@ -546,7 +607,9 @@ fn populate(logs_dir: &Path, ctx: &mut AgentContext) {
             ctx.metadata = Some(Value::Object(meta));
         }
     }
-    let Some((p, c, k, cost)) = std::fs::read_to_string(logs_dir.join("eve-events.ndjson")).ok().and_then(|t| event_totals(&t)) else { return };
+    let Some((p, c, k, cost)) = std::fs::read_to_string(logs_dir.join("eve-events.ndjson")).ok().and_then(|t| event_totals(&t)) else {
+        return;
+    };
     if p != 0 {
         ctx.n_input_tokens = Some(p);
     }
@@ -647,7 +710,16 @@ impl Eve {
         let rt = self.runtime_env()?;
         // `eve info` failing is non-fatal in upstream.
         let _ = cx
-            .exec(&format!("set -o pipefail; {}", in_project(&format!("{NODE_PREFIX}node_modules/.bin/eve info --json > /logs/agent/eve-info.json 2> /logs/agent/eve-info.stderr"))), &rt, None)
+            .exec(
+                &format!(
+                    "set -o pipefail; {}",
+                    in_project(&format!(
+                        "{NODE_PREFIX}node_modules/.bin/eve info --json > /logs/agent/eve-info.json 2> /logs/agent/eve-info.stderr"
+                    ))
+                ),
+                &rt,
+                None,
+            )
             .await?;
         exec_agent(cx, &in_project(&format!("{NODE_PREFIX}node_modules/.bin/eve build 2>&1 | tee /logs/agent/eve-build.log")), &rt).await?;
         Ok(())
@@ -668,7 +740,11 @@ mod tests {
             std::fs::write(p.join("instructions.md"), "flat\n").unwrap();
         } else {
             std::fs::create_dir_all(p.join("agent")).unwrap();
-            std::fs::write(p.join("agent/agent.ts"), "import { defineAgent } from \"eve\";\nexport default defineAgent({ model: \"anthropic/claude-sonnet-4.6\" });\n").unwrap();
+            std::fs::write(
+                p.join("agent/agent.ts"),
+                "import { defineAgent } from \"eve\";\nexport default defineAgent({ model: \"anthropic/claude-sonnet-4.6\" });\n",
+            )
+            .unwrap();
             std::fs::write(p.join("agent/instructions.md"), "x\n").unwrap();
         }
         p
@@ -680,7 +756,8 @@ mod tests {
         std::fs::write(dir.join("task.toml"), "[environment]\ndocker_image='x'\n").unwrap();
         std::fs::write(dir.join("instruction.md"), "x").unwrap();
         let task = Arc::new(crate::task::Task::load(&dir).unwrap());
-        Eve::new(AgentArgs { load_trajectory: None,
+        Eve::new(AgentArgs {
+            load_trajectory: None,
             model_name: Some("anthropic/claude-sonnet-4.6".into()),
             kwargs: serde_json::from_value(kwargs).unwrap(),
             extra_env: env.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect(),
@@ -709,7 +786,8 @@ mod tests {
         std::fs::write(empty.join("package.json"), "{}").unwrap();
         assert!(agent(json!({"path": empty.display().to_string()}), &[], vec![]).err().unwrap().to_string().contains("agent"));
 
-        let a = agent(json!({"path": ps, "port": 4321, "startup_timeout_ms": 12345}), &[("AI_GATEWAY_API_KEY", "agent-key")], vec![]).unwrap();
+        let a =
+            agent(json!({"path": ps, "port": 4321, "startup_timeout_ms": 12345}), &[("AI_GATEWAY_API_KEY", "agent-key")], vec![]).unwrap();
         let env = a.runner_env_with(&host(&[("AI_GATEWAY_API_KEY", "host-key")])).unwrap();
         assert_eq!(env["AI_GATEWAY_API_KEY"], "agent-key");
         assert_eq!(env["HBENCH_MODEL"], "anthropic/claude-sonnet-4.6");
@@ -719,7 +797,11 @@ mod tests {
         let env = a.runner_env_with(&host(&[("AI_GATEWAY_API_KEY", "g"), ("VERCEL_OIDC_TOKEN", "o")])).unwrap();
         assert_eq!(env["VERCEL_OIDC_TOKEN"], "o");
         let skills = a.register_skills_command().unwrap();
-        assert!(skills.contains("/hbench/skills") && skills.contains("/installed-agent/eve-project/agent/skills") && skills.contains("hbench_$skill_name"));
+        assert!(
+            skills.contains("/hbench/skills")
+                && skills.contains("/installed-agent/eve-project/agent/skills")
+                && skills.contains("hbench_$skill_name")
+        );
 
         let flat = project(json!({}), true);
         let f = agent(json!({"path": flat.display().to_string()}), &[], vec![]).unwrap();
@@ -780,11 +862,21 @@ mod tests {
             std::fs::create_dir_all(p.join(d)).unwrap();
             std::fs::write(p.join(d).join("i.txt"), "x").unwrap();
         }
-        let srv = |name: &str, t: &str, url: Option<&str>| crate::task::McpServer { name: name.into(), transport: t.into(), url: url.map(String::from), command: None, args: vec![] };
+        let srv = |name: &str, t: &str, url: Option<&str>| crate::task::McpServer {
+            name: name.into(),
+            transport: t.into(),
+            url: url.map(String::from),
+            command: None,
+            args: vec![],
+        };
         let a = agent(
             json!({"path": p.display().to_string()}),
             &[],
-            vec![srv("linear", "sse", Some("http://linear-mcp:8000/sse")), srv("api.server", "streamable-http", Some("http://api-mcp:8000/mcp")), srv("local", "stdio", None)],
+            vec![
+                srv("linear", "sse", Some("http://linear-mcp:8000/sse")),
+                srv("api.server", "streamable-http", Some("http://api-mcp:8000/mcp")),
+                srv("local", "stdio", None),
+            ],
         )
         .unwrap();
         let staged = temp_path("staged-test");
@@ -796,7 +888,9 @@ mod tests {
         let linear = std::fs::read_to_string(staged.join("agent/connections/hbench-linear.ts")).unwrap();
         assert!(linear.contains("defineMcpClientConnection") && linear.contains("\"http://linear-mcp:8000/sse\""));
         assert!(linear.contains("\"hbench-provided MCP server 'linear' via sse transport.\""));
-        assert!(std::fs::read_to_string(staged.join("agent/connections/hbench-api-server.ts")).unwrap().contains("\"http://api-mcp:8000/mcp\""));
+        assert!(
+            std::fs::read_to_string(staged.join("agent/connections/hbench-api-server.ts")).unwrap().contains("\"http://api-mcp:8000/mcp\"")
+        );
         assert!(!staged.join("agent/connections/hbench-local.ts").exists());
         let mut used = BTreeSet::from(["hbench-x".to_string()]);
         assert_eq!(connection_filename(&mut used, "X"), "hbench-x-2.ts");
@@ -807,12 +901,19 @@ mod tests {
     fn usage_from_result_and_events() {
         let dir = temp_path("logs");
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("eve-result.json"), r#"{"status":"session.waiting","sessionId":"s1","message":null,"usage":{"inputTokens":7,"outputTokens":0}}"#).unwrap();
+        std::fs::write(
+            dir.join("eve-result.json"),
+            r#"{"status":"session.waiting","sessionId":"s1","message":null,"usage":{"inputTokens":7,"outputTokens":0}}"#,
+        )
+        .unwrap();
         let mut c = AgentContext::default();
         populate(&dir, &mut c);
         assert_eq!((c.n_input_tokens, c.n_output_tokens), (Some(7), Some(0)));
         let m = c.metadata.unwrap();
-        assert_eq!((m["eve_status"].as_str(), m["eve_session_id"].as_str(), m["answer_written"].is_null()), (Some("session.waiting"), Some("s1"), true));
+        assert_eq!(
+            (m["eve_status"].as_str(), m["eve_session_id"].as_str(), m["answer_written"].is_null()),
+            (Some("session.waiting"), Some("s1"), true)
+        );
 
         // upstream's representative event stream: step.completed usage attaches to the final message.
         let events = [

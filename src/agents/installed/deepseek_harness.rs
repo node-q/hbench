@@ -15,7 +15,12 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 const NAME: &str = "deepseek-harness";
-const SPEC: Spec = Spec { default_provider: Some("deepseek"), api_key_envs: &["DEEPSEEK_API_KEY"], base_url_envs: &["DEEPSEEK_BASE_URL"], passthrough: false };
+const SPEC: Spec = Spec {
+    default_provider: Some("deepseek"),
+    api_key_envs: &["DEEPSEEK_API_KEY"],
+    base_url_envs: &["DEEPSEEK_BASE_URL"],
+    passthrough: false,
+};
 const EFFORTS: [&str; 4] = ["off", "low", "high", "max"];
 /// dsh's own default route (`agent-default-model` in the shipped profile).
 const DEFAULT_MODEL: &str = "deepseek-flash";
@@ -129,7 +134,15 @@ pub fn failure_kind(output: &str) -> &'static str {
 }
 
 fn text_of(content: &Value, kind: &str) -> String {
-    content.as_array().into_iter().flatten().filter(|b| b["type"] == kind).filter_map(|b| b["text"].as_str()).filter(|t| !t.is_empty()).collect::<Vec<_>>().join("\n")
+    content
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|b| b["type"] == kind)
+        .filter_map(|b| b["text"].as_str())
+        .filter(|t| !t.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn iso(ms: &Value) -> Option<String> {
@@ -153,14 +166,24 @@ pub fn session_trajectory(text: &str, since_ms: i64, version: &str, model: Optio
     let evs = events(text);
     let session_id = evs.iter().find(|e| e["type"] == "session").and_then(|e| e["id"].as_str()).map(String::from);
     // The route header is logged once per session, before a resumed step's window: read it from the whole log.
-    let model_name = evs.iter().rev().find_map(|e| (e["type"] == "request/header").then(|| e["data"]["header"]["config"]["model"].as_str()).flatten()).map(String::from).or(model.map(String::from));
+    let model_name = evs
+        .iter()
+        .rev()
+        .find_map(|e| (e["type"] == "request/header").then(|| e["data"]["header"]["config"]["model"].as_str()).flatten())
+        .map(String::from)
+        .or(model.map(String::from));
     let mut steps: Vec<atif::Step> = vec![];
     let (mut tp, mut tc, mut tcache, mut tcost) = (0i64, 0i64, 0i64, None::<f64>);
     for e in evs.iter().filter(|e| e["time"].as_i64().unwrap_or(i64::MAX) >= since_ms) {
         let d = &e["data"];
         match e["type"].as_str().unwrap_or_default() {
             "user/message" if d["source"]["kind"] == "user" => {
-                steps.push(atif::Step { source: "user".into(), timestamp: iso(&e["time"]), message: json!(text_of(&d["content"], "text")), ..Default::default() });
+                steps.push(atif::Step {
+                    source: "user".into(),
+                    timestamp: iso(&e["time"]),
+                    message: json!(text_of(&d["content"], "text")),
+                    ..Default::default()
+                });
             }
             "assistant/message" => {
                 let msg = &d["message"];
@@ -171,7 +194,13 @@ pub fn session_trajectory(text: &str, since_ms: i64, version: &str, model: Optio
                     if let Some(c) = c {
                         tcost = Some(tcost.unwrap_or(0.0) + c);
                     }
-                    atif::Metrics { prompt_tokens: Some(u.0), completion_tokens: Some(u.1), cached_tokens: Some(u.2), cost_usd: c, ..Default::default() }
+                    atif::Metrics {
+                        prompt_tokens: Some(u.0),
+                        completion_tokens: Some(u.1),
+                        cached_tokens: Some(u.2),
+                        cost_usd: c,
+                        ..Default::default()
+                    }
                 });
                 let reasoning = text_of(&msg["content"], "reasoning");
                 steps.push(atif::Step {
@@ -252,7 +281,12 @@ impl Agent for DeepSeekHarness {
         opts::installed_dir(cx).await?;
         ensure_system_dependencies(cx, &["curl", "bash", "coreutils"]).await?;
         let spec = format!("@{}", self.version.as_deref().unwrap_or("latest"));
-        exec_agent(cx, &format!("set -euo pipefail; {NVM_NODE_INSTALL} && npm i -g @deepseek-ai/dsh{spec} && dsh --version"), &BTreeMap::new()).await?;
+        exec_agent(
+            cx,
+            &format!("set -euo pipefail; {NVM_NODE_INSTALL} && npm i -g @deepseek-ai/dsh{spec} && dsh --version"),
+            &BTreeMap::new(),
+        )
+        .await?;
         if self.version.is_none() {
             self.version = opts::detect_version(cx, &format!("{NVM} dsh --version"), |s| s.trim().to_string()).await;
         }
@@ -280,7 +314,10 @@ impl Agent for DeepSeekHarness {
 
     fn populate_context_post_run(&self, logs_dir: &Path, ctx: &mut AgentContext) {
         let since = std::fs::read_to_string(logs_dir.join("dsh-run-start")).ok().and_then(|s| s.trim().parse().ok()).unwrap_or(0);
-        let main_id = std::fs::read_to_string(logs_dir.join("dsh.jsonl")).ok().and_then(|t| events(&t).into_iter().find(|e| e["type"] == "session")).and_then(|e| e["sessionId"].as_str().map(String::from));
+        let main_id = std::fs::read_to_string(logs_dir.join("dsh.jsonl"))
+            .ok()
+            .and_then(|t| events(&t).into_iter().find(|e| e["type"] == "session"))
+            .and_then(|e| e["sessionId"].as_str().map(String::from));
         let model = self.route().ok().flatten().unwrap_or_else(|| DEFAULT_MODEL.into());
         let version = self.version.clone().unwrap_or_else(|| "unknown".into());
         let Ok(dir) = std::fs::read_dir(logs_dir.join("dsh-sessions")) else { return };
@@ -325,7 +362,10 @@ mod tests {
     fn model_patch_env_and_command() {
         let a = agent(json!({"reasoning_effort": "max"}), Some("deepseek/deepseek-v4-pro")).unwrap();
         let p: Value = serde_json::from_str(&a.patch().unwrap().unwrap()).unwrap();
-        assert_eq!(p, json!([{"id": "agent-default-model", "config": {"provider": "deepseek-official", "model": "deepseek-v4-pro", "reasoningEffort": "max"}}]));
+        assert_eq!(
+            p,
+            json!([{"id": "agent-default-model", "config": {"provider": "deepseek-official", "model": "deepseek-v4-pro", "reasoningEffort": "max"}}])
+        );
         assert!(agent(json!({}), None).unwrap().patch().unwrap().is_none());
         assert_eq!(agent(json!({"reasoning_effort": "low"}), None).unwrap().patch().unwrap().unwrap().matches(DEFAULT_MODEL).count(), 1);
         assert!(agent(json!({}), Some("openai/gpt-5")).is_err());
@@ -343,7 +383,11 @@ mod tests {
 
     #[test]
     fn failure_kinds() {
-        let ev = |status: u16, code: &str| format!("{{\"type\":\"status\",\"phase\":\"turn_end\",\"turn\":1,\"reason\":{{\"kind\":\"error\",\"error\":{{\"message\":\"m\",\"code\":\"{code}\",\"status\":{status}}}}}}}\n{{\"type\":\"final\",\"text\":\"\"}}\ndsh: X: m");
+        let ev = |status: u16, code: &str| {
+            format!(
+                "{{\"type\":\"status\",\"phase\":\"turn_end\",\"turn\":1,\"reason\":{{\"kind\":\"error\",\"error\":{{\"message\":\"m\",\"code\":\"{code}\",\"status\":{status}}}}}}}\n{{\"type\":\"final\",\"text\":\"\"}}\ndsh: X: m"
+            )
+        };
         assert_eq!(failure_kind(&ev(401, "AUTH")), "AgentAuthenticationError");
         assert_eq!(failure_kind(&ev(402, "BALANCE")), "ApiUsageLimitError");
         assert_eq!(failure_kind(&ev(429, "RATE")), "ApiRateLimitError");
@@ -378,9 +422,15 @@ mod tests {
         let tc = &s.tool_calls.as_ref().unwrap()[0];
         assert_eq!((tc.tool_call_id.as_str(), tc.function_name.as_str(), &tc.arguments), ("c1", "bash", &json!({"command": "ls"})));
         let r = &s.observation.as_ref().unwrap().results[0];
-        assert_eq!((r.source_call_id.as_deref(), r.content.clone(), r.extra.as_ref().map(|e| e["is_error"].clone())), (Some("c1"), Some(json!("a.txt")), Some(json!(true))));
+        assert_eq!(
+            (r.source_call_id.as_deref(), r.content.clone(), r.extra.as_ref().map(|e| e["is_error"].clone())),
+            (Some("c1"), Some(json!("a.txt")), Some(json!(true)))
+        );
         let fm = t.final_metrics.unwrap();
-        assert_eq!((fm.total_prompt_tokens, fm.total_completion_tokens, fm.total_cached_tokens, fm.total_steps), (Some(5000 + 5012), Some(105), Some(9000), Some(3)));
+        assert_eq!(
+            (fm.total_prompt_tokens, fm.total_completion_tokens, fm.total_cached_tokens, fm.total_steps),
+            (Some(5000 + 5012), Some(105), Some(9000), Some(3))
+        );
         // LiteLLM deepseek/deepseek-v4-flash: in 1.4e-7, out 2.8e-7, cache read 2.8e-9, no cache-write price (-> 0).
         let want = (1000.0 + 10.0) * 1.4e-7 + 9000.0 * 2.8e-9 + 105.0 * 2.8e-7;
         assert!((fm.total_cost_usd.unwrap() - want).abs() < 1e-12, "{:?} vs {want}", fm.total_cost_usd);

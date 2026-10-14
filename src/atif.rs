@@ -137,7 +137,9 @@ pub struct FinalMetrics {
 pub fn py_dumps(v: &Value) -> String {
     match v {
         Value::Array(a) => format!("[{}]", a.iter().map(py_dumps).collect::<Vec<_>>().join(", ")),
-        Value::Object(o) => format!("{{{}}}", o.iter().map(|(k, v)| format!("{}: {}", Value::from(k.as_str()), py_dumps(v))).collect::<Vec<_>>().join(", ")),
+        Value::Object(o) => {
+            format!("{{{}}}", o.iter().map(|(k, v)| format!("{}: {}", Value::from(k.as_str()), py_dumps(v))).collect::<Vec<_>>().join(", "))
+        }
         _ => v.to_string(),
     }
 }
@@ -173,7 +175,12 @@ fn nonempty_str(v: Option<&Value>) -> Option<String> {
 }
 
 fn join_nonblank<I: IntoIterator<Item = String>>(parts: I, strip: bool) -> String {
-    parts.into_iter().filter(|p| !p.trim().is_empty()).map(|p| if strip { p.trim().to_string() } else { p }).collect::<Vec<_>>().join("\n\n")
+    parts
+        .into_iter()
+        .filter(|p| !p.trim().is_empty())
+        .map(|p| if strip { p.trim().to_string() } else { p })
+        .collect::<Vec<_>>()
+        .join("\n\n")
 }
 
 /// Every file/dir under `dir`, depth-first in name order (symlinked dirs are not followed).
@@ -220,7 +227,10 @@ fn extract_text_reasoning_tool_uses(content: &Value) -> (String, Option<String>,
                         // OpenRouter tunnels plain reasoning as `openrouter.reasoning:<b64 json>`; real ciphertext is dropped.
                         if let Some(payload) = b.get("data").and_then(Value::as_str).and_then(|d| d.strip_prefix("openrouter.reasoning:")) {
                             use base64::Engine;
-                            let engine = base64::engine::GeneralPurpose::new(&base64::alphabet::STANDARD, base64::engine::general_purpose::PAD_INDIFFERENT);
+                            let engine = base64::engine::GeneralPurpose::new(
+                                &base64::alphabet::STANDARD,
+                                base64::engine::general_purpose::PAD_INDIFFERENT,
+                            );
                             if let Some(t) = engine
                                 .decode(payload.trim_end_matches('='))
                                 .ok()
@@ -322,7 +332,10 @@ fn identity_extra(ev: &Value) -> Obj {
 }
 
 fn first_event_model(events: &[Value], include_sidechain: bool) -> Option<String> {
-    events.iter().filter(|e| include_sidechain || !truthy(e.get("isSidechain"))).find_map(|e| nonempty_str(e.get("message").filter(|m| m.is_object()).and_then(|m| m.get("model"))))
+    events
+        .iter()
+        .filter(|e| include_sidechain || !truthy(e.get("isSidechain")))
+        .find_map(|e| nonempty_str(e.get("message").filter(|m| m.is_object()).and_then(|m| m.get("model"))))
 }
 
 struct CallSpec {
@@ -336,9 +349,28 @@ struct CallSpec {
 
 /// Normalized events (one per future ATIF step).
 enum Norm {
-    UserMsg { timestamp: Option<String>, text: String, extra: Obj },
-    Turn { timestamp: Option<String>, text: String, reasoning: Option<String>, metrics: Option<Metrics>, extra: Option<Obj>, model_name: Option<String>, calls: Vec<CallSpec> },
-    Orphan { timestamp: Option<String>, call_id: String, tool_name: String, output: Option<String>, extra: Obj, model_name: Option<String> },
+    UserMsg {
+        timestamp: Option<String>,
+        text: String,
+        extra: Obj,
+    },
+    Turn {
+        timestamp: Option<String>,
+        text: String,
+        reasoning: Option<String>,
+        metrics: Option<Metrics>,
+        extra: Option<Obj>,
+        model_name: Option<String>,
+        calls: Vec<CallSpec>,
+    },
+    Orphan {
+        timestamp: Option<String>,
+        call_id: String,
+        tool_name: String,
+        output: Option<String>,
+        extra: Obj,
+        model_name: Option<String>,
+    },
 }
 
 /// The single Claude session dir under `<logs_dir>/sessions/projects` (None if 0 or >1).
@@ -356,7 +388,12 @@ pub fn session_dir(logs_dir: &Path) -> Option<PathBuf> {
 /// First stream-json `result` event's `total_cost_usd` in `<logs_dir>/claude-code.txt`.
 fn stream_total_cost(logs_dir: &Path) -> Option<f64> {
     let text = std::fs::read_to_string(logs_dir.join("claude-code.txt")).ok()?;
-    let ev = text.lines().map(str::trim).filter(|l| l.starts_with('{')).filter_map(|l| serde_json::from_str::<Value>(l).ok()).find(|e| e["type"] == "result")?;
+    let ev = text
+        .lines()
+        .map(str::trim)
+        .filter(|l| l.starts_with('{'))
+        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+        .find(|e| e["type"] == "result")?;
     ev.get("total_cost_usd")?.as_f64()
 }
 
@@ -364,7 +401,9 @@ fn stream_total_cost(logs_dir: &Path) -> Option<f64> {
 pub fn convert_session(session_dir: &Path, logs_dir: &Path) -> Option<Trajectory> {
     let mut files: Vec<PathBuf> = std::fs::read_dir(session_dir).ok()?.flatten().map(|e| e.path()).filter(|p| is_jsonl(p)).collect();
     files.sort();
-    files.extend(walk(session_dir).into_iter().filter(|p| is_jsonl(p) && p.parent().and_then(Path::file_name).is_some_and(|n| n == "subagents")));
+    files.extend(
+        walk(session_dir).into_iter().filter(|p| is_jsonl(p) && p.parent().and_then(Path::file_name).is_some_and(|n| n == "subagents")),
+    );
     let mut seen_uuids = HashSet::new();
     let mut events: Vec<Value> = vec![];
     for f in files {
@@ -383,7 +422,11 @@ pub fn convert_session(session_dir: &Path, logs_dir: &Path) -> Option<Trajectory
     }
     events.sort_by(|a, b| a["timestamp"].as_str().unwrap_or("").cmp(b["timestamp"].as_str().unwrap_or("")));
 
-    let session_id = events.iter().find_map(|e| e.get("sessionId").and_then(Value::as_str)).map(str::to_string).unwrap_or_else(|| session_dir.file_name().unwrap_or_default().to_string_lossy().into_owned());
+    let session_id = events
+        .iter()
+        .find_map(|e| e.get("sessionId").and_then(Value::as_str))
+        .map(str::to_string)
+        .unwrap_or_else(|| session_dir.file_name().unwrap_or_default().to_string_lossy().into_owned());
     let version = events.iter().find_map(|e| nonempty_str(e.get("version"))).unwrap_or_else(|| "unknown".into());
     let collect = |k: &str| -> BTreeSet<String> { events.iter().filter_map(|e| nonempty_str(e.get(k))).collect() };
     let mut agent_extra = Obj::new();
@@ -443,7 +486,15 @@ pub fn convert_session(session_dir: &Path, logs_dir: &Path) -> Option<Trajectory
                 let idx = match msg_id.as_ref().and_then(|m| turn_by_msgid.get(m)) {
                     Some(&i) => i,
                     None => {
-                        norm.push(Norm::Turn { timestamp, text: String::new(), reasoning: None, metrics: None, extra: (!extra.is_empty()).then_some(extra), model_name, calls: vec![] });
+                        norm.push(Norm::Turn {
+                            timestamp,
+                            text: String::new(),
+                            reasoning: None,
+                            metrics: None,
+                            extra: (!extra.is_empty()).then_some(extra),
+                            model_name,
+                            calls: vec![],
+                        });
                         if let Some(m) = &msg_id {
                             turn_by_msgid.insert(m.clone(), norm.len() - 1);
                         }
@@ -536,7 +587,9 @@ pub fn convert_session(session_dir: &Path, logs_dir: &Path) -> Option<Trajectory
                                 if call_id.as_ref().is_some_and(|c| completed.contains(c)) {
                                     continue;
                                 }
-                                let Some(tool_name) = nonempty_str(b.get("name")).or_else(|| nonempty_str(b.get("tool_name"))) else { continue };
+                                let Some(tool_name) = nonempty_str(b.get("name")).or_else(|| nonempty_str(b.get("tool_name"))) else {
+                                    continue;
+                                };
                                 let mut extra = identity_extra(ev);
                                 if let Some(m) = metadata.clone().filter(|m| !m.is_empty()) {
                                     extra.insert("tool_result_metadata".into(), Value::Object(m));
@@ -549,7 +602,14 @@ pub fn convert_session(session_dir: &Path, logs_dir: &Path) -> Option<Trajectory
                                 }
                                 if let Some(c) = call_id {
                                     completed.insert(c.clone());
-                                    norm.push(Norm::Orphan { timestamp: timestamp.clone(), call_id: c, tool_name, output, extra, model_name: default_model.clone() });
+                                    norm.push(Norm::Orphan {
+                                        timestamp: timestamp.clone(),
+                                        call_id: c,
+                                        tool_name,
+                                        output,
+                                        extra,
+                                        model_name: default_model.clone(),
+                                    });
                                 }
                                 continue;
                             }
@@ -577,14 +637,24 @@ pub fn convert_session(session_dir: &Path, logs_dir: &Path) -> Option<Trajectory
     for n in norm {
         let step_id = steps.len() + 1;
         let step = match n {
-            Norm::UserMsg { timestamp, text, extra } => Step { step_id, timestamp, source: "user".into(), message: text.into(), extra: Some(extra), ..Default::default() },
+            Norm::UserMsg { timestamp, text, extra } => {
+                Step { step_id, timestamp, source: "user".into(), message: text.into(), extra: Some(extra), ..Default::default() }
+            }
             Norm::Turn { timestamp, text, reasoning, metrics, extra, model_name, calls } => {
                 let results: Vec<ObservationResult> = calls
                     .iter()
                     .filter(|c| c.output.is_some())
-                    .map(|c| ObservationResult { source_call_id: Some(c.call_id.clone()), content: c.output.clone().map(Value::from), extra: c.result_extra.clone(), ..Default::default() })
+                    .map(|c| ObservationResult {
+                        source_call_id: Some(c.call_id.clone()),
+                        content: c.output.clone().map(Value::from),
+                        extra: c.result_extra.clone(),
+                        ..Default::default()
+                    })
                     .collect();
-                let tool_calls: Vec<ToolCall> = calls.into_iter().map(|c| ToolCall { tool_call_id: c.call_id, function_name: c.tool_name, arguments: c.arguments, extra: c.extra }).collect();
+                let tool_calls: Vec<ToolCall> = calls
+                    .into_iter()
+                    .map(|c| ToolCall { tool_call_id: c.call_id, function_name: c.tool_name, arguments: c.arguments, extra: c.extra })
+                    .collect();
                 Step {
                     step_id,
                     timestamp,
@@ -606,8 +676,15 @@ pub fn convert_session(session_dir: &Path, logs_dir: &Path) -> Option<Trajectory
                 source: "agent".into(),
                 model_name: model_name.or(default_model.clone()),
                 message: "".into(),
-                tool_calls: Some(vec![ToolCall { tool_call_id: call_id.clone(), function_name: tool_name, arguments: json!({}), extra: None }]),
-                observation: output.map(|o| Observation { results: vec![ObservationResult { source_call_id: Some(call_id), content: Some(o.into()), ..Default::default() }] }),
+                tool_calls: Some(vec![ToolCall {
+                    tool_call_id: call_id.clone(),
+                    function_name: tool_name,
+                    arguments: json!({}),
+                    extra: None,
+                }]),
+                observation: output.map(|o| Observation {
+                    results: vec![ObservationResult { source_call_id: Some(call_id), content: Some(o.into()), ..Default::default() }],
+                }),
                 llm_call_count: Some(1),
                 extra: Some(extra),
                 ..Default::default()
@@ -656,7 +733,13 @@ pub fn convert_session(session_dir: &Path, logs_dir: &Path) -> Option<Trajectory
     Some(Trajectory {
         schema_version: "ATIF-v1.7".into(),
         session_id: Some(session_id),
-        agent: Agent { name: "claude-code".into(), version, model_name: default_model, tool_definitions: None, extra: (!agent_extra.is_empty()).then_some(agent_extra) },
+        agent: Agent {
+            name: "claude-code".into(),
+            version,
+            model_name: default_model,
+            tool_definitions: None,
+            extra: (!agent_extra.is_empty()).then_some(agent_extra),
+        },
         steps,
         final_metrics: Some(final_metrics),
         ..Default::default()
@@ -710,13 +793,25 @@ mod tests {
                        "usage": {"input_tokens": 10, "output_tokens": 40, "cache_read_input_tokens": 100, "cache_creation_input_tokens": 5, "service_tier": "standard"}}),
             ),
             with(
-                with(base("user", "u2", "2026-01-01T00:00:02.000Z"), "message", json!({"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "a.txt\n"}]})),
+                with(
+                    base("user", "u2", "2026-01-01T00:00:02.000Z"),
+                    "message",
+                    json!({"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "a.txt\n"}]}),
+                ),
                 "toolUseResult",
                 json!({"stdout": "a.txt", "stderr": "", "interrupted": false, "isImage": false}),
             ),
-            with(base("user", "u3", "2026-01-01T00:00:02.100Z"), "message", json!({"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_2", "content": "File does not exist.", "is_error": true}]})),
+            with(
+                base("user", "u3", "2026-01-01T00:00:02.100Z"),
+                "message",
+                json!({"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_2", "content": "File does not exist.", "is_error": true}]}),
+            ),
             // replayed event: same uuid, must be dropped
-            with(base("user", "u3", "2026-01-01T00:00:02.100Z"), "message", json!({"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_2", "content": "dup"}]})),
+            with(
+                base("user", "u3", "2026-01-01T00:00:02.100Z"),
+                "message",
+                json!({"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_2", "content": "dup"}]}),
+            ),
             with(
                 base("assistant", "a3", "2026-01-01T00:00:04.000Z"),
                 "message",
@@ -747,7 +842,10 @@ mod tests {
         let v = claude_code_trajectory(&logs).unwrap();
         let t: Trajectory = serde_json::from_value(v.clone()).unwrap();
         assert_eq!((t.schema_version.as_str(), t.session_id.as_deref()), ("ATIF-v1.7", Some(sid)));
-        assert_eq!((t.agent.name.as_str(), t.agent.version.as_str(), t.agent.model_name.as_deref()), ("claude-code", "2.1.50", Some("claude-opus-4-6")));
+        assert_eq!(
+            (t.agent.name.as_str(), t.agent.version.as_str(), t.agent.model_name.as_deref()),
+            ("claude-code", "2.1.50", Some("claude-opus-4-6"))
+        );
         assert_eq!(t.agent.extra.as_ref().unwrap()["agent_ids"], json!(["agent-7"]));
         let ids: Vec<usize> = t.steps.iter().map(|s| s.step_id).collect();
         assert_eq!(ids, vec![1, 2, 3, 4]);
@@ -778,7 +876,10 @@ mod tests {
         assert_eq!(t.steps[3].message, "Done.");
 
         let f = t.final_metrics.unwrap();
-        assert_eq!((f.total_prompt_tokens, f.total_completion_tokens, f.total_cached_tokens, f.total_steps), (Some(115 + 203 + 1), Some(49), Some(300), Some(4)));
+        assert_eq!(
+            (f.total_prompt_tokens, f.total_completion_tokens, f.total_cached_tokens, f.total_steps),
+            (Some(115 + 203 + 1), Some(49), Some(300), Some(4))
+        );
         assert_eq!(f.total_cost_usd, Some(0.0421));
         assert_eq!(f.extra.unwrap()["service_tiers"], json!(["standard"]));
         // upstream's to_json_dict(exclude_none=True): no nulls on model fields

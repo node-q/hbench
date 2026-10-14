@@ -67,7 +67,13 @@ fn reward_key(n: &serde_json::Number) -> String {
     }
 }
 
-pub fn compute_stats(results: &[TrialResult], n_total: usize, n_running: usize, n_retries: usize, metric_cfgs: &[crate::config::MetricConfig]) -> JobStats {
+pub fn compute_stats(
+    results: &[TrialResult],
+    n_total: usize,
+    n_running: usize,
+    n_retries: usize,
+    metric_cfgs: &[crate::config::MetricConfig],
+) -> JobStats {
     let mut s = JobStats { n_retries, n_running_trials: n_running, ..Default::default() };
     let mut groups: BTreeMap<String, Vec<&TrialResult>> = BTreeMap::new();
     for r in results {
@@ -198,7 +204,12 @@ struct Shared {
 }
 
 /// Run (or resume) a job. `filter_error_types`: on resume, rerun trials that failed with these.
-pub async fn run_job(cfg: JobConfig, trial_configs: Option<Vec<TrialConfig>>, filter_error_types: &[String], cancel: watch::Receiver<bool>) -> Result<JobResult> {
+pub async fn run_job(
+    cfg: JobConfig,
+    trial_configs: Option<Vec<TrialConfig>>,
+    filter_error_types: &[String],
+    cancel: watch::Receiver<bool>,
+) -> Result<JobResult> {
     let job_dir = cfg.job_dir();
     std::fs::create_dir_all(&job_dir)?;
     let job_id = match std::fs::read_to_string(job_dir.join("result.json")).ok().and_then(|s| serde_json::from_str::<JobResult>(&s).ok()) {
@@ -258,11 +269,19 @@ pub async fn run_job(cfg: JobConfig, trial_configs: Option<Vec<TrialConfig>>, fi
     });
     std::fs::write(job_dir.join("lock.json"), serde_json::to_string_pretty(&lock)?)?;
 
-    let job_result = Arc::new(Mutex::new(JobResult { id: job_id, started_at: Utc::now(), updated_at: None, finished_at: None, n_total_trials: n_total, stats: JobStats::default() }));
+    let job_result = Arc::new(Mutex::new(JobResult {
+        id: job_id,
+        started_at: Utc::now(),
+        updated_at: None,
+        finished_at: None,
+        n_total_trials: n_total,
+        stats: JobStats::default(),
+    }));
     let shared = Arc::new(Mutex::new(Shared { results: previous, running: 0, retries: 0 }));
     let metric_cfgs = Arc::new(cfg.metrics.clone());
     let write = {
-        let (job_result, shared, path, metric_cfgs) = (job_result.clone(), shared.clone(), job_dir.join("result.json"), metric_cfgs.clone());
+        let (job_result, shared, path, metric_cfgs) =
+            (job_result.clone(), shared.clone(), job_dir.join("result.json"), metric_cfgs.clone());
         move || {
             let sh = shared.lock().unwrap();
             let mut jr = job_result.lock().unwrap();
@@ -285,7 +304,8 @@ pub async fn run_job(cfg: JobConfig, trial_configs: Option<Vec<TrialConfig>>, fi
     for tcfg in pending {
         let task = tasks[&registry::local_path(&tcfg.task)].clone();
         let pool = pools.get(&tcfg.agent.concurrency_key()).cloned();
-        let (sem, shared, write, cancel, retry, log) = (sem.clone(), shared.clone(), write.clone(), cancel.clone(), cfg.retry.clone(), log.clone());
+        let (sem, shared, write, cancel, retry, log) =
+            (sem.clone(), shared.clone(), write.clone(), cancel.clone(), cfg.retry.clone(), log.clone());
         handles.push(tokio::spawn(async move {
             let _permit = sem.acquire_owned().await.unwrap();
             if *cancel.borrow() {
@@ -328,7 +348,11 @@ pub async fn run_job(cfg: JobConfig, trial_configs: Option<Vec<TrialConfig>>, fi
                 ));
                 if !quiet {
                     let reward = result.reward().map(|r| serde_json::to_string(r).unwrap()).unwrap_or_else(|| "-".into());
-                    let err = result.exception_info.as_ref().map(|e| format!(" [{}: {}]", e.exception_type, crate::env::tail(&e.exception_message, 200))).unwrap_or_default();
+                    let err = result
+                        .exception_info
+                        .as_ref()
+                        .map(|e| format!(" [{}: {}]", e.exception_type, crate::env::tail(&e.exception_message, 200)))
+                        .unwrap_or_default();
                     eprintln!("[{}/{}] {} reward={reward}{err}", sh.results.len(), n_total, result.trial_name);
                 }
             }
@@ -379,7 +403,15 @@ fn bar(frac: f64) -> (String, String) {
 pub fn render_summary(jr: &JobResult, job_dir: &Path, color: bool) -> String {
     let paint = |code: &str, t: &str| if color { format!("\x1b[{code}m{t}\x1b[0m") } else { t.to_string() };
     // Score colour: green = good, yellow = partial, red = zero.
-    let tone = |v: f64| if v >= 1.0 { "32" } else if v > 0.0 { "33" } else { "31" };
+    let tone = |v: f64| {
+        if v >= 1.0 {
+            "32"
+        } else if v > 0.0 {
+            "33"
+        } else {
+            "31"
+        }
+    };
     let mut out = String::new();
     for (key, e) in &jr.stats.evals {
         let mut metrics: Vec<(String, &Value)> = Vec::new();
@@ -390,8 +422,11 @@ pub fn render_summary(jr: &JobResult, job_dir: &Path, color: bool) -> String {
             }
         }
         let pass: Vec<(String, f64)> = e.pass_at_k.iter().map(|(k, v)| (format!("Pass@{k}"), *v)).collect();
-        let rewards: Vec<(&String, usize)> = e.reward_stats.values().flat_map(|vals| vals.iter().rev().map(|(v, n)| (v, n.len()))).collect();
-        let w = metrics.iter().map(|(l, _)| l.chars().count())
+        let rewards: Vec<(&String, usize)> =
+            e.reward_stats.values().flat_map(|vals| vals.iter().rev().map(|(v, n)| (v, n.len()))).collect();
+        let w = metrics
+            .iter()
+            .map(|(l, _)| l.chars().count())
             .chain(pass.iter().map(|(l, _)| l.len()))
             .chain(rewards.iter().map(|(v, _)| v.chars().count()))
             .chain(e.exception_stats.keys().map(|x| x.chars().count()))
@@ -402,14 +437,25 @@ pub fn render_summary(jr: &JobResult, job_dir: &Path, color: bool) -> String {
         out += &format!("{}\n{}\n", paint("1", &title), paint("2", &"─".repeat(title.chars().count().max(w + BAR + 12))));
 
         // upstream's n_trials counts graded trials only; metrics divide by every finished trial (no reward = 0).
-        let names: std::collections::HashSet<&String> = e.reward_stats.values().flat_map(|v| v.values().flatten()).chain(e.exception_stats.values().flatten()).collect();
+        let names: std::collections::HashSet<&String> =
+            e.reward_stats.values().flat_map(|v| v.values().flatten()).chain(e.exception_stats.values().flatten()).collect();
         let total = names.len().max(e.n_trials);
         let ungraded = total.saturating_sub(e.n_trials);
         let errs = if e.n_errors == 0 { paint("2", "0 exceptions") } else { paint("33", &format!("{} exceptions", e.n_errors)) };
-        out += &format!("  {:<w$}  {}  {}\n\n", "Trials", paint("1", &format!("{total:>6}")), [paint("2", "finished"), format!("{} graded", e.n_trials), errs].join(&paint("2", " · ")));
+        out += &format!(
+            "  {:<w$}  {}  {}\n\n",
+            "Trials",
+            paint("1", &format!("{total:>6}")),
+            [paint("2", "finished"), format!("{} graded", e.n_trials), errs].join(&paint("2", " · "))
+        );
 
         let score = |label: &str, text: String, frac: Option<f64>| {
-            let bars = frac.map(|f| { let (a, b) = bar(f); format!("  {}{}", paint(tone(f), &a), paint("2", &b)) }).unwrap_or_default();
+            let bars = frac
+                .map(|f| {
+                    let (a, b) = bar(f);
+                    format!("  {}{}", paint(tone(f), &a), paint("2", &b))
+                })
+                .unwrap_or_default();
             format!("  {label:<w$}  {}{bars}\n", paint("1", &format!("{text:>6}")))
         };
         for (l, v) in &metrics {
@@ -424,12 +470,20 @@ pub fn render_summary(jr: &JobResult, job_dir: &Path, color: bool) -> String {
             let mut s = format!("\n  {}\n", paint("2", &format!("{head:<w$}   count  share of trials")));
             for (label, n, code) in rows {
                 let (a, b) = bar(n as f64 / total);
-                s += &format!("  {}  {}  {}{}  {}\n", paint(if code == "2" { "2" } else { "0" }, &format!("{label:<w$}")), paint("1", &format!("{n:>6}")), paint(code, &a), paint("2", &b), paint("2", &format!("{:.0}%", 100.0 * n as f64 / total)));
+                s += &format!(
+                    "  {}  {}  {}{}  {}\n",
+                    paint(if code == "2" { "2" } else { "0" }, &format!("{label:<w$}")),
+                    paint("1", &format!("{n:>6}")),
+                    paint(code, &a),
+                    paint("2", &b),
+                    paint("2", &format!("{:.0}%", 100.0 * n as f64 / total))
+                );
             }
             s
         };
         if !rewards.is_empty() {
-            let mut rows: Vec<(String, usize, &str)> = rewards.iter().map(|(v, n)| ((*v).clone(), *n, v.parse::<f64>().map(tone).unwrap_or("36"))).collect();
+            let mut rows: Vec<(String, usize, &str)> =
+                rewards.iter().map(|(v, n)| ((*v).clone(), *n, v.parse::<f64>().map(tone).unwrap_or("36"))).collect();
             if ungraded > 0 {
                 rows.push(("no reward".into(), ungraded, "2"));
             }
@@ -455,7 +509,13 @@ pub fn render_summary(jr: &JobResult, job_dir: &Path, color: bool) -> String {
 
 fn human(n: Option<i64>) -> String {
     let n = n.unwrap_or(0) as f64;
-    if n >= 1e6 { format!("{:.2}M", n / 1e6) } else if n >= 1e3 { format!("{:.1}K", n / 1e3) } else { format!("{n}") }
+    if n >= 1e6 {
+        format!("{:.2}M", n / 1e6)
+    } else if n >= 1e3 {
+        format!("{:.1}K", n / 1e3)
+    } else {
+        format!("{n}")
+    }
 }
 
 /// `agent__model__dataset` -> `dataset • agent • model` (model names may themselves contain `__`).
@@ -472,7 +532,13 @@ fn format_duration(start: DateTime<Utc>, end: Option<DateTime<Utc>>) -> String {
     let Some(end) = end else { return "unknown".into() };
     let t = (end - start).num_seconds().max(0);
     let (h, m, s) = (t / 3600, t / 60 % 60, t % 60);
-    if h > 0 { format!("{h}h {m}m {s}s") } else if m > 0 { format!("{m}m {s}s") } else { format!("{s}s") }
+    if h > 0 {
+        format!("{h}h {m}m {s}s")
+    } else if m > 0 {
+        format!("{m}m {s}s")
+    } else {
+        format!("{s}s")
+    }
 }
 
 /// Python `str.title()`.
@@ -504,7 +570,8 @@ mod tests {
     use crate::trial::*;
 
     pub fn result(task: &str, trial: &str, reward: Option<f64>, err: Option<&str>) -> TrialResult {
-        let cfg: TrialConfig = serde_json::from_value(serde_json::json!({"task": {"path": task}, "trial_name": trial, "trials_dir": "j"})).unwrap();
+        let cfg: TrialConfig =
+            serde_json::from_value(serde_json::json!({"task": {"path": task}, "trial_name": trial, "trials_dir": "j"})).unwrap();
         TrialResult {
             id: uuid::Uuid::nil(),
             task_name: task.into(),
@@ -516,9 +583,15 @@ mod tests {
             config: cfg,
             agent_info: AgentInfo { name: "oracle".into(), version: "1.0.0".into(), model_info: None },
             agent_result: None,
-            verifier_result: reward.map(|r| VerifierResult { rewards: Some([("reward".into(), serde_json::Number::from_f64(r).unwrap())].into()) }),
+            verifier_result: reward
+                .map(|r| VerifierResult { rewards: Some([("reward".into(), serde_json::Number::from_f64(r).unwrap())].into()) }),
             verifier_environment_mode: None,
-            exception_info: err.map(|e| ExceptionInfo { exception_type: e.into(), exception_message: String::new(), exception_traceback: String::new(), occurred_at: Utc::now() }),
+            exception_info: err.map(|e| ExceptionInfo {
+                exception_type: e.into(),
+                exception_message: String::new(),
+                exception_traceback: String::new(),
+                occurred_at: Utc::now(),
+            }),
             started_at: None,
             finished_at: None,
             environment_setup: None,
@@ -531,7 +604,12 @@ mod tests {
 
     #[test]
     fn stats_mean_and_pass_at_k() {
-        let rs = vec![result("a", "a1", Some(1.0), None), result("a", "a2", Some(0.0), None), result("b", "b1", None, Some("AgentTimeoutError")), result("b", "b2", Some(0.0), None)];
+        let rs = vec![
+            result("a", "a1", Some(1.0), None),
+            result("a", "a2", Some(0.0), None),
+            result("b", "b1", None, Some("AgentTimeoutError")),
+            result("b", "b2", Some(0.0), None),
+        ];
         let s = compute_stats(&rs, 5, 0, 0, &[]);
         let e = &s.evals["oracle__adhoc"];
         assert_eq!((e.n_trials, e.n_errors, s.n_errored_trials, s.n_pending_trials), (3, 1, 1, 1));
@@ -547,9 +625,21 @@ mod tests {
 
     #[test]
     fn summary_dashboard() {
-        let rs = vec![result("a", "a1", Some(1.0), None), result("a", "a2", Some(0.0), None), result("b", "b1", None, Some("AgentTimeoutError")), result("b", "b2", Some(0.0), None)];
+        let rs = vec![
+            result("a", "a1", Some(1.0), None),
+            result("a", "a2", Some(0.0), None),
+            result("b", "b1", None, Some("AgentTimeoutError")),
+            result("b", "b2", Some(0.0), None),
+        ];
         let t0 = Utc::now();
-        let jr = JobResult { id: uuid::Uuid::nil(), started_at: t0, updated_at: None, finished_at: Some(t0 + chrono::Duration::seconds(3725)), n_total_trials: 4, stats: compute_stats(&rs, 4, 0, 0, &[]) };
+        let jr = JobResult {
+            id: uuid::Uuid::nil(),
+            started_at: t0,
+            updated_at: None,
+            finished_at: Some(t0 + chrono::Duration::seconds(3725)),
+            n_total_trials: 4,
+            stats: compute_stats(&rs, 4, 0, 0, &[]),
+        };
         let out = render_summary(&jr, Path::new("jobs/j"), false);
         let expect = "\
 adhoc • oracle
@@ -572,7 +662,10 @@ Job  runtime 1h 2m 5s
      inspect hbench view jobs
 ";
         assert_eq!(out, expect);
-        assert_eq!(group_title("claude-code__deepseek/deepseek-v4-flash__terminal-bench@2.0"), "terminal-bench@2.0 • claude-code • deepseek/deepseek-v4-flash");
+        assert_eq!(
+            group_title("claude-code__deepseek/deepseek-v4-flash__terminal-bench@2.0"),
+            "terminal-bench@2.0 • claude-code • deepseek/deepseek-v4-flash"
+        );
         assert_eq!(py_title("Metric 1: pass_rate"), "Metric 1: Pass_Rate");
     }
 

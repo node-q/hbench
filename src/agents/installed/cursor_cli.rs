@@ -25,11 +25,15 @@ fn builtin_pricing(slug: &str) -> Option<[f64; 4]> {
 
 /// LiteLLM `model_cost` rates for `model` (then without its `provider/` prefix), per million tokens.
 fn litellm_rates(model: &str) -> Option<[f64; 4]> {
-    let p = crate::agents::pricing::model_cost(model).or_else(|| crate::agents::pricing::model_cost(model.split_once('/').map_or(model, |(_, m)| m)))?;
+    let p = crate::agents::pricing::model_cost(model)
+        .or_else(|| crate::agents::pricing::model_cost(model.split_once('/').map_or(model, |(_, m)| m)))?;
     let rate = |k: &str| p.get(k).and_then(Value::as_f64);
     let input = rate("input_cost_per_token").unwrap_or(0.0);
     let output = rate("output_cost_per_token").unwrap_or(0.0);
-    Some([input, output, rate("cache_read_input_token_cost").unwrap_or(input), rate("cache_creation_input_token_cost").unwrap_or(input)].map(|r| r * 1_000_000.0))
+    Some(
+        [input, output, rate("cache_read_input_token_cost").unwrap_or(input), rate("cache_creation_input_token_cost").unwrap_or(input)]
+            .map(|r| r * 1_000_000.0),
+    )
 }
 
 fn model_slug(model: &str) -> String {
@@ -71,16 +75,22 @@ fn parse_pricing(v: Option<&Value>) -> Result<Option<Pricing>> {
     let Some(o) = v.as_object() else { bail!("Invalid pricing: expected per-million USD rates or a model → rates map") };
     // Any known rate key means flat rates, so `{"input": 1}` fails as incomplete instead of a model map.
     if o.keys().any(|k| ["input", "output", "cache_read", "cache_write"].contains(&k.as_str())) {
-        return parse_rates(v)
-            .map(|r| Some(Pricing::Flat(r)))
-            .map_err(|e| anyhow::anyhow!("Invalid pricing: expected per-million USD rates with 'input' and 'output' (optional cache_read/cache_write). {e}"));
+        return parse_rates(v).map(|r| Some(Pricing::Flat(r))).map_err(|e| {
+            anyhow::anyhow!(
+                "Invalid pricing: expected per-million USD rates with 'input' and 'output' (optional cache_read/cache_write). {e}"
+            )
+        });
     }
     if o.is_empty() {
         bail!("Invalid pricing: expected a non-empty model → rates map");
     }
     let mut m = BTreeMap::new();
     for (k, r) in o {
-        let r = parse_rates(r).map_err(|e| anyhow::anyhow!("Invalid pricing: expected per-million USD rates ({{'input': ..., 'output': ..., ...}}) or a model → rates map. {k}: {e}"))?;
+        let r = parse_rates(r).map_err(|e| {
+            anyhow::anyhow!(
+                "Invalid pricing: expected per-million USD rates ({{'input': ..., 'output': ..., ...}}) or a model → rates map. {k}: {e}"
+            )
+        })?;
         m.insert(model_slug(k), r);
     }
     Ok(Some(Pricing::Map(m)))
@@ -195,7 +205,13 @@ impl CursorCli {
             let r = self.rates().filter(|_| any_usage)?;
             Some((tot[0] as f64 * r[0] + tot[2] as f64 * r[2] + tot[3] as f64 * r[3] + tot[1] as f64 * r[1]) / 1_000_000.0)
         });
-        Some(AgentContext { n_input_tokens: Some(tot[0] + tot[2] + tot[3]), n_cache_tokens: Some(tot[2]), n_output_tokens: Some(tot[1]), cost_usd: cost, ..Default::default() })
+        Some(AgentContext {
+            n_input_tokens: Some(tot[0] + tot[2] + tot[3]),
+            n_cache_tokens: Some(tot[2]),
+            n_output_tokens: Some(tot[1]),
+            cost_usd: cost,
+            ..Default::default()
+        })
     }
 }
 
@@ -215,10 +231,16 @@ impl Agent for CursorCli {
         exec_agent(cx, "set -euo pipefail; curl https://cursor.com/install -fsS | bash && export PATH=\"$HOME/.local/bin:$PATH\" && cursor-agent --version", &none).await?;
         if let Some(d) = opts::skills_dir(&self.args) {
             let d = quote(&d);
-            exec_agent(cx, &format!("if [ -d {d} ]; then mkdir -p ~/.cursor/skills && cp -r {d}/* ~/.cursor/skills/ 2>/dev/null || true; fi"), &none).await?;
+            exec_agent(
+                cx,
+                &format!("if [ -d {d} ]; then mkdir -p ~/.cursor/skills && cp -r {d}/* ~/.cursor/skills/ 2>/dev/null || true; fi"),
+                &none,
+            )
+            .await?;
         }
         if self.version.is_none() {
-            self.version = opts::detect_version(cx, "export PATH=\"$HOME/.local/bin:$PATH\"; cursor-agent --version", |s| s.trim().to_string()).await;
+            self.version =
+                opts::detect_version(cx, "export PATH=\"$HOME/.local/bin:$PATH\"; cursor-agent --version", |s| s.trim().to_string()).await;
         }
         Ok(())
     }
@@ -227,7 +249,9 @@ impl Agent for CursorCli {
         let instruction = self.args.render_instruction(instruction)?;
         let model = quote(&self.model_arg()?);
         // upstream reads the key from the host environment only.
-        let Ok(key) = std::env::var("CURSOR_API_KEY") else { bail!("CURSOR_API_KEY environment variable is required. Please set your Cursor API key.") };
+        let Ok(key) = std::env::var("CURSOR_API_KEY") else {
+            bail!("CURSOR_API_KEY environment variable is required. Please set your Cursor API key.")
+        };
         let env = BTreeMap::from([("CURSOR_API_KEY".to_string(), key)]);
         if let Some(c) = self.mcp_command() {
             exec_agent(cx, &c, &env).await?;
@@ -264,7 +288,10 @@ mod tests {
     #[test]
     fn model_effort_and_validation() {
         assert_eq!(agent(json!({"reasoning_effort": "high"}), "cursor/gpt-5").unwrap().model_arg().unwrap(), "gpt-5[effort=high]");
-        assert_eq!(agent(json!({"reasoning_effort": "low"}), "cursor/gpt-5[context=1m]").unwrap().model_arg().unwrap(), "gpt-5[context=1m,effort=low]");
+        assert_eq!(
+            agent(json!({"reasoning_effort": "low"}), "cursor/gpt-5[context=1m]").unwrap().model_arg().unwrap(),
+            "gpt-5[context=1m,effort=low]"
+        );
         assert_eq!(agent(json!({"reasoning_effort": "low"}), "cursor/gpt-5[]").unwrap().model_arg().unwrap(), "gpt-5[effort=low]");
         assert!(agent(json!({"reasoning_effort": "low"}), "cursor/gpt-5[effort=high]").unwrap().model_arg().is_err());
         assert!(agent(json!({"reasoning_effort": "extreme"}), "cursor/x").is_err());

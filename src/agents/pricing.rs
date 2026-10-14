@@ -48,7 +48,8 @@ pub fn cost_per_token(model: &str, prompt: i64, completion: i64, cache_creation:
     let mut read = unit(m, "cache_read_input_token_cost").unwrap_or(0.0);
     // Tiered pricing: the highest threshold below prompt_tokens applies to every token type.
     let tier_suffixes = ["_flex", "_priority"];
-    let mut keys: Vec<&String> = m.keys().filter(|k| k.starts_with("input_cost_per_token_above_") && !tier_suffixes.iter().any(|s| k.ends_with(s))).collect();
+    let mut keys: Vec<&String> =
+        m.keys().filter(|k| k.starts_with("input_cost_per_token_above_") && !tier_suffixes.iter().any(|s| k.ends_with(s))).collect();
     keys.sort_by(|a, b| threshold(b).unwrap_or(0.0).total_cmp(&threshold(a).unwrap_or(0.0)));
     for k in keys {
         let (Some(t), Some(v)) = (threshold(k), unit(m, k)) else { continue };

@@ -499,13 +499,20 @@ fn template_init(dir: &Path, name: &str, template: &str, o: TaskOpts) -> PathBuf
 fn task_toml_matches_hbench() {
     let d = tmp();
     let authors = parse_authors(&["Jane Doe <jane@x.com>".into(), "Bob".into()]);
-    let t2 = init_task("acme/t2", &d, &TaskOpts { description: "It's a \"desc\" é\nline2\ttab \\ back".into(), authors, ..Default::default() }).unwrap();
+    let t2 =
+        init_task("acme/t2", &d, &TaskOpts { description: "It's a \"desc\" é\nline2\ttab \\ back".into(), authors, ..Default::default() })
+            .unwrap();
     assert_eq!(read(&t2.join("task.toml")), T2_TOML);
     let t5 = init_task("acme/t5", &d, &TaskOpts { include_standard_metadata: true, no_package: true, ..Default::default() }).unwrap();
     assert_eq!(read(&t5.join("task.toml")), T5_TOML);
     let t9 = template_init(&d, "acme/t9", T9_TEMPLATE, TaskOpts::default());
     assert_eq!(read(&t9.join("task.toml")), T9_TOML);
-    let q1 = template_init(&d, "acme/q1", Q1_TEMPLATE, TaskOpts { steps: 2, no_package: true, include_canary_strings: true, ..Default::default() });
+    let q1 = template_init(
+        &d,
+        "acme/q1",
+        Q1_TEMPLATE,
+        TaskOpts { steps: 2, no_package: true, include_canary_strings: true, ..Default::default() },
+    );
     assert_eq!(read(&q1.join("task.toml")), Q1_TOML);
 }
 
@@ -550,7 +557,11 @@ fn digests_with_gitignore_match_hbench() {
     let ds = d.join("ds");
     let ta = init_task("acme/tA", &ds, &TaskOpts::default()).unwrap();
     let tb = init_task("acme/tB", &ds, &TaskOpts { no_pytest: true, ..Default::default() }).unwrap();
-    std::fs::write(ta.join(".gitignore"), "build/\n!keep.log\n*.log\n!important.log\n/environment/secret.txt\nsolution/**/gen\n# c\n\n[ab]?.tmp\n").unwrap();
+    std::fs::write(
+        ta.join(".gitignore"),
+        "build/\n!keep.log\n*.log\n!important.log\n/environment/secret.txt\nsolution/**/gen\n# c\n\n[ab]?.tmp\n",
+    )
+    .unwrap();
     for (rel, body) in [
         ("environment/build/out", "1\n"),
         ("tests/a.log", "2\n"),
@@ -589,7 +600,10 @@ fn auto_adds_new_task_to_sibling_dataset() {
     init_task("acme/a1", &d, &TaskOpts::default()).unwrap();
     init_task("acme/np", &d, &TaskOpts { no_package: true, ..Default::default() }).unwrap();
     let m = Manifest::load(&d.join("dataset.toml")).unwrap();
-    assert_eq!(m.tasks, vec![Ref { name: "acme/a1".into(), digest: "sha256:3e2514e482e45ffc9d810aab548ec503e2937bd7d6087171853bb2e1c963bc5a".into() }]);
+    assert_eq!(
+        m.tasks,
+        vec![Ref { name: "acme/a1".into(), digest: "sha256:3e2514e482e45ffc9d810aab548ec503e2937bd7d6087171853bb2e1c963bc5a".into() }]
+    );
 }
 
 #[test]

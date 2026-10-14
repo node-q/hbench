@@ -27,7 +27,9 @@ pub struct CopilotCli {
 
 impl CopilotCli {
     fn cli_flags(&self) -> Result<String> {
-        Ok(opts::choice(&self.args, "reasoning_effort", Some("COPILOT_CLI_EFFORT"), &["low", "medium", "high", "xhigh", "max"])?.map(|v| format!("--effort {}", quote(&v))).unwrap_or_default())
+        Ok(opts::choice(&self.args, "reasoning_effort", Some("COPILOT_CLI_EFFORT"), &["low", "medium", "high", "xhigh", "max"])?
+            .map(|v| format!("--effort {}", quote(&v)))
+            .unwrap_or_default())
     }
 
     fn disable_web_search(&self) -> Result<bool> {
@@ -52,7 +54,8 @@ impl CopilotCli {
     }
 
     fn run_command(&self, instruction: &str, resume: bool) -> Result<String> {
-        let model_flag = self.args.model_name.as_deref().map(|m| format!("--model={}", quote(m.rsplit('/').next().unwrap()))).unwrap_or_default();
+        let model_flag =
+            self.args.model_name.as_deref().map(|m| format!("--model={}", quote(m.rsplit('/').next().unwrap()))).unwrap_or_default();
         let web = if self.disable_web_search()? { "--deny-tool web_fetch --deny-tool web_search " } else { "" };
         Ok(format!(
             "set -o pipefail; export PATH=\"$HOME/.local/bin:$PATH\"; copilot --prompt={} {}--yolo {web}{model_flag} {} {} --output-format=json \
@@ -101,7 +104,9 @@ pub fn parse_copilot_usage(text: &str) -> Option<AgentContext> {
                     steps += 1;
                 }
             }
-            Some("user.message") if !d.is_object() || d["content"].as_str().is_some_and(|s| !s.is_empty()) || other_keys(&["content"]) => steps += 1,
+            Some("user.message") if !d.is_object() || d["content"].as_str().is_some_and(|s| !s.is_empty()) || other_keys(&["content"]) => {
+                steps += 1
+            }
             _ => {}
         }
     }
@@ -142,8 +147,12 @@ impl Agent for CopilotCli {
     async fn run(&mut self, instruction: &str, cx: &AgentCtx<'_>, _ctx: &mut AgentContext, resume: bool) -> Result<()> {
         let instruction = self.args.render_instruction(instruction)?;
         // Copilot checks COPILOT_GITHUB_TOKEN > GH_TOKEN > GITHUB_TOKEN; it can also use a cached login.
-        let env: BTreeMap<String, String> =
-            ["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"].iter().find_map(|k| self.args.get_env(k)).map(|t| ("COPILOT_GITHUB_TOKEN".to_string(), t)).into_iter().collect();
+        let env: BTreeMap<String, String> = ["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"]
+            .iter()
+            .find_map(|k| self.args.get_env(k))
+            .map(|t| ("COPILOT_GITHUB_TOKEN".to_string(), t))
+            .into_iter()
+            .collect();
         exec_agent_10s(
             cx,
             "if [ -d /logs/agent/copilot/session-state ]; then mkdir -p ~/.copilot && cp -R /logs/agent/copilot/session-state ~/.copilot/ && \
@@ -152,7 +161,8 @@ impl Agent for CopilotCli {
         )
         .await?;
         if let Some(d) = opts::skills_dir(&self.args) {
-            exec_agent(cx, &format!("mkdir -p ~/.copilot/skills && cp -r {}/* ~/.copilot/skills/ 2>/dev/null || true", quote(&d)), &env).await?;
+            exec_agent(cx, &format!("mkdir -p ~/.copilot/skills && cp -r {}/* ~/.copilot/skills/ 2>/dev/null || true", quote(&d)), &env)
+                .await?;
         }
         let r = exec_agent(cx, &self.run_command(&instruction, resume)?, &env).await;
         let _ = exec_agent(cx, &format!("cat {TRAJECTORY_PATH} > {OUTPUT_PATH} 2>/dev/null || true"), &BTreeMap::new()).await;
@@ -180,11 +190,14 @@ mod tests {
 
     #[test]
     fn flags_and_command() {
-        let mut args = opts::test_args(json!({"reasoning_effort": "high", "disable_web_search": true}), &[], Some("anthropic/claude-haiku-4-5"));
+        let mut args =
+            opts::test_args(json!({"reasoning_effort": "high", "disable_web_search": true}), &[], Some("anthropic/claude-haiku-4-5"));
         args.mcp_servers = vec![serde_json::from_value(json!({"name": "s", "transport": "http", "url": "http://m"})).unwrap()];
         let a = CopilotCli { version: None, args };
         let c = a.run_command("do it", true).unwrap();
-        assert!(c.contains("copilot --prompt='do it' --continue --yolo --deny-tool web_fetch --deny-tool web_search --model=claude-haiku-4-5 --effort high"));
+        assert!(c.contains(
+            "copilot --prompt='do it' --continue --yolo --deny-tool web_fetch --deny-tool web_search --model=claude-haiku-4-5 --effort high"
+        ));
         assert!(c.contains(r#"--additional-mcp-config='{"mcpServers":{"s":{"type":"http","url":"http://m"}}}'"#));
         assert!(create(opts::test_args(json!({"reasoning_effort": "turbo"}), &[], None)).is_err());
         let fb = CopilotCli { version: None, args: opts::test_args(json!({}), &[("COPILOT_CLI_EFFORT", "max")], None) };

@@ -41,8 +41,13 @@ fn py_type(v: &Value) -> &'static str {
 fn py_int(v: &Value) -> Result<i64, String> {
     match v {
         Value::Bool(b) => Ok(*b as i64),
-        Value::Number(n) => n.as_i64().or_else(|| n.as_f64().filter(|f| f.is_finite()).map(|f| f.trunc() as i64)).ok_or_else(|| "cannot convert float infinity to integer".into()),
-        Value::String(s) => s.trim().replace('_', "").parse::<i64>().map_err(|_| format!("invalid literal for int() with base 10: {}", pyrepr(s))),
+        Value::Number(n) => n
+            .as_i64()
+            .or_else(|| n.as_f64().filter(|f| f.is_finite()).map(|f| f.trunc() as i64))
+            .ok_or_else(|| "cannot convert float infinity to integer".into()),
+        Value::String(s) => {
+            s.trim().replace('_', "").parse::<i64>().map_err(|_| format!("invalid literal for int() with base 10: {}", pyrepr(s)))
+        }
         other => Err(format!("int() argument must be a string, a bytes-like object or a real number, not '{}'", py_type(other))),
     }
 }
@@ -84,7 +89,11 @@ fn str_or_empty(d: &Map<String, Value>, k: &str) -> String {
 
 /// Python `json.dumps` (default separators, ensure_ascii) of a flat object.
 fn py_json_dumps(m: &Map<String, Value>) -> String {
-    let ascii = |s: String| s.chars().map(|c| if c.is_ascii() { c.to_string() } else { c.encode_utf16(&mut [0; 2]).iter().map(|u| format!("\\u{u:04x}")).collect() }).collect::<String>();
+    let ascii = |s: String| {
+        s.chars()
+            .map(|c| if c.is_ascii() { c.to_string() } else { c.encode_utf16(&mut [0; 2]).iter().map(|u| format!("\\u{u:04x}")).collect() })
+            .collect::<String>()
+    };
     let items: Vec<String> = m
         .iter()
         .map(|(k, v)| {
@@ -108,7 +117,9 @@ fn strip_data_url(r: &str) -> &str {
 
 fn media_type_for_data_url(r: &str) -> &str {
     match r.strip_prefix("data:") {
-        Some(rest) => Some(rest.split(',').next().unwrap_or("").split(';').next().unwrap_or("")).filter(|m| !m.is_empty()).unwrap_or("image/webp"),
+        Some(rest) => {
+            Some(rest.split(',').next().unwrap_or("").split(';').next().unwrap_or("")).filter(|m| !m.is_empty()).unwrap_or("image/webp")
+        }
         None => "image/webp",
     }
 }
@@ -177,7 +188,10 @@ pub(super) fn translate_anthropic(d: &Map<String, Value>, w: i64, h: i64) -> Res
     let (raw_x, raw_y) = pair(d.get("coordinate"))?.unwrap_or((0, 0));
     let (x, y) = anthropic_scale(raw_x, raw_y, w, h);
     let modifier = if ["left_click", "right_click", "double_click", "triple_click", "middle_click", "scroll"].contains(&action.as_str()) {
-        d.get("text").and_then(Value::as_str).map(str::to_lowercase).filter(|m| ["shift", "ctrl", "control", "alt", "super"].contains(&m.as_str()))
+        d.get("text")
+            .and_then(Value::as_str)
+            .map(str::to_lowercase)
+            .filter(|m| ["shift", "ctrl", "control", "alt", "super"].contains(&m.as_str()))
     } else {
         None
     };
@@ -266,7 +280,11 @@ pub(super) fn translate_openai(a: &Value) -> Option<Action> {
     let kind = a.get("type").filter(|v| truthy(v)).map(py_str).unwrap_or_default();
     let coord = |k: &str| a.get(k).filter(|v| truthy(v)).map_or(0, |v| py_int(v).unwrap_or(0));
     let modifier = || {
-        a["keys"].as_array()?.iter().map(|k| py_str(k).to_lowercase()).find(|k| ["shift", "ctrl", "control", "alt", "option", "super", "cmd", "meta"].contains(&k.as_str()))
+        a["keys"]
+            .as_array()?
+            .iter()
+            .map(|k| py_str(k).to_lowercase())
+            .find(|k| ["shift", "ctrl", "control", "alt", "option", "super", "cmd", "meta"].contains(&k.as_str()))
     };
     let xy = |kind: &str| {
         let mut r = Action::new(kind);
@@ -295,7 +313,9 @@ pub(super) fn translate_openai(a: &Value) -> Option<Action> {
         }
         "move" => xy("mouse_move"),
         "scroll" => {
-            let pick = |a1: &str, a2: &str| a.get(a1).filter(|v| !v.is_null()).or(a.get(a2)).filter(|v| truthy(v)).map_or(0, |v| py_int(v).unwrap_or(0));
+            let pick = |a1: &str, a2: &str| {
+                a.get(a1).filter(|v| !v.is_null()).or(a.get(a2)).filter(|v| truthy(v)).map_or(0, |v| py_int(v).unwrap_or(0))
+            };
             let mut r = xy("scroll");
             (r.scroll_x, r.scroll_y, r.modifier) = (Some(pick("scroll_x", "scrollX")), Some(pick("scroll_y", "scrollY")), modifier());
             r
@@ -465,7 +485,13 @@ impl ExecResult {
 }
 
 /// `make_step`.
-fn make_step(calls: Vec<NativeCall>, message: String, usage: Option<Usage>, response_id: Option<String>, is_terminal: bool) -> Result<NativeStep> {
+fn make_step(
+    calls: Vec<NativeCall>,
+    message: String,
+    usage: Option<Usage>,
+    response_id: Option<String>,
+    is_terminal: bool,
+) -> Result<NativeStep> {
     let ids: std::collections::BTreeSet<&str> = calls.iter().map(|c| c.call_id.as_str()).collect();
     if calls.iter().any(|c| c.call_id.is_empty()) || ids.len() != calls.len() {
         bail!("Native tool calls require nonempty, unique IDs");
@@ -486,13 +512,22 @@ pub(super) fn usage_from_any(u: &Value) -> Option<Usage> {
     let g = |k: &str| u.get(k).filter(|v| !v.is_null());
     let prompt = g("prompt_tokens").or(g("input_tokens"));
     let completion = g("completion_tokens").or(g("output_tokens"));
-    let nested = || ["input_tokens_details", "prompt_tokens_details"].iter().find_map(|p| u.get(*p).filter(|d| !d.is_null())?.get("cached_tokens").filter(|c| !c.is_null()));
+    let nested = || {
+        ["input_tokens_details", "prompt_tokens_details"]
+            .iter()
+            .find_map(|p| u.get(*p).filter(|d| !d.is_null())?.get("cached_tokens").filter(|c| !c.is_null()))
+    };
     let cache = g("cache_tokens").or(g("cache_read_input_tokens")).or_else(nested);
     if prompt.is_none() && completion.is_none() {
         return None;
     }
     let i = |v: Option<&Value>| v.filter(|v| truthy(v)).map_or(0, |v| py_int(v).unwrap_or(0));
-    Some(Usage { prompt_tokens: i(prompt), completion_tokens: i(completion), cache_tokens: i(cache), cost_usd: g("cost_usd").and_then(Value::as_f64).unwrap_or(0.0) })
+    Some(Usage {
+        prompt_tokens: i(prompt),
+        completion_tokens: i(completion),
+        cache_tokens: i(cache),
+        cost_usd: g("cost_usd").and_then(Value::as_f64).unwrap_or(0.0),
+    })
 }
 
 /// `metrics_from_llm_response` (native turns are never priced).
@@ -572,7 +607,12 @@ impl Transport for Http {
             attempt += 1;
             let mut headers = self.headers.clone();
             if let Some(c) = &self.aws {
-                headers.extend(sigv4_headers(c, &self.url, &serde_json::to_vec(body)?, &chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string()));
+                headers.extend(sigv4_headers(
+                    c,
+                    &self.url,
+                    &serde_json::to_vec(body)?,
+                    &chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string(),
+                ));
             }
             let req = Request { headers, body: body.clone(), timeout: Duration::from_secs(600) };
             let (retry, err) = match send_raw(&self.url, &req).await {
@@ -618,7 +658,9 @@ fn hmac_sha256(key: &[u8], msg: &[u8]) -> Vec<u8> {
 
 /// RFC 3986 encoding of a URL path, '/' kept (botocore's `quote(path, safe='/~')`).
 fn uri_encode_path(p: &str) -> String {
-    p.bytes().map(|b| if b.is_ascii_alphanumeric() || b"-_.~/".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect()
+    p.bytes()
+        .map(|b| if b.is_ascii_alphanumeric() || b"-_.~/".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") })
+        .collect()
 }
 
 /// AWS SigV4 headers (`x-amz-date`, optional `x-amz-security-token`, `authorization`) for a
@@ -641,7 +683,8 @@ fn sigv4(method: &str, c: &AwsCreds, service: &str, url: &str, body: &[u8], amz_
     let mut q: Vec<&str> = query.split('&').filter(|s| !s.is_empty()).collect();
     q.sort();
     let canon_query = q.iter().map(|kv| if kv.contains('=') { kv.to_string() } else { format!("{kv}=") }).collect::<Vec<_>>().join("&");
-    let canonical = format!("{method}\n{}\n{canon_query}\n{canon_headers}\n{signed}\n{}", uri_encode_path(path), hex(&Sha256::digest(body)));
+    let canonical =
+        format!("{method}\n{}\n{canon_query}\n{canon_headers}\n{signed}\n{}", uri_encode_path(path), hex(&Sha256::digest(body)));
     let scope = format!("{date}/{}/{service}/aws4_request", c.region);
     let to_sign = format!("AWS4-HMAC-SHA256\n{amz_date}\n{scope}\n{}", hex(&Sha256::digest(canonical.as_bytes())));
     let mut key = hmac_sha256(format!("AWS4{}", c.secret).as_bytes(), date.as_bytes());
@@ -650,7 +693,10 @@ fn sigv4(method: &str, c: &AwsCreds, service: &str, url: &str, body: &[u8], amz_
     }
     let sig = hex(&hmac_sha256(&key, to_sign.as_bytes()));
     let mut out: Vec<(String, String)> = hdrs.into_iter().filter(|(k, _)| *k != "host").map(|(k, v)| (k.to_string(), v)).collect();
-    out.push(("authorization".into(), format!("AWS4-HMAC-SHA256 Credential={}/{scope}, SignedHeaders={signed}, Signature={sig}", c.key_id)));
+    out.push((
+        "authorization".into(),
+        format!("AWS4-HMAC-SHA256 Credential={}/{scope}, SignedHeaders={signed}, Signature={sig}", c.key_id),
+    ));
     out
 }
 
@@ -718,7 +764,15 @@ impl Native {
     }
 
     /// The provider plus an HTTP transport configured like the vendor SDK's client from `get` (env).
-    pub fn new(name: &str, model: &str, w: i64, h: i64, aws_region: Option<&str>, auto_ack_safety: bool, get: &dyn Fn(&str) -> Option<String>) -> Result<Native> {
+    pub fn new(
+        name: &str,
+        model: &str,
+        w: i64,
+        h: i64,
+        aws_region: Option<&str>,
+        auto_ack_safety: bool,
+        get: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<Native> {
         let kind = match name {
             "anthropic" => Kind::Anthropic,
             "bedrock" => Kind::Bedrock,
@@ -758,19 +812,33 @@ impl Native {
                 let base = get("ANTHROPIC_BEDROCK_BASE_URL").unwrap_or_else(|| format!("https://bedrock-runtime.{region}.amazonaws.com"));
                 let model_path = uri_encode_path(&n.model).replace("%3A", ":").replace('/', "%2F");
                 let aws = AwsCreds { key_id, secret, token: get("AWS_SESSION_TOKEN"), region };
-                Http { sdk: Sdk::Stainless, url: format!("{}/model/{model_path}/invoke", base.trim_end_matches('/')), headers: vec![], aws: Some(aws) }
+                Http {
+                    sdk: Sdk::Stainless,
+                    url: format!("{}/model/{model_path}/invoke", base.trim_end_matches('/')),
+                    headers: vec![],
+                    aws: Some(aws),
+                }
             }
             Kind::Gemini => {
                 // genai.Client(vertexai=False): always the Gemini Developer API with an API key.
                 let Some(key) = get("GOOGLE_API_KEY").or_else(|| get("GEMINI_API_KEY")) else {
-                    bail!("Missing key inputs argument! To use the Google AI API, provide (`api_key`) arguments (GOOGLE_API_KEY or GEMINI_API_KEY) for computer-1's 'gemini' provider")
+                    bail!(
+                        "Missing key inputs argument! To use the Google AI API, provide (`api_key`) arguments (GOOGLE_API_KEY or GEMINI_API_KEY) for computer-1's 'gemini' provider"
+                    )
                 };
                 let base = get("GOOGLE_GEMINI_BASE_URL").unwrap_or_else(|| "https://generativelanguage.googleapis.com".into());
-                Http { sdk: Sdk::Gemini, url: format!("{}/v1beta/interactions", base.trim_end_matches('/')), headers: vec![h("x-goog-api-key", key)], aws: None }
+                Http {
+                    sdk: Sdk::Gemini,
+                    url: format!("{}/v1beta/interactions", base.trim_end_matches('/')),
+                    headers: vec![h("x-goog-api-key", key)],
+                    aws: None,
+                }
             }
             Kind::OpenAi => {
                 let Some(key) = get("OPENAI_API_KEY") else {
-                    bail!("The api_key client option must be set either by passing api_key to the client or by setting the OPENAI_API_KEY environment variable")
+                    bail!(
+                        "The api_key client option must be set either by passing api_key to the client or by setting the OPENAI_API_KEY environment variable"
+                    )
                 };
                 let base = get("OPENAI_BASE_URL").unwrap_or_else(|| "https://api.openai.com/v1".into());
                 let mut headers = vec![h("authorization", format!("Bearer {key}"))];
@@ -845,7 +913,9 @@ impl Native {
                     let translated = if name != "computer" {
                         Err(format!("Unsupported tool: {name}"))
                     } else if let Some(d) = input.as_object() {
-                        translate_anthropic(d, self.w, self.h).and_then(|a| a.ok_or_else(|| format!("Unsupported action: {}", d.get("action").map(py_str).unwrap_or_else(|| "None".into()))))
+                        translate_anthropic(d, self.w, self.h).and_then(|a| {
+                            a.ok_or_else(|| format!("Unsupported action: {}", d.get("action").map(py_str).unwrap_or_else(|| "None".into())))
+                        })
                     } else {
                         Err("Computer input must be an object".into())
                     };
@@ -853,7 +923,13 @@ impl Native {
                         Ok(a) => (Some(a), None),
                         Err(e) => (None, Some(e)),
                     };
-                    calls.push(NativeCall { call_id: id, name, arguments: if input.is_object() { input } else { json!({}) }, action, error });
+                    calls.push(NativeCall {
+                        call_id: id,
+                        name,
+                        arguments: if input.is_object() { input } else { json!({}) },
+                        action,
+                        error,
+                    });
                 }
                 _ => {}
             }
@@ -865,7 +941,13 @@ impl Native {
             }
         }
         let id = resp.get("id").filter(|v| truthy(v)).map(py_str);
-        make_step(calls, texts.join("\n").trim().to_string(), usage_from_any(&resp["usage"]), id, matches!(stop, None | Some("end_turn" | "stop_sequence" | "refusal")))
+        make_step(
+            calls,
+            texts.join("\n").trim().to_string(),
+            usage_from_any(&resp["usage"]),
+            id,
+            matches!(stop, None | Some("end_turn" | "stop_sequence" | "refusal")),
+        )
     }
 
     async fn anthropic_turn(&mut self, content: Vec<Value>) -> Result<NativeStep> {
@@ -884,7 +966,8 @@ impl Native {
     }
 
     pub fn gemini_request(&self, input: Vec<Value>) -> Value {
-        let coord = json!({"type": "integer", "description": "Coordinate on Gemini's normalized 0-999 screen grid.", "minimum": 0, "maximum": 999});
+        let coord =
+            json!({"type": "integer", "description": "Coordinate on Gemini's normalized 0-999 screen grid.", "minimum": 0, "maximum": 999});
         let tools = json!([
             {"type": "computer_use", "environment": "browser", "enable_prompt_injection_detection": true},
             {"type": "function", "name": "zoom_region",
@@ -903,7 +986,9 @@ impl Native {
         let explanation = d.get("explanation").map(py_str).unwrap_or_default();
         match d.get("decision").and_then(Value::as_str) {
             Some("blocked") => bail!("Gemini blocked the requested computer action: {explanation}"),
-            Some("require_confirmation") if !self.auto_ack_safety => bail!("Gemini Computer Use requires safety confirmation. Pass gemini_auto_ack_safety=True for an unattended run."),
+            Some("require_confirmation") if !self.auto_ack_safety => {
+                bail!("Gemini Computer Use requires safety confirmation. Pass gemini_auto_ack_safety=True for an unattended run.")
+            }
             _ => Ok(()),
         }
     }
@@ -912,7 +997,8 @@ impl Native {
         let (mut calls, mut texts, mut intents) = (vec![], vec![], vec![]);
         for s in resp["steps"].as_array().into_iter().flatten() {
             match s["type"].as_str() {
-                Some("model_output") => texts.extend(s["content"].as_array().into_iter().flatten().filter_map(|c| c.get("text").filter(|t| truthy(t)).map(py_str))),
+                Some("model_output") => texts
+                    .extend(s["content"].as_array().into_iter().flatten().filter_map(|c| c.get("text").filter(|t| truthy(t)).map(py_str))),
                 Some("function_call") => {
                     let name = s.get("name").filter(|v| truthy(v)).map(py_str).unwrap_or_default();
                     let id = s.get("id").filter(|v| truthy(v)).map(py_str).unwrap_or_default();
@@ -940,7 +1026,12 @@ impl Native {
         }
         let usage = resp.get("usage").filter(|u| !u.is_null()).map(|u| {
             let i = |k: &str| u.get(k).filter(|v| truthy(v)).map_or(0, |v| py_int(v).unwrap_or(0));
-            Usage { prompt_tokens: i("total_input_tokens"), completion_tokens: i("total_output_tokens"), cache_tokens: i("total_cached_tokens"), cost_usd: 0.0 }
+            Usage {
+                prompt_tokens: i("total_input_tokens"),
+                completion_tokens: i("total_output_tokens"),
+                cache_tokens: i("total_cached_tokens"),
+                cost_usd: 0.0,
+            }
         });
         let message = if texts.is_empty() { intents } else { texts }.join("\n").trim().to_string();
         let is_terminal = calls.is_empty();
@@ -971,7 +1062,10 @@ impl Native {
                 self.messages.clear();
                 self.anthropic_turn(vec![json!({"type": "text", "text": instruction}), Self::image_block(shot)]).await
             }
-            Kind::Gemini => self.gemini_turn(vec![json!({"type": "text", "text": format!("{instruction}\n\n{GEMINI_NOTE}")}), Self::gemini_image(shot)]).await,
+            Kind::Gemini => {
+                self.gemini_turn(vec![json!({"type": "text", "text": format!("{instruction}\n\n{GEMINI_NOTE}")}), Self::gemini_image(shot)])
+                    .await
+            }
             Kind::OpenAi => bail!("the openai provider drives its own loop"),
         }
     }
@@ -1081,7 +1175,8 @@ impl Computer1 {
                 json!({"source_call_id": r.call_id, "content": parts, "extra": {"execution_status": r.status}})
             })
             .collect();
-        let calls: Vec<Value> = step.calls.iter().map(|c| json!({"tool_call_id": c.call_id, "function_name": c.name, "arguments": c.arguments})).collect();
+        let calls: Vec<Value> =
+            step.calls.iter().map(|c| json!({"tool_call_id": c.call_id, "function_name": c.name, "arguments": c.arguments})).collect();
         self.push_step(Map::from_iter([
             ("source".into(), json!("agent")),
             ("model_name".into(), json!(model)),
@@ -1098,15 +1193,27 @@ impl Computer1 {
         let mut results: Vec<ExecResult> = vec![];
         for (i, call) in step.calls.iter().enumerate() {
             if results.last().is_some_and(|r| r.status != "success") {
-                results.push(ExecResult::new(&call.call_id, "not_executed", "Not executed: an earlier computer action in this turn failed."));
+                results.push(ExecResult::new(
+                    &call.call_id,
+                    "not_executed",
+                    "Not executed: an earlier computer action in this turn failed.",
+                ));
                 continue;
             }
             let r = match (&call.error, &call.action) {
                 (Some(e), _) if !e.is_empty() => ExecResult::new(&call.call_id, "error", e.clone()),
-                (_, None) => ExecResult::new(&call.call_id, "error", call.error.clone().filter(|e| !e.is_empty()).unwrap_or_else(|| "Unsupported computer action".into())),
+                (_, None) => ExecResult::new(
+                    &call.call_id,
+                    "error",
+                    call.error.clone().filter(|e| !e.is_empty()).unwrap_or_else(|| "Unsupported computer action".into()),
+                ),
                 (_, Some(a)) => match self.execute_action(sh, Some(a), episode, Some(i)).await {
                     Ok((text, paths, is_err)) => {
-                        let mut r = ExecResult::new(&call.call_id, if is_err { "error" } else { "success" }, if text.is_empty() { "OK".into() } else { text });
+                        let mut r = ExecResult::new(
+                            &call.call_id,
+                            if is_err { "error" } else { "success" },
+                            if text.is_empty() { "OK".into() } else { text },
+                        );
                         r.screenshot_paths = paths;
                         match r.screenshot_paths.last().cloned().filter(|_| matches!(a.kind.as_str(), "screenshot" | "zoom")) {
                             Some(p) => match self.payload_ref(sh, &p).await {
@@ -1127,7 +1234,13 @@ impl Computer1 {
     }
 
     /// `_run_step_loop` (Anthropic / Bedrock / Gemini).
-    pub(super) async fn run_step_loop(&mut self, sh: &dyn Shell, ctx: &mut AgentContext, instruction: &str, initial_shot: &str) -> Result<()> {
+    pub(super) async fn run_step_loop(
+        &mut self,
+        sh: &dyn Shell,
+        ctx: &mut AgentContext,
+        instruction: &str,
+        initial_shot: &str,
+    ) -> Result<()> {
         self.push_step(Map::from_iter([("source".into(), json!("user")), ("message".into(), json!(instruction))]));
         self.dump_trajectory();
         let shot = self.payload_ref(sh, initial_shot).await?;
@@ -1139,7 +1252,8 @@ impl Computer1 {
             self.sync_context(ctx);
             if !self.desktop()?.is_alive(sh).await {
                 self.early_termination_reason = Some("runtime_session_dead".into());
-                let r: Vec<ExecResult> = step.calls.iter().map(|c| ExecResult::new(&c.call_id, "not_executed", "Runtime session ended")).collect();
+                let r: Vec<ExecResult> =
+                    step.calls.iter().map(|c| ExecResult::new(&c.call_id, "not_executed", "Runtime session ended")).collect();
                 self.record_native_step(&step, &r);
                 return Ok(());
             }
@@ -1240,7 +1354,15 @@ impl super::Desktop {
     /// Base64 data-url of the most recent capture as PNG (`latest_png_data_url`).
     pub(super) async fn latest_png_data_url(&self, sh: &dyn Shell) -> Result<String> {
         let png = format!("{SCREENSHOT_DIR}/latest.png");
-        let out = self.exec(sh, &format!("base64 -w0 {0} 2>/dev/null || base64 {0}", quote(&png)), self.request_timeout.max(30), "screenshot:png-b64", 0).await?;
+        let out = self
+            .exec(
+                sh,
+                &format!("base64 -w0 {0} 2>/dev/null || base64 {0}", quote(&png)),
+                self.request_timeout.max(30),
+                "screenshot:png-b64",
+                0,
+            )
+            .await?;
         let enc = out.trim();
         if enc.is_empty() {
             bail!("Could not read screenshot at {png}");
@@ -1248,7 +1370,6 @@ impl super::Desktop {
         Ok(format!("data:image/png;base64,{enc}"))
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -1283,13 +1404,21 @@ mod tests {
 
     /// upstream's test_native_batches `response()`.
     fn response(actions: Vec<Value>, stop: &str) -> Value {
-        let content: Vec<Value> = actions.into_iter().enumerate().map(|(i, a)| json!({"type": "tool_use", "name": "computer", "id": format!("call-{i}"), "input": a})).collect();
+        let content: Vec<Value> = actions
+            .into_iter()
+            .enumerate()
+            .map(|(i, a)| json!({"type": "tool_use", "name": "computer", "id": format!("call-{i}"), "input": a}))
+            .collect();
         json!({"id": "response-1", "stop_reason": stop, "content": content, "usage": {"input_tokens": 100, "output_tokens": 20, "cache_read_input_tokens": 0}})
     }
 
     /// upstream's test_gemini_batches `response()`.
     fn gemini_response(calls: Vec<(&str, Value)>) -> Value {
-        let steps: Vec<Value> = calls.into_iter().enumerate().map(|(i, (n, a))| json!({"type": "function_call", "id": format!("g{i}"), "name": n, "arguments": a})).collect();
+        let steps: Vec<Value> = calls
+            .into_iter()
+            .enumerate()
+            .map(|(i, (n, a))| json!({"type": "function_call", "id": format!("g{i}"), "name": n, "arguments": a}))
+            .collect();
         json!({"id": "interaction-1", "steps": steps, "usage": {"total_input_tokens": 100, "total_output_tokens": 20}})
     }
 
@@ -1329,7 +1458,12 @@ mod tests {
             assert_eq!(resolve_provider_name(m, None).unwrap(), p, "{m}");
         }
         assert_eq!(resolve_provider_name("openai/gpt-6-astra", Some("openai")).unwrap(), "openai");
-        assert!(resolve_provider_name("openai/gpt-5.2", Some("openai")).unwrap_err().to_string().contains("is not a computer-use model for the 'openai' harness"));
+        assert!(
+            resolve_provider_name("openai/gpt-5.2", Some("openai"))
+                .unwrap_err()
+                .to_string()
+                .contains("is not a computer-use model for the 'openai' harness")
+        );
         assert!(resolve_provider_name("gemini/gemini-2.0-flash", None).is_err());
         for m in ["gpt-5.4", "gpt-5.10", "gpt-7", "openai/gpt-5.4-turbo"] {
             assert!(is_computer_use_model(m), "{m}");
@@ -1347,7 +1481,9 @@ mod tests {
         let t = |v: Value| translate_anthropic(v.as_object().unwrap(), 1024, 900);
         let a = t(json!({"action": "left_click", "coordinate": [100, 200]})).unwrap().unwrap();
         assert_eq!((a.kind.as_str(), a.x, a.y, a.source), ("click", Some(100), Some(200), "anthropic_scaled"));
-        let a = t(json!({"action": "scroll", "coordinate": [512, 450], "scroll_direction": "up", "scroll_amount": 2, "text": "shift"})).unwrap().unwrap();
+        let a = t(json!({"action": "scroll", "coordinate": [512, 450], "scroll_direction": "up", "scroll_amount": 2, "text": "shift"}))
+            .unwrap()
+            .unwrap();
         assert_eq!((a.kind.as_str(), a.scroll_x, a.scroll_y, a.modifier.as_deref()), ("scroll", Some(0), Some(-200), Some("shift")));
         assert_eq!(t(json!({"action": "zoom", "region": [10, 20, 110, 220]})).unwrap().unwrap().zoom_region, Some(vec![10, 20, 110, 220]));
         assert_eq!(t(json!({"action": "screenshot"})).unwrap().unwrap().kind, "screenshot");
@@ -1358,10 +1494,15 @@ mod tests {
         assert_eq!(t(json!({"action": "key", "text": "ctrl+ l"})).unwrap().unwrap().keys, Some(vec!["ctrl".into(), "l".into()]));
         let a = t(json!({"action": "hold_key", "text": "shift", "duration": 2})).unwrap().unwrap();
         assert_eq!((a.keys, a.duration), (Some(vec!["shift".to_string()]), Some(2.0)));
-        assert_eq!(t(json!({"action": "left_click", "coordinate": ["bad", 1]})).unwrap_err(), "invalid literal for int() with base 10: 'bad'");
+        assert_eq!(
+            t(json!({"action": "left_click", "coordinate": ["bad", 1]})).unwrap_err(),
+            "invalid literal for int() with base 10: 'bad'"
+        );
         assert_eq!(t(json!({"action": "missing"})).unwrap(), None);
         // Larger desktops reverse Anthropic's downscale.
-        let a = translate_anthropic(json!({"action": "left_click", "coordinate": [784, 400]}).as_object().unwrap(), 2048, 700).unwrap().unwrap();
+        let a = translate_anthropic(json!({"action": "left_click", "coordinate": [784, 400]}).as_object().unwrap(), 2048, 700)
+            .unwrap()
+            .unwrap();
         assert_eq!((a.x, a.model_x), (Some(1024), Some(784)));
     }
 
@@ -1370,8 +1511,14 @@ mod tests {
         let a = translate_openai(&json!({"type": "click", "button": "left", "x": 10, "y": 20})).unwrap();
         assert_eq!((a.kind.as_str(), a.x, a.y, a.source), ("click", Some(10), Some(20), "native_prescaled"));
         assert_eq!(translate_openai(&json!({"type": "click", "button": "right", "x": 5, "y": 6})).unwrap().kind, "right_click");
-        assert_eq!(translate_openai(&json!({"type": "click", "button": "wheel", "x": 5, "y": 6})).unwrap().button.as_deref(), Some("middle"));
-        assert_eq!(translate_openai(&json!({"type": "double_click", "x": 7, "y": 8, "keys": ["SHIFT"]})).unwrap().modifier.as_deref(), Some("shift"));
+        assert_eq!(
+            translate_openai(&json!({"type": "click", "button": "wheel", "x": 5, "y": 6})).unwrap().button.as_deref(),
+            Some("middle")
+        );
+        assert_eq!(
+            translate_openai(&json!({"type": "double_click", "x": 7, "y": 8, "keys": ["SHIFT"]})).unwrap().modifier.as_deref(),
+            Some("shift")
+        );
         assert_eq!(translate_openai(&json!({"type": "type", "text": "hi"})).unwrap().text.as_deref(), Some("hi"));
         assert_eq!(translate_openai(&json!({"type": "keypress", "keys": ["Enter"]})).unwrap().keys, Some(vec!["Enter".into()]));
         assert_eq!(translate_openai(&json!({"type": "scroll", "x": 1, "y": 2, "scrollX": 0, "scrollY": 300})).unwrap().scroll_y, Some(300));
@@ -1411,42 +1558,79 @@ mod tests {
     fn usage_and_metrics() {
         let u = usage_from_any(&json!({"input_tokens": 100, "output_tokens": 20, "cache_read_input_tokens": 30})).unwrap();
         assert_eq!((u.prompt_tokens, u.completion_tokens, u.cache_tokens, u.cost_usd), (100, 20, 30, 0.0));
-        assert_eq!(usage_from_any(&json!({"input_tokens": 200, "output_tokens": 10, "input_tokens_details": {"cached_tokens": 128}})).unwrap().cache_tokens, 128);
-        assert_eq!(usage_from_any(&json!({"prompt_tokens": 50, "completion_tokens": 5, "prompt_tokens_details": {"cached_tokens": 40}})).unwrap().cache_tokens, 40);
+        assert_eq!(
+            usage_from_any(&json!({"input_tokens": 200, "output_tokens": 10, "input_tokens_details": {"cached_tokens": 128}}))
+                .unwrap()
+                .cache_tokens,
+            128
+        );
+        assert_eq!(
+            usage_from_any(&json!({"prompt_tokens": 50, "completion_tokens": 5, "prompt_tokens_details": {"cached_tokens": 40}}))
+                .unwrap()
+                .cache_tokens,
+            40
+        );
         assert_eq!(usage_from_any(&json!({"prompt_tokens": 10, "completion_tokens": 2, "cache_tokens": 7})).unwrap().cache_tokens, 7);
         assert!(usage_from_any(&Value::Null).is_none() && usage_from_any(&json!({"foo": 1})).is_none());
         // Native turns are never priced: no cost_usd, cached only when > 0.
         assert_eq!(native_metrics(Some(&u)), json!({"prompt_tokens": 100, "completion_tokens": 20, "cached_tokens": 30}));
         assert_eq!(native_metrics(None), json!({}));
-        let m: Map<String, Value> = Map::from_iter([("url".to_string(), json!("")), ("status".to_string(), json!("error")), ("error".to_string(), json!("caf\u{e9} \"x\""))]);
+        let m: Map<String, Value> = Map::from_iter([
+            ("url".to_string(), json!("")),
+            ("status".to_string(), json!("error")),
+            ("error".to_string(), json!("caf\u{e9} \"x\"")),
+        ]);
         assert_eq!(py_json_dumps(&m), r#"{"url": "", "status": "error", "error": "caf\u00e9 \"x\""}"#);
     }
 
     #[test]
     fn sigv4_signing() {
-        assert_eq!(hex(&hmac_sha256(b"Jefe", b"what do ya want for nothing?")), "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843");
+        assert_eq!(
+            hex(&hmac_sha256(b"Jefe", b"what do ya want for nothing?")),
+            "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"
+        );
         // AWS SigV4 test suite "get-vanilla".
-        let c = AwsCreds { key_id: "AKIDEXAMPLE".into(), secret: "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY".into(), token: None, region: "us-east-1".into() };
+        let c = AwsCreds {
+            key_id: "AKIDEXAMPLE".into(),
+            secret: "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY".into(),
+            token: None,
+            region: "us-east-1".into(),
+        };
         let h = sigv4("GET", &c, "service", "https://example.amazonaws.com/", b"", "20150830T123600Z");
-        assert_eq!(h.last().unwrap().1, "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20150830/us-east-1/service/aws4_request, SignedHeaders=host;x-amz-date, Signature=5fa00fa31553b73ebf1942676e86291e8372ff2a2260956d9b8aae1d763fbf31");
+        assert_eq!(
+            h.last().unwrap().1,
+            "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20150830/us-east-1/service/aws4_request, SignedHeaders=host;x-amz-date, Signature=5fa00fa31553b73ebf1942676e86291e8372ff2a2260956d9b8aae1d763fbf31"
+        );
         // Bedrock invoke: ':' is %3A in the canonical path; session token is signed (cross-checked with Python hmac/hashlib).
         let c = AwsCreds { key_id: "AKID".into(), secret: "SECRET".into(), token: Some("TOK".into()), region: "us-west-2".into() };
-        let h = sigv4_headers(&c, "https://bedrock-runtime.us-west-2.amazonaws.com/model/us.anthropic.claude-opus-4-7-v1:0/invoke", br#"{"a":1}"#, "20260101T000000Z");
+        let h = sigv4_headers(
+            &c,
+            "https://bedrock-runtime.us-west-2.amazonaws.com/model/us.anthropic.claude-opus-4-7-v1:0/invoke",
+            br#"{"a":1}"#,
+            "20260101T000000Z",
+        );
         assert_eq!(h[0], ("x-amz-date".to_string(), "20260101T000000Z".to_string()));
         assert_eq!(h[1], ("x-amz-security-token".to_string(), "TOK".to_string()));
-        assert!(h[2].1.ends_with("SignedHeaders=host;x-amz-date;x-amz-security-token, Signature=a825c5356adc2506a35b8206bd66ea5463c5a3b86fa8903f7fcebd6c9eba02a8"));
+        assert!(h[2].1.ends_with(
+            "SignedHeaders=host;x-amz-date;x-amz-security-token, Signature=a825c5356adc2506a35b8206bd66ea5463c5a3b86fa8903f7fcebd6c9eba02a8"
+        ));
     }
 
     #[test]
     fn transports_follow_sdk_clients() {
-        let env = |vars: &'static [(&'static str, &'static str)]| move |k: &str| vars.iter().find(|(n, _)| *n == k).map(|(_, v)| v.to_string());
+        let env =
+            |vars: &'static [(&'static str, &'static str)]| move |k: &str| vars.iter().find(|(n, _)| *n == k).map(|(_, v)| v.to_string());
         let n = provider(Kind::Anthropic, "anthropic/claude-opus-4-7", &MockApi::default());
         let h = n.http(None, &env(&[("ANTHROPIC_API_KEY", "sk")])).unwrap();
         assert_eq!(h.url, "https://api.anthropic.com/v1/messages?beta=true");
-        assert!(h.headers.contains(&("anthropic-beta".into(), "computer-use-2025-11-24".into())) && h.headers.contains(&("x-api-key".into(), "sk".into())));
+        assert!(
+            h.headers.contains(&("anthropic-beta".into(), "computer-use-2025-11-24".into()))
+                && h.headers.contains(&("x-api-key".into(), "sk".into()))
+        );
         assert!(n.http(None, &env(&[])).err().unwrap().to_string().contains("Could not resolve authentication method"));
         let b = provider(Kind::Bedrock, "bedrock/us.anthropic.claude-sonnet-4-5-v1:0", &MockApi::default());
-        let creds: &'static [(&'static str, &'static str)] = &[("AWS_ACCESS_KEY_ID", "A"), ("AWS_SECRET_ACCESS_KEY", "S"), ("AWS_REGION", "ap-south-1")];
+        let creds: &'static [(&'static str, &'static str)] =
+            &[("AWS_ACCESS_KEY_ID", "A"), ("AWS_SECRET_ACCESS_KEY", "S"), ("AWS_REGION", "ap-south-1")];
         let h = b.http(Some("eu-west-1"), &env(creds)).unwrap();
         assert_eq!(h.url, "https://bedrock-runtime.eu-west-1.amazonaws.com/model/us.anthropic.claude-sonnet-4-5-v1:0/invoke");
         let h = b.http(None, &env(creds)).unwrap();
@@ -1454,7 +1638,10 @@ mod tests {
         assert!(b.http(None, &env(&[])).err().unwrap().to_string().contains("SigV4"));
         let g = provider(Kind::Gemini, "gemini/gemini-3.8-flash", &MockApi::default());
         let h = g.http(None, &env(&[("GEMINI_API_KEY", "g")])).unwrap();
-        assert_eq!((h.url.as_str(), h.sdk, h.headers[0].1.as_str()), ("https://generativelanguage.googleapis.com/v1beta/interactions", Sdk::Gemini, "g"));
+        assert_eq!(
+            (h.url.as_str(), h.sdk, h.headers[0].1.as_str()),
+            ("https://generativelanguage.googleapis.com/v1beta/interactions", Sdk::Gemini, "g")
+        );
         let o = provider(Kind::OpenAi, "openai/gpt-5.5", &MockApi::default());
         assert_eq!(o.http(None, &env(&[("OPENAI_API_KEY", "k")])).unwrap().url, "https://api.openai.com/v1/responses");
         assert!(o.http(None, &env(&[])).is_err());
@@ -1467,15 +1654,24 @@ mod tests {
 
     #[tokio::test]
     async fn anthropic_request_and_batch_parsing() {
-        let a = api(vec![response(vec![json!({"action": "left_click", "coordinate": [10, 20]}), json!({"action": "screenshot"})], "tool_use"), json!({"content": [], "stop_reason": "end_turn"})]);
+        let a = api(vec![
+            response(vec![json!({"action": "left_click", "coordinate": [10, 20]}), json!({"action": "screenshot"})], "tool_use"),
+            json!({"content": [], "stop_reason": "end_turn"}),
+        ]);
         let mut p = provider(Kind::Anthropic, "anthropic/claude-opus-4-7", &a);
         let step = p.initial("task", "data:image/webp;base64,initial").await.unwrap();
         let body = a.seen.lock().unwrap()[0].clone();
         assert_eq!(body["model"], "claude-opus-4-7");
         assert_eq!(body["max_tokens"], 4096);
-        assert_eq!(body["tools"], json!([{"type": "computer_20251124", "name": "computer", "display_width_px": 1024, "display_height_px": 900, "display_number": 1, "enable_zoom": true}]));
+        assert_eq!(
+            body["tools"],
+            json!([{"type": "computer_20251124", "name": "computer", "display_width_px": 1024, "display_height_px": 900, "display_number": 1, "enable_zoom": true}])
+        );
         assert_eq!(body["system"][0]["cache_control"], json!({"type": "ephemeral"}));
-        assert_eq!(body["messages"][0]["content"][1], json!({"type": "image", "source": {"type": "base64", "media_type": "image/webp", "data": "initial"}, "cache_control": {"type": "ephemeral"}}));
+        assert_eq!(
+            body["messages"][0]["content"][1],
+            json!({"type": "image", "source": {"type": "base64", "media_type": "image/webp", "data": "initial"}, "cache_control": {"type": "ephemeral"}})
+        );
         assert!(p.messages[0]["content"][1].get("cache_control").is_none()); // history not mutated
         assert_eq!(step.calls.iter().map(|c| c.action.as_ref().unwrap().kind.as_str()).collect::<Vec<_>>(), ["click", "screenshot"]);
         assert!(!step.is_terminal && step.usage.as_ref().unwrap().prompt_tokens == 100);
@@ -1485,7 +1681,10 @@ mod tests {
         let last = p.follow_up(&step, &[ok("call-0"), shot], "data:image/webp;base64,s", None).await.unwrap();
         assert!(last.is_terminal);
         let c = &p.messages[2]["content"];
-        assert_eq!((c[0]["tool_use_id"].as_str(), c[0]["content"][0]["text"].as_str(), c[0]["is_error"].as_bool()), (Some("call-0"), Some("OK"), Some(false)));
+        assert_eq!(
+            (c[0]["tool_use_id"].as_str(), c[0]["content"][0]["text"].as_str(), c[0]["is_error"].as_bool()),
+            (Some("call-0"), Some("OK"), Some(false))
+        );
         assert_eq!(c[1]["content"][1]["source"]["data"], "s");
         assert_eq!(c[2], json!({"type": "text", "text": "Continue with the task."}));
         assert_eq!(c.as_array().unwrap().len(), 3);
@@ -1496,14 +1695,20 @@ mod tests {
         let b = provider(Kind::Bedrock, "bedrock/global.anthropic.claude-sonnet-4-5-20250929-v1:0", &a);
         let body = b.anthropic_body();
         assert!(body.get("model").is_none());
-        assert_eq!((&body["anthropic_version"], &body["anthropic_beta"], &body["tools"][0]["type"]), (&json!("bedrock-2023-05-31"), &json!(["computer-use-2025-01-24"]), &json!("computer_20250124")));
+        assert_eq!(
+            (&body["anthropic_version"], &body["anthropic_beta"], &body["tools"][0]["type"]),
+            (&json!("bedrock-2023-05-31"), &json!(["computer-use-2025-01-24"]), &json!("computer_20250124"))
+        );
         assert!(body["tools"][0].get("enable_zoom").is_none());
 
         // Unsupported tool / bad input / truncation / refusal / ids.
         let mut raw = response(vec![json!({"action": "screenshot"}), json!("not an object"), json!({"action": "missing"})], "tool_use");
         raw["content"][0]["name"] = json!("unsupported_tool");
         let s = p.anthropic_step(&raw).unwrap();
-        assert_eq!(s.calls.iter().map(|c| c.error.clone().unwrap()).collect::<Vec<_>>(), ["Unsupported tool: unsupported_tool", "Computer input must be an object", "Unsupported action: missing"]);
+        assert_eq!(
+            s.calls.iter().map(|c| c.error.clone().unwrap()).collect::<Vec<_>>(),
+            ["Unsupported tool: unsupported_tool", "Computer input must be an object", "Unsupported action: missing"]
+        );
         assert_eq!(s.calls[1].arguments, json!({}));
         let s = p.anthropic_step(&response(vec![json!({"action": "type", "text": "partial"})], "max_tokens")).unwrap();
         assert_eq!(s.calls[0].error.as_deref(), Some("Response truncated at max_tokens; no actions executed"));
@@ -1517,7 +1722,10 @@ mod tests {
 
     #[tokio::test]
     async fn gemini_request_and_results() {
-        let a = api(vec![gemini_response(vec![("click", json!({"x": 10, "y": 20, "intent": "Click it"})), ("take_screenshot", json!({}))]), json!({"steps": []})]);
+        let a = api(vec![
+            gemini_response(vec![("click", json!({"x": 10, "y": 20, "intent": "Click it"})), ("take_screenshot", json!({}))]),
+            json!({"steps": []}),
+        ]);
         let mut p = provider(Kind::Gemini, "gemini/gemini-3.8-flash", &a);
         let step = p.initial("Do it", "data:image/png;base64,ZmluYWw=").await.unwrap();
         let body = a.seen.lock().unwrap()[0].clone();
@@ -1534,18 +1742,29 @@ mod tests {
         let sent = a.seen.lock().unwrap()[1].clone();
         assert_eq!(sent["previous_interaction_id"], "interaction-1");
         let input = sent["input"].as_array().unwrap();
-        assert_eq!((input[0]["call_id"].as_str(), input[0]["is_error"].as_bool(), input[0]["name"].as_str()), (Some("g0"), Some(true), Some("click")));
+        assert_eq!(
+            (input[0]["call_id"].as_str(), input[0]["is_error"].as_bool(), input[0]["name"].as_str()),
+            (Some("g0"), Some(true), Some("click"))
+        );
         assert_eq!(input[0]["result"][0]["data"], "ZmluYWw=");
         assert_eq!(input[0]["result"][1]["text"], r#"{"url": "", "status": "error", "error": "click failed"}"#);
         assert_eq!(input[1]["result"][0]["data"], "em9vbQ==");
         assert_eq!(input[2], json!({"type": "text", "text": "Check"}));
         // Safety: checked for every call before anything executes; auto-ack is per call.
         for outcome in ["blocked", "require_confirmation"] {
-            let r = gemini_response(vec![("click", json!({"x": 1, "y": 2})), ("click", json!({"x": 3, "y": 4, "safety_decision": {"decision": outcome}}))]);
+            let r = gemini_response(vec![
+                ("click", json!({"x": 1, "y": 2})),
+                ("click", json!({"x": 3, "y": 4, "safety_decision": {"decision": outcome}})),
+            ]);
             assert!(p.gemini_step(&r).is_err());
         }
         p.auto_ack_safety = true;
-        let s = p.gemini_step(&gemini_response(vec![("click", json!({"x": 1, "y": 2})), ("click", json!({"x": 3, "y": 4, "safety_decision": {"decision": "require_confirmation"}}))])).unwrap();
+        let s = p
+            .gemini_step(&gemini_response(vec![
+                ("click", json!({"x": 1, "y": 2})),
+                ("click", json!({"x": 3, "y": 4, "safety_decision": {"decision": "require_confirmation"}})),
+            ]))
+            .unwrap();
         *a.replies.lock().unwrap() = vec![json!({"steps": []})].into();
         p.follow_up(&s, &[ok("g0"), ok("g1")], "data:image/png;base64,AA==", None).await.unwrap();
         let sent = a.seen.lock().unwrap().last().unwrap().clone();
@@ -1553,7 +1772,10 @@ mod tests {
         assert_eq!(sent["input"][1]["result"][1]["text"], r#"{"url": "", "status": "success", "safety_acknowledgement": true}"#);
         // Malformed calls become errors; text-only is terminal.
         let s = p.gemini_step(&gemini_response(vec![("unknown", json!({})), ("click", json!("not an object"))])).unwrap();
-        assert_eq!(s.calls.iter().map(|c| c.error.clone().unwrap()).collect::<Vec<_>>(), ["Unsupported Gemini action: unknown", "Gemini function arguments must be an object"]);
+        assert_eq!(
+            s.calls.iter().map(|c| c.error.clone().unwrap()).collect::<Vec<_>>(),
+            ["Unsupported Gemini action: unknown", "Gemini function arguments must be an object"]
+        );
         let s = p.gemini_step(&json!({"steps": [{"type": "model_output", "content": [{"text": "Done"}]}]})).unwrap();
         assert!(s.is_terminal && s.message == "Done" && s.calls.is_empty());
     }
@@ -1572,7 +1794,14 @@ mod tests {
     #[tokio::test]
     async fn anthropic_step_loop_end_to_end() {
         let a = api(vec![
-            response(vec![json!({"action": "left_click", "coordinate": [3, 4]}), json!({"action": "key", "text": "ctrl+u"}), json!({"action": "type", "text": "x"})], "tool_use"),
+            response(
+                vec![
+                    json!({"action": "left_click", "coordinate": [3, 4]}),
+                    json!({"action": "key", "text": "ctrl+u"}),
+                    json!({"action": "type", "text": "x"}),
+                ],
+                "tool_use",
+            ),
             json!({"id": "final", "content": [{"type": "text", "text": "Finished"}], "stop_reason": "end_turn", "usage": {"input_tokens": 40, "output_tokens": 10, "cache_read_input_tokens": 30}}),
         ]);
         let (mut c, logs) = native_agent(Kind::Anthropic, "anthropic/claude-opus-4-7", &a, json!({}));
@@ -1592,7 +1821,16 @@ mod tests {
 
         let seen = a.seen.lock().unwrap().clone();
         let follow = &seen[1]["messages"][2]["content"];
-        assert_eq!(follow.as_array().unwrap().iter().filter(|b| b["type"] == "tool_result").map(|b| b["is_error"].as_bool().unwrap()).collect::<Vec<_>>(), [false, true, true]);
+        assert_eq!(
+            follow
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|b| b["type"] == "tool_result")
+                .map(|b| b["is_error"].as_bool().unwrap())
+                .collect::<Vec<_>>(),
+            [false, true, true]
+        );
         assert!(follow[1]["content"][0]["text"].as_str().unwrap().contains("(403): Action blocked: developer tools"));
         assert_eq!(follow[2]["content"][0]["text"], "Not executed: an earlier computer action in this turn failed.");
         assert_eq!(follow.as_array().unwrap().last().unwrap()["source"]["data"], "QUJD");
@@ -1601,9 +1839,15 @@ mod tests {
         let steps = t["steps"].as_array().unwrap();
         assert_eq!(steps[0], json!({"step_id": 1, "timestamp": steps[0]["timestamp"], "source": "user", "message": "task"}));
         assert_eq!(steps[1]["model_name"], "claude-opus-4-7");
-        assert_eq!(steps[1]["tool_calls"][0], json!({"tool_call_id": "call-0", "function_name": "computer", "arguments": {"action": "left_click", "coordinate": [3, 4]}}));
+        assert_eq!(
+            steps[1]["tool_calls"][0],
+            json!({"tool_call_id": "call-0", "function_name": "computer", "arguments": {"action": "left_click", "coordinate": [3, 4]}})
+        );
         let r0 = &steps[1]["observation"]["results"][0];
-        assert_eq!((r0["source_call_id"].as_str(), r0["extra"]["execution_status"].as_str(), r0["content"][0]["text"].as_str()), (Some("call-0"), Some("success"), Some("OK")));
+        assert_eq!(
+            (r0["source_call_id"].as_str(), r0["extra"]["execution_status"].as_str(), r0["content"][0]["text"].as_str()),
+            (Some("call-0"), Some("success"), Some("OK"))
+        );
         assert_eq!(r0["content"][1]["source"]["path"], "screenshot_ep0_action0.webp");
         assert_eq!(steps[1]["metrics"], json!({"prompt_tokens": 100, "completion_tokens": 20}));
         assert_eq!(steps[1]["extra"], json!({"response_id": "response-1"}));
@@ -1623,7 +1867,9 @@ mod tests {
         assert_eq!(a.seen.lock().unwrap().len(), 1);
         assert_eq!(c.early_termination_reason.as_deref(), Some("max_turns_reached"));
         assert_eq!(ctx.n_output_tokens, Some(20));
-        assert!(sh.log.lock().unwrap().iter().any(|c| c == "mkdir -p /logs/agent && printf '%s' '' | base64 -d > /logs/agent/final_answer.txt"));
+        assert!(
+            sh.log.lock().unwrap().iter().any(|c| c == "mkdir -p /logs/agent && printf '%s' '' | base64 -d > /logs/agent/final_answer.txt")
+        );
         let t = trajectory(&logs);
         assert_eq!(t["steps"][1]["observation"]["results"][0]["content"][1]["source"]["path"], "screenshot_ep0_action0.webp");
 
@@ -1687,9 +1933,15 @@ mod tests {
         let mut ctx = AgentContext::default();
         c.run_with("Find it", &sh, &mut ctx).await.unwrap();
         let seen = a.seen.lock().unwrap().clone();
-        assert_eq!(seen[0], json!({"model": "gpt-5.5", "tools": [{"type": "computer"}], "input": "Find it", "truncation": "auto", "prompt_cache_key": "computer-1-sess"}));
+        assert_eq!(
+            seen[0],
+            json!({"model": "gpt-5.5", "tools": [{"type": "computer"}], "input": "Find it", "truncation": "auto", "prompt_cache_key": "computer-1-sess"})
+        );
         assert_eq!(seen[1]["previous_response_id"], "r1");
-        assert_eq!(seen[1]["input"], json!([{"type": "computer_call_output", "call_id": "c1", "output": {"type": "computer_screenshot", "image_url": "data:image/png;base64,QUJD", "detail": "original"}, "acknowledged_safety_checks": [{"id": "s1"}]}]));
+        assert_eq!(
+            seen[1]["input"],
+            json!([{"type": "computer_call_output", "call_id": "c1", "output": {"type": "computer_screenshot", "image_url": "data:image/png;base64,QUJD", "detail": "original"}, "acknowledged_safety_checks": [{"id": "s1"}]}])
+        );
         assert!(sh.log.lock().unwrap().contains(&"DISPLAY=:1 xdotool mousemove 7 8 click 1".to_string()));
         assert_eq!((ctx.n_input_tokens, ctx.n_output_tokens, ctx.n_cache_tokens), (Some(150), Some(8), Some(64)));
         assert_eq!(c.early_termination_reason.as_deref(), Some("task_complete"));
@@ -1699,7 +1951,10 @@ mod tests {
         assert_eq!(steps[1]["observation"]["results"][0]["content"][1]["source"]["path"], "screenshot_ep0.webp");
         assert_eq!(steps[1]["metrics"], json!({"prompt_tokens": 100, "completion_tokens": 5, "cached_tokens": 64}));
         assert_eq!(steps[2]["message"], "Analysis: The answer is 42");
-        assert_eq!(steps[2]["tool_calls"], json!([{"tool_call_id": "call_1_task_complete", "function_name": "mark_task_complete", "arguments": {"result": null}}]));
+        assert_eq!(
+            steps[2]["tool_calls"],
+            json!([{"tool_call_id": "call_1_task_complete", "function_name": "mark_task_complete", "arguments": {"result": null}}])
+        );
         let enc = base64::engine::general_purpose::STANDARD.encode("The answer is 42");
         assert!(sh.log.lock().unwrap().iter().any(|c| c.contains(&enc)));
     }

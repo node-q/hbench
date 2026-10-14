@@ -98,7 +98,15 @@ impl MCode {
         {
             bail!("Invalid value for 'api_format': '{f}'. Valid values: {}", API_FORMATS.join(", "));
         }
-        Ok(MCode { max_steps: kw_int(&args, "max_steps")?, version: args.version_kw(), args, api_format, context_window, max_output_tokens, permission_mode })
+        Ok(MCode {
+            max_steps: kw_int(&args, "max_steps")?,
+            version: args.version_kw(),
+            args,
+            api_format,
+            context_window,
+            max_output_tokens,
+            permission_mode,
+        })
     }
 
     fn model_parts(&self) -> Result<(String, String)> {
@@ -194,7 +202,10 @@ impl MCode {
         let provider_key = format!("hbench-{}", provider.replace('_', "-"));
         let execution_model = format!("custom_provider:{provider_key}/{model_id}");
         if access.api_key.is_none() {
-            let names = pa.as_ref().map(|p| p.api_key_envs.join(" or ")).unwrap_or_else(|| format!("{}_API_KEY", provider.to_uppercase().replace('-', "_")));
+            let names = pa
+                .as_ref()
+                .map(|p| p.api_key_envs.join(" or "))
+                .unwrap_or_else(|| format!("{}_API_KEY", provider.to_uppercase().replace('-', "_")));
             bail!("{names} is required. Set it on the host or pass it with --ae.");
         }
         let mut env = access.env.clone();
@@ -257,7 +268,12 @@ pub fn parse_usage(text: &str) -> Option<AgentContext> {
         cache += u["cacheReadTokens"].as_i64().unwrap_or(0);
         output += u["outputTokens"].as_i64().unwrap_or(0);
     }
-    saw.then(|| AgentContext { n_input_tokens: Some(input + cache), n_cache_tokens: Some(cache), n_output_tokens: Some(output), ..Default::default() })
+    saw.then(|| AgentContext {
+        n_input_tokens: Some(input + cache),
+        n_cache_tokens: Some(cache),
+        n_output_tokens: Some(output),
+        ..Default::default()
+    })
 }
 
 #[async_trait::async_trait]
@@ -276,7 +292,8 @@ impl Agent for MCode {
         let spec = format!("@{}", self.version.as_deref().unwrap_or("latest"));
         let install = async {
             ensure_system_dependencies(cx, &["curl", "coreutils"]).await?;
-            let cmd = format!("set -euo pipefail; {} && npm install -g @minimax-ai/code{spec} && mcode --version", nvm_node_install_snippet(22));
+            let cmd =
+                format!("set -euo pipefail; {} && npm install -g @minimax-ai/code{spec} && mcode --version", nvm_node_install_snippet(22));
             exec_agent(cx, &cmd, &BTreeMap::new()).await.map(|_| ())
         };
         installed_setup(cx, &mut self.version, install, ". ~/.nvm/nvm.sh; mcode --version", strip).await

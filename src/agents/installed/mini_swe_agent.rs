@@ -18,7 +18,8 @@ const SPEC: Spec = Spec {
 const DEFAULT_LITELLM_TIMEOUT_SEC: u32 = 3600;
 const PYTHON_VERSION: &str = "3.12";
 const TRAJECTORY_PATH: &str = "/logs/agent/mini-swe-agent.trajectory.json";
-const ENV_PRELUDE: &str = "if [ -f \"$HOME/.local/bin/env\" ]; then . \"$HOME/.local/bin/env\"; else export PATH=\"$HOME/.local/bin:$PATH\"; fi; ";
+const ENV_PRELUDE: &str =
+    "if [ -f \"$HOME/.local/bin/env\" ]; then . \"$HOME/.local/bin/env\"; else export PATH=\"$HOME/.local/bin:$PATH\"; fi; ";
 const OPTIONS: &[&str] = &[
     "version",
     "prompt_template_path",
@@ -119,7 +120,10 @@ impl MiniSweAgent {
             (None, None) => None,
             (r, f) => {
                 let (source, v) = match f {
-                    Some(p) => ("litellm_model_registry_file", serde_json::from_str::<Value>(&std::fs::read_to_string(p).map_err(|e| anyhow!("{p}: {e}"))?)?),
+                    Some(p) => (
+                        "litellm_model_registry_file",
+                        serde_json::from_str::<Value>(&std::fs::read_to_string(p).map_err(|e| anyhow!("{p}: {e}"))?)?,
+                    ),
                     None => ("litellm_model_registry", r.unwrap().clone()),
                 };
                 if !v.is_object() {
@@ -164,7 +168,12 @@ impl MiniSweAgent {
             instruction += "\n\nMCP Servers:\nThe following MCP servers are available for this task.\n";
             for s in &self.args.mcp_servers {
                 if s.transport() == "stdio" {
-                    instruction += &format!("- {}: stdio transport, command: {} {}\n", s.name, s.command.as_deref().unwrap_or("None"), s.args.join(" "));
+                    instruction += &format!(
+                        "- {}: stdio transport, command: {} {}\n",
+                        s.name,
+                        s.command.as_deref().unwrap_or("None"),
+                        s.args.join(" ")
+                    );
                 } else {
                     instruction += &format!("- {}: {} transport, url: {}\n", s.name, s.transport(), s.url.as_deref().unwrap_or("None"));
                 }
@@ -341,7 +350,8 @@ pub(crate) mod tests {
         std::fs::write(dir.join("task.toml"), "[environment]\ndocker_image='x'\n").unwrap();
         std::fs::write(dir.join("instruction.md"), "x").unwrap();
         let task = Arc::new(crate::task::Task::load(&dir).unwrap());
-        AgentArgs { load_trajectory: None,
+        AgentArgs {
+            load_trajectory: None,
             model_name: model.map(String::from),
             kwargs: serde_json::from_value(kwargs).unwrap(),
             extra_env: env.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect(),
@@ -370,23 +380,40 @@ pub(crate) mod tests {
         assert_eq!((env["MSWEA_CONFIGURED"].as_str(), env["MSWEA_API_KEY"].as_str()), ("true", "test-key"));
         assert_eq!(env["MSWEA_COST_TRACKING"], "ignore_errors");
         assert!(agent(json!({}), &[], Some("no-slash")).unwrap().commands("t").unwrap_err().to_string().contains("provider/model_name"));
-        assert!(agent(json!({"cost_limit": null}), &[("MSWEA_API_KEY", "k")], SONNET).unwrap().commands("t").unwrap().1.contains("--cost-limit") == false);
+        assert!(
+            agent(json!({"cost_limit": null}), &[("MSWEA_API_KEY", "k")], SONNET)
+                .unwrap()
+                .commands("t")
+                .unwrap()
+                .1
+                .contains("--cost-limit")
+                == false
+        );
     }
 
     #[test]
     fn base_url_and_keyless() {
-        let a = agent(json!({}), &[("MSWEA_API_KEY", ""), ("OPENAI_BASE_URL", "http://localhost:8000/v1")], Some("openai/local-model")).unwrap();
+        let a = agent(json!({}), &[("MSWEA_API_KEY", ""), ("OPENAI_BASE_URL", "http://localhost:8000/v1")], Some("openai/local-model"))
+            .unwrap();
         let env = a.commands("t").unwrap().2;
         assert_eq!(env["MSWEA_API_KEY"], "");
-        let a = agent(json!({}), &[("OPENAI_API_KEY", "sk-extra"), ("OPENAI_API_BASE", "https://b/v1")], Some("openai/Qwen/Qwen3.5-27B")).unwrap();
+        let a = agent(json!({}), &[("OPENAI_API_KEY", "sk-extra"), ("OPENAI_API_BASE", "https://b/v1")], Some("openai/Qwen/Qwen3.5-27B"))
+            .unwrap();
         let env = a.commands("t").unwrap().2;
-        assert_eq!((env["OPENAI_API_KEY"].as_str(), env["OPENAI_BASE_URL"].as_str(), env["OPENAI_API_BASE"].as_str()), ("sk-extra", "https://b/v1", "https://b/v1"));
+        assert_eq!(
+            (env["OPENAI_API_KEY"].as_str(), env["OPENAI_BASE_URL"].as_str(), env["OPENAI_API_BASE"].as_str()),
+            ("sk-extra", "https://b/v1", "https://b/v1")
+        );
     }
 
     #[test]
     fn options_to_config_flags() {
         let k = &[("MSWEA_API_KEY", "k")];
-        let cmd = agent(json!({"reasoning_effort": "max", "max_tokens": 32000}), k, Some("anthropic/claude-opus-4-8")).unwrap().commands("t").unwrap().1;
+        let cmd = agent(json!({"reasoning_effort": "max", "max_tokens": 32000}), k, Some("anthropic/claude-opus-4-8"))
+            .unwrap()
+            .commands("t")
+            .unwrap()
+            .1;
         assert!(cmd.contains("-c model.model_kwargs.reasoning_effort=max ") && cmd.contains("-c model.model_kwargs.max_tokens=32000 "));
         let cmd = agent(json!({"reasoning_effort": "low", "max_tokens": 4096}), k, Some("openai/gpt-5")).unwrap().commands("t").unwrap().1;
         assert!(cmd.contains("-c model.model_class=litellm_response -c model.model_kwargs.reasoning.effort=low "));
@@ -394,8 +421,17 @@ pub(crate) mod tests {
         let cmd = agent(json!({"session_id_headers": ["Modal-Session-ID"]}), k, SONNET).unwrap().commands("t").unwrap().1;
         assert!(cmd.contains("extra_headers.Modal-Session-ID=my-trial__agent") && !cmd.contains("X-Session-ID"));
 
-        let (pre, cmd, _) = agent(json!({"config": {"agent": {"step_limit": 20}}, "litellm_model_registry": {"m": {"supports_reasoning": true}}}), k, SONNET).unwrap().commands("t").unwrap();
-        assert!(pre[0].contains("cat > '/tmp/mswea-config/custom.yaml' << 'MSWEA_CONFIG_EOF_") && pre[0].contains("agent:\n  step_limit: 20"));
+        let (pre, cmd, _) = agent(
+            json!({"config": {"agent": {"step_limit": 20}}, "litellm_model_registry": {"m": {"supports_reasoning": true}}}),
+            k,
+            SONNET,
+        )
+        .unwrap()
+        .commands("t")
+        .unwrap();
+        assert!(
+            pre[0].contains("cat > '/tmp/mswea-config/custom.yaml' << 'MSWEA_CONFIG_EOF_") && pre[0].contains("agent:\n  step_limit: 20")
+        );
         assert!(pre[1].contains("cat > '/tmp/mswea-config/registry.json'") && pre[1].contains("\"supports_reasoning\": true"));
         assert!(cmd.contains("-c mini -c model.model_kwargs.timeout=3600 -c /tmp/mswea-config/custom.yaml -c model.litellm_model_registry=/tmp/mswea-config/registry.json "));
     }
@@ -413,7 +449,10 @@ pub(crate) mod tests {
         assert!(err(json!({"bogus": 1})).contains("Unknown option 'bogus'"));
         let f = std::env::temp_dir().join(format!("reg-{}.json", uuid::Uuid::new_v4()));
         std::fs::write(&f, "[1, 2, 3]").unwrap();
-        assert!(err(json!({"litellm_model_registry_file": f.to_str().unwrap()})).contains("'litellm_model_registry_file': expected a mapping, got list"));
+        assert!(
+            err(json!({"litellm_model_registry_file": f.to_str().unwrap()}))
+                .contains("'litellm_model_registry_file': expected a mapping, got list")
+        );
         assert_eq!(parse_version("mini-swe-agent v2.1.0\n"), "2.1.0");
     }
 

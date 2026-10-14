@@ -20,14 +20,45 @@ const DEFAULT_WORKDIR: &str = "/app";
 const EXPERIMENTAL_WARNING: &str = "`hbench exec` is experimental; flags and behavior may change.";
 
 const KNOWN_EXTS: &[&str] = &[
-    "md", "txt", "pdf", "png", "jpg", "jpeg", "gif", "svg", "csv", "json", "jsonl", "xml", "yaml", "yml", "toml", "py", "js", "ts", "tsx", "jsx", "sh", "html", "css", "sql", "rs", "go",
-    "java", "c", "cpp", "h", "rb", "ipynb", "parquet", "xlsx", "docx", "pptx", "zip", "tar", "gz", "lock", "cfg", "ini", "log",
+    "md", "txt", "pdf", "png", "jpg", "jpeg", "gif", "svg", "csv", "json", "jsonl", "xml", "yaml", "yml", "toml", "py", "js", "ts", "tsx",
+    "jsx", "sh", "html", "css", "sql", "rs", "go", "java", "c", "cpp", "h", "rb", "ipynb", "parquet", "xlsx", "docx", "pptx", "zip", "tar",
+    "gz", "lock", "cfg", "ini", "log",
 ];
 const KNOWN_DOTFILES: &[&str] = &["gitignore", "gitattributes", "env", "envrc", "bashrc", "zshrc", "editorconfig", "npmrc", "prettierrc"];
 /// upstream's EnvironmentType values (accepted for config parity; hbench only runs docker).
 const ENVIRONMENT_TYPES: &[&str] = &[
-    "docker", "podman", "daytona", "e2b", "modal", "runloop", "langsmith", "ec2", "gke", "ack", "openshift", "novita", "apple-container", "singularity", "islo", "tensorlake", "cwsandbox",
-    "use-computer", "cua-cloud", "blaxel", "opensandbox", "beam", "skypilot", "hf-sandbox", "hyperbrowser", "vercel", "runta", "prime", "kata", "mosaic", "smol", "sail",
+    "docker",
+    "podman",
+    "daytona",
+    "e2b",
+    "modal",
+    "runloop",
+    "langsmith",
+    "ec2",
+    "gke",
+    "ack",
+    "openshift",
+    "novita",
+    "apple-container",
+    "singularity",
+    "islo",
+    "tensorlake",
+    "cwsandbox",
+    "use-computer",
+    "cua-cloud",
+    "blaxel",
+    "opensandbox",
+    "beam",
+    "skypilot",
+    "hf-sandbox",
+    "hyperbrowser",
+    "vercel",
+    "runta",
+    "prime",
+    "kata",
+    "mosaic",
+    "smol",
+    "sail",
 ];
 
 // ---------------------------------------------------------------- CLI
@@ -818,7 +849,13 @@ fn config_from_flags(a: &ExecArgs) -> Result<ExecConfig> {
     Ok(cfg)
 }
 
-fn reduce_config_from_flags(a: &ExecArgs, verify: bool, default_job_name: &str, map_job: &ExecJobConfig, output_dir: &PyPath) -> Result<Option<ExecReduceConfig>> {
+fn reduce_config_from_flags(
+    a: &ExecArgs,
+    verify: bool,
+    default_job_name: &str,
+    map_job: &ExecJobConfig,
+    output_dir: &PyPath,
+) -> Result<Option<ExecReduceConfig>> {
     if !reduce_flags_passed(a) {
         return Ok(None);
     }
@@ -827,7 +864,8 @@ fn reduce_config_from_flags(a: &ExecArgs, verify: bool, default_job_name: &str, 
     if reward.is_some() && !verify {
         bail!("--reduce-reward-artifact cannot be used with --disable-verification.");
     }
-    let artifacts = with_reward_artifact(compile_artifacts(&a.reduce_artifact, a.reduce_instruction.as_deref(), &workdir), reward.as_deref());
+    let artifacts =
+        with_reward_artifact(compile_artifacts(&a.reduce_artifact, a.reduce_instruction.as_deref(), &workdir), reward.as_deref());
     let verifier = compile_verifiers(&artifacts, verify, reward.as_deref()).into_iter().next();
     let instruction = match (&a.reduce_instruction, &a.reduce_instruction_path) {
         (Some(_), Some(_)) => bail!("--reduce-instruction and --reduce-instruction-path are mutually exclusive."),
@@ -929,7 +967,13 @@ fn prompt_file_to_artifact_path(filename: &str, workdir: &str) -> String {
     normpath(&posix_join(&wd, f))
 }
 
-fn compile_environments(paths: &[String], scan: Option<bool>, limit: Option<u64>, image: Option<&str>, workdir: Option<&str>) -> Result<Vec<CompileEnvironment>> {
+fn compile_environments(
+    paths: &[String],
+    scan: Option<bool>,
+    limit: Option<u64>,
+    image: Option<&str>,
+    workdir: Option<&str>,
+) -> Result<Vec<CompileEnvironment>> {
     let env = |p: Vec<String>| CompileEnvironment {
         path: None,
         paths: p,
@@ -1009,7 +1053,11 @@ fn compile_verifiers(artifacts: &[String], verify: bool, reward: Option<&str>) -
     if verify && (!artifacts.is_empty() || reward.is_some()) {
         return vec![CompileVerifier {
             path: None,
-            auto_verifier: Some(AutoVerifier { required_artifacts: Some(artifacts.to_vec()), reward_artifact: reward.map(String::from), artifact_json_schemas: Map::new() }),
+            auto_verifier: Some(AutoVerifier {
+                required_artifacts: Some(artifacts.to_vec()),
+                reward_artifact: reward.map(String::from),
+                artifact_json_schemas: Map::new(),
+            }),
         }];
     }
     vec![]
@@ -1041,7 +1089,13 @@ fn parse_env_vars(items: &[String]) -> Result<Map<String, Value>> {
     Ok(m)
 }
 
-fn agent_configs(agent: Option<&str>, models: &[String], kwargs: &[String], env: &[String], timeout: Option<f64>) -> Result<Vec<Map<String, Value>>> {
+fn agent_configs(
+    agent: Option<&str>,
+    models: &[String],
+    kwargs: &[String],
+    env: &[String],
+    timeout: Option<f64>,
+) -> Result<Vec<Map<String, Value>>> {
     if agent.is_none() && (!models.is_empty() || !kwargs.is_empty() || !env.is_empty()) {
         bail!("--agent is required when passing agent-specific flags.");
     }
@@ -1207,7 +1261,13 @@ fn file_mention_pattern() -> Node {
         Star(Box::new(Seq(vec![dot(), Opt(Box::new(dot())), Lit("/")]))),
         Star(Box::new(Seq(vec![w(), Star(Box::new(w_dot_dash())), Lit("/")]))),
         Alt(vec![
-            Seq(vec![w(), Star(Box::new(w_dash())), Star(Box::new(Seq(vec![dot(), w_dash(), Star(Box::new(w_dash()))]))), dot(), Words(KNOWN_EXTS)]),
+            Seq(vec![
+                w(),
+                Star(Box::new(w_dash())),
+                Star(Box::new(Seq(vec![dot(), w_dash(), Star(Box::new(w_dash()))]))),
+                dot(),
+                Words(KNOWN_EXTS),
+            ]),
             Seq(vec![dot(), Words(KNOWN_DOTFILES), Star(Box::new(Seq(vec![dot(), w(), Star(Box::new(w()))])))]),
         ]),
         NotAhead(Box::new(Class(|c| is_word(c) || c == '/' || c == '-'))),
@@ -1385,12 +1445,19 @@ fn listdir(dirname: &str, dironly: bool) -> Vec<String> {
 }
 
 fn glob0(dirname: &str, basename: &str) -> Vec<String> {
-    let hit = if !basename.is_empty() { Path::new(&posix_join(dirname, basename)).symlink_metadata().is_ok() } else { Path::new(dirname).is_dir() };
+    let hit = if !basename.is_empty() {
+        Path::new(&posix_join(dirname, basename)).symlink_metadata().is_ok()
+    } else {
+        Path::new(dirname).is_dir()
+    };
     if hit { vec![basename.to_string()] } else { vec![] }
 }
 
 fn glob1(dirname: &str, pattern: &str, dironly: bool) -> Vec<String> {
-    listdir(dirname, dironly).into_iter().filter(|n| (pattern.starts_with('.') || !n.starts_with('.')) && crate::glob_match(pattern, n)).collect()
+    listdir(dirname, dironly)
+        .into_iter()
+        .filter(|n| (pattern.starts_with('.') || !n.starts_with('.')) && crate::glob_match(pattern, n))
+        .collect()
 }
 
 fn glob2(dirname: &str, _pattern: &str, dironly: bool) -> Vec<String> {
@@ -1469,9 +1536,12 @@ pub fn compile(cfg: &CompileConfig) -> Result<Vec<PathBuf>> {
     let out = cfg.output_dir.as_ref().ok_or_else(|| anyhow!("CompileConfig.output_dir is required."))?;
     let out = resolve(&out.0);
     std::fs::create_dir_all(&out)?;
-    let instructions: Vec<Option<&CompileInstruction>> = if cfg.instructions.is_empty() { vec![None] } else { cfg.instructions.iter().map(Some).collect() };
-    let environments: Vec<Option<&CompileEnvironment>> = if cfg.environments.is_empty() { vec![None] } else { cfg.environments.iter().map(Some).collect() };
-    let verifiers: Vec<Option<&CompileVerifier>> = if cfg.verifiers.is_empty() { vec![None] } else { cfg.verifiers.iter().map(Some).collect() };
+    let instructions: Vec<Option<&CompileInstruction>> =
+        if cfg.instructions.is_empty() { vec![None] } else { cfg.instructions.iter().map(Some).collect() };
+    let environments: Vec<Option<&CompileEnvironment>> =
+        if cfg.environments.is_empty() { vec![None] } else { cfg.environments.iter().map(Some).collect() };
+    let verifiers: Vec<Option<&CompileVerifier>> =
+        if cfg.verifiers.is_empty() { vec![None] } else { cfg.verifiers.iter().map(Some).collect() };
     let base = slugify(cfg.task_name_prefix.as_deref().or(cfg.dataset_name.as_deref()).unwrap_or("task"));
     let mut tasks = vec![];
     for i in &instructions {
@@ -1486,7 +1556,13 @@ pub fn compile(cfg: &CompileConfig) -> Result<Vec<PathBuf>> {
     Ok(tasks)
 }
 
-fn compile_task(cfg: &CompileConfig, dir: &Path, instruction: Option<&CompileInstruction>, environment: Option<&CompileEnvironment>, verifier: Option<&CompileVerifier>) -> Result<()> {
+fn compile_task(
+    cfg: &CompileConfig,
+    dir: &Path,
+    instruction: Option<&CompileInstruction>,
+    environment: Option<&CompileEnvironment>,
+    verifier: Option<&CompileVerifier>,
+) -> Result<()> {
     if dir.exists() {
         std::fs::remove_dir_all(dir)?;
     }
@@ -1585,7 +1661,10 @@ fn write_auto_verifier(cfg: &CompileConfig, tests_dir: &Path, av: &AutoVerifier)
     }
     std::fs::create_dir_all(tests_dir)?;
     let mut required = av.required_artifacts.clone().unwrap_or_else(|| {
-        cfg.artifacts.iter().map(|a| a.as_str().or_else(|| a.get("source").and_then(Value::as_str)).unwrap_or_default().to_string()).collect()
+        cfg.artifacts
+            .iter()
+            .map(|a| a.as_str().or_else(|| a.get("source").and_then(Value::as_str)).unwrap_or_default().to_string())
+            .collect()
     });
     if let Some(r) = &av.reward_artifact
         && !required.contains(r)
@@ -1638,12 +1717,17 @@ fn ascii_json(s: &str) -> String {
 fn write_task_config(cfg: &CompileConfig, dir: &Path, environment: Option<&CompileEnvironment>) -> Result<()> {
     let path = dir.join("task.toml");
     let exists = path.exists();
-    let raw: Map<String, Value> = if exists { parse_toml(&std::fs::read_to_string(&path)?).with_context(|| format!("parsing {}", path.display()))? } else { Map::new() };
+    let raw: Map<String, Value> = if exists {
+        parse_toml(&std::fs::read_to_string(&path)?).with_context(|| format!("parsing {}", path.display()))?
+    } else {
+        Map::new()
+    };
     let mut tc = hbench_task_config(&raw);
     if !cfg.artifacts.is_empty() {
         tc.insert("artifacts".into(), cfg.artifacts.iter().map(artifact_value).collect());
     }
-    let fresh_env = |image: &str, workdir: &str| Value::Object(env_cfg(json!({"docker_image": image, "workdir": workdir}).as_object().unwrap()));
+    let fresh_env =
+        |image: &str, workdir: &str| Value::Object(env_cfg(json!({"docker_image": image, "workdir": workdir}).as_object().unwrap()));
     match environment {
         None if !exists => {
             tc.insert("environment".into(), fresh_env(DEFAULT_IMAGE, DEFAULT_WORKDIR));
@@ -1678,15 +1762,25 @@ fn is_valid_dir(dir: &Path, disable_verification: bool) -> bool {
     }
     let Ok(raw) = parse_toml(&text) else { return false };
     let tc = Value::Object(hbench_task_config(&raw));
-    let steps: Vec<String> = tc.get("steps").and_then(Value::as_array).map(|s| s.iter().filter_map(|x| x.get("name")?.as_str().map(String::from)).collect()).unwrap_or_default();
-    let has_instructions = if steps.is_empty() { dir.join("instruction.md").exists() } else { steps.iter().all(|s| dir.join("steps").join(s).join("instruction.md").exists()) };
+    let steps: Vec<String> = tc
+        .get("steps")
+        .and_then(Value::as_array)
+        .map(|s| s.iter().filter_map(|x| x.get("name")?.as_str().map(String::from)).collect())
+        .unwrap_or_default();
+    let has_instructions = if steps.is_empty() {
+        dir.join("instruction.md").exists()
+    } else {
+        steps.iter().all(|s| dir.join("steps").join(s).join("instruction.md").exists())
+    };
     if disable_verification || !has_instructions {
         return has_instructions;
     }
     let windows = tc.pointer("/environment/os").and_then(Value::as_str) == Some("windows");
     let script = if windows { "test.bat" } else { "test.sh" };
-    let separate = tc.pointer("/verifier/environment_mode").and_then(Value::as_str) == Some("separate") || tc.pointer("/verifier/environment").is_some();
-    let bundled = |tests: &Path| separate && ["Dockerfile", "docker-compose.yaml", "docker-compose.yml"].iter().any(|f| tests.join(f).exists());
+    let separate = tc.pointer("/verifier/environment_mode").and_then(Value::as_str) == Some("separate")
+        || tc.pointer("/verifier/environment").is_some();
+    let bundled =
+        |tests: &Path| separate && ["Dockerfile", "docker-compose.yaml", "docker-compose.yml"].iter().any(|f| tests.join(f).exists());
     let tests = dir.join("tests");
     if steps.is_empty() {
         return bundled(&tests) || tests.join(script).is_file();
@@ -1847,7 +1941,15 @@ fn verifier_cfg(m: &Map<String, Value>) -> Map<String, Value> {
         .opt("user")
         .opt("environment_mode")
         .sub("environment", env_cfg, false)
-        .list("collect", |v| Value::Object(Model::new(&obj(v)).opt("command").val("service", "main".into()).float("timeout_sec", Some(60.0)).opt("user").done()), true)
+        .list(
+            "collect",
+            |v| {
+                Value::Object(
+                    Model::new(&obj(v)).opt("command").val("service", "main".into()).float("timeout_sec", Some(60.0)).opt("user").done(),
+                )
+            },
+            true,
+        )
         .done()
 }
 
@@ -1903,7 +2005,9 @@ fn env_cfg(m: &Map<String, Value>) -> Map<String, Value> {
                 if s.get("transport").and_then(Value::as_str) == Some("http") {
                     s.insert("transport".into(), "streamable-http".into());
                 }
-                Value::Object(Model::new(&s).opt("name").val("transport", "sse".into()).opt("url").opt("command").val("args", json!([])).done())
+                Value::Object(
+                    Model::new(&s).opt("name").val("transport", "sse".into()).opt("url").opt("command").val("args", json!([])).done(),
+                )
             },
             true,
         )
@@ -2287,7 +2391,12 @@ fn stage_and_compile(task: &ExecReduceTaskConfig, trials: &[crate::trial::TrialR
         task_template: task.task_template.clone(),
         artifacts: task.artifacts.clone(),
         instructions: vec![task.instruction.clone()],
-        environments: vec![CompileEnvironment { path: None, paths: vec![], docker_image: Some(task.environment.docker_image.clone()), workdir: Some(task.environment.workdir.clone()) }],
+        environments: vec![CompileEnvironment {
+            path: None,
+            paths: vec![],
+            docker_image: Some(task.environment.docker_image.clone()),
+            workdir: Some(task.environment.workdir.clone()),
+        }],
         verifiers: task.verifier.clone().into_iter().collect(),
         ..Default::default()
     })?;
@@ -2406,7 +2515,10 @@ mod tests {
             ("unpack foo.tar.gz and app.config.py", &["foo.tar.gz", "app.config.py"]),
             ("release v1.2.3.tar.gz is out", &["v1.2.3.tar.gz"]),
             ("jquery.min.js is legacy", &["jquery.min.js"]),
-            ("outputs events.jsonl layout.xml notebook.ipynb data.parquet", &["events.jsonl", "layout.xml", "notebook.ipynb", "data.parquet"]),
+            (
+                "outputs events.jsonl layout.xml notebook.ipynb data.parquet",
+                &["events.jsonl", "layout.xml", "notebook.ipynb", "data.parquet"],
+            ),
             ("see README.MD and photo.JPG", &["README.MD", "photo.JPG"]),
             ("I renamed foo.txt.", &["foo.txt"]),
             ("is it in foo.md?", &["foo.md"]),
@@ -2450,8 +2562,14 @@ mod tests {
     #[test]
     fn artifact_inference_matches_hbench() {
         let p = "Write result.json, reports/summary.txt, /tmp/output.PNG, ../out/data.csv, docs/README.md, and .env.local.";
-        assert_eq!(infer_artifacts_from_prompt(p, "/app"), ["/app/result.json", "/app/reports/summary.txt", "/tmp/output.PNG", "/out/data.csv", "/app/docs/README.md", "/app/.env.local"]);
-        assert_eq!(infer_artifacts_from_prompt("Write result.json and reports/summary.txt.", "workspace"), ["/workspace/result.json", "/workspace/reports/summary.txt"]);
+        assert_eq!(
+            infer_artifacts_from_prompt(p, "/app"),
+            ["/app/result.json", "/app/reports/summary.txt", "/tmp/output.PNG", "/out/data.csv", "/app/docs/README.md", "/app/.env.local"]
+        );
+        assert_eq!(
+            infer_artifacts_from_prompt("Write result.json and reports/summary.txt.", "workspace"),
+            ["/workspace/result.json", "/workspace/reports/summary.txt"]
+        );
         assert_eq!(infer_artifacts_from_prompt("a.md then ./a.md and x/../a.md", "/w"), ["/w/a.md"]);
         assert!(infer_artifacts_from_prompt("Run python3.12 and explain the result.", "/app").is_empty());
         assert_eq!(prompt_file_to_artifact_path("out.json)\"", "/"), "/out.json");
@@ -2483,7 +2601,10 @@ mod tests {
         }
         assert_eq!(dump_value(&json!([[1, 2], ["a"]])), "[ [ 1, 2,], [ \"a\",],]");
         let m = json!({"a": 1e-5, "k y": "v", "m": {"x": {"y": 1}, "z": [{"q": 1, "w": {"r": 2}}]}, "t": true});
-        assert_eq!(toml_dumps(m.as_object().unwrap()).unwrap(), "a = 1e-5\n\"k y\" = \"v\"\nt = true\n\n[m]\n[[m.z]]\nq = 1\n\n[m.z.w]\nr = 2\n\n[m.x]\ny = 1\n");
+        assert_eq!(
+            toml_dumps(m.as_object().unwrap()).unwrap(),
+            "a = 1e-5\n\"k y\" = \"v\"\nt = true\n\n[m]\n[[m.z]]\nq = 1\n\n[m.z.w]\nr = 2\n\n[m.x]\ny = 1\n"
+        );
     }
 
     fn print_output(a: &ExecArgs) -> String {
@@ -2602,7 +2723,11 @@ mod tests {
         let root = tmp("bad");
         let out = Some(PyPath(root.join("o").to_string_lossy().into_owned()));
         assert!(compile(&CompileConfig::default()).unwrap_err().to_string().contains("output_dir"));
-        let missing = CompileConfig { output_dir: out.clone(), instructions: vec![CompileInstruction { text: None, path: Some(PyPath::new("/nonexistent/i.md")) }], ..Default::default() };
+        let missing = CompileConfig {
+            output_dir: out.clone(),
+            instructions: vec![CompileInstruction { text: None, path: Some(PyPath::new("/nonexistent/i.md")) }],
+            ..Default::default()
+        };
         assert!(compile(&missing).unwrap_err().to_string().starts_with("Instruction path must be a file"));
         let no_instruction = CompileConfig { output_dir: out, ..Default::default() };
         assert!(compile(&no_instruction).unwrap_err().to_string().starts_with("Compiled task is not a valid task directory"));
@@ -2656,15 +2781,41 @@ mod tests {
         write_trial(&empty, "t__1", &[]);
         assert_eq!(compile_reduce_task(&task, &empty).unwrap_err().to_string(), "Cannot reduce a map job with no trial artifacts.");
         std::fs::create_dir_all(root.join("jobs/none")).unwrap();
-        assert_eq!(compile_reduce_task(&task, &root.join("jobs/none")).unwrap_err().to_string(), "Cannot reduce a map job with no trial results.");
+        assert_eq!(
+            compile_reduce_task(&task, &root.join("jobs/none")).unwrap_err().to_string(),
+            "Cannot reduce a map job with no trial results."
+        );
         std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]
     fn job_config_feeds_existing_runner() {
-        let c = resolve_config(&args(&["-i", "make a.md", "-a", "oracle", "-n", "2", "-k", "3", "-r", "1", "--job-name", "J", "--jobs-dir", "jd", "--tasks-dir", "td", "--ae", "K=V"])).unwrap();
+        let c = resolve_config(&args(&[
+            "-i",
+            "make a.md",
+            "-a",
+            "oracle",
+            "-n",
+            "2",
+            "-k",
+            "3",
+            "-r",
+            "1",
+            "--job-name",
+            "J",
+            "--jobs-dir",
+            "jd",
+            "--tasks-dir",
+            "td",
+            "--ae",
+            "K=V",
+        ]))
+        .unwrap();
         let cfg = job_config(&c.map.job, &[PathBuf::from("/t/a")]).unwrap();
-        assert_eq!((cfg.job_name.as_str(), cfg.jobs_dir.as_path(), cfg.n_attempts, cfg.n_concurrent_trials, cfg.retry.max_retries), ("J", Path::new("jd"), 3, 2, 1));
+        assert_eq!(
+            (cfg.job_name.as_str(), cfg.jobs_dir.as_path(), cfg.n_attempts, cfg.n_concurrent_trials, cfg.retry.max_retries),
+            ("J", Path::new("jd"), 3, 2, 1)
+        );
         assert_eq!(cfg.agents[0].env["K"], "V");
         assert_eq!(cfg.tasks[0].path.as_deref(), Some(Path::new("/t/a")));
         assert!(!cfg.verifier.disable);

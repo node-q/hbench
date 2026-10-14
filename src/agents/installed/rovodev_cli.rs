@@ -15,7 +15,9 @@ pub struct RovodevCli {
 pub fn create(args: AgentArgs) -> Result<AgentBox> {
     // max_thinking_tokens is accepted (and validated) but unused, as in upstream.
     if let Some(v) = args.kw("max_thinking_tokens") {
-        v.trim().parse::<i64>().map_err(|_| anyhow!("Invalid kwargs for agent 'rovodev-cli':\n  max_thinking_tokens: Input should be a valid integer"))?;
+        v.trim()
+            .parse::<i64>()
+            .map_err(|_| anyhow!("Invalid kwargs for agent 'rovodev-cli':\n  max_thinking_tokens: Input should be a valid integer"))?;
     }
     Ok(Box::new(RovodevCli { version: args.version_kw(), args }))
 }
@@ -28,7 +30,10 @@ impl RovodevCli {
         Ok(BTreeMap::from([
             ("ROVODEV_USER_EMAIL".to_string(), email),
             ("ROVODEV_USER_API_TOKEN".into(), token),
-            ("ROVODEV_USER_BILLING_SITE".into(), self.args.get_env("ROVODEV_USER_BILLING_SITE").unwrap_or_else(|| "https://hello.atlassian.net".into())),
+            (
+                "ROVODEV_USER_BILLING_SITE".into(),
+                self.args.get_env("ROVODEV_USER_BILLING_SITE").unwrap_or_else(|| "https://hello.atlassian.net".into()),
+            ),
         ]))
     }
 }
@@ -56,7 +61,12 @@ pub fn usage_from_session(text: &str) -> Option<AgentContext> {
     let u = &s["usage"];
     let n = |k: &str| u[k].as_i64().unwrap_or(0);
     // RovoDev reports no cost.
-    Some(AgentContext { n_input_tokens: Some(n("input_tokens") + n("cache_read_tokens")), n_cache_tokens: Some(n("cache_read_tokens")), n_output_tokens: Some(n("output_tokens")), ..Default::default() })
+    Some(AgentContext {
+        n_input_tokens: Some(n("input_tokens") + n("cache_read_tokens")),
+        n_cache_tokens: Some(n("cache_read_tokens")),
+        n_output_tokens: Some(n("output_tokens")),
+        ..Default::default()
+    })
 }
 
 /// upstream's SYSTEM_MESSAGE_PATTERNS (internal prompts filtered from user steps).
@@ -120,7 +130,12 @@ impl Agent for RovodevCli {
             &env,
         )
         .await?;
-        let r = exec_agent(cx, &format!("acli rovodev run --yolo {} 2>&1 </dev/null | tee /logs/agent/rovodev-cli.txt", quote(&instruction)), &env).await;
+        let r = exec_agent(
+            cx,
+            &format!("acli rovodev run --yolo {} 2>&1 </dev/null | tee /logs/agent/rovodev-cli.txt", quote(&instruction)),
+            &env,
+        )
+        .await;
         let _ = exec_agent(
             cx,
             "mkdir -p /logs/agent && LATEST_SESSION=$(ls -t ~/.rovodev/sessions/ | head -1) && \
@@ -152,7 +167,8 @@ mod tests {
         std::fs::create_dir_all(dir.join("environment")).unwrap();
         std::fs::write(dir.join("task.toml"), "[environment]\ndocker_image='x'\n").unwrap();
         std::fs::write(dir.join("instruction.md"), "x").unwrap();
-        AgentArgs { load_trajectory: None,
+        AgentArgs {
+            load_trajectory: None,
             model_name: None,
             kwargs: serde_json::from_value(kwargs).unwrap(),
             extra_env: env.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect(),

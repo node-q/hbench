@@ -1,9 +1,9 @@
 mod agents;
 mod analyze;
-mod authoring;
 mod artifacts;
-mod bridge;
 mod atif;
+mod authoring;
+mod bridge;
 mod config;
 mod diff;
 mod env;
@@ -11,8 +11,8 @@ mod exec;
 mod job;
 mod metrics;
 mod migrate;
-mod regrade;
 mod registry;
+mod regrade;
 mod schemas;
 mod sweeps;
 mod task;
@@ -636,10 +636,17 @@ fn build_job_config(a: &RunArgs) -> Result<JobConfig> {
             d.n_tasks = a.n_tasks;
         }
     }
-    if a.agent.is_some() || !a.models.is_empty() || !a.agent_kwargs.is_empty() || !a.agent_env.is_empty() || a.n_concurrent_agent.is_some() || !a.skill.is_empty() {
+    if a.agent.is_some()
+        || !a.models.is_empty()
+        || !a.agent_kwargs.is_empty()
+        || !a.agent_env.is_empty()
+        || a.n_concurrent_agent.is_some()
+        || !a.skill.is_empty()
+    {
         let base = cfg.agents.first().cloned().unwrap_or_default();
         let base = AgentConfig { name: a.agent.clone().or(base.name), ..base };
-        let models: Vec<Option<String>> = if a.models.is_empty() { vec![base.model_name.clone()] } else { a.models.iter().cloned().map(Some).collect() };
+        let models: Vec<Option<String>> =
+            if a.models.is_empty() { vec![base.model_name.clone()] } else { a.models.iter().cloned().map(Some).collect() };
         cfg.agents = models
             .into_iter()
             .map(|m| {
@@ -857,7 +864,12 @@ async fn main() -> Result<()> {
             }
             let mut trials = vec![];
             for e in std::fs::read_dir(&source)?.flatten() {
-                let Some(r) = std::fs::read_to_string(e.path().join("result.json")).ok().and_then(|s| serde_json::from_str::<trial::TrialResult>(&s).ok()) else { continue };
+                let Some(r) = std::fs::read_to_string(e.path().join("result.json"))
+                    .ok()
+                    .and_then(|s| serde_json::from_str::<trial::TrialResult>(&s).ok())
+                else {
+                    continue;
+                };
                 let Some(dir) = by_name.get(&r.task_name) else { continue };
                 let tref = TaskRef { path: Some(dir.clone()), source: r.source.clone(), ..Default::default() };
                 trials.push(TrialConfig {
@@ -865,7 +877,12 @@ async fn main() -> Result<()> {
                     trial_name: job::trial_name(&tref),
                     trials_dir: cfg.job_dir(),
                     agent: r.config.agent.clone(),
-                    source_trial: Some(SourceTrial { action: "regrade".into(), kind: "local".into(), trial_id: Some(r.id.to_string()), path: Some(e.path()) }),
+                    source_trial: Some(SourceTrial {
+                        action: "regrade".into(),
+                        kind: "local".into(),
+                        trial_id: Some(r.id.to_string()),
+                        path: Some(e.path()),
+                    }),
                     ..serde_json::from_value(serde_json::json!({"task": {"path": dir}, "trial_name": "x", "trials_dir": "x"}))?
                 });
             }
@@ -887,7 +904,9 @@ async fn main() -> Result<()> {
                     let mut a = AgentConfig { name: Some(agent), model_name: model, ..Default::default() };
                     a.kwargs = agent_kwargs.iter().map(|(k, v)| (k.clone(), kwarg_value(v))).collect();
                     a.env = agent_env.into_iter().collect();
-                    serde_json::from_value(serde_json::json!({"task": tref, "trial_name": job::trial_name(&tref), "trials_dir": trials_dir, "agent": a}))?
+                    serde_json::from_value(
+                        serde_json::json!({"task": tref, "trial_name": job::trial_name(&tref), "trials_dir": trials_dir, "agent": a}),
+                    )?
                 }
             };
             if tc.trial_name.is_empty() {
@@ -899,9 +918,12 @@ async fn main() -> Result<()> {
             let task = std::sync::Arc::new(Task::load(&registry::local_path(&tc.task))?);
             let (_tx, rx) = tokio::sync::watch::channel(false);
             let r = trial::Trial::new(tc, task, None)?.run(rx).await;
-            println!("{}", serde_json::to_string_pretty(&serde_json::json!({
-                "trial_name": r.trial_name, "rewards": r.reward(), "exception": r.exception_info.as_ref().map(|e| &e.exception_type), "trial_uri": r.trial_uri
-            }))?);
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "trial_name": r.trial_name, "rewards": r.reward(), "exception": r.exception_info.as_ref().map(|e| &e.exception_type), "trial_uri": r.trial_uri
+                }))?
+            );
             Ok(())
         }
         Cmd::Datasets { cmd: DatasetsCmd::List(r) } => {
@@ -915,7 +937,14 @@ async fn main() -> Result<()> {
                 Some((n, v)) => (n.to_string(), Some(v.to_string())),
                 None => (dataset.clone(), None),
             };
-            let d = DatasetConfig { name: Some(name), version, registry_url: r.registry_url, registry_path: r.registry_path, download_dir: output_dir, ..Default::default() };
+            let d = DatasetConfig {
+                name: Some(name),
+                version,
+                registry_url: r.registry_url,
+                registry_path: r.registry_path,
+                download_dir: output_dir,
+                ..Default::default()
+            };
             let tasks = registry::dataset_tasks(&d, false)?;
             registry::download(&tasks)?;
             for t in &tasks {
@@ -924,7 +953,21 @@ async fn main() -> Result<()> {
             Ok(())
         }
         Cmd::Tasks {
-            cmd: TasksCmd::Init { name, tasks_dir, org, description, no_pytest, no_solution, include_canary_strings, metadata_template, include_standard_metadata, no_package, author, steps },
+            cmd:
+                TasksCmd::Init {
+                    name,
+                    tasks_dir,
+                    org,
+                    description,
+                    no_pytest,
+                    no_solution,
+                    include_canary_strings,
+                    metadata_template,
+                    include_standard_metadata,
+                    no_package,
+                    author,
+                    steps,
+                },
         } => {
             if include_standard_metadata {
                 bail!("--include-standard-metadata has been removed. Use --metadata-template <path-to-template.toml> instead.");
@@ -935,7 +978,17 @@ async fn main() -> Result<()> {
                 bail!("Template file not found: {}", t.display());
             }
             let name = authoring::resolve_name(name, org)?;
-            let opts = authoring::TaskOpts { no_pytest, no_solution, include_canary_strings, no_package, description, authors: authoring::parse_authors(&author), metadata_template, steps, ..Default::default() };
+            let opts = authoring::TaskOpts {
+                no_pytest,
+                no_solution,
+                include_canary_strings,
+                no_package,
+                description,
+                authors: authoring::parse_authors(&author),
+                metadata_template,
+                steps,
+                ..Default::default()
+            };
             authoring::init_task(&name, &tasks_dir, &opts).map(|_| ())
         }
         Cmd::Init(a) => run_init(*a),
@@ -974,7 +1027,9 @@ async fn main() -> Result<()> {
             preflight_agents(&cfg)?;
             env::preflight().await?;
             let hints: BTreeMap<String, String> = match hints_file {
-                Some(p) => serde_json::from_str(&std::fs::read_to_string(&p)?).context("--hints-file must be a JSON object {task_name: hint}")?,
+                Some(p) => {
+                    serde_json::from_str(&std::fs::read_to_string(&p)?).context("--hints-file must be a JSON object {task_name: hint}")?
+                }
                 None => BTreeMap::new(),
             };
             for d in sweeps::run(cfg, max_sweeps, trials_per_task, hint, hints).await? {
@@ -983,7 +1038,9 @@ async fn main() -> Result<()> {
             Ok(())
         }
         Cmd::Tasks { cmd: TasksCmd::Migrate { input, output, cpus, memory_mb, storage_mb, gpus } } => {
-            println!("⚠️  WARNING: This migration tool is not foolproof. Please review migrated tasks carefully and make manual adjustments as needed.\n");
+            println!(
+                "⚠️  WARNING: This migration tool is not foolproof. Please review migrated tasks carefully and make manual adjustments as needed.\n"
+            );
             if !input.exists() {
                 println!("❌ Input path does not exist: {}", input.display());
                 return Ok(());
@@ -1004,7 +1061,9 @@ async fn main() -> Result<()> {
             }
             Ok(())
         }
-        Cmd::Cache { cmd: CacheCmd::Clean { force, dry, no_docker, no_cache_dir } } => tools::cache_clean(force, dry, no_docker, no_cache_dir).await,
+        Cmd::Cache { cmd: CacheCmd::Clean { force, dry, no_docker, no_cache_dir } } => {
+            tools::cache_clean(force, dry, no_docker, no_cache_dir).await
+        }
         Cmd::Tasks { cmd: TasksCmd::StartEnv { path, no_all, non_interactive, agent, model, agent_kwargs } } => {
             env::preflight().await?;
             let a = agent.map(|name| AgentConfig {
@@ -1058,10 +1117,18 @@ async fn main() -> Result<()> {
                 Some(p) => (folder.or(Some(PathBuf::from(p))), port),
                 None => (folder, port),
             };
-            let mode = if tasks { Some(viewer::Mode::Tasks) } else if jobs { Some(viewer::Mode::Jobs) } else { None };
+            let mode = if tasks {
+                Some(viewer::Mode::Tasks)
+            } else if jobs {
+                Some(viewer::Mode::Jobs)
+            } else {
+                None
+            };
             viewer::serve(&folder.unwrap_or_else(|| "jobs".into()), mode, &host, viewer::parse_port_range(&port)?)
         }
-        Cmd::Traces { cmd: TracesCmd::Export { path, output, no_recursive, episodes, filter, sharegpt, instruction_metadata, verifier_metadata } } => {
+        Cmd::Traces {
+            cmd: TracesCmd::Export { path, output, no_recursive, episodes, filter, sharegpt, instruction_metadata, verifier_metadata },
+        } => {
             let o = traces::ExportOpts {
                 recursive: !no_recursive,
                 episodes,
@@ -1091,8 +1158,27 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("hbench-cli-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let cli = Cli::parse_from([
-            "hbench", "run", "-p", dir.to_str().unwrap(), "-a", "claude-code", "-m", "anthropic/a", "-m", "anthropic/b", "--ak", "max_turns=5", "--ae", "X=1", "-k", "3", "-i", "t*",
-            "--no-delete", "--artifact", "/app/x",
+            "hbench",
+            "run",
+            "-p",
+            dir.to_str().unwrap(),
+            "-a",
+            "claude-code",
+            "-m",
+            "anthropic/a",
+            "-m",
+            "anthropic/b",
+            "--ak",
+            "max_turns=5",
+            "--ae",
+            "X=1",
+            "-k",
+            "3",
+            "-i",
+            "t*",
+            "--no-delete",
+            "--artifact",
+            "/app/x",
         ]);
         let Cmd::Run(a) = cli.cmd else { panic!() };
         let c = build_job_config(&a).unwrap();

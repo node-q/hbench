@@ -165,7 +165,9 @@ fn validate_hosted_vllm(model: &str, info: Option<&Value>) -> Result<()> {
     for f in ["max_input_tokens", "max_output_tokens", "input_cost_per_token", "output_cost_per_token"] {
         match info.get(f) {
             None | Some(Value::Null) => bail!("hosted_vllm model_info missing '{f}'."),
-            Some(v) if v.as_f64().or_else(|| v.as_str()?.parse::<f64>().ok()).is_none() => bail!("hosted_vllm model_info field '{f}' must be a number. Got '{v}'."),
+            Some(v) if v.as_f64().or_else(|| v.as_str()?.parse::<f64>().ok()).is_none() => {
+                bail!("hosted_vllm model_info field '{f}' must be a number. Got '{v}'.")
+            }
             _ => {}
         }
     }
@@ -239,11 +241,15 @@ pub fn resolve_endpoint(model: &str, api_base: Option<&str>, responses: bool, ge
             return Ok(Endpoint { api: Api::Anthropic, url, headers, model: sent, provider });
         }
         "amazon-bedrock" | "vertex_ai" | "sagemaker" => {
-            bail!("LLM provider '{provider}' (model {model}) needs AWS SigV4 / Google Cloud auth, which hbench's LLM client doesn't implement; use an OpenAI-compatible gateway via api_base instead")
+            bail!(
+                "LLM provider '{provider}' (model {model}) needs AWS SigV4 / Google Cloud auth, which hbench's LLM client doesn't implement; use an OpenAI-compatible gateway via api_base instead"
+            )
         }
         _ => {}
     }
-    let mut b = base.ok_or_else(|| anyhow!("No API base URL known for LLM provider '{provider}' (model {model}); set {upper}_BASE_URL or the api_base kwarg"))?;
+    let mut b = base.ok_or_else(|| {
+        anyhow!("No API base URL known for LLM provider '{provider}' (model {model}); set {upper}_BASE_URL or the api_base kwarg")
+    })?;
     if provider == "azure" {
         let ver = get("AZURE_API_VERSION").unwrap_or_else(|| "2024-10-21".into());
         if let Some(k) = key {
@@ -284,7 +290,13 @@ pub struct LlmConfig {
 #[async_trait::async_trait]
 pub trait Llm: Send + Sync {
     /// `kw`: per-call kwargs (upstream `llm_call_kwargs`: extra_body, extra_headers, sampling params).
-    async fn call(&self, prompt: &str, history: &[Value], kw: &Map<String, Value>, previous_response_id: Option<&str>) -> Result<LlmResponse, LlmError>;
+    async fn call(
+        &self,
+        prompt: &str,
+        history: &[Value],
+        kw: &Map<String, Value>,
+        previous_response_id: Option<&str>,
+    ) -> Result<LlmResponse, LlmError>;
     fn context_limit(&self) -> i64;
     fn output_limit(&self) -> Option<i64>;
     fn count_tokens(&self, messages: &[Value]) -> i64 {
@@ -309,7 +321,9 @@ pub fn approx_tokens(messages: &[Value]) -> i64 {
 /// HF tokenizer there; cl100k_base here.
 pub fn token_counter(model: &str, messages: &[Value]) -> i64 {
     let bare_openai = !model.contains('/') && ["gpt-", "o1", "o3", "o4", "chatgpt"].iter().any(|p| model.starts_with(p));
-    let o200k = bare_openai && (model.contains("gpt-4o") || ["gpt-4.1", "gpt-4.5", "gpt-5", "o1", "o3", "o4", "chatgpt-4o"].iter().any(|p| model.starts_with(p)));
+    let o200k = bare_openai
+        && (model.contains("gpt-4o")
+            || ["gpt-4.1", "gpt-4.5", "gpt-5", "o1", "o3", "o4", "chatgpt-4o"].iter().any(|p| model.starts_with(p)));
     let bpe = if o200k { tiktoken_rs::o200k_base_singleton() } else { tiktoken_rs::cl100k_base_singleton() };
     let count = |s: &str| bpe.encode_ordinary(s).len() as i64;
     let mut n = 0;
@@ -319,7 +333,16 @@ pub fn token_counter(model: &str, messages: &[Value]) -> i64 {
             match v {
                 Value::Null => {}
                 Value::Array(calls) if k == "tool_calls" => {
-                    n += calls.iter().map(|c| count(&match &c["function"]["arguments"] { Value::String(s) => s.clone(), Value::Null => String::new(), o => o.to_string() })).sum::<i64>();
+                    n += calls
+                        .iter()
+                        .map(|c| {
+                            count(&match &c["function"]["arguments"] {
+                                Value::String(s) => s.clone(),
+                                Value::Null => String::new(),
+                                o => o.to_string(),
+                            })
+                        })
+                        .sum::<i64>();
                 }
                 Value::String(s) => {
                     n += count(s);
@@ -436,7 +459,8 @@ pub struct Request {
 /// LiteLLM's default request timeout.
 const DEFAULT_TIMEOUT_SECS: f64 = 6000.0;
 /// LiteLLM/transport kwargs that must not reach the request body.
-const NON_BODY: [&str; 8] = ["api_base", "base_url", "drop_params", "num_retries", "custom_llm_provider", "logger_fn", "litellm_debug", "max_retries"];
+const NON_BODY: [&str; 8] =
+    ["api_base", "base_url", "drop_params", "num_retries", "custom_llm_provider", "logger_fn", "litellm_debug", "max_retries"];
 
 fn obj<'a>(m: &'a mut Map<String, Value>, k: &str) -> &'a mut Map<String, Value> {
     if !m.get(k).is_some_and(Value::is_object) {
@@ -508,7 +532,8 @@ fn to_anthropic_messages(messages: &[Value]) -> (Vec<Value>, Vec<Value>) {
                         match (p["type"].as_str(), url) {
                             (Some("image_url"), Some(url)) => {
                                 let (meta, data) = url.split_once(',').unwrap_or(("", url));
-                                let media = meta.trim_start_matches("data:").split(';').next().filter(|m| !m.is_empty()).unwrap_or("image/png");
+                                let media =
+                                    meta.trim_start_matches("data:").split(';').next().filter(|m| !m.is_empty()).unwrap_or("image/png");
                                 let mut b = json!({"type": "image", "source": {"type": "base64", "media_type": media, "data": data}});
                                 if let Some(cc) = p.get("cache_control") {
                                     b["cache_control"] = cc.clone();
@@ -542,7 +567,10 @@ fn to_anthropic_messages(messages: &[Value]) -> (Vec<Value>, Vec<Value>) {
 fn cost(info: Option<&ModelInfo>, uncached_in: i64, cache_read: i64, cache_write: i64, output: i64) -> f64 {
     let Some(i) = info else { return 0.0 };
     let or_in = |c: f64| if c > 0.0 { c } else { i.input_cost };
-    uncached_in as f64 * i.input_cost + cache_read as f64 * or_in(i.cache_read_cost) + cache_write as f64 * or_in(i.cache_write_cost) + output as f64 * i.output_cost
+    uncached_in as f64 * i.input_cost
+        + cache_read as f64 * or_in(i.cache_read_cost)
+        + cache_write as f64 * or_in(i.cache_write_cost)
+        + output as f64 * i.output_cost
 }
 
 fn n(v: &Value) -> i64 {
@@ -555,7 +583,8 @@ fn ints(v: &Value) -> Option<Vec<i64>> {
 
 /// Chat-completions response -> LlmResponse (LiteLLM's ModelResponse handling in `call`).
 pub fn parse_chat(v: &Value, info: Option<&ModelInfo>, model: &str, rollout: bool) -> Result<LlmResponse, LlmError> {
-    let choice = v["choices"].get(0).ok_or_else(|| api_err("APIError", format!("response has no choices: {}", tail(&v.to_string(), 2000))))?;
+    let choice =
+        v["choices"].get(0).ok_or_else(|| api_err("APIError", format!("response has no choices: {}", tail(&v.to_string(), 2000))))?;
     let msg = &choice["message"];
     let content = content_text(&msg["content"]);
     let reasoning = msg["reasoning_content"].as_str().or(msg["reasoning"].as_str()).map(String::from);
@@ -580,14 +609,18 @@ pub fn parse_chat(v: &Value, info: Option<&ModelInfo>, model: &str, rollout: boo
     if rollout {
         r.prompt_token_ids = ints(&v["prompt_token_ids"]).or_else(|| ints(&choice["prompt_token_ids"]));
         r.completion_token_ids = ints(&choice["token_ids"]).filter(|t| !t.is_empty());
-        r.logprobs = choice["logprobs"]["content"].as_array().map(|a| a.iter().filter_map(|t| t["logprob"].as_f64()).collect()).filter(|l: &Vec<f64>| !l.is_empty());
+        r.logprobs = choice["logprobs"]["content"]
+            .as_array()
+            .map(|a| a.iter().filter_map(|t| t["logprob"].as_f64()).collect())
+            .filter(|l: &Vec<f64>| !l.is_empty());
     }
     Ok(r)
 }
 
 /// Anthropic Messages response -> LlmResponse (usage as LiteLLM reports it).
 pub fn parse_anthropic(v: &Value, info: Option<&ModelInfo>, model: &str) -> Result<LlmResponse, LlmError> {
-    let blocks = v["content"].as_array().ok_or_else(|| api_err("APIError", format!("unexpected response: {}", tail(&v.to_string(), 2000))))?;
+    let blocks =
+        v["content"].as_array().ok_or_else(|| api_err("APIError", format!("unexpected response: {}", tail(&v.to_string(), 2000))))?;
     let text: String = blocks.iter().filter(|b| b["type"] == "text").filter_map(|b| b["text"].as_str()).collect();
     let thinking: String = blocks.iter().filter(|b| b["type"] == "thinking").filter_map(|b| b["thinking"].as_str()).collect();
     if v["stop_reason"] == "max_tokens" {
@@ -597,12 +630,18 @@ pub fn parse_anthropic(v: &Value, info: Option<&ModelInfo>, model: &str) -> Resu
         });
     }
     let u = &v["usage"];
-    let (input, read, write, out) = (n(&u["input_tokens"]), n(&u["cache_read_input_tokens"]), n(&u["cache_creation_input_tokens"]), n(&u["output_tokens"]));
+    let (input, read, write, out) =
+        (n(&u["input_tokens"]), n(&u["cache_read_input_tokens"]), n(&u["cache_creation_input_tokens"]), n(&u["output_tokens"]));
     Ok(LlmResponse {
         content: text,
         reasoning_content: (!thinking.is_empty()).then_some(thinking),
         model_name: v["model"].as_str().map(String::from),
-        usage: Some(Usage { prompt_tokens: input + read + write, completion_tokens: out, cache_tokens: read, cost_usd: cost(info, input, read, write, out) }),
+        usage: Some(Usage {
+            prompt_tokens: input + read + write,
+            completion_tokens: out,
+            cache_tokens: read,
+            cost_usd: cost(info, input, read, write, out),
+        }),
         ..Default::default()
     })
 }
@@ -616,13 +655,22 @@ pub fn parse_responses(v: &Value, info: Option<&ModelInfo>, model: &str) -> Resu
         }
     }
     if v["status"] == "incomplete" && v["incomplete_details"]["reason"] == "max_output_tokens" {
-        return Err(LlmError::OutputLength { msg: format!("Model {model} hit max_tokens limit. Response was truncated."), truncated: content });
+        return Err(LlmError::OutputLength {
+            msg: format!("Model {model} hit max_tokens limit. Response was truncated."),
+            truncated: content,
+        });
     }
     let usage = v.get("usage").filter(|u| !u.is_null()).map(|u| {
         let (i, o) = (n(&u["input_tokens"]), n(&u["output_tokens"]));
         Usage { prompt_tokens: i, completion_tokens: o, cache_tokens: 0, cost_usd: cost(info, i, 0, 0, o) }
     });
-    Ok(LlmResponse { content, model_name: v["model"].as_str().map(String::from), usage, response_id: v["id"].as_str().map(String::from), ..Default::default() })
+    Ok(LlmResponse {
+        content,
+        model_name: v["model"].as_str().map(String::from),
+        usage,
+        response_id: v["id"].as_str().map(String::from),
+        ..Default::default()
+    })
 }
 
 /// upstream's `LiteLLM` backend.
@@ -697,7 +745,9 @@ impl LiteLlm {
             let max = p.remove("max_tokens").or_else(|| p.remove("max_completion_tokens"));
             body.insert("max_tokens".into(), max.unwrap_or_else(|| json!(self.info.and_then(|i| i.max_output_tokens).unwrap_or(4096))));
             let effort = p.remove("reasoning_effort");
-            let thinking = p.remove("thinking").or_else(|| anthropic_thinking(effort.as_ref()?.as_str()?, self.info.is_some_and(|i| i.adaptive_thinking)));
+            let thinking = p
+                .remove("thinking")
+                .or_else(|| anthropic_thinking(effort.as_ref()?.as_str()?, self.info.is_some_and(|i| i.adaptive_thinking)));
             if let Some(t) = thinking {
                 body.insert("thinking".into(), t);
             }
@@ -726,7 +776,13 @@ impl LiteLlm {
     }
 
     /// Responses API request (`_call_responses`).
-    pub fn responses_request(&self, prompt: &str, history: &[Value], kw: &Map<String, Value>, previous_response_id: Option<&str>) -> Request {
+    pub fn responses_request(
+        &self,
+        prompt: &str,
+        history: &[Value],
+        kw: &Map<String, Value>,
+        previous_response_id: Option<&str>,
+    ) -> Request {
         let mut p = self.cfg.llm_kwargs.clone();
         if let Some(e) = &self.cfg.reasoning_effort {
             p.insert("reasoning".into(), json!({"effort": e}));
@@ -757,7 +813,13 @@ impl LiteLlm {
         Request { headers, body: Value::Object(body), timeout }
     }
 
-    async fn call_once(&self, prompt: &str, history: &[Value], kw: &Map<String, Value>, prev: Option<&str>) -> Result<LlmResponse, LlmError> {
+    async fn call_once(
+        &self,
+        prompt: &str,
+        history: &[Value],
+        kw: &Map<String, Value>,
+        prev: Option<&str>,
+    ) -> Result<LlmResponse, LlmError> {
         let model = &self.cfg.model_name;
         if self.ep.api == Api::Responses {
             let v = send(&self.ep.url, &self.responses_request(prompt, history, kw, prev)).await?;
@@ -768,7 +830,9 @@ impl LiteLlm {
         let mut p = self.params(add_anthropic_caching(messages, model), kw);
         let v = match send(&self.ep.url, &self.request(p.clone())).await {
             // Providers that reject return_token_ids / session_id in extra_body: retry without them.
-            Err(LlmError::Api { kind: "BadRequestError", msg }) if msg.contains("Unrecognized request argument") && p.contains_key("extra_body") => {
+            Err(LlmError::Api { kind: "BadRequestError", msg })
+                if msg.contains("Unrecognized request argument") && p.contains_key("extra_body") =>
+            {
                 let rejected: Vec<&str> = ["return_token_ids", "session_id"].into_iter().filter(|k| msg.contains(k)).collect();
                 if rejected.is_empty() {
                     return Err(LlmError::Api { kind: "BadRequestError", msg });
@@ -794,7 +858,13 @@ impl LiteLlm {
 #[async_trait::async_trait]
 impl Llm for LiteLlm {
     /// upstream: `@retry(stop_after_attempt(3), wait_exponential(min=4, max=15))`, except context/output/auth errors.
-    async fn call(&self, prompt: &str, history: &[Value], kw: &Map<String, Value>, previous_response_id: Option<&str>) -> Result<LlmResponse, LlmError> {
+    async fn call(
+        &self,
+        prompt: &str,
+        history: &[Value],
+        kw: &Map<String, Value>,
+        previous_response_id: Option<&str>,
+    ) -> Result<LlmResponse, LlmError> {
         let mut attempt = 0;
         loop {
             attempt += 1;
@@ -846,7 +916,8 @@ pub async fn send(url: &str, req: &Request) -> Result<Value, LlmError> {
 /// (kind `Timeout` or `APIConnectionError`).
 pub async fn send_raw(url: &str, req: &Request) -> Result<(u16, String), LlmError> {
     let path = std::env::temp_dir().join(format!("hbench-llm-{}.json", uuid::Uuid::new_v4().simple()));
-    std::fs::write(&path, serde_json::to_vec(&req.body).unwrap_or_default()).map_err(|e| api_err("APIConnectionError", format!("writing request body: {e}")))?;
+    std::fs::write(&path, serde_json::to_vec(&req.body).unwrap_or_default())
+        .map_err(|e| api_err("APIConnectionError", format!("writing request body: {e}")))?;
     let mut cfg = format!(
         "url = {}\nrequest = \"POST\"\nsilent\nshow-error\nmax-time = {}\nwrite-out = \"\\n%{{http_code}}\"\ndata-binary = {}\nheader = \"content-type: application/json\"\n",
         cq(url),
@@ -969,13 +1040,28 @@ mod tests {
     #[test]
     fn endpoints() {
         let e = resolve_endpoint("anthropic/claude-sonnet-4-5", None, false, &env(&[("ANTHROPIC_API_KEY", "sk")])).unwrap();
-        assert_eq!((e.api, e.url.as_str(), e.model.as_str()), (Api::Anthropic, "https://api.anthropic.com/v1/messages", "claude-sonnet-4-5"));
+        assert_eq!(
+            (e.api, e.url.as_str(), e.model.as_str()),
+            (Api::Anthropic, "https://api.anthropic.com/v1/messages", "claude-sonnet-4-5")
+        );
         assert!(e.headers.contains(&("x-api-key".into(), "sk".into())));
-        let e = resolve_endpoint("anthropic/claude-x", None, false, &env(&[("CLAUDE_CODE_OAUTH_TOKEN", "oat"), ("ANTHROPIC_BASE_URL", "http://proxy:8080")])).unwrap();
+        let e = resolve_endpoint(
+            "anthropic/claude-x",
+            None,
+            false,
+            &env(&[("CLAUDE_CODE_OAUTH_TOKEN", "oat"), ("ANTHROPIC_BASE_URL", "http://proxy:8080")]),
+        )
+        .unwrap();
         assert_eq!(e.url, "http://proxy:8080/v1/messages");
-        assert!(e.headers.contains(&("authorization".into(), "Bearer oat".into())) && e.headers.contains(&("anthropic-beta".into(), "oauth-2025-04-20".into())));
+        assert!(
+            e.headers.contains(&("authorization".into(), "Bearer oat".into()))
+                && e.headers.contains(&("anthropic-beta".into(), "oauth-2025-04-20".into()))
+        );
         let e = resolve_endpoint("openrouter/anthropic/claude-sonnet-4-5", None, false, &env(&[("OPENROUTER_API_KEY", "or")])).unwrap();
-        assert_eq!((e.api, e.url.as_str(), e.model.as_str()), (Api::Chat, "https://openrouter.ai/api/v1/chat/completions", "anthropic/claude-sonnet-4-5"));
+        assert_eq!(
+            (e.api, e.url.as_str(), e.model.as_str()),
+            (Api::Chat, "https://openrouter.ai/api/v1/chat/completions", "anthropic/claude-sonnet-4-5")
+        );
         let e = resolve_endpoint("gemini/gemini-2.5-pro", None, false, &env(&[("GEMINI_API_KEY", "g")])).unwrap();
         assert_eq!(e.url, "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions");
         let e = resolve_endpoint("ollama/llama3", None, false, &env(&[])).unwrap();
@@ -995,7 +1081,13 @@ mod tests {
     #[test]
     fn anthropic_request_body() {
         let l = llm(
-            LlmConfig { model_name: "anthropic/claude-opus-4-1".into(), temperature: Some(0.2), reasoning_effort: Some("high".into()), session_id: Some("s1".into()), ..Default::default() },
+            LlmConfig {
+                model_name: "anthropic/claude-opus-4-1".into(),
+                temperature: Some(0.2),
+                reasoning_effort: Some("high".into()),
+                session_id: Some("s1".into()),
+                ..Default::default()
+            },
             &[("ANTHROPIC_API_KEY", "sk")],
         );
         let history = vec![json!({"role": "user", "content": "a"}), json!({"role": "assistant", "content": "b", "reasoning_content": "r"})];
@@ -1013,8 +1105,13 @@ mod tests {
         assert!(b["messages"][1].get("reasoning_content").is_none() && b.get("reasoning_effort").is_none());
         assert!(req.headers.contains(&("X-A".into(), "1".into())) && req.headers.contains(&("X-Session-ID".into(), "s1".into())));
         // Default max_tokens = model max output; adaptive models get adaptive thinking.
-        let l = llm(LlmConfig { model_name: "anthropic/claude-opus-4-7".into(), reasoning_effort: Some("low".into()), ..Default::default() }, &[]);
-        let b = l.request(l.params(vec![json!({"role": "system", "content": "sys"}), json!({"role": "user", "content": "x"})], &Map::new())).body;
+        let l = llm(
+            LlmConfig { model_name: "anthropic/claude-opus-4-7".into(), reasoning_effort: Some("low".into()), ..Default::default() },
+            &[],
+        );
+        let b = l
+            .request(l.params(vec![json!({"role": "system", "content": "sys"}), json!({"role": "user", "content": "x"})], &Map::new()))
+            .body;
         assert_eq!((b["max_tokens"].clone(), b["thinking"].clone()), (json!(128000), json!({"type": "adaptive"})));
         assert_eq!(b["system"], json!([{"type": "text", "text": "sys"}]));
         assert!(b.get("temperature").is_none());
@@ -1044,14 +1141,33 @@ mod tests {
         assert!(b.get("extra_body").is_none() && b.get("timeout").is_none());
         assert_eq!(req.timeout, Duration::from_secs(30));
         assert!(req.headers.contains(&("authorization".into(), "Bearer k".into())));
-        let l = llm(LlmConfig { model_name: "openai/gpt-5".into(), temperature: Some(0.3), reasoning_effort: Some("high".into()), ..Default::default() }, &[]);
+        let l = llm(
+            LlmConfig {
+                model_name: "openai/gpt-5".into(),
+                temperature: Some(0.3),
+                reasoning_effort: Some("high".into()),
+                ..Default::default()
+            },
+            &[],
+        );
         let b = l.request(l.params(vec![], &Map::new())).body;
         assert!(b.get("temperature").is_none());
         assert_eq!(b["reasoning_effort"], "high");
         // Responses API, chained and unchained.
-        let l = llm(LlmConfig { model_name: "openai/gpt-5".into(), use_responses_api: true, reasoning_effort: Some("low".into()), ..Default::default() }, &[]);
+        let l = llm(
+            LlmConfig {
+                model_name: "openai/gpt-5".into(),
+                use_responses_api: true,
+                reasoning_effort: Some("low".into()),
+                ..Default::default()
+            },
+            &[],
+        );
         let b = l.responses_request("p", &[json!({"role": "user", "content": "a"})], &Map::new(), None).body;
-        assert_eq!((b["input"][1].clone(), b["reasoning"].clone(), b["max_output_tokens"].clone()), (json!({"role": "user", "content": "p"}), json!({"effort": "low"}), json!(128000)));
+        assert_eq!(
+            (b["input"][1].clone(), b["reasoning"].clone(), b["max_output_tokens"].clone()),
+            (json!({"role": "user", "content": "p"}), json!({"effort": "low"}), json!(128000))
+        );
         let b = l.responses_request("p", &[], &Map::new(), Some("resp_1")).body;
         assert_eq!((b["input"].clone(), b["previous_response_id"].clone()), (json!("p"), json!("resp_1")));
     }
@@ -1060,7 +1176,8 @@ mod tests {
     fn caching_caps_at_four_blocks() {
         let mm = json!({"role": "user", "content": [{"type": "text", "text": "look"}, {"type": "image_url", "image_url": {"url": "data:image/webp;base64,AAAA"}}]});
         let out = add_anthropic_caching(vec![mm.clone(), mm.clone(), mm.clone()], "anthropic/claude-opus-4-1");
-        let count: usize = out.iter().map(|m| m["content"].as_array().unwrap().iter().filter(|p| p.get("cache_control").is_some()).count()).sum();
+        let count: usize =
+            out.iter().map(|m| m["content"].as_array().unwrap().iter().filter(|p| p.get("cache_control").is_some()).count()).sum();
         assert_eq!(count, 4);
         assert!(out[0]["content"][0].get("cache_control").is_none() && out[2]["content"][1].get("cache_control").is_some());
         let plain = vec![json!({"role": "user", "content": "hello"})];
@@ -1075,7 +1192,10 @@ mod tests {
         let v = json!({"model": "claude-sonnet-4-5-20250929", "stop_reason": "end_turn", "content": [{"type": "thinking", "thinking": "hmm"}, {"type": "text", "text": "hi"}],
             "usage": {"input_tokens": 100, "cache_creation_input_tokens": 1000, "cache_read_input_tokens": 2000, "output_tokens": 50}});
         let r = parse_anthropic(&v, info.as_ref(), "m").unwrap();
-        assert_eq!((r.content.as_str(), r.reasoning_content.as_deref(), r.model_name.as_deref()), ("hi", Some("hmm"), Some("claude-sonnet-4-5-20250929")));
+        assert_eq!(
+            (r.content.as_str(), r.reasoning_content.as_deref(), r.model_name.as_deref()),
+            ("hi", Some("hmm"), Some("claude-sonnet-4-5-20250929"))
+        );
         let u = r.usage.unwrap();
         assert_eq!((u.prompt_tokens, u.cache_tokens, u.completion_tokens), (3100, 2000, 50));
         assert!((u.cost_usd - (100.0 * 3e-6 + 1000.0 * 3.75e-6 + 2000.0 * 3e-7 + 50.0 * 1.5e-5)).abs() < 1e-12);
@@ -1093,7 +1213,10 @@ mod tests {
         // OpenRouter reports cost itself; DeepSeek reports cache hits its own way; unknown models are unpriced.
         let v = json!({"choices": [{"finish_reason": "stop", "message": {"content": "x", "reasoning": "why"}}], "usage": {"prompt_tokens": 5, "completion_tokens": 1, "cost": 0.123, "prompt_cache_hit_tokens": 2}});
         let r = parse_chat(&v, None, "m", false).unwrap();
-        assert_eq!((r.usage.clone().unwrap().cost_usd, r.usage.unwrap().cache_tokens, r.reasoning_content.as_deref()), (0.123, 2, Some("why")));
+        assert_eq!(
+            (r.usage.clone().unwrap().cost_usd, r.usage.unwrap().cache_tokens, r.reasoning_content.as_deref()),
+            (0.123, 2, Some("why"))
+        );
         let v = json!({"choices": [{"finish_reason": "length", "message": {"content": "cut"}}]});
         assert!(matches!(parse_chat(&v, None, "m", false), Err(LlmError::OutputLength { .. })));
         let v = json!({"id": "resp_9", "status": "completed", "output": [{"type": "reasoning"}, {"type": "message", "content": [{"type": "output_text", "text": "a"}, {"type": "output_text", "text": "b"}]}], "usage": {"input_tokens": 3, "output_tokens": 4}});
@@ -1103,7 +1226,13 @@ mod tests {
 
     #[test]
     fn error_classification() {
-        assert!(matches!(classify_http(400, r#"{"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long: 210000 tokens > 200000 maximum"}}"#), LlmError::ContextLength(_)));
+        assert!(matches!(
+            classify_http(
+                400,
+                r#"{"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long: 210000 tokens > 200000 maximum"}}"#
+            ),
+            LlmError::ContextLength(_)
+        ));
         assert!(matches!(classify_http(400, r#"{"error":{"code":"context_length_exceeded"}}"#), LlmError::ContextLength(_)));
         assert!(matches!(classify_http(400, "This model's maximum context length is 8192 tokens"), LlmError::ContextLength(_)));
         assert_eq!(classify_http(429, "slow down").kind(), "RateLimitError");
@@ -1120,10 +1249,25 @@ mod tests {
         assert!(lookup_model_info("openai/unknown").is_none());
         let l = llm(LlmConfig { model_name: "openai/unknown".into(), ..Default::default() }, &[]);
         assert_eq!((l.context_limit(), l.output_limit()), (1_000_000, None));
-        let info = json!({"max_input_tokens": 32768, "max_output_tokens": "4096", "input_cost_per_token": 1e-7, "output_cost_per_token": 2e-7});
-        let l = llm(LlmConfig { model_name: "hosted_vllm/llama".into(), api_base: Some("http://h/v1".into()), model_info: Some(info), ..Default::default() }, &[]);
+        let info =
+            json!({"max_input_tokens": 32768, "max_output_tokens": "4096", "input_cost_per_token": 1e-7, "output_cost_per_token": 2e-7});
+        let l = llm(
+            LlmConfig {
+                model_name: "hosted_vllm/llama".into(),
+                api_base: Some("http://h/v1".into()),
+                model_info: Some(info),
+                ..Default::default()
+            },
+            &[],
+        );
         assert_eq!((l.context_limit(), l.output_limit()), (32768, Some(4096)));
-        assert!(LiteLlm::new(LlmConfig { model_name: "hosted_vllm/llama".into(), api_base: Some("http://h".into()), ..Default::default() }, &env(&[])).is_err());
+        assert!(
+            LiteLlm::new(
+                LlmConfig { model_name: "hosted_vllm/llama".into(), api_base: Some("http://h".into()), ..Default::default() },
+                &env(&[])
+            )
+            .is_err()
+        );
         assert!(LiteLlm::new(LlmConfig { model_name: "hosted_vllm/a/b".into(), ..Default::default() }, &env(&[])).is_err());
     }
 
@@ -1148,7 +1292,8 @@ mod tests {
             let resp = json!({"model": "gpt-4o-x", "choices": [{"finish_reason": "stop", "message": {"content": content}}], "usage": {"prompt_tokens": 3, "completion_tokens": 1}});
             rq.respond(tiny_http::Response::from_string(resp.to_string())).unwrap();
         });
-        let cfg = LlmConfig { model_name: "openai/gpt-4o".into(), api_base: Some(format!("http://127.0.0.1:{port}/v1")), ..Default::default() };
+        let cfg =
+            LlmConfig { model_name: "openai/gpt-4o".into(), api_base: Some(format!("http://127.0.0.1:{port}/v1")), ..Default::default() };
         let l = llm(cfg, &[("OPENAI_API_KEY", "sk-\"q\\")]);
         let e = l.call_once("x", &[], &Map::new(), None).await.unwrap_err();
         assert_eq!(e.kind(), "RateLimitError");
@@ -1156,7 +1301,12 @@ mod tests {
         assert_eq!(r.content, "/v1/chat/completions|Bearer sk-\"q\\|he said \"hi\" \\ ok");
         assert_eq!((r.model_name.as_deref(), r.usage.unwrap().prompt_tokens), (Some("gpt-4o-x"), 3));
         handle.join().unwrap();
-        let e = send(&format!("http://127.0.0.1:{port}/v1/chat/completions"), &Request { headers: vec![], body: json!({}), timeout: Duration::from_secs(5) }).await.unwrap_err();
+        let e = send(
+            &format!("http://127.0.0.1:{port}/v1/chat/completions"),
+            &Request { headers: vec![], body: json!({}), timeout: Duration::from_secs(5) },
+        )
+        .await
+        .unwrap_err();
         assert_eq!(e.kind(), "APIConnectionError"); // server gone
     }
 

@@ -28,7 +28,9 @@ pub fn create(args: AgentArgs) -> Result<AgentBox> {
     if let Some(r) = &reasoning_effort
         && !EFFORTS.contains(&r.as_str())
     {
-        bail!("Invalid kwargs for agent 'code-puppy':\n  reasoning_effort: Input should be 'minimal', 'low', 'medium', 'high', 'xhigh' or 'max'");
+        bail!(
+            "Invalid kwargs for agent 'code-puppy':\n  reasoning_effort: Input should be 'minimal', 'low', 'medium', 'high', 'xhigh' or 'max'"
+        );
     }
     Ok(Box::new(CodePuppy { version: args.version_kw(), base_url: args.kw("base_url"), reasoning_effort, args }))
 }
@@ -42,7 +44,9 @@ impl CodePuppy {
         };
         let conn = connection(&self.args, SPEC);
         let Some(api_key) = conn.api_key.clone().filter(|k| !k.is_empty()) else {
-            bail!("No API key found for provider '{provider}'. Set the provider's credential on the host (or pass it with `--ae`/`--ak`) before running Code Puppy.");
+            bail!(
+                "No API key found for provider '{provider}'. Set the provider's credential on the host (or pass it with `--ae`/`--ak`) before running Code Puppy."
+            );
         };
         let endpoint = self.base_url.clone().or(conn.configured_base_url.clone());
         let canonical = conn.provider.clone().unwrap_or_else(|| provider.to_string());
@@ -79,7 +83,8 @@ impl CodePuppy {
     }
 
     fn puppy_cfg(&self, alias: &str) -> String {
-        let mut lines = vec!["[puppy]".to_string(), "puppy_name = HbenchPup".into(), "owner_name = hbench".into(), "auto_save_session = false".into()];
+        let mut lines =
+            vec!["[puppy]".to_string(), "puppy_name = HbenchPup".into(), "owner_name = hbench".into(), "auto_save_session = false".into()];
         if let Some(r) = &self.reasoning_effort {
             let setting = alias.replace(['.', '-', '/'], "_").to_lowercase();
             lines.push(format!("model_settings_{setting}_reasoning_effort = {r}"));
@@ -89,7 +94,11 @@ impl CodePuppy {
 
     fn run_command(&self, instruction: &str) -> String {
         // A leading `!`/`/` would be parsed as a shell/slash command.
-        let instruction = if instruction.trim_start().starts_with(['!', '/']) { format!("Task request:\n{instruction}") } else { instruction.to_string() };
+        let instruction = if instruction.trim_start().starts_with(['!', '/']) {
+            format!("Task request:\n{instruction}")
+        } else {
+            instruction.to_string()
+        };
         format!(
             "{PATH_EXPORT}; set -o pipefail; code-puppy --yolo true --disable-ask-user-question --usage-file {USAGE} --model {} --prompt {} \
              2>&1 </dev/null | stdbuf -oL tee /logs/agent/code-puppy.txt; cp_status=$?; if [ ! -s {USAGE} ]; then \
@@ -107,7 +116,10 @@ fn write_file_cmd(path: &str, content: &str) -> String {
 /// Map `code-puppy-usage.json` onto the context (only keys that are present).
 pub fn apply_usage(text: &str, ctx: &mut AgentContext) {
     let Ok(Value::Object(u)) = serde_json::from_str::<Value>(text) else { return };
-    let int = |k: &str| u.get(k).and_then(|v| v.as_i64().or_else(|| v.as_f64().map(|f| f as i64)).or_else(|| v.as_str().and_then(|s| s.trim().parse().ok())));
+    let int = |k: &str| {
+        u.get(k)
+            .and_then(|v| v.as_i64().or_else(|| v.as_f64().map(|f| f as i64)).or_else(|| v.as_str().and_then(|s| s.trim().parse().ok())))
+    };
     if let Some(v) = int("input_tokens") {
         ctx.n_input_tokens = Some(v);
     }
@@ -184,7 +196,8 @@ mod tests {
         std::fs::write(dir.join("task.toml"), "[environment]\ndocker_image='x'\n").unwrap();
         std::fs::write(dir.join("instruction.md"), "x").unwrap();
         let task = Arc::new(crate::task::Task::load(&dir).unwrap());
-        let args = AgentArgs { load_trajectory: None,
+        let args = AgentArgs {
+            load_trajectory: None,
             model_name: model.map(String::from),
             kwargs: serde_json::from_value(kwargs).unwrap(),
             extra_env: env.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect(),
@@ -207,7 +220,10 @@ mod tests {
 
         let o = agent(json!({}), &[("OPENROUTER_API_KEY", "ok")], Some("openrouter/openai/gpt-5")).unwrap();
         let (def, env) = o.model_definition().unwrap();
-        assert_eq!(def, json!({"type": "custom_openai", "name": "openai/gpt-5", "custom_endpoint": {"url": "https://openrouter.ai/api/v1", "api_key": "$CODE_PUPPY_API_KEY"}}));
+        assert_eq!(
+            def,
+            json!({"type": "custom_openai", "name": "openai/gpt-5", "custom_endpoint": {"url": "https://openrouter.ai/api/v1", "api_key": "$CODE_PUPPY_API_KEY"}})
+        );
         assert_eq!((env["CODE_PUPPY_API_KEY"].as_str(), env["OPENROUTER_API_KEY"].as_str()), ("ok", "ok"));
 
         let r = agent(json!({"base_url": "http://gw/v1"}), &[("OPENAI_API_KEY", "k")], Some("openai-responses/gpt-5")).unwrap();

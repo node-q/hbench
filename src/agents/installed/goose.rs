@@ -153,7 +153,9 @@ pub fn parse_goose_usage(text: &str) -> Option<AgentContext> {
                 for item in m["content"].as_array().into_iter().flatten() {
                     match item["type"].as_str() {
                         Some("text") => entry.text += item["text"].as_str().unwrap_or(""),
-                        Some("thinking") => entry.reasoning += item["thinking"].as_str().filter(|s| !s.is_empty()).or(item["text"].as_str()).unwrap_or(""),
+                        Some("thinking") => {
+                            entry.reasoning += item["thinking"].as_str().filter(|s| !s.is_empty()).or(item["text"].as_str()).unwrap_or("")
+                        }
                         Some("toolRequest") => entry.tool_calls = true,
                         Some("toolResponse") => entry.tool_responses = true,
                         _ => {}
@@ -220,7 +222,8 @@ impl Agent for Goose {
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
         opts::installed_dir(cx).await?;
         ensure_system_dependencies(cx, &["curl", "bzip2", "libxcb", "libgomp"]).await?;
-        let env = BTreeMap::from([("GOOSE_DISABLE_KEYRING".to_string(), "true".to_string()), ("CONFIGURE".to_string(), "false".to_string())]);
+        let env =
+            BTreeMap::from([("GOOSE_DISABLE_KEYRING".to_string(), "true".to_string()), ("CONFIGURE".to_string(), "false".to_string())]);
         exec_agent(
             cx,
             "mkdir -p ~/.config/goose && cat > ~/.config/goose/config.yaml << 'INNEREOF'\nGOOSE_MODEL: ${GOOSE_MODEL}\nGOOSE_PROVIDER: ${GOOSE_PROVIDER}\nextensions:\n  \
@@ -251,7 +254,12 @@ impl Agent for Goose {
         let env = self.run_env()?;
         let recipe = self.recipe_yaml(&instruction)?;
         if let Some(d) = opts::skills_dir(&self.args) {
-            exec_agent_10s(cx, &format!("mkdir -p ~/.config/goose/skills && cp -r {}/* ~/.config/goose/skills/ 2>/dev/null || true", quote(&d)), &env).await?;
+            exec_agent_10s(
+                cx,
+                &format!("mkdir -p ~/.config/goose/skills && cp -r {}/* ~/.config/goose/skills/ 2>/dev/null || true", quote(&d)),
+                &env,
+            )
+            .await?;
         }
         exec_agent_10s(cx, &format!("cat > ~/hbench-recipe.yaml << 'EOF'\n{recipe}EOF"), &env).await?;
         let flags = self.cli_flags()?;
@@ -287,11 +295,18 @@ mod tests {
 
     #[test]
     fn options_env_and_validation() {
-        let g = goose(json!({"max_turns": 30, "reasoning_effort": "high", "temperature": 1, "max_tokens": "4096"}), &[("ANTHROPIC_API_KEY", "sk"), ("ANTHROPIC_BASE_URL", "http://p")], Some("anthropic/claude-x"));
+        let g = goose(
+            json!({"max_turns": 30, "reasoning_effort": "high", "temperature": 1, "max_tokens": "4096"}),
+            &[("ANTHROPIC_API_KEY", "sk"), ("ANTHROPIC_BASE_URL", "http://p")],
+            Some("anthropic/claude-x"),
+        );
         assert_eq!(g.cli_flags().unwrap(), "--max-turns 30");
         let env = g.run_env().unwrap();
         assert_eq!((env["GOOSE_PROVIDER"].as_str(), env["GOOSE_MODEL"].as_str()), ("anthropic", "claude-x"));
-        assert_eq!((env["GOOSE_THINKING_EFFORT"].as_str(), env["GOOSE_TEMPERATURE"].as_str(), env["GOOSE_MAX_TOKENS"].as_str()), ("high", "1.0", "4096"));
+        assert_eq!(
+            (env["GOOSE_THINKING_EFFORT"].as_str(), env["GOOSE_TEMPERATURE"].as_str(), env["GOOSE_MAX_TOKENS"].as_str()),
+            ("high", "1.0", "4096")
+        );
         assert_eq!(env["ANTHROPIC_HOST"], "http://p");
         assert!(!env.contains_key("ANTHROPIC_BASE_URL"));
         assert!(create(opts::test_args(json!({"temperature": 1.5}), &[], None)).is_err());

@@ -460,7 +460,10 @@ impl Task {
             a.spec().validate()?;
         }
         let instruction = if steps.is_empty() {
-            strip_canary(&std::fs::read_to_string(dir.join("instruction.md")).with_context(|| format!("reading {}/instruction.md", dir.display()))?)
+            strip_canary(
+                &std::fs::read_to_string(dir.join("instruction.md"))
+                    .with_context(|| format!("reading {}/instruction.md", dir.display()))?,
+            )
         } else {
             for s in &steps {
                 let p = dir.join("steps").join(&s.name).join("instruction.md");

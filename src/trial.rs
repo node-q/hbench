@@ -47,7 +47,12 @@ pub struct ExceptionInfo {
 
 impl ExceptionInfo {
     pub fn from(e: &anyhow::Error) -> ExceptionInfo {
-        ExceptionInfo { exception_type: error_kind(e).into(), exception_message: format!("{e:#}"), exception_traceback: format!("{e:?}"), occurred_at: Utc::now() }
+        ExceptionInfo {
+            exception_type: error_kind(e).into(),
+            exception_message: format!("{e:#}"),
+            exception_traceback: format!("{e:?}"),
+            occurred_at: Utc::now(),
+        }
     }
 }
 
@@ -219,7 +224,11 @@ impl Trial {
             source: cfg.task.source.clone(),
             task_checksum: task.checksum().unwrap_or_default(),
             config: cfg.clone(),
-            agent_info: AgentInfo { name: cfg.agent.name().into(), version: "unknown".into(), model_info: model_info(&cfg.agent.model_name) },
+            agent_info: AgentInfo {
+                name: cfg.agent.name().into(),
+                version: "unknown".into(),
+                model_info: model_info(&cfg.agent.model_name),
+            },
             agent_result: None,
             verifier_result: None,
             verifier_environment_mode: (!task.has_steps()).then(|| task.verifier_mode(None)),
@@ -232,9 +241,22 @@ impl Trial {
             verifier: None,
             step_results: None,
         };
-        Ok(Trial { cfg, task, dir, log, agent: None, env: None, env_stopped: false, result, agent_permit, shared_verifier_dirty: false, user_agent: None, bridge: None, agent_env: None })
+        Ok(Trial {
+            cfg,
+            task,
+            dir,
+            log,
+            agent: None,
+            env: None,
+            env_stopped: false,
+            result,
+            agent_permit,
+            shared_verifier_dirty: false,
+            user_agent: None,
+            bridge: None,
+            agent_env: None,
+        })
     }
-
 
     fn secs(&self, base: f64, max: Option<f64>, mult: Option<f64>) -> Duration {
         let b = max.map_or(base, |m| base.min(m));
@@ -245,7 +267,13 @@ impl Trial {
         Some(self.secs(base, self.cfg.agent.max_timeout_sec, self.cfg.agent_timeout_multiplier))
     }
     fn verifier_timeout(&self, step: Option<&StepConfig>) -> Duration {
-        let base = self.cfg.verifier.override_timeout_sec.or(step.and_then(|s| s.verifier.timeout_sec)).or(self.task.config.verifier.timeout_sec).unwrap_or(600.0);
+        let base = self
+            .cfg
+            .verifier
+            .override_timeout_sec
+            .or(step.and_then(|s| s.verifier.timeout_sec))
+            .or(self.task.config.verifier.timeout_sec)
+            .unwrap_or(600.0);
         self.secs(base, self.cfg.verifier.max_timeout_sec, self.cfg.verifier_timeout_multiplier)
     }
     fn build_timeout(&self, ec: &EnvironmentConfig) -> Duration {
@@ -263,7 +291,10 @@ impl Trial {
         let env_hosts = normalize_hosts(&self.cfg.environment.extra_allowed_hosts)?;
         let agent_env_baseline = merge_hosts(tc.environment.baseline(), &env_hosts);
         let explicit_agent = step.and_then(|s| s.agent.explicit_policy()).or_else(|| tc.agent.explicit_policy());
-        let agent_phase = merge_hosts(explicit_agent.unwrap_or_else(|| agent_env_baseline.clone()), &normalize_hosts(&self.cfg.agent.extra_allowed_hosts)?);
+        let agent_phase = merge_hosts(
+            explicit_agent.unwrap_or_else(|| agent_env_baseline.clone()),
+            &normalize_hosts(&self.cfg.agent.extra_allowed_hosts)?,
+        );
         let verifier_env_baseline = match self.task.verifier_env_definition(step) {
             None => None,
             Some((ec, _, _)) => {
@@ -272,7 +303,8 @@ impl Trial {
             }
         };
         let explicit_verifier = step.and_then(|s| s.verifier.explicit_policy()).or_else(|| tc.verifier.explicit_policy());
-        let verifier_phase = explicit_verifier.unwrap_or_else(|| verifier_env_baseline.clone().unwrap_or_else(|| agent_env_baseline.clone()));
+        let verifier_phase =
+            explicit_verifier.unwrap_or_else(|| verifier_env_baseline.clone().unwrap_or_else(|| agent_env_baseline.clone()));
         Ok(NetPlan { agent_env_baseline, agent_phase, verifier_env_baseline, verifier_phase })
     }
 
@@ -285,7 +317,15 @@ impl Trial {
         with_convention(&all)
     }
 
-    fn env_spec(&self, project: String, env_dir: PathBuf, config: EnvironmentConfig, baseline: NetworkPolicy, phases: Vec<NetworkPolicy>, agent_env: bool) -> Result<EnvSpec> {
+    fn env_spec(
+        &self,
+        project: String,
+        env_dir: PathBuf,
+        config: EnvironmentConfig,
+        baseline: NetworkPolicy,
+        phases: Vec<NetworkPolicy>,
+        agent_env: bool,
+    ) -> Result<EnvSpec> {
         let e = &self.cfg.environment;
         Ok(EnvSpec {
             compose_dir: self.dir.join(if agent_env { "compose".to_string() } else { format!("compose-{project}") }),
@@ -299,7 +339,11 @@ impl Trial {
             override_memory_mb: e.override_memory_mb,
             override_gpus: e.override_gpus,
             mounts: if agent_env { e.mounts.clone().unwrap_or_default() } else { vec![] },
-            extra_compose: if agent_env { e.extra_docker_compose.iter().map(|p| std::path::absolute(p).unwrap_or_else(|_| p.clone())).collect() } else { vec![] },
+            extra_compose: if agent_env {
+                e.extra_docker_compose.iter().map(|p| std::path::absolute(p).unwrap_or_else(|_| p.clone())).collect()
+            } else {
+                vec![]
+            },
             baseline,
             phase_policies: phases,
             upload_env_dir: true,
@@ -333,7 +377,13 @@ impl Trial {
         }
     }
 
-    fn ctx_with(&self, user: Option<String>, step: Option<&StepConfig>, overlay: BTreeMap<String, String>, logs: &str) -> Result<AgentCtx<'_>> {
+    fn ctx_with(
+        &self,
+        user: Option<String>,
+        step: Option<&StepConfig>,
+        overlay: BTreeMap<String, String>,
+        logs: &str,
+    ) -> Result<AgentCtx<'_>> {
         Ok(AgentCtx { env: self.env(), user, overlay, logs_dir: self.dir.join(logs), step: step.map(|s| s.name.clone()) })
     }
 
@@ -404,7 +454,12 @@ impl Trial {
         if let Some(p) = &load {
             let atif = p.extension().is_some_and(|e| e == "json");
             if !agent.supports_load(atif) {
-                bail!("Agent '{}' does not support loading {} trajectory; cannot honor {}", self.cfg.agent.name(), if atif { "an ATIF" } else { "a native" }, p.display());
+                bail!(
+                    "Agent '{}' does not support loading {} trajectory; cannot honor {}",
+                    self.cfg.agent.name(),
+                    if atif { "an ATIF" } else { "a native" },
+                    p.display()
+                );
             }
         }
         if let Some(u) = self.cfg.user_agent.clone() {
@@ -419,7 +474,13 @@ impl Trial {
             }
             let (tv, uv) = (self.cfg.agent.kwargs.get("version"), u.agent.kwargs.get("version"));
             if u.agent.name() == self.cfg.agent.name() && uv.is_some() && uv != tv {
-                bail!("user_agent pins {}@{} but the target agent is {}@{}: both roles share one container install.", u.agent.name(), uv.unwrap(), self.cfg.agent.name(), tv.map(|v| v.to_string()).unwrap_or("latest".into()));
+                bail!(
+                    "user_agent pins {}@{} but the target agent is {}@{}: both roles share one container install.",
+                    u.agent.name(),
+                    uv.unwrap(),
+                    self.cfg.agent.name(),
+                    tv.map(|v| v.to_string()).unwrap_or("latest".into())
+                );
             }
             std::fs::create_dir_all(self.dir.join("user-agent"))?;
             self.user_agent = Some(agents::create(&u.agent, self.dir.join("user-agent"), task.clone(), None)?);
@@ -427,7 +488,8 @@ impl Trial {
         }
         self.agent_env = agent.extra_env();
         self.agent = Some(agent);
-        if task.has_steps() && self.cfg.agent.resume_trajectory && task.steps().len() > 1 && !self.agent.as_ref().unwrap().supports_resume() {
+        if task.has_steps() && self.cfg.agent.resume_trajectory && task.steps().len() > 1 && !self.agent.as_ref().unwrap().supports_resume()
+        {
             bail!("Agent '{}' does not support resume; cannot honor agent.resume_trajectory", self.cfg.agent.name());
         }
 
@@ -442,7 +504,14 @@ impl Trial {
             }
         }
         let baseline = self.net_plan(steps[0])?.agent_env_baseline;
-        let mut spec = self.env_spec(crate::env::sanitize(&self.cfg.trial_name, false), task.env_dir(), task.config.environment.clone(), baseline, phases, true)?;
+        let mut spec = self.env_spec(
+            crate::env::sanitize(&self.cfg.trial_name, false),
+            task.env_dir(),
+            task.config.environment.clone(),
+            baseline,
+            phases,
+            true,
+        )?;
         if self.user_agent.is_some() {
             spec.log_dirs.push("/logs/user-agent");
         }
@@ -465,12 +534,15 @@ impl Trial {
             None,
             self.cfg.agent_setup_timeout_multiplier,
         );
-        let timeout_err = |what: &str| kind_err("AgentSetupTimeoutError", format!("{what} timed out after {} seconds", setup_timeout.as_secs_f64()));
+        let timeout_err =
+            |what: &str| kind_err("AgentSetupTimeoutError", format!("{what} timed out after {} seconds", setup_timeout.as_secs_f64()));
         if let Some(mut ua) = self.user_agent.take() {
             let overlay = resolve_env_vars(&self.cfg.user_agent.as_ref().unwrap().agent.env)?;
             let r = match self.ctx_with(user.clone(), None, overlay, "user-agent") {
                 Err(e) => Err(e),
-                Ok(cx) => tokio::time::timeout(setup_timeout, ua.setup(&cx)).await.unwrap_or_else(|_| Err(timeout_err("Simulated-user setup"))),
+                Ok(cx) => {
+                    tokio::time::timeout(setup_timeout, ua.setup(&cx)).await.unwrap_or_else(|_| Err(timeout_err("Simulated-user setup")))
+                }
             };
             self.user_agent = Some(ua);
             if let Err(e) = r {
@@ -490,7 +562,10 @@ impl Trial {
                     loop {
                         match agent.setup(&cx).await {
                             Err(e) if n < SETUP_ATTEMPTS => {
-                                log.line(&format!("agent setup attempt {n} failed, retrying: {}", format!("{e:#}").chars().take(300).collect::<String>()));
+                                log.line(&format!(
+                                    "agent setup attempt {n} failed, retrying: {}",
+                                    format!("{e:#}").chars().take(300).collect::<String>()
+                                ));
                                 tokio::time::sleep(Duration::from_secs(5 * n as u64)).await;
                                 n += 1;
                             }
@@ -500,10 +575,13 @@ impl Trial {
                 };
                 match tokio::time::timeout(setup_timeout, attempts).await {
                     Ok(Ok(())) => Ok(()),
-                    Ok(Err((e, n))) => Err(kind_err("AgentSetupError", format!(
-                        "Agent setup failed before the agent started (environment/install problem, {n} attempt{}): {e:#}",
-                        if n == 1 { "" } else { "s" }
-                    ))),
+                    Ok(Err((e, n))) => Err(kind_err(
+                        "AgentSetupError",
+                        format!(
+                            "Agent setup failed before the agent started (environment/install problem, {n} attempt{}): {e:#}",
+                            if n == 1 { "" } else { "s" }
+                        ),
+                    )),
                     Err(_) => Err(timeout_err("Agent setup")),
                 }
             }
@@ -514,7 +592,9 @@ impl Trial {
                 let mut agent = self.agent.take().unwrap();
                 let r = match self.bridge_overlay().and_then(|o| self.ctx_with(user.clone(), None, o, "agent")) {
                     Err(e) => Err(e),
-                    Ok(cx) => tokio::time::timeout(setup_timeout, bridge.setup(&cx, &mut agent)).await.unwrap_or_else(|_| Err(timeout_err("Bridge setup"))),
+                    Ok(cx) => tokio::time::timeout(setup_timeout, bridge.setup(&cx, &mut agent))
+                        .await
+                        .unwrap_or_else(|_| Err(timeout_err("Bridge setup"))),
                 };
                 self.agent = Some(agent);
                 self.bridge = Some(bridge);
@@ -555,7 +635,8 @@ impl Trial {
         if !p.is_file() {
             return Ok(None);
         }
-        let v: Value = serde_json::from_str(&std::fs::read_to_string(&p)?).map_err(|e| anyhow::anyhow!("Task trajectory is not a valid ATIF document ({}): {e}", p.display()))?;
+        let v: Value = serde_json::from_str(&std::fs::read_to_string(&p)?)
+            .map_err(|e| anyhow::anyhow!("Task trajectory is not a valid ATIF document ({}): {e}", p.display()))?;
         if !v["steps"].is_array() || !v["schema_version"].is_string() {
             bail!("Task trajectory is not a valid ATIF document ({}): needs schema_version and steps", p.display());
         }
@@ -610,7 +691,9 @@ impl Trial {
                 match timeout {
                     Some(d) => match tokio::time::timeout(d, run).await {
                         Ok(r) => r,
-                        Err(_) => Err(kind_err("AgentTimeoutError", format!("Agent execution timed out after {} seconds", d.as_secs_f64()))),
+                        Err(_) => {
+                            Err(kind_err("AgentTimeoutError", format!("Agent execution timed out after {} seconds", d.as_secs_f64())))
+                        }
                     },
                     None => run.await,
                 }
@@ -640,9 +723,9 @@ impl Trial {
             Ok(cx) => {
                 let run = ua.run(&prompt, &cx, ctx, false);
                 match timeout {
-                    Some(d) => tokio::time::timeout(d, run)
-                        .await
-                        .unwrap_or_else(|_| Err(kind_err("AgentTimeoutError", format!("Agent execution timed out after {} seconds", d.as_secs_f64())))),
+                    Some(d) => tokio::time::timeout(d, run).await.unwrap_or_else(|_| {
+                        Err(kind_err("AgentTimeoutError", format!("Agent execution timed out after {} seconds", d.as_secs_f64())))
+                    }),
                     None => run.await,
                 }
             }
@@ -724,7 +807,14 @@ impl Trial {
             let hooks = hooks.clone();
             async move {
                 for h in hooks.iter().filter(|h| (h.service == MAIN) == svc_main) {
-                    let r = env.service_exec(&h.service, &h.command, h.user.as_ref().map(|u| u.to_string()).as_deref(), Some(Duration::from_secs_f64(h.timeout_sec))).await;
+                    let r = env
+                        .service_exec(
+                            &h.service,
+                            &h.command,
+                            h.user.as_ref().map(|u| u.to_string()).as_deref(),
+                            Some(Duration::from_secs_f64(h.timeout_sec)),
+                        )
+                        .await;
                     match r {
                         Ok(r) if r.code != 0 => self.log.line(&format!("collect hook in {} exited {}: {}", h.service, r.code, h.command)),
                         Err(e) => self.log.line(&format!("collect hook in {} failed: {e:#}", h.service)),
@@ -826,7 +916,14 @@ impl Trial {
             for d in ["agent", "verifier", "artifacts"] {
                 std::fs::create_dir_all(sdir.join(d))?;
             }
-            let mut sr = StepResult { step_name: step.name.clone(), agent_result: None, verifier_result: None, exception_info: None, agent_execution: None, verifier: None };
+            let mut sr = StepResult {
+                step_name: step.name.clone(),
+                agent_result: None,
+                verifier_result: None,
+                exception_info: None,
+                agent_execution: None,
+                verifier: None,
+            };
 
             if let Err(e) = self.prepare_step(step, resume).await {
                 self.log.line(&format!("step {} preparation failed: {e:#}", step.name));
@@ -880,7 +977,8 @@ impl Trial {
             {
                 self.log.line(&format!("clearing /logs/artifacts failed: {e:#}"));
             }
-            let stop = (sr.exception_info.is_some() && sr.verifier_result.is_none()) || (!self.cfg.verifier.disable && min_reward_failure(sr.verifier_result.as_ref(), step.min_reward.as_ref()));
+            let stop = (sr.exception_info.is_some() && sr.verifier_result.is_none())
+                || (!self.cfg.verifier.disable && min_reward_failure(sr.verifier_result.as_ref(), step.min_reward.as_ref()));
             results.push(sr);
             if stop {
                 self.log.line(&format!("step {} failed its gate; aborting remaining steps", step.name));
@@ -977,7 +1075,9 @@ impl Trial {
         };
         match tokio::time::timeout(timeout, fut).await {
             Ok(r) => r,
-            Err(_) => Err(kind_err("VerifierTimeoutError", format!("Verifier execution timed out after {} seconds", timeout.as_secs_f64()))),
+            Err(_) => {
+                Err(kind_err("VerifierTimeoutError", format!("Verifier execution timed out after {} seconds", timeout.as_secs_f64())))
+            }
         }
     }
 
@@ -1012,7 +1112,9 @@ impl Trial {
             }
             let Some(rel) = script_rel else { bail!("No test script found for step {:?}", step.map(|s| &s.name)) };
             for src in &sources {
-                env.upload_dir(src, "/tests").await.map_err(|e| kind_err("AddTestsDirError", format!("Failed to add tests directory to environment: {e:#}")))?;
+                env.upload_dir(src, "/tests")
+                    .await
+                    .map_err(|e| kind_err("AddTestsDirError", format!("Failed to add tests directory to environment: {e:#}")))?;
             }
             format!("/tests/{rel}")
         };
@@ -1188,7 +1290,8 @@ fn min_reward_failure(v: Option<&VerifierResult>, min: Option<&MinReward>) -> bo
 
 /// Per-key mean over steps that have a verifier result (missing keys count 0).
 pub fn aggregate_step_rewards(results: &[StepResult]) -> Option<VerifierResult> {
-    let valid: Vec<Rewards> = results.iter().filter_map(|r| r.verifier_result.as_ref()).map(|v| v.rewards.clone().unwrap_or_default()).collect();
+    let valid: Vec<Rewards> =
+        results.iter().filter_map(|r| r.verifier_result.as_ref()).map(|v| v.rewards.clone().unwrap_or_default()).collect();
     if valid.is_empty() {
         return None;
     }
@@ -1228,7 +1331,8 @@ fn filter_logs(dir: &Path, include: &[String], exclude: &[String], protect: &[&s
         if protect.contains(&s.as_str()) {
             continue;
         }
-        let keep = (include.is_empty() || include.iter().any(|g| crate::glob_match(g, &s))) && !exclude.iter().any(|g| crate::glob_match(g, &s));
+        let keep =
+            (include.is_empty() || include.iter().any(|g| crate::glob_match(g, &s))) && !exclude.iter().any(|g| crate::glob_match(g, &s));
         if !keep {
             let _ = std::fs::remove_file(dir.join(&f));
         }
@@ -1244,7 +1348,8 @@ pub fn parse_rewards(vdir: &Path) -> Result<Rewards> {
             return Err(kind_err("RewardFileEmptyError", format!("Reward file is empty at {}", json_p.display())));
         }
         let parse_err = |m: String| kind_err("VerifierOutputParseError", m);
-        let v: Value = serde_json::from_str(&raw).map_err(|e| parse_err(format!("Failed to parse rewards from JSON file {}: {e}", json_p.display())))?;
+        let v: Value = serde_json::from_str(&raw)
+            .map_err(|e| parse_err(format!("Failed to parse rewards from JSON file {}: {e}", json_p.display())))?;
         let Value::Object(map) = v else { return Err(parse_err(format!("Rewards in {} must be a JSON object", json_p.display()))) };
         let mut out = Rewards::new();
         for (k, v) in map {
@@ -1261,8 +1366,13 @@ pub fn parse_rewards(vdir: &Path) -> Result<Rewards> {
         if raw.is_empty() {
             return Err(kind_err("RewardFileEmptyError", format!("Reward file is empty at {}", txt_p.display())));
         }
-        let v: f64 = raw.trim().parse().map_err(|_| kind_err("VerifierOutputParseError", format!("Failed to parse rewards from text file {}", txt_p.display())))?;
-        let n = Number::from_f64(v).filter(|_| v.is_finite()).ok_or_else(|| kind_err("VerifierOutputParseError", format!("Non-finite reward in text file {}", txt_p.display())))?;
+        let v: f64 = raw
+            .trim()
+            .parse()
+            .map_err(|_| kind_err("VerifierOutputParseError", format!("Failed to parse rewards from text file {}", txt_p.display())))?;
+        let n = Number::from_f64(v)
+            .filter(|_| v.is_finite())
+            .ok_or_else(|| kind_err("VerifierOutputParseError", format!("Non-finite reward in text file {}", txt_p.display())))?;
         Ok([("reward".to_string(), n)].into())
     } else {
         Err(kind_err("RewardFileNotFoundError", format!("No reward file found at {} or {}", txt_p.display(), json_p.display())))

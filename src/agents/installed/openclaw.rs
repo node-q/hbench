@@ -111,7 +111,8 @@ impl OpenClaw {
                 }
             }
             // `_normalize_provider_models_schema`: ensure a non-empty `models` array.
-            if let Some(prov) = cfg.get_mut("models").and_then(|m| m.get_mut("providers")).and_then(|p| p.get_mut(provider)).and_then(Value::as_object_mut)
+            if let Some(prov) =
+                cfg.get_mut("models").and_then(|m| m.get_mut("providers")).and_then(|p| p.get_mut(provider)).and_then(Value::as_object_mut)
                 && prov.get("models").and_then(Value::as_array).is_none_or(|a| a.is_empty())
             {
                 prov.insert("models".into(), json!([{"id": self.args.model_name, "name": self.args.model_name}]));
@@ -169,7 +170,13 @@ pub fn parse_usage(raw: &str) -> Option<AgentContext> {
         _ => 0,
     };
     let (input, output, cache) = (n("input"), n("output"), n("cacheRead"));
-    Some(AgentContext { n_input_tokens: Some(input + cache), n_output_tokens: Some(output), n_cache_tokens: Some(cache), cost_usd: None, ..Default::default() })
+    Some(AgentContext {
+        n_input_tokens: Some(input + cache),
+        n_output_tokens: Some(output),
+        n_cache_tokens: Some(cache),
+        cost_usd: None,
+        ..Default::default()
+    })
 }
 
 async fn exec_timeout(cx: &AgentCtx<'_>, cmd: &str) -> Result<ExecResult> {
@@ -239,7 +246,8 @@ impl Agent for OpenClaw {
         exec_agent(cx, &nvm22("openclaw setup --baseline --workspace ."), &env).await?;
         exec_agent(cx, "mkdir -p ~/.openclaw && cp /logs/agent/openclaw.upload.json ~/.openclaw/openclaw.json", &env).await?;
         if let Some(d) = skills_dir(&self.args) {
-            exec_agent(cx, &format!("mkdir -p ~/.openclaw/skills && cp -r {}/* ~/.openclaw/skills/ 2>/dev/null || true", quote(&d)), &env).await?;
+            exec_agent(cx, &format!("mkdir -p ~/.openclaw/skills && cp -r {}/* ~/.openclaw/skills/ 2>/dev/null || true", quote(&d)), &env)
+                .await?;
         }
         let cmd = format!(
             ". ~/.nvm/nvm.sh && nvm use 22 && openclaw agent --local --json {} --model {} --message {} 2>&1 </dev/null | stdbuf -oL tee /logs/agent/openclaw.txt",
@@ -274,13 +282,22 @@ mod tests {
 
     #[test]
     fn config_and_flags() {
-        let a = oc(json!({"openclaw_config": {"agents": {"defaults": {"verboseDefault": "off"}}, "tools": {"deny": ["x", "message", 3]}}, "disable_web_search": true, "failover_retries": 2}), &[("OPENAI_BASE_URL", "https://proxy.example.com/v1")]);
+        let a = oc(
+            json!({"openclaw_config": {"agents": {"defaults": {"verboseDefault": "off"}}, "tools": {"deny": ["x", "message", 3]}}, "disable_web_search": true, "failover_retries": 2}),
+            &[("OPENAI_BASE_URL", "https://proxy.example.com/v1")],
+        );
         let c = a.full_config();
         assert_eq!(c["agents"]["defaults"], json!({"workspace": ".", "verboseDefault": "off"}));
-        assert_eq!(c["models"]["providers"]["openai"], json!({"baseUrl": "https://proxy.example.com/v1", "models": [{"id": "openai/gpt-4.1", "name": "openai/gpt-4.1"}]}));
+        assert_eq!(
+            c["models"]["providers"]["openai"],
+            json!({"baseUrl": "https://proxy.example.com/v1", "models": [{"id": "openai/gpt-4.1", "name": "openai/gpt-4.1"}]})
+        );
         assert_eq!(c["tools"]["deny"], json!(["x", "message", "group:web"]));
         assert_eq!(c["auth"]["cooldowns"]["rateLimitedProfileRotations"], 2);
-        let user = oc(json!({"openclaw_config": {"models": {"providers": {"openai": {"baseUrl": "https://example.com/v1"}}}}}), &[("OPENAI_BASE_URL", "https://proxy")]);
+        let user = oc(
+            json!({"openclaw_config": {"models": {"providers": {"openai": {"baseUrl": "https://example.com/v1"}}}}}),
+            &[("OPENAI_BASE_URL", "https://proxy")],
+        );
         assert_eq!(user.full_config()["models"]["providers"]["openai"]["baseUrl"], "https://example.com/v1");
         assert_eq!(oc(json!({"reasoning_effort": "high", "timeout": 60}), &[]).cli_flags(), "--agent main --thinking high --timeout 60");
         assert!(OpenClaw::new(args(json!({"failover_retries": -1}), &[], None)).is_err());

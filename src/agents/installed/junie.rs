@@ -98,7 +98,10 @@ impl Junie {
         };
         let mut f = vec![];
         if let Some(v) = args.kw("timeout_ms") {
-            let n: i64 = v.trim().parse().map_err(|_| anyhow!("Invalid kwargs for agent 'junie':\n  timeout_ms: Input should be a valid integer"))?;
+            let n: i64 = v
+                .trim()
+                .parse()
+                .map_err(|_| anyhow!("Invalid kwargs for agent 'junie':\n  timeout_ms: Input should be a valid integer"))?;
             f.push(format!("--timeout {n}"));
         }
         if let Some(v) = args.kw("guidelines_filename") {
@@ -165,7 +168,11 @@ impl Junie {
             let (name, fallbacks) = provider_key_env(p);
             let all: Vec<&str> = std::iter::once(name).chain(fallbacks.iter().copied()).collect();
             let Some(v) = all.iter().find_map(|n| self.args.get_env(n)) else {
-                bail!("Junie needs a {p} API key for model '{}'. Set one of: {}.", self.args.model_name.as_deref().unwrap_or(""), all.join(", "));
+                bail!(
+                    "Junie needs a {p} API key for model '{}'. Set one of: {}.",
+                    self.args.model_name.as_deref().unwrap_or(""),
+                    all.join(", ")
+                );
             };
             env.insert(name.into(), v);
             env.insert("JUNIE_LLM_PROVIDER".into(), p.into());
@@ -231,7 +238,13 @@ pub fn usage_from_events(text: &str) -> Option<AgentContext> {
             }
         }
     }
-    (steps > 0).then(|| AgentContext { n_input_tokens: Some(prompt), n_output_tokens: Some(completion), n_cache_tokens: Some(cached), cost_usd: cost, ..Default::default() })
+    (steps > 0).then(|| AgentContext {
+        n_input_tokens: Some(prompt),
+        n_output_tokens: Some(completion),
+        n_cache_tokens: Some(cached),
+        cost_usd: cost,
+        ..Default::default()
+    })
 }
 
 fn find_events(dir: &Path) -> Option<PathBuf> {
@@ -270,7 +283,8 @@ impl Agent for Junie {
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
         cx.env.exec_root("[ -d /installed-agent ] || mkdir -p /installed-agent", None).await?;
         ensure_system_dependencies(cx, &["curl", "bash", "unzip"]).await?;
-        let url = if self.channel == "eap" { "https://junie.jetbrains.com/install-eap.sh" } else { "https://junie.jetbrains.com/install.sh" };
+        let url =
+            if self.channel == "eap" { "https://junie.jetbrains.com/install-eap.sh" } else { "https://junie.jetbrains.com/install.sh" };
         let none = BTreeMap::new();
         exec_agent(
             cx,
@@ -281,13 +295,25 @@ impl Agent for Junie {
             &none,
         )
         .await?;
-        exec_agent(cx, &write_json_cmd("$HOME/.junie/settings.json", &json!({"shareAnonymousStatistics": self.share_anonymous_statistics})), &none).await?;
+        exec_agent(
+            cx,
+            &write_json_cmd("$HOME/.junie/settings.json", &json!({"shareAnonymousStatistics": self.share_anonymous_statistics})),
+            &none,
+        )
+        .await?;
         let config = self.build_config().map_err(|e| anyhow!("Agent install failed: {e}"))?;
         exec_agent(cx, &write_json_cmd("$HOME/.junie/config.json", &config), &none).await?;
         if self.version.is_none() {
             let r = cx.exec(&format!("{PATH_EXPORT}junie --version"), &none, None).await?;
             if r.code == 0 && !r.stdout.is_empty() {
-                self.version = r.stdout.lines().map(str::trim).filter(|l| !l.is_empty()).last().map(String::from).or_else(|| Some(r.stdout.trim().into()));
+                self.version = r
+                    .stdout
+                    .lines()
+                    .map(str::trim)
+                    .filter(|l| !l.is_empty())
+                    .last()
+                    .map(String::from)
+                    .or_else(|| Some(r.stdout.trim().into()));
             }
         }
         Ok(())
@@ -307,7 +333,14 @@ impl Agent for Junie {
         }
         if let Some(d) = self.skills_dir() {
             let d = quote(&d);
-            exec_agent(cx, &format!("if [ -d {d} ]; then mkdir -p \"$HOME/.junie/skills\" && cp -r {d}/* \"$HOME/.junie/skills/\" 2>/dev/null || true; fi"), &none).await?;
+            exec_agent(
+                cx,
+                &format!(
+                    "if [ -d {d} ]; then mkdir -p \"$HOME/.junie/skills\" && cp -r {d}/* \"$HOME/.junie/skills/\" 2>/dev/null || true; fi"
+                ),
+                &none,
+            )
+            .await?;
         }
         let r = exec_agent(cx, &self.run_command(&instruction, resume), &env).await;
         // Collect the newest session + logs even when Junie failed.
@@ -344,7 +377,8 @@ mod tests {
         std::fs::write(dir.join("task.toml"), "[environment]\ndocker_image='x'\n").unwrap();
         std::fs::write(dir.join("instruction.md"), "x").unwrap();
         let task = Arc::new(crate::task::Task::load(&dir).unwrap());
-        Junie::new(AgentArgs { load_trajectory: None,
+        Junie::new(AgentArgs {
+            load_trajectory: None,
             model_name: model.map(String::from),
             kwargs: serde_json::from_value(kwargs).unwrap(),
             extra_env: env.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect(),
@@ -357,7 +391,12 @@ mod tests {
 
     #[test]
     fn options_auth_and_command() {
-        let mut a = agent(json!({"timeout_ms": 5000, "output_format": "json", "json_output": true, "config": {"brave": false, "x": 1}}), &[("ANTHROPIC_API_KEY", "ak")], Some("claude/sonnet")).unwrap();
+        let mut a = agent(
+            json!({"timeout_ms": 5000, "output_format": "json", "json_output": true, "config": {"brave": false, "x": 1}}),
+            &[("ANTHROPIC_API_KEY", "ak")],
+            Some("claude/sonnet"),
+        )
+        .unwrap();
         let p = a.resolve_provider().unwrap();
         let env = a.auth_env(p).unwrap();
         assert_eq!((env["JUNIE_ANTHROPIC_API_KEY"].as_str(), env["JUNIE_LLM_PROVIDER"].as_str()), ("ak", "anthropic"));

@@ -55,7 +55,14 @@ impl QwenCode {
     }
 
     fn skills_command(&self) -> Option<String> {
-        let d = self.args.task.config.environment.skills_dir.clone().or_else(|| (!self.args.skills.is_empty()).then(|| "/hbench/skills".into()))?;
+        let d = self
+            .args
+            .task
+            .config
+            .environment
+            .skills_dir
+            .clone()
+            .or_else(|| (!self.args.skills.is_empty()).then(|| "/hbench/skills".into()))?;
         Some(format!("mkdir -p ~/.qwen/skills && cp -r {}/* ~/.qwen/skills/ 2>/dev/null || true", quote(&d)))
     }
 
@@ -152,7 +159,9 @@ fn find_session_jsonl(logs_dir: &Path) -> Option<PathBuf> {
 
 /// Usage summed over subagent transcripts upstream embeds (those whose parent chain reaches a root).
 fn subagent_usage(session: &Path) -> (i64, i64, i64) {
-    let (Some(stem), Some(project)) = (session.file_stem().and_then(|s| s.to_str()), session.parent().and_then(Path::parent)) else { return (0, 0, 0) };
+    let (Some(stem), Some(project)) = (session.file_stem().and_then(|s| s.to_str()), session.parent().and_then(Path::parent)) else {
+        return (0, 0, 0);
+    };
     let mut files: Vec<PathBuf> = std::fs::read_dir(project.join("subagents").join(stem))
         .into_iter()
         .flatten()
@@ -169,7 +178,11 @@ fn subagent_usage(session: &Path) -> (i64, i64, i64) {
             continue;
         }
         let meta_path = f.with_file_name(format!("{}.meta.json", f.file_stem().unwrap().to_string_lossy()));
-        let meta: Value = std::fs::read_to_string(meta_path).ok().and_then(|t| serde_json::from_str(&t).ok()).filter(Value::is_object).unwrap_or(json!({}));
+        let meta: Value = std::fs::read_to_string(meta_path)
+            .ok()
+            .and_then(|t| serde_json::from_str(&t).ok())
+            .filter(Value::is_object)
+            .unwrap_or(json!({}));
         let id = meta["agentId"].as_str().or_else(|| events.iter().find_map(|e| e["agentId"].as_str())).map(String::from);
         let Some(id) = id.filter(|i| !i.is_empty() && !usage.contains_key(i)) else { continue };
         // A malformed transcript is skipped on its own; siblings survive.
@@ -214,7 +227,12 @@ impl Agent for QwenCode {
         cx.env.exec_root("[ -d /installed-agent ] || mkdir -p /installed-agent", None).await?;
         ensure_system_dependencies(cx, &["curl"]).await?;
         let vs = self.version.as_deref().unwrap_or("latest");
-        exec_agent(cx, &format!("set -euo pipefail; {NVM_NODE_INSTALL} && npm install -g @qwen-code/qwen-code@{vs} && qwen --version"), &BTreeMap::new()).await?;
+        exec_agent(
+            cx,
+            &format!("set -euo pipefail; {NVM_NODE_INSTALL} && npm install -g @qwen-code/qwen-code@{vs} && qwen --version"),
+            &BTreeMap::new(),
+        )
+        .await?;
         if self.version.is_none()
             && let Ok(r) = cx.exec(". ~/.nvm/nvm.sh; qwen --version", &BTreeMap::new(), None).await
             && r.code == 0
@@ -270,9 +288,17 @@ mod tests {
 
     #[test]
     fn env_flags_and_options() {
-        let a = QwenCode::new(args(json!({"api_key": "kw-key"}), &[("OPENAI_API_KEY", "env-key"), ("OPENAI_API_BASE", "http://b")], Some("openai/qwen3-coder-plus"))).unwrap();
+        let a = QwenCode::new(args(
+            json!({"api_key": "kw-key"}),
+            &[("OPENAI_API_KEY", "env-key"), ("OPENAI_API_BASE", "http://b")],
+            Some("openai/qwen3-coder-plus"),
+        ))
+        .unwrap();
         let env = a.run_env();
-        assert_eq!((env["OPENAI_API_KEY"].as_str(), env["OPENAI_API_BASE"].as_str(), env["OPENAI_MODEL"].as_str()), ("kw-key", "http://b", "qwen3-coder-plus"));
+        assert_eq!(
+            (env["OPENAI_API_KEY"].as_str(), env["OPENAI_API_BASE"].as_str(), env["OPENAI_MODEL"].as_str()),
+            ("kw-key", "http://b", "qwen3-coder-plus")
+        );
         let b = QwenCode::new(args(json!({"base_url": "http://kw"}), &[("OPENAI_API_BASE", "http://b")], Some("m"))).unwrap();
         assert_eq!(b.run_env()["OPENAI_BASE_URL"], "http://kw");
         assert!(!b.run_env().contains_key("OPENAI_API_BASE"));
@@ -313,17 +339,28 @@ mod tests {
         let fc = json!([{"functionCall": {"id": "call_parent", "name": "agent", "args": {}}}]);
         write_jsonl(
             &project.join("chats/session-1.jsonl"),
-            &[user("Delegate.", json!({})), assistant(fc, json!({"promptTokenCount": 100, "candidatesTokenCount": 10, "cachedContentTokenCount": 5}), json!({}))],
+            &[
+                user("Delegate.", json!({})),
+                assistant(fc, json!({"promptTokenCount": 100, "candidatesTokenCount": 10, "cachedContentTokenCount": 5}), json!({})),
+            ],
         );
         let sub = |id: &str, parent: Value, events: &[Value]| {
             let p = project.join(format!("subagents/session-1/agent-{id}.jsonl"));
             write_jsonl(&p, events);
-            std::fs::write(p.with_file_name(format!("agent-{id}.meta.json")), json!({"agentId": id, "agentType": "Explore", "parentAgentId": parent}).to_string()).unwrap();
+            std::fs::write(
+                p.with_file_name(format!("agent-{id}.meta.json")),
+                json!({"agentId": id, "agentType": "Explore", "parentAgentId": parent}).to_string(),
+            )
+            .unwrap();
         };
         let su = json!({"promptTokenCount": 700, "candidatesTokenCount": 70, "cachedContentTokenCount": 35});
         sub("Explore-call_parent", Value::Null, &[user("Inspect.", json!({})), assistant(json!([{"text": "ok"}]), su.clone(), json!({}))]);
         // Nested child counts; a malformed (bad timestamp) sibling is skipped.
-        sub("Child-call_x", json!("Explore-call_parent"), &[assistant(json!([{"text": "c"}]), json!({"promptTokenCount": 1, "candidatesTokenCount": 1}), json!({}))]);
+        sub(
+            "Child-call_x",
+            json!("Explore-call_parent"),
+            &[assistant(json!([{"text": "c"}]), json!({"promptTokenCount": 1, "candidatesTokenCount": 1}), json!({}))],
+        );
         sub("Bad-call_y", Value::Null, &[user("bad", json!({"timestamp": "not-a-timestamp"})), assistant(json!([]), su, json!({}))]);
         let mut ctx = AgentContext::default();
         a.populate_context_post_run(&logs, &mut ctx);

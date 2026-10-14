@@ -10,7 +10,8 @@ use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
-const SPEC: Spec = Spec { default_provider: Some("meta"), api_key_envs: &["META_API_KEY"], base_url_envs: &["MUSE_CODE_BASE_URL"], passthrough: false };
+const SPEC: Spec =
+    Spec { default_provider: Some("meta"), api_key_envs: &["META_API_KEY"], base_url_envs: &["MUSE_CODE_BASE_URL"], passthrough: false };
 const INSTALL_SCRIPT_URL: &str = "https://dev.meta.ai/install.sh";
 const PATH_EXPORT: &str = "export PATH=\"$HOME/.local/bin:$PATH\"";
 const LOGS: &str = "/logs/agent";
@@ -128,7 +129,14 @@ impl MuseCode {
 
     fn run_command(&self, instruction: &str, session_id: &str, load: bool) -> Result<String> {
         let prompt = format!("{RUNTIME_DIR}/prompt.txt");
-        let mut parts = vec!["muse exec".to_string(), "--json".into(), "--yolo".into(), "--user-input-auto-resolve".into(), format!("--session-id {session_id}"), format!("--prompt-file {prompt}")];
+        let mut parts = vec![
+            "muse exec".to_string(),
+            "--json".into(),
+            "--yolo".into(),
+            "--user-input-auto-resolve".into(),
+            format!("--session-id {session_id}"),
+            format!("--prompt-file {prompt}"),
+        ];
         if load {
             parts.push("--allow-workspace-switch".into());
         }
@@ -158,7 +166,8 @@ impl MuseCode {
 fn validate_load_trajectory(p: &Path) -> Result<()> {
     if p.extension().is_some_and(|e| e == "json") {
         let raw = std::fs::read_to_string(p).map_err(|e| anyhow!("load_trajectory file not found: {}: {e}", p.display()))?;
-        let v: Value = serde_json::from_str(&raw).map_err(|e| anyhow!("load_trajectory is not a valid ATIF trajectory file ({}): {e}", p.display()))?;
+        let v: Value = serde_json::from_str(&raw)
+            .map_err(|e| anyhow!("load_trajectory is not a valid ATIF trajectory file ({}): {e}", p.display()))?;
         if !v["steps"].is_array() {
             bail!("load_trajectory is not a valid ATIF trajectory file ({}): missing steps", p.display());
         }
@@ -184,18 +193,29 @@ fn native_session_id_strict(records: &Records) -> Result<String> {
 }
 
 fn session_metadata(records: &Records) -> Value {
-    records.iter().find(|(_, r)| r["payload"]["kind"] == "metadata").map(|(_, r)| r["payload"]["record"].clone()).unwrap_or_else(|| json!({}))
+    records
+        .iter()
+        .find(|(_, r)| r["payload"]["kind"] == "metadata")
+        .map(|(_, r)| r["payload"]["record"].clone())
+        .unwrap_or_else(|| json!({}))
 }
 
 /// Base `_atif_session_id`: reuse the trajectory's session id when it is a UUID; else mint one.
 fn atif_session_id(traj: &Value) -> String {
-    traj["session_id"].as_str().filter(|s| uuid::Uuid::parse_str(s).is_ok()).map(String::from).unwrap_or_else(|| uuid::Uuid::new_v4().to_string())
+    traj["session_id"]
+        .as_str()
+        .filter(|s| uuid::Uuid::parse_str(s).is_ok())
+        .map(String::from)
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string())
 }
 
 /// Python `json.dumps` (default separators, ensure_ascii).
 fn py_json(v: &Value) -> String {
     match v {
-        Value::Object(m) => format!("{{{}}}", m.iter().map(|(k, v)| format!("{}: {}", py_json(&Value::String(k.clone())), py_json(v))).collect::<Vec<_>>().join(", ")),
+        Value::Object(m) => format!(
+            "{{{}}}",
+            m.iter().map(|(k, v)| format!("{}: {}", py_json(&Value::String(k.clone())), py_json(v))).collect::<Vec<_>>().join(", ")
+        ),
         Value::Array(a) => format!("[{}]", a.iter().map(py_json).collect::<Vec<_>>().join(", ")),
         Value::String(s) => serde_json::to_string(s).unwrap().chars().fold(String::new(), |mut o, c| {
             if c.is_ascii() {
@@ -241,10 +261,18 @@ pub fn atif_to_native(traj: &Value, sid: &str) -> Result<String> {
     };
     let event = |rows: &mut Vec<Value>, run_id: &str, run_seq: &mut i64, value: Value| {
         *run_seq += 1;
-        append(rows, json!({"kind": "run", "run_id": run_id, "event": value, "source_run_record_id": uuid::Uuid::new_v4().to_string(), "source_run_record_sequence": *run_seq}), "runtime.session");
+        append(
+            rows,
+            json!({"kind": "run", "run_id": run_id, "event": value, "source_run_record_id": uuid::Uuid::new_v4().to_string(), "source_run_record_sequence": *run_seq}),
+            "runtime.session",
+        );
     };
     // The uploader replaces this placeholder with the task environment's cwd.
-    append(&mut rows, json!({"kind": "metadata", "record": {"workspace_root": "/", "provider_id": "meta", "web_search_mode": "client", "tool_surface_version": "2"}}), "runtime.session.metadata");
+    append(
+        &mut rows,
+        json!({"kind": "metadata", "record": {"workspace_root": "/", "provider_id": "meta", "web_search_mode": "client", "tool_surface_version": "2"}}),
+        "runtime.session.metadata",
+    );
     let steps: Vec<&Value> = traj["steps"].as_array().into_iter().flatten().collect();
     let (mut system, mut user_count, mut system_allowed) = (vec![], 0, true);
     for step in &steps {
@@ -271,7 +299,12 @@ pub fn atif_to_native(traj: &Value, sid: &str) -> Result<String> {
                 }
                 event(&mut rows, &run_id, &mut run_seq, json!({"kind": "started", "prompt": session_text(&step["message"])?}));
                 if !system.is_empty() {
-                    event(&mut rows, &run_id, &mut run_seq, json!({"kind": "model_request_configured", "base_instructions": system.join("\n")}));
+                    event(
+                        &mut rows,
+                        &run_id,
+                        &mut run_seq,
+                        json!({"kind": "model_request_configured", "base_instructions": system.join("\n")}),
+                    );
                 }
                 started = true;
                 continue;
@@ -286,12 +319,22 @@ pub fn atif_to_native(traj: &Value, sid: &str) -> Result<String> {
         let reasoning = &step["extra"]["muse_reasoning"];
         let reasoning_text = step["reasoning_content"].as_str().unwrap_or("");
         if !reasoning_text.is_empty() || reasoning.as_object().is_some_and(|o| !o.is_empty()) {
-            event(&mut rows, &run_id, &mut run_seq, json!({"kind": "reasoning_committed", "message_id": uuid::Uuid::new_v4().to_string(), "response_id": response_id,
-                "text": reasoning_text, "encrypted_content": reasoning["encrypted_content"]}));
+            event(
+                &mut rows,
+                &run_id,
+                &mut run_seq,
+                json!({"kind": "reasoning_committed", "message_id": uuid::Uuid::new_v4().to_string(), "response_id": response_id,
+                "text": reasoning_text, "encrypted_content": reasoning["encrypted_content"]}),
+            );
         }
         let message = session_text(&step["message"])?;
         if !message.is_empty() {
-            event(&mut rows, &run_id, &mut run_seq, json!({"kind": "assistant_message_committed", "message_id": uuid::Uuid::new_v4().to_string(), "response_id": response_id, "text": message}));
+            event(
+                &mut rows,
+                &run_id,
+                &mut run_seq,
+                json!({"kind": "assistant_message_committed", "message_id": uuid::Uuid::new_v4().to_string(), "response_id": response_id, "text": message}),
+            );
         }
         let calls: Vec<&Value> = step["tool_calls"].as_array().into_iter().flatten().collect();
         if !calls.is_empty() {
@@ -304,7 +347,12 @@ pub fn atif_to_native(traj: &Value, sid: &str) -> Result<String> {
                     json!({"call_id": c["tool_call_id"], "id": id, "name": c["function_name"], "args": args})
                 })
                 .collect();
-            event(&mut rows, &run_id, &mut run_seq, json!({"kind": "assistant_tool_calls_committed", "message_id": uuid::Uuid::new_v4().to_string(), "response_id": response_id, "tool_calls": tools}));
+            event(
+                &mut rows,
+                &run_id,
+                &mut run_seq,
+                json!({"kind": "assistant_tool_calls_committed", "message_id": uuid::Uuid::new_v4().to_string(), "response_id": response_id, "tool_calls": tools}),
+            );
         }
         let results: Vec<&Value> = step["observation"]["results"].as_array().into_iter().flatten().collect();
         if !calls.is_empty() {
@@ -317,7 +365,12 @@ pub fn atif_to_native(traj: &Value, sid: &str) -> Result<String> {
             for (i, c) in calls.iter().enumerate() {
                 out.push(json!({"tool_call_index": i, "tool_call_id": c["tool_call_id"], "text": session_text(&by_call[&c["tool_call_id"].to_string()]["content"])?}));
             }
-            event(&mut rows, &run_id, &mut run_seq, json!({"kind": "tool_result_batch_committed", "batch_id": uuid::Uuid::new_v4().to_string(), "results": out}));
+            event(
+                &mut rows,
+                &run_id,
+                &mut run_seq,
+                json!({"kind": "tool_result_batch_committed", "batch_id": uuid::Uuid::new_v4().to_string(), "results": out}),
+            );
         } else if !results.is_empty() {
             bail!("Muse ATIF loading requires tool results to reference a tool call");
         }
@@ -459,8 +512,15 @@ fn native_session_id(records: &Records) -> Option<String> {
 /// Whether upstream's ATIF converter would produce any step (else the session yields no trajectory).
 fn has_steps(records: &Records) -> bool {
     run_events(records, 0).iter().any(|e| match e["kind"].as_str().unwrap_or("") {
-        "started" | "model_response_created" | "assistant_message_committed" | "assistant_tool_calls_committed" | "reasoning_committed"
-        | "reasoning_summary_committed" | "model_completed" | "tool_result" | "context_compaction_installed" => true,
+        "started"
+        | "model_response_created"
+        | "assistant_message_committed"
+        | "assistant_tool_calls_committed"
+        | "reasoning_committed"
+        | "reasoning_summary_committed"
+        | "model_completed"
+        | "tool_result"
+        | "context_compaction_installed" => true,
         "model_request_configured" => e["base_instructions"].as_str().is_some_and(|s| !s.is_empty()),
         "tool_result_batch_committed" => e["results"].as_array().is_some_and(|a| !a.is_empty()),
         _ => false,
@@ -481,7 +541,8 @@ fn sum_usage(values: &[Usage]) -> Usage {
         let known: Vec<i64> = values.iter().filter_map(f).collect();
         (!known.is_empty()).then(|| known.iter().sum())
     };
-    let cost = if values.is_empty() || values.iter().any(|v| v.cost.is_none()) { None } else { Some(values.iter().filter_map(|v| v.cost).sum()) };
+    let cost =
+        if values.is_empty() || values.iter().any(|v| v.cost.is_none()) { None } else { Some(values.iter().filter_map(|v| v.cost).sum()) };
     Usage { prompt: s(|v| v.prompt), completion: s(|v| v.completion), cached: s(|v| v.cached), cost }
 }
 
@@ -491,7 +552,12 @@ fn session_usage(records: &Records, after: usize) -> Usage {
         .filter(|e| e["kind"] == "model_completed" && e["usage"].is_object())
         .map(|e| {
             let u = &e["usage"];
-            Usage { prompt: u["input_tokens"].as_i64(), completion: u["output_tokens"].as_i64(), cached: u["cached_tokens"].as_i64(), cost: u["cost_usd"].as_f64() }
+            Usage {
+                prompt: u["input_tokens"].as_i64(),
+                completion: u["output_tokens"].as_i64(),
+                cached: u["cached_tokens"].as_i64(),
+                cost: u["cost_usd"].as_f64(),
+            }
         })
         .collect();
     sum_usage(&values)
@@ -573,7 +639,9 @@ impl Agent for MuseCode {
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
         cx.env.exec_root("[ -d /installed-agent ] || mkdir -p /installed-agent", None).await?;
         if self.version.is_some() {
-            bail!("Agent install failed: muse-code does not support version pinning: the installer always fetches the latest stable release.");
+            bail!(
+                "Agent install failed: muse-code does not support version pinning: the installer always fetches the latest stable release."
+            );
         }
         ensure_system_dependencies(cx, &["curl", "bash", "ca_certificates", "coreutils"]).await?;
         exec_agent(
@@ -673,7 +741,8 @@ mod tests {
         std::fs::write(dir.join("task.toml"), "[environment]\ndocker_image='x'\n").unwrap();
         std::fs::write(dir.join("instruction.md"), "x").unwrap();
         let task = Arc::new(crate::task::Task::load(&dir).unwrap());
-        MuseCode::new(AgentArgs { load_trajectory: None,
+        MuseCode::new(AgentArgs {
+            load_trajectory: None,
             model_name: model.map(String::from),
             kwargs: serde_json::from_value(kwargs).unwrap(),
             extra_env: env.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect(),
@@ -717,7 +786,12 @@ mod tests {
 
     #[test]
     fn flags_command_and_validation() {
-        let a = agent(json!({"reasoning_effort": "xhigh", "max_model_steps": 50}), &[("META_API_KEY", "test-key")], Some("meta/muse-spark-1.2")).unwrap();
+        let a = agent(
+            json!({"reasoning_effort": "xhigh", "max_model_steps": 50}),
+            &[("META_API_KEY", "test-key")],
+            Some("meta/muse-spark-1.2"),
+        )
+        .unwrap();
         let cmd = a.run_command("do the task", SID, false).unwrap();
         for part in [
             "muse exec --json --yolo --user-input-auto-resolve --session-id 00000000-0000-4000-8000-000000000001 --prompt-file /tmp/hbench-muse/agent/prompt.txt",
@@ -737,7 +811,12 @@ mod tests {
         let e = agent(json!({"base_url": "https://explicit/v1"}), &[("META_BASE_URL", "https://other")], None).unwrap();
         assert_eq!(e.model_connection().base_url.as_deref(), Some("https://explicit/v1"));
         assert_eq!(e.run_command("hi", SID, false).unwrap().matches("--base-url").count(), 1);
-        for bad in [json!({"max_model_steps": 0}), json!({"max_model_steps": -1}), json!({"reasoning_effort": "none"}), json!({"reasoning_effort": "invalid"})] {
+        for bad in [
+            json!({"max_model_steps": 0}),
+            json!({"max_model_steps": -1}),
+            json!({"reasoning_effort": "none"}),
+            json!({"reasoning_effort": "invalid"}),
+        ] {
             assert!(agent(bad, &[], None).is_err());
         }
         for cfg in [json!({"schema_version": 2}), json!({"schema_version": true})] {
@@ -750,12 +829,27 @@ mod tests {
 
     #[test]
     fn config_and_mcp_merge() {
-        let srv = |name: &str, t: &str, url: Option<&str>, cmd: Option<&str>| McpServer { name: name.into(), transport: t.into(), url: url.map(String::from), command: cmd.map(String::from), args: if cmd.is_some() { vec!["--root".into(), "a b".into()] } else { vec![] } };
+        let srv = |name: &str, t: &str, url: Option<&str>, cmd: Option<&str>| McpServer {
+            name: name.into(),
+            transport: t.into(),
+            url: url.map(String::from),
+            command: cmd.map(String::from),
+            args: if cmd.is_some() { vec!["--root".into(), "a b".into()] } else { vec![] },
+        };
         let config = json!({"runtime_capabilities": {"verification": false}, "mcp_servers": {"files": {"transport": "stdio", "command": "old"}, "extra": {"transport": "stdio", "command": "keep"}}});
-        let a = agent_with(json!({"config": config}), &[], None, vec![srv("files", "stdio", None, Some("server")), srv("remote", "streamable-http", Some("https://example.com/mcp"), None)]).unwrap();
+        let a = agent_with(
+            json!({"config": config}),
+            &[],
+            None,
+            vec![srv("files", "stdio", None, Some("server")), srv("remote", "streamable-http", Some("https://example.com/mcp"), None)],
+        )
+        .unwrap();
         let eff = a.effective_config().unwrap();
         assert_eq!(eff["schema_version"], 1);
-        assert_eq!(eff["mcp_servers"]["files"], json!({"transport": "stdio", "command": "server", "args": ["--root", "a b"], "enabled": true, "mode": "required"}));
+        assert_eq!(
+            eff["mcp_servers"]["files"],
+            json!({"transport": "stdio", "command": "server", "args": ["--root", "a b"], "enabled": true, "mode": "required"})
+        );
         assert_eq!(eff["mcp_servers"]["remote"]["transport"], "streamable_http");
         assert_eq!(eff["mcp_servers"]["extra"]["command"], "keep");
         let e = agent_with(json!({}), &[], None, vec![srv("old", "sse", Some("https://example.com/sse"), None)]);
@@ -781,14 +875,14 @@ mod tests {
     #[test]
     fn atif_to_native_shape_and_load_validation() {
         let traj = json!({"schema_version": "ATIF-v1.4", "session_id": SID, "agent": {"name": "x", "version": "1"},
-            "steps": [
-                {"step_id": 1, "source": "system", "message": "be brief"},
-                {"step_id": 2, "source": "user", "message": "Read the answer"},
-                {"step_id": 3, "source": "agent", "message": "Reading", "reasoning_content": "think",
-                 "tool_calls": [{"tool_call_id": "c1", "function_name": "bash", "arguments": {"cmd": "cat x", "n": 1}}],
-                 "observation": {"results": [{"source_call_id": "c1", "content": "42"}]}},
-                {"step_id": 4, "source": "user", "message": [{"type": "text", "text": "again"}]}
-            ]});
+        "steps": [
+            {"step_id": 1, "source": "system", "message": "be brief"},
+            {"step_id": 2, "source": "user", "message": "Read the answer"},
+            {"step_id": 3, "source": "agent", "message": "Reading", "reasoning_content": "think",
+             "tool_calls": [{"tool_call_id": "c1", "function_name": "bash", "arguments": {"cmd": "cat x", "n": 1}}],
+             "observation": {"results": [{"source_call_id": "c1", "content": "42"}]}},
+            {"step_id": 4, "source": "user", "message": [{"type": "text", "text": "again"}]}
+        ]});
         let out = atif_to_native(&traj, SID).unwrap();
         let recs = read_session(&out);
         assert_eq!(native_session_id(&recs).as_deref(), Some(SID));
@@ -796,7 +890,19 @@ mod tests {
         let kinds: Vec<&str> = run_events(&recs, 0).iter().map(|e| e["kind"].as_str().unwrap()).collect();
         assert_eq!(
             kinds,
-            ["started", "model_request_configured", "model_response_created", "reasoning_committed", "assistant_message_committed", "assistant_tool_calls_committed", "tool_result_batch_committed", "terminal", "started", "model_request_configured", "terminal"]
+            [
+                "started",
+                "model_request_configured",
+                "model_response_created",
+                "reasoning_committed",
+                "assistant_message_committed",
+                "assistant_tool_calls_committed",
+                "tool_result_batch_committed",
+                "terminal",
+                "started",
+                "model_request_configured",
+                "terminal"
+            ]
         );
         let ev = run_events(&recs, 0);
         assert_eq!(ev[1]["base_instructions"], "be brief");
@@ -825,7 +931,11 @@ mod tests {
         assert!(validate_load_trajectory(&bad).is_err());
         let a = agent(json!({}), &[], Some("meta/muse-spark-1.2")).unwrap();
         assert!(a.supports_load(true) && a.supports_load(false));
-        assert!(a.run_command("hi", SID, true).unwrap().contains("--prompt-file /tmp/hbench-muse/agent/prompt.txt --allow-workspace-switch --model"));
+        assert!(
+            a.run_command("hi", SID, true)
+                .unwrap()
+                .contains("--prompt-file /tmp/hbench-muse/agent/prompt.txt --allow-workspace-switch --model")
+        );
     }
 
     #[test]

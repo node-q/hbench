@@ -44,7 +44,11 @@ impl Hermes {
     fn new(args: AgentArgs) -> Result<Hermes> {
         let max_turns = args
             .kw("max_turns")
-            .map(|v| v.trim().parse::<i64>().map_err(|_| anyhow!("Invalid kwargs for agent 'hermes':\n  max_turns: Input should be a valid integer")))
+            .map(|v| {
+                v.trim()
+                    .parse::<i64>()
+                    .map_err(|_| anyhow!("Invalid kwargs for agent 'hermes':\n  max_turns: Input should be a valid integer"))
+            })
             .transpose()?;
         Ok(Hermes {
             version: args.version_kw(),
@@ -72,7 +76,10 @@ impl Hermes {
         let native = native_provider(provider);
         if let Some((native_flag, keys)) = native {
             // upstream's _resolve_env: agent env first, then host env, first name wins per source.
-            let found = keys.iter().find_map(|k| self.args.extra_env.get(*k).map(|v| (k, v.clone()))).or_else(|| keys.iter().find_map(|k| std::env::var(k).ok().map(|v| (k, v))));
+            let found = keys
+                .iter()
+                .find_map(|k| self.args.extra_env.get(*k).map(|v| (k, v.clone())))
+                .or_else(|| keys.iter().find_map(|k| std::env::var(k).ok().map(|v| (k, v))));
             if let Some((k, v)) = found {
                 env.insert(k.to_string(), v);
                 flag = Some(native_flag);
@@ -159,7 +166,9 @@ fn native_session_id(text: &str) -> Option<String> {
 
 fn text_of(c: &Value) -> String {
     match c {
-        Value::Array(parts) => parts.iter().filter(|p| p["type"] == "text").map(|p| p["text"].as_str().unwrap_or("")).collect::<Vec<_>>().join(" "),
+        Value::Array(parts) => {
+            parts.iter().filter(|p| p["type"] == "text").map(|p| p["text"].as_str().unwrap_or("")).collect::<Vec<_>>().join(" ")
+        }
         Value::String(s) => s.clone(),
         Value::Null => String::new(),
         v => v.to_string(),
@@ -245,7 +254,13 @@ impl Agent for Hermes {
             exec_timeout(cx, &c, &env, 10).await?;
         }
         if let Some(d) = self.skills_dir() {
-            exec_timeout(cx, &format!("mkdir -p /tmp/hermes/skills && cp -r {}/* /tmp/hermes/skills/ 2>/dev/null || true", quote(&d)), &env, 10).await?;
+            exec_timeout(
+                cx,
+                &format!("mkdir -p /tmp/hermes/skills && cp -r {}/* /tmp/hermes/skills/ 2>/dev/null || true", quote(&d)),
+                &env,
+                10,
+            )
+            .await?;
         }
         let cmd = self.run_command(flag, &cli_model, resume)?;
         let r = exec_agent(cx, &cmd, &env).await;
@@ -268,7 +283,9 @@ impl Agent for Hermes {
         let mut reported = self.reported.lock().unwrap();
         match &*reported {
             // Resumed run: report only this step's increment over the same session.
-            Some((prev_id, pp, pc)) if self.last_run_was_resume && (native.is_none() || prev_id.is_none() || native == *prev_id) && p >= *pp && c >= *pc => {
+            Some((prev_id, pp, pc))
+                if self.last_run_was_resume && (native.is_none() || prev_id.is_none() || native == *prev_id) && p >= *pp && c >= *pc =>
+            {
                 ctx.n_input_tokens = Some(p - pp);
                 ctx.n_output_tokens = Some(c - pc);
             }
@@ -292,7 +309,8 @@ mod tests {
         std::fs::write(dir.join("task.toml"), "[environment]\ndocker_image='x'\n").unwrap();
         std::fs::write(dir.join("instruction.md"), "x").unwrap();
         let task = Arc::new(crate::task::Task::load(&dir).unwrap());
-        Hermes::new(AgentArgs { load_trajectory: None,
+        Hermes::new(AgentArgs {
+            load_trajectory: None,
             model_name: model.map(String::from),
             kwargs: serde_json::from_value(kwargs).unwrap(),
             extra_env: env.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect(),
@@ -305,7 +323,9 @@ mod tests {
 
     #[test]
     fn auth_and_command() {
-        let a = agent(json!({"toolsets": "terminal,file", "max_turns": 30}), &[("ANTHROPIC_TOKEN", "t")], Some("anthropic/claude-sonnet-4-6")).unwrap();
+        let a =
+            agent(json!({"toolsets": "terminal,file", "max_turns": 30}), &[("ANTHROPIC_TOKEN", "t")], Some("anthropic/claude-sonnet-4-6"))
+                .unwrap();
         let (env, flag, model) = a.auth().unwrap();
         assert_eq!((env["ANTHROPIC_TOKEN"].as_str(), flag, model.as_str()), ("t", Some("anthropic"), "claude-sonnet-4-6"));
         let cmd = a.run_command(flag, &model, false).unwrap();

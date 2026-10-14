@@ -19,7 +19,12 @@ const SNAPSHOT_UNTRACKED_WORKSPACE: &str = "if command -v git >/dev/null 2>&1 \
     fi; ";
 
 pub fn create(args: AgentArgs) -> Result<AgentBox> {
-    opts::check_known(&args, "aider", &["reasoning_effort", "thinking_tokens", "cache_prompts", "auto_lint", "auto_test", "test_cmd", "stream", "map_tokens"], false)?;
+    opts::check_known(
+        &args,
+        "aider",
+        &["reasoning_effort", "thinking_tokens", "cache_prompts", "auto_lint", "auto_test", "test_cmd", "stream", "map_tokens"],
+        false,
+    )?;
     let a = Aider { version: args.version_kw(), args };
     a.cli_flags()?;
     Ok(Box::new(a))
@@ -79,7 +84,11 @@ impl Aider {
 
 fn parse_aider_version(stdout: &str) -> String {
     let text = stdout.trim();
-    text.lines().map(str::trim).find(|l| !l.is_empty()).map(|l| l.strip_prefix("aider").unwrap_or(l).trim().to_string()).unwrap_or_else(|| text.to_string())
+    text.lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .map(|l| l.strip_prefix("aider").unwrap_or(l).trim().to_string())
+        .unwrap_or_else(|| text.to_string())
 }
 
 #[async_trait::async_trait]
@@ -153,10 +162,14 @@ pub(super) mod opts {
     }
 
     pub fn int(a: &AgentArgs, k: &str, fallback: Option<&str>) -> Result<Option<i64>> {
-        let err = |v: &Value| anyhow!("Invalid value for '{k}': cannot parse '{}' as int", v.as_str().map(String::from).unwrap_or_else(|| v.to_string()));
+        let err = |v: &Value| {
+            anyhow!("Invalid value for '{k}': cannot parse '{}' as int", v.as_str().map(String::from).unwrap_or_else(|| v.to_string()))
+        };
         Ok(match raw(a, k, fallback) {
             None => None,
-            Some(v @ Value::Number(_)) => Some(v.as_i64().or_else(|| v.as_f64().filter(|f| f.fract() == 0.0).map(|f| f as i64)).ok_or_else(|| err(&v))?),
+            Some(v @ Value::Number(_)) => {
+                Some(v.as_i64().or_else(|| v.as_f64().filter(|f| f.fract() == 0.0).map(|f| f as i64)).ok_or_else(|| err(&v))?)
+            }
             Some(v @ Value::String(_)) => Some(v.as_str().unwrap().trim().parse().map_err(|_| err(&v))?),
             Some(v) => return Err(err(&v)),
         })
@@ -199,7 +212,11 @@ pub(super) mod opts {
             Some(v) => {
                 let mut c = choices.to_vec();
                 c.sort();
-                bail!("Invalid value for '{k}': '{}'. Valid values: {}", v.as_str().map(String::from).unwrap_or_else(|| v.to_string()), c.join(", "))
+                bail!(
+                    "Invalid value for '{k}': '{}'. Valid values: {}",
+                    v.as_str().map(String::from).unwrap_or_else(|| v.to_string()),
+                    c.join(", ")
+                )
             }
         }
     }
@@ -208,7 +225,9 @@ pub(super) mod opts {
     pub fn check_known(a: &AgentArgs, agent: &str, known: &[&str], native_config: bool) -> Result<()> {
         for k in a.kwargs.keys() {
             if !known.contains(&k.as_str()) && !["version", "prompt_template_path", "config"].contains(&k.as_str()) {
-                bail!("Invalid kwargs for agent '{agent}':\n  Unknown option '{k}'.\nSee `hbench agents schema {agent}` for available options.");
+                bail!(
+                    "Invalid kwargs for agent '{agent}':\n  Unknown option '{k}'.\nSee `hbench agents schema {agent}` for available options."
+                );
             }
         }
         if !native_config && a.kw("config").is_some() {
@@ -246,7 +265,8 @@ pub(super) mod opts {
         std::fs::write(dir.join("task.toml"), "[environment]\ndocker_image='x'\n").unwrap();
         std::fs::write(dir.join("instruction.md"), "x").unwrap();
         let task = std::sync::Arc::new(crate::task::Task::load(&dir).unwrap());
-        AgentArgs { load_trajectory: None,
+        AgentArgs {
+            load_trajectory: None,
             model_name: model.map(String::from),
             kwargs: serde_json::from_value(kwargs).unwrap(),
             extra_env: env.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect(),
@@ -265,7 +285,12 @@ mod tests {
 
     fn agent(kwargs: serde_json::Value, env: &[(&str, &str)], model: Option<&str>) -> Result<Aider> {
         let args = opts::test_args(kwargs, env, model);
-        opts::check_known(&args, "aider", &["reasoning_effort", "thinking_tokens", "cache_prompts", "auto_lint", "auto_test", "test_cmd", "stream", "map_tokens"], false)?;
+        opts::check_known(
+            &args,
+            "aider",
+            &["reasoning_effort", "thinking_tokens", "cache_prompts", "auto_lint", "auto_test", "test_cmd", "stream", "map_tokens"],
+            false,
+        )?;
         let a = Aider { version: None, args };
         a.cli_flags()?;
         Ok(a)
@@ -274,7 +299,10 @@ mod tests {
     #[test]
     fn flags_env_and_validation() {
         let a = agent(json!({"reasoning_effort": "high", "thinking_tokens": "2048", "cache_prompts": true, "auto_lint": false, "test_cmd": "pytest -q", "map_tokens": 1024}), &[("OPENAI_API_KEY", "sk-o")], Some("openai/gpt-4o")).unwrap();
-        assert_eq!(a.cli_flags().unwrap(), "--reasoning-effort high --thinking-tokens 2048 --cache-prompts --test-cmd 'pytest -q' --map-tokens 1024");
+        assert_eq!(
+            a.cli_flags().unwrap(),
+            "--reasoning-effort high --thinking-tokens 2048 --cache-prompts --test-cmd 'pytest -q' --map-tokens 1024"
+        );
         let (env, model) = a.run_env().unwrap();
         assert_eq!(model, "gpt-4o");
         assert_eq!(env["AIDER_API_KEY"], "openai=sk-o");

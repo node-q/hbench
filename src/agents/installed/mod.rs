@@ -1,11 +1,11 @@
 //! Installed (CLI) agents: shared machinery from upstream's BaseInstalledAgent —
 //! system-package installs, `set -o pipefail` execs, and error classification.
 
-pub mod claude_code;
 pub mod acp;
 pub mod aider;
 pub mod antigravity_cli;
 pub mod antigravity_sdk;
+pub mod claude_code;
 pub mod cline_cli;
 pub mod code_puppy;
 pub mod codex;
@@ -52,7 +52,49 @@ use std::collections::BTreeMap;
 use std::sync::OnceLock;
 
 /// Names of every installed agent (upstream's AgentName values).
-pub const NAMES: &[&str] = &["claude-code", "acp", "cline-cli", "cortex-code", "aider", "codex", "cursor-cli", "gemini-cli", "antigravity-cli", "rovodev-cli", "goose", "grok-build", "hermes", "junie", "mini-swe-agent", "nemo-agent", "swe-agent", "opencode", "openclaw", "openhands", "openhands-sdk", "antigravity-sdk", "kimi-code", "kimi-cli", "langgraph", "deerflow", "mimo", "mcode", "pi", "qwen-coder", "copilot-cli", "code-puppy", "devin", "trae-agent", "eve", "fx", "fx-dev", "vibe", "muse-code", "strands", "deepseek-harness"];
+pub const NAMES: &[&str] = &[
+    "claude-code",
+    "acp",
+    "cline-cli",
+    "cortex-code",
+    "aider",
+    "codex",
+    "cursor-cli",
+    "gemini-cli",
+    "antigravity-cli",
+    "rovodev-cli",
+    "goose",
+    "grok-build",
+    "hermes",
+    "junie",
+    "mini-swe-agent",
+    "nemo-agent",
+    "swe-agent",
+    "opencode",
+    "openclaw",
+    "openhands",
+    "openhands-sdk",
+    "antigravity-sdk",
+    "kimi-code",
+    "kimi-cli",
+    "langgraph",
+    "deerflow",
+    "mimo",
+    "mcode",
+    "pi",
+    "qwen-coder",
+    "copilot-cli",
+    "code-puppy",
+    "devin",
+    "trae-agent",
+    "eve",
+    "fx",
+    "fx-dev",
+    "vibe",
+    "muse-code",
+    "strands",
+    "deepseek-harness",
+];
 
 pub fn create(name: &str, args: AgentArgs) -> Result<Option<AgentBox>> {
     Ok(Some(match name {
@@ -126,10 +168,18 @@ fn package_spec(name: &str) -> Option<PackageSpec> {
         "wget" => std_("wget", &["wget"], &["wget"]),
         "python3" => std_("python3", &["python3"], &["python3"]),
         "npm" => std_("npm", &["npm"], &["npm"]),
-        "build_tools" => PackageSpec { commands: &["gcc", "make"], apt: &["build-essential"], dnf: &["gcc", "gcc-c++", "make"], apk: &["build-base"], always: false },
+        "build_tools" => PackageSpec {
+            commands: &["gcc", "make"],
+            apt: &["build-essential"],
+            dnf: &["gcc", "gcc-c++", "make"],
+            apk: &["build-base"],
+            always: false,
+        },
         "ripgrep" => PackageSpec { commands: &["rg"], apt: &["ripgrep"], dnf: &["ripgrep"], apk: &["ripgrep"], always: false },
         "xz" => PackageSpec { commands: &["xz"], apt: &["xz-utils"], dnf: &["xz"], apk: &["xz"], always: false },
-        "ca_certificates" => PackageSpec { commands: &[], apt: &["ca-certificates"], dnf: &["ca-certificates"], apk: &["ca-certificates"], always: true },
+        "ca_certificates" => {
+            PackageSpec { commands: &[], apt: &["ca-certificates"], dnf: &["ca-certificates"], apk: &["ca-certificates"], always: true }
+        }
         "procps" => PackageSpec { commands: &["pgrep"], apt: &["procps"], dnf: &["procps-ng"], apk: &["procps"], always: false },
         "coreutils" => PackageSpec { commands: &["stdbuf"], apt: &["coreutils"], dnf: &["coreutils"], apk: &["coreutils"], always: false },
         "gnupg" => PackageSpec { commands: &["gpg"], apt: &["gnupg2"], dnf: &["gnupg2"], apk: &["gnupg"], always: false },
@@ -215,7 +265,10 @@ pub async fn ensure_system_dependencies(cx: &AgentCtx<'_>, deps: &[&str]) -> Res
     }
     let args = pkgs.iter().map(|p| quote(p)).collect::<Vec<_>>().join(" ");
     let (cmd, env) = match mgr.as_str() {
-        "apt-get" => (format!("{APT_INSTALL_FN}hb_apt_install {args}"), BTreeMap::from([("DEBIAN_FRONTEND".to_string(), "noninteractive".to_string())])),
+        "apt-get" => (
+            format!("{APT_INSTALL_FN}hb_apt_install {args}"),
+            BTreeMap::from([("DEBIAN_FRONTEND".to_string(), "noninteractive".to_string())]),
+        ),
         "dnf" => (format!("dnf install -y {args}"), BTreeMap::new()),
         "yum" => (format!("yum install -y {args}"), BTreeMap::new()),
         _ => (format!("apk add --no-cache {args}"), BTreeMap::new()),

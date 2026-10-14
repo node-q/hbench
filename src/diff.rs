@@ -57,8 +57,10 @@ pub fn load_sources(job_dirs: &[PathBuf]) -> Result<Vec<Source>> {
             if !d.join("result.json").exists() {
                 continue;
             }
-            let lock = std::fs::read_to_string(d.join("lock.json")).with_context(|| format!("Source trial '{}' has a result.json but no lock.json.", d.display()))?;
-            let result = serde_json::from_str(&std::fs::read_to_string(d.join("result.json"))?).with_context(|| format!("unreadable result.json in {}", d.display()))?;
+            let lock = std::fs::read_to_string(d.join("lock.json"))
+                .with_context(|| format!("Source trial '{}' has a result.json but no lock.json.", d.display()))?;
+            let result = serde_json::from_str(&std::fs::read_to_string(d.join("result.json"))?)
+                .with_context(|| format!("unreadable result.json in {}", d.display()))?;
             out.push(Source { dir: d.canonicalize()?, result, lock: serde_json::from_str(&lock)? });
         }
     }
@@ -125,12 +127,21 @@ pub fn compare(targets: &[TrialConfig], sources: &[Source]) -> Result<Vec<TrialD
     let mut out = vec![];
     for (c, l) in targets.iter().zip(&locks) {
         let task_name = l["task"]["name"].as_str().unwrap_or_default().to_string();
-        let rerun = |reason: String, downgraded: bool| TrialDiff { action: Action::Rerun, target_trial_name: c.trial_name.clone(), task_name: task_name.clone(), source: None, reason, downgraded };
+        let rerun = |reason: String, downgraded: bool| TrialDiff {
+            action: Action::Rerun,
+            target_trial_name: c.trial_name.clone(),
+            task_name: task_name.clone(),
+            source: None,
+            reason,
+            downgraded,
+        };
         let Some(tv) = l["task"]["version"].as_str() else {
             out.push(rerun("target task has no semantic version".into(), false));
             continue;
         };
-        let task_sources: Vec<usize> = (0..sources.len()).filter(|&i| sources[i].result.task_name == task_name && sources[i].version().is_some() && !consumed.contains(&i)).collect();
+        let task_sources: Vec<usize> = (0..sources.len())
+            .filter(|&i| sources[i].result.task_name == task_name && sources[i].version().is_some() && !consumed.contains(&i))
+            .collect();
         let compatible: Vec<usize> = task_sources.iter().copied().filter(|&i| without_task(&sources[i].lock) == without_task(l)).collect();
         let mut cands: Vec<(Action, bool, usize)> = vec![];
         for &i in compatible.iter().filter(|&&i| sources[i].completed_successfully()) {
@@ -155,7 +166,10 @@ pub fn compare(targets: &[TrialConfig], sources: &[Source]) -> Result<Vec<TrialD
         }
         if action == Action::Regrade {
             let dir = crate::registry::local_path(&c.task);
-            let why = regradable.entry(dir.clone()).or_insert_with(|| crate::task::Task::load(&dir).ok().and_then(|t| crate::regrade::check_task_regradable(&t))).clone();
+            let why = regradable
+                .entry(dir.clone())
+                .or_insert_with(|| crate::task::Task::load(&dir).ok().and_then(|t| crate::regrade::check_task_regradable(&t)))
+                .clone();
             if let Some(why) = why {
                 out.push(rerun(why, true));
                 continue;
@@ -185,7 +199,12 @@ pub fn trial_configs(targets: Vec<TrialConfig>, diffs: &[TrialDiff], sources: &[
             Action::Rerun => Some(c),
             Action::Regrade => {
                 let s = &sources[d.source.unwrap()];
-                c.source_trial = Some(SourceTrial { action: "regrade".into(), kind: "local".into(), trial_id: Some(s.result.id.to_string()), path: Some(s.dir.clone()) });
+                c.source_trial = Some(SourceTrial {
+                    action: "regrade".into(),
+                    kind: "local".into(),
+                    trial_id: Some(s.result.id.to_string()),
+                    path: Some(s.dir.clone()),
+                });
                 Some(c)
             }
         })
@@ -194,7 +213,13 @@ pub fn trial_configs(targets: Vec<TrialConfig>, diffs: &[TrialDiff], sources: &[
 
 pub fn print_preview(diffs: &[TrialDiff], sources: &[Source]) {
     let count = |a: Action| diffs.iter().filter(|d| d.action == a).count();
-    println!("Reuse: {}/{n}  Regrade: {}/{n}  Rerun: {}/{n}", count(Action::Reuse), count(Action::Regrade), count(Action::Rerun), n = diffs.len());
+    println!(
+        "Reuse: {}/{n}  Regrade: {}/{n}  Rerun: {}/{n}",
+        count(Action::Reuse),
+        count(Action::Regrade),
+        count(Action::Rerun),
+        n = diffs.len()
+    );
     for d in diffs {
         let src = d.source.map(|i| sources[i].dir.file_name().unwrap().to_string_lossy().into_owned()).unwrap_or_default();
         println!("  {:<8} {:<40} {:<20} {src} ({})", format!("{:?}", d.action).to_lowercase(), d.task_name, d.target_trial_name, d.reason);

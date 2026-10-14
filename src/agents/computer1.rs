@@ -50,7 +50,9 @@ fn py_repr(v: &Value) -> String {
         Value::Number(n) => n.to_string(),
         Value::String(s) => pyrepr(s),
         Value::Array(a) => format!("[{}]", a.iter().map(py_repr).collect::<Vec<_>>().join(", ")),
-        Value::Object(o) => format!("{{{}}}", o.iter().map(|(k, v)| format!("{}: {}", pyrepr(k), py_repr(v))).collect::<Vec<_>>().join(", ")),
+        Value::Object(o) => {
+            format!("{{{}}}", o.iter().map(|(k, v)| format!("{}: {}", pyrepr(k), py_repr(v))).collect::<Vec<_>>().join(", "))
+        }
     }
 }
 
@@ -131,8 +133,26 @@ struct ParsedAction {
 }
 
 const ALLOWED_ACTION_TYPES: [&str; 20] = [
-    "click", "double_click", "triple_click", "right_click", "mouse_down", "mouse_up", "mouse_move", "type", "key", "keypress", "hold_key", "scroll", "drag", "zoom",
-    "navigate", "wait", "bash", "done", "answer", "terminate",
+    "click",
+    "double_click",
+    "triple_click",
+    "right_click",
+    "mouse_down",
+    "mouse_up",
+    "mouse_move",
+    "type",
+    "key",
+    "keypress",
+    "hold_key",
+    "scroll",
+    "drag",
+    "zoom",
+    "navigate",
+    "wait",
+    "bash",
+    "done",
+    "answer",
+    "terminate",
 ];
 
 fn warn_join(w: &[String]) -> String {
@@ -211,14 +231,18 @@ fn coerce_str(v: Option<&Value>) -> Option<String> {
 
 fn parse_action_dict(d: &Value, w: &mut Vec<String>) -> Result<Action, String> {
     let Some(o) = d.as_object() else { return Err("Field 'action' must be an object".into()) };
-    let Some(kind) = o.get("type").and_then(Value::as_str).filter(|t| !t.is_empty()) else { return Err("Action 'type' is missing or not a string".into()) };
+    let Some(kind) = o.get("type").and_then(Value::as_str).filter(|t| !t.is_empty()) else {
+        return Err("Action 'type' is missing or not a string".into());
+    };
     if !ALLOWED_ACTION_TYPES.contains(&kind) {
         w.push(format!("Unknown action type: {}", pyrepr(kind)));
     }
     let mut keys = None;
     match o.get("keys") {
         None | Some(Value::Null) => {}
-        Some(Value::Array(a)) if a.iter().all(Value::is_string) => keys = Some(a.iter().map(|k| k.as_str().unwrap().to_string()).collect::<Vec<_>>()).filter(|k| !k.is_empty()),
+        Some(Value::Array(a)) if a.iter().all(Value::is_string) => {
+            keys = Some(a.iter().map(|k| k.as_str().unwrap().to_string()).collect::<Vec<_>>()).filter(|k| !k.is_empty())
+        }
         Some(_) => w.push("Action 'keys' must be a list of strings; ignoring".into()),
     }
     let mut modifier = None;
@@ -227,7 +251,11 @@ fn parse_action_dict(d: &Value, w: &mut Vec<String>) -> Result<Action, String> {
         Some(Value::String(m)) => modifier = Some(m.clone()),
         Some(_) => w.push("Action 'modifier' must be a string; ignoring".into()),
     }
-    let zoom_region = o.get("zoom_region").and_then(Value::as_array).filter(|a| a.len() == 4).and_then(|a| a.iter().map(|v| coerce_int(Some(v))).collect::<Option<Vec<_>>>());
+    let zoom_region = o
+        .get("zoom_region")
+        .and_then(Value::as_array)
+        .filter(|a| a.len() == 4)
+        .and_then(|a| a.iter().map(|v| coerce_int(Some(v))).collect::<Option<Vec<_>>>());
     if o.get("zoom_region").is_some_and(|z| !z.is_null()) && zoom_region.is_none() {
         w.push("Action 'zoom_region' must be a 4-element list of integers; ignoring".into());
     }
@@ -256,7 +284,13 @@ fn parse_response(response: &str) -> ParsedAction {
     let mut w = vec![];
     let (json_str, extra) = extract_json_object(response);
     w.extend(extra);
-    let fail = |error: String, w: &[String], analysis: String, plan: String| ParsedAction { error, warning: warn_join(w), analysis, plan, ..Default::default() };
+    let fail = |error: String, w: &[String], analysis: String, plan: String| ParsedAction {
+        error,
+        warning: warn_join(w),
+        analysis,
+        plan,
+        ..Default::default()
+    };
     if json_str.is_empty() {
         return fail("No valid JSON found in response".into(), &w, String::new(), String::new());
     }
@@ -286,7 +320,14 @@ fn parse_response(response: &str) -> ParsedAction {
     let Some(action_data) = o.get("action") else { return fail("Missing required field: action".into(), &w, analysis, plan) };
     match parse_action_dict(action_data, &mut w) {
         Err(e) => fail(e, &w, analysis, plan),
-        Ok(action) => ParsedAction { is_task_complete: action.is_terminal(), action: Some(action), error: String::new(), warning: warn_join(&w), analysis, plan },
+        Ok(action) => ParsedAction {
+            is_task_complete: action.is_terminal(),
+            action: Some(action),
+            error: String::new(),
+            warning: warn_join(&w),
+            analysis,
+            plan,
+        },
     }
 }
 
@@ -313,7 +354,15 @@ fn parse_step(content: &str) -> ModelStep {
     if !p.error.is_empty() {
         return ModelStep { needs_retry: true, feedback, ..Default::default() };
     }
-    ModelStep { action: p.action, message: content.into(), analysis: p.analysis, plan: p.plan, feedback, is_terminal: p.is_task_complete, needs_retry: false }
+    ModelStep {
+        action: p.action,
+        message: content.into(),
+        analysis: p.analysis,
+        plan: p.plan,
+        feedback,
+        is_terminal: p.is_task_complete,
+        needs_retry: false,
+    }
 }
 
 fn image_url_part(data_url: &str) -> Value {
@@ -344,7 +393,8 @@ const XVFB_LOG: &str = "/tmp/computer_1_runtime/xvfb.log";
 const XFCE_LOG: &str = "/tmp/computer_1_runtime/xfce4.log";
 const VNC_LOG: &str = "/tmp/computer_1_runtime/x11vnc.log";
 const NOVNC_LOG: &str = "/tmp/computer_1_runtime/novnc.log";
-const BLOCKED_KEY_COMBOS: [&str; 9] = ["ctrl+u", "ctrl+shift+i", "ctrl+shift+j", "ctrl+shift+c", "f12", "control+u", "control+shift+i", "control+shift+j", "control+shift+c"];
+const BLOCKED_KEY_COMBOS: [&str; 9] =
+    ["ctrl+u", "ctrl+shift+i", "ctrl+shift+j", "ctrl+shift+c", "f12", "control+u", "control+shift+i", "control+shift+j", "control+shift+c"];
 const BLOCKED_URL_SCHEMES: [&str; 3] = ["view-source:", "devtools://", "chrome-devtools://"];
 
 /// upstream's `RuntimeRequestError`.
@@ -568,13 +618,19 @@ impl Desktop {
     }
 
     async fn start(&mut self, sh: &dyn Shell) -> Result<()> {
-        let dirs = [RUNTIME_DIR, SCREENSHOT_DIR, CHROME_PROFILE, self.agent_dir.as_str()].iter().map(|d| quote(d)).collect::<Vec<_>>().join(" ");
+        let dirs =
+            [RUNTIME_DIR, SCREENSHOT_DIR, CHROME_PROFILE, self.agent_dir.as_str()].iter().map(|d| quote(d)).collect::<Vec<_>>().join(" ");
         self.exec(sh, &bash_inline(&format!("mkdir -p {dirs}")), 60, "mkdir runtime dirs", 2).await?;
         // Xvfb (reuse a display the image already started).
         let check = self.raw_exec(sh, "test -S /tmp/.X11-unix/X1 && echo present || echo missing", 5).await?;
         if !check.stdout.contains("present") {
             let g = self.geo;
-            let cmd = format!("setsid nohup Xvfb :1 -screen 0 {}x{}x24 -fbdir /var/tmp >> {} 2>&1 < /dev/null &", g.desktop_width, g.desktop_height, quote(XVFB_LOG));
+            let cmd = format!(
+                "setsid nohup Xvfb :1 -screen 0 {}x{}x24 -fbdir /var/tmp >> {} 2>&1 < /dev/null &",
+                g.desktop_width,
+                g.desktop_height,
+                quote(XVFB_LOG)
+            );
             self.exec(sh, &bash_inline(&cmd), 60, "start Xvfb", 2).await?;
         }
         let deadline = Instant::now() + Duration::from_secs(120);
@@ -647,11 +703,15 @@ impl Desktop {
         let deadline = Instant::now() + Duration::from_secs(self.readiness_timeout);
         while Instant::now() < deadline {
             let probe = async {
-                let w = self.raw_exec(sh, &format!("DISPLAY={DISPLAY} wmctrl -l 2>/dev/null | grep -Ei 'chromium|chrome' | head -1"), 10).await?;
+                let w = self
+                    .raw_exec(sh, &format!("DISPLAY={DISPLAY} wmctrl -l 2>/dev/null | grep -Ei 'chromium|chrome' | head -1"), 10)
+                    .await?;
                 if !w.stdout.trim().is_empty() {
                     return anyhow::Ok(true);
                 }
-                let cdp = self.raw_exec(sh, "curl -fsS -o /dev/null -w '%{http_code}' --max-time 3 http://127.0.0.1:9222/json/version", 10).await?;
+                let cdp = self
+                    .raw_exec(sh, "curl -fsS -o /dev/null -w '%{http_code}' --max-time 3 http://127.0.0.1:9222/json/version", 10)
+                    .await?;
                 Ok(cdp.stdout.trim() == "200")
             };
             match probe.await {
@@ -668,7 +728,11 @@ impl Desktop {
             Ok(_) => "(empty log)".into(),
             Err(e) => format!("(failed to tail {CHROMIUM_LOG}: {e})"),
         };
-        Err(ReadinessTimeout(format!("Chromium did not become ready within {}s.\n--- chromium.log tail ---\n{tail}", self.readiness_timeout)).into())
+        Err(ReadinessTimeout(format!(
+            "Chromium did not become ready within {}s.\n--- chromium.log tail ---\n{tail}",
+            self.readiness_timeout
+        ))
+        .into())
     }
 
     async fn position_window(&self, sh: &dyn Shell) {
@@ -749,7 +813,9 @@ impl Desktop {
             k if TERMINAL_ACTION_TYPES.contains(&k) => return Ok(json!({"status": "done", "text": a.text})),
             "bash" => {
                 if !self.enable_bash {
-                    return Ok(json!({"status": "error", "return_code": 2, "stdout": "", "stderr": "bash action is disabled. Enable it by running computer-1 with extra_tools=[\"bash\"]."}));
+                    return Ok(
+                        json!({"status": "error", "return_code": 2, "stdout": "", "stderr": "bash action is disabled. Enable it by running computer-1 with extra_tools=[\"bash\"]."}),
+                    );
                 }
                 return Ok(self.execute_bash(sh, a).await);
             }
@@ -810,7 +876,9 @@ impl Desktop {
                 }
             }
             kind => {
-                let Some(argvs) = build_xdotool_argv(a, &self.geo) else { return Err(rt_err(kind, 400, format!("Unsupported action type: {kind}"))) };
+                let Some(argvs) = build_xdotool_argv(a, &self.geo) else {
+                    return Err(rt_err(kind, 400, format!("Unsupported action type: {kind}")));
+                };
                 for argv in argvs {
                     self.exec(sh, &xdotool_command(&argv), self.request_timeout, &format!("action:{kind}"), 0).await?;
                 }
@@ -827,7 +895,9 @@ impl Desktop {
         }
         let t = (a.timeout_sec.filter(|t| *t != 0.0).unwrap_or(self.bash_timeout).ceil() as u64).max(1);
         match sh.sh(&format!("cd / && {cmd}"), false, Some(Duration::from_secs(t))).await {
-            Err(e) if error_kind(&e) == "TimeoutError" => json!({"status": "timeout", "return_code": 124, "stdout": "", "stderr": format!("bash action timed out after {t}s: {e}")}),
+            Err(e) if error_kind(&e) == "TimeoutError" => {
+                json!({"status": "timeout", "return_code": 124, "stdout": "", "stderr": format!("bash action timed out after {t}s: {e}")})
+            }
             Err(e) => json!({"status": "error", "return_code": 1, "stdout": "", "stderr": format!("bash action failed to dispatch: {e}")}),
             Ok(r) => {
                 let cut = |s: &str, n: usize| s.chars().take(n).collect::<String>();
@@ -845,7 +915,9 @@ impl Desktop {
         let (png, webp) = (format!("{SCREENSHOT_DIR}/latest.png"), format!("{SCREENSHOT_DIR}/latest.webp"));
         let dir = target.rsplit_once('/').map(|(d, _)| if d.is_empty() { "/" } else { d }).unwrap_or(".");
         let crop = match self.zoom.take() {
-            Some([x0, y0, x1, y1]) => format!(" && convert {} -crop {}x{}+{x0}+{y0} +repage {}", quote(&png), (x1 - x0).max(1), (y1 - y0).max(1), quote(&png)),
+            Some([x0, y0, x1, y1]) => {
+                format!(" && convert {} -crop {}x{}+{x0}+{y0} +repage {}", quote(&png), (x1 - x0).max(1), (y1 - y0).max(1), quote(&png))
+            }
             None => String::new(),
         };
         let output = if target.to_lowercase().ends_with(".png") {
@@ -935,7 +1007,11 @@ fn text_only_message(m: &Value) -> Value {
 /// Image-aware token count: text (image-stripped) + a flat estimate per screenshot.
 fn count_total_tokens(llm: &dyn Llm, messages: &[Value]) -> i64 {
     let text: Vec<Value> = messages.iter().map(text_only_message).collect();
-    let images = messages.iter().filter_map(|m| m["content"].as_array()).map(|ps| ps.iter().filter(|p| is_image_part(p)).count() as i64).sum::<i64>();
+    let images = messages
+        .iter()
+        .filter_map(|m| m["content"].as_array())
+        .map(|ps| ps.iter().filter(|p| is_image_part(p)).count() as i64)
+        .sum::<i64>();
     llm.count_tokens(&text) + images * IMAGE_TOKEN_ESTIMATE
 }
 
@@ -1125,7 +1201,10 @@ fn resolve_provider_name(model: &str, override_: Option<&str>) -> Result<String>
     let name = match override_ {
         Some(n) => {
             if !["anthropic", "bedrock", "gemini", "litellm", "openai"].contains(&n) {
-                bail!("Unknown computer-1 provider {}. Available providers: ['anthropic', 'bedrock', 'gemini', 'litellm', 'openai']", pyrepr(n));
+                bail!(
+                    "Unknown computer-1 provider {}. Available providers: ['anthropic', 'bedrock', 'gemini', 'litellm', 'openai']",
+                    pyrepr(n)
+                );
             }
             n.to_string()
         }
@@ -1214,13 +1293,18 @@ impl Computer1 {
         let model = args.model_name.clone().ok_or_else(|| anyhow!("model_name is required for computer-1"))?;
         let provider = resolve_provider_name(&model, opts.provider.as_deref())?;
         // Known to LiteLLM without vision support -> fail fast (unknown models pass).
-        if provider == "litellm" && opts.enable_images.is_none() && lookup_model_info(&model).is_some() && supports_vision(&model) != Some(true) {
+        if provider == "litellm"
+            && opts.enable_images.is_none()
+            && lookup_model_info(&model).is_some()
+            && supports_vision(&model) != Some(true)
+        {
             bail!(
                 "Model {} does not support vision input, but computer-1's generic harness is screenshot-driven. Use a vision-capable model, or pass enable_images explicitly to override litellm's metadata.",
                 pyrepr(&model)
             );
         }
-        let unknown: BTreeSet<String> = opts.extra_tools.iter().map(|t| t.trim().to_lowercase()).filter(|t| !t.is_empty() && t != "bash").collect();
+        let unknown: BTreeSet<String> =
+            opts.extra_tools.iter().map(|t| t.trim().to_lowercase()).filter(|t| !t.is_empty() && t != "bash").collect();
         if !unknown.is_empty() {
             bail!("Unknown computer-1 extra_tools: {}. Supported tools: bash.", py_repr(&json!(unknown)));
         }
@@ -1243,13 +1327,22 @@ impl Computer1 {
         };
         // Native providers talk to their vendor APIs directly; the litellm client is never used
         // (no JSON loop, compaction or fallback query), so its endpoint isn't resolved.
-        let llm: Box<dyn Llm> = if provider == "litellm" { Box::new(LiteLlm::new(cfg, &|k: &str| args.get_env(k))?) } else { Box::new(NoLlm) };
+        let llm: Box<dyn Llm> =
+            if provider == "litellm" { Box::new(LiteLlm::new(cfg, &|k: &str| args.get_env(k))?) } else { Box::new(NoLlm) };
         let mut c = Self::with_llm(args, opts, model, llm, enable_images, enable_bash, session_id);
         c.provider = provider;
         Ok(c)
     }
 
-    fn with_llm(args: AgentArgs, opts: Options, model_name: String, llm: Box<dyn Llm>, enable_images: bool, enable_bash: bool, session_id: String) -> Computer1 {
+    fn with_llm(
+        args: AgentArgs,
+        opts: Options,
+        model_name: String,
+        llm: Box<dyn Llm>,
+        enable_images: bool,
+        enable_bash: bool,
+        session_id: String,
+    ) -> Computer1 {
         Computer1 {
             env_io_dir: opts.env_io_dir.clone().unwrap_or_else(|| AGENT_DIR.into()).trim_end_matches('/').to_string(),
             args,
@@ -1312,7 +1405,17 @@ impl Computer1 {
             ("", "", "")
         };
         let (w, h) = (self.opts.geo.desktop_width.to_string(), self.opts.geo.desktop_height.to_string());
-        py_format(JSON_TEMPLATE, &[("instruction", instruction), ("desktop_width", &w), ("desktop_height", &h), ("bash_type_option", opt), ("bash_fields", fields), ("bash_rule", rule)])
+        py_format(
+            JSON_TEMPLATE,
+            &[
+                ("instruction", instruction),
+                ("desktop_width", &w),
+                ("desktop_height", &h),
+                ("bash_type_option", opt),
+                ("bash_fields", fields),
+                ("bash_rule", rule),
+            ],
+        )
     }
 
     fn turn(&self, text: &str, screenshot_ref: &str, empty: &str) -> Vec<Value> {
@@ -1373,7 +1476,16 @@ impl Computer1 {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn record_agent_step(&mut self, episode: i64, resp: &LlmResponse, step: &ModelStep, is_complete: bool, observation: &str, paths: &[String], metrics: Value) {
+    fn record_agent_step(
+        &mut self,
+        episode: i64,
+        resp: &LlmResponse,
+        step: &ModelStep,
+        is_complete: bool,
+        observation: &str,
+        paths: &[String],
+        metrics: Value,
+    ) {
         let mut parts = vec![];
         if !step.analysis.is_empty() {
             parts.push(format!("Analysis: {}", step.analysis));
@@ -1493,7 +1605,13 @@ impl Computer1 {
         Ok(p)
     }
 
-    async fn execute_action(&mut self, sh: &dyn Shell, action: Option<&Action>, episode: i64, index: Option<usize>) -> Result<(String, Vec<String>, bool)> {
+    async fn execute_action(
+        &mut self,
+        sh: &dyn Shell,
+        action: Option<&Action>,
+        episode: i64,
+        index: Option<usize>,
+    ) -> Result<(String, Vec<String>, bool)> {
         let shot = format!("screenshot_ep{episode}{}.webp", index.map(|i| format!("_action{i}")).unwrap_or_default());
         let Some(a) = action else { return Ok(("(no action taken)".into(), vec![self.capture(sh, &shot).await?], false)) };
         if a.is_terminal() {
@@ -1507,7 +1625,8 @@ impl Computer1 {
             }
             Err(e) => return Ok((format!("Action {} failed: {e}", pyrepr(&a.kind)), vec![self.capture(sh, &shot).await?], true)),
         };
-        let is_error = !matches!(r["status"].as_str(), None | Some("ok" | "done")) || r.get("return_code").is_some_and(|c| c.as_i64() != Some(0));
+        let is_error =
+            !matches!(r["status"].as_str(), None | Some("ok" | "done")) || r.get("return_code").is_some_and(|c| c.as_i64() != Some(0));
         let text = if a.kind == "bash" {
             format_bash_observation(&r)
         } else if is_error {
@@ -1537,12 +1656,15 @@ impl Computer1 {
             return Ok(());
         }
         // Native providers have no chat history to ask: upstream writes an empty answer.
-        let text = if self.native.is_some() { String::new() } else { self.extract_text_fallback(sh, instruction).await.unwrap_or_default() };
+        let text =
+            if self.native.is_some() { String::new() } else { self.extract_text_fallback(sh, instruction).await.unwrap_or_default() };
         self.write_final_answer(sh, &text).await
     }
 
     async fn extract_text_fallback(&mut self, sh: &dyn Shell, instruction: &str) -> Result<String> {
-        let prompt = format!("Based on the prior screenshots and reasoning in the chat history, briefly provide the final answer to this task: {instruction}");
+        let prompt = format!(
+            "Based on the prior screenshots and reasoning in the chat history, briefly provide the final answer to this task: {instruction}"
+        );
         // Role/content only; empty assistant turns get a placeholder (Anthropic rejects empty text).
         let history: Vec<Value> = self
             .chat
@@ -1562,7 +1684,9 @@ impl Computer1 {
             Some(p) => {
                 let url = screenshot_data_url(sh, &p).await?;
                 let mut chat = CChat { messages: history, ..Default::default() };
-                let turn = vec![json!({"role": "user", "content": [{"type": "text", "text": prompt}, {"type": "image_url", "image_url": {"url": url}}]})];
+                let turn = vec![
+                    json!({"role": "user", "content": [{"type": "text", "text": prompt}, {"type": "image_url", "image_url": {"url": url}}]}),
+                ];
                 chat.chat(&*self.llm, &self.model_name, &turn, &Map::new()).await?
             }
             None => self.llm.call(&prompt, &history, &Map::new(), None).await?,
@@ -1582,7 +1706,9 @@ impl Computer1 {
             screenshot_data_url(sh, &p).await
         };
         match shot.await {
-            Ok(url) => vec![json!({"role": "user", "content": [{"type": "text", "text": format!("{text}\n\nThe current screen state is attached.")}, image_url_part(&url)]})],
+            Ok(url) => vec![
+                json!({"role": "user", "content": [{"type": "text", "text": format!("{text}\n\nThe current screen state is attached.")}, image_url_part(&url)]}),
+            ],
             Err(_) => user(text),
         }
     }
@@ -1645,7 +1771,9 @@ impl Computer1 {
     }
 
     async fn summary_from_history(&mut self, orig: &str) -> Option<String> {
-        if self.chat.messages.is_empty() || count_total_tokens(&*self.llm, &self.chat.messages) > (self.llm.context_limit() as f64 * 0.9) as i64 {
+        if self.chat.messages.is_empty()
+            || count_total_tokens(&*self.llm, &self.chat.messages) > (self.llm.context_limit() as f64 * 0.9) as i64
+        {
             return None;
         }
         let p = format!(
@@ -1657,7 +1785,14 @@ impl Computer1 {
     // ----- LLM query (`_query_litellm`) -----
 
     /// 3 attempts (not on context overflow / bad request); overflow compacts and recurses (depth <= 2).
-    fn query<'a>(&'a mut self, sh: &'a dyn Shell, prompt: Vec<Value>, log_dir: Option<PathBuf>, orig: &'a str, depth: usize) -> BoxFut<'a, Result<LlmResponse>> {
+    fn query<'a>(
+        &'a mut self,
+        sh: &'a dyn Shell,
+        prompt: Vec<Value>,
+        log_dir: Option<PathBuf>,
+        orig: &'a str,
+        depth: usize,
+    ) -> BoxFut<'a, Result<LlmResponse>> {
         Box::pin(async move {
             let mut attempt = 0;
             loop {
@@ -1665,7 +1800,10 @@ impl Computer1 {
                 match self.query_once(sh, &prompt, log_dir.clone(), orig, depth).await {
                     Err(e)
                         if attempt < 3
-                            && !matches!(e.downcast_ref::<LlmError>(), Some(LlmError::ContextLength(_) | LlmError::Api { kind: "BadRequestError", .. })) =>
+                            && !matches!(
+                                e.downcast_ref::<LlmError>(),
+                                Some(LlmError::ContextLength(_) | LlmError::Api { kind: "BadRequestError", .. })
+                            ) =>
                     {
                         continue;
                     }
@@ -1675,7 +1813,14 @@ impl Computer1 {
         })
     }
 
-    async fn query_once(&mut self, sh: &dyn Shell, prompt: &[Value], log_dir: Option<PathBuf>, orig: &str, depth: usize) -> Result<LlmResponse> {
+    async fn query_once(
+        &mut self,
+        sh: &dyn Shell,
+        prompt: &[Value],
+        log_dir: Option<PathBuf>,
+        orig: &str,
+        depth: usize,
+    ) -> Result<LlmResponse> {
         if let Some(d) = &log_dir {
             let text = match prompt {
                 [p] if p["content"].is_string() => p["content"].as_str().unwrap_or_default().to_string(),
@@ -1733,7 +1878,10 @@ impl Computer1 {
             let step = parse_step(&resp.content);
 
             if step.needs_retry {
-                let next = format!("Previous response had parsing errors:\n{}\n\nPlease fix these issues and provide a proper JSON response.", step.feedback);
+                let next = format!(
+                    "Previous response had parsing errors:\n{}\n\nPlease fix these issues and provide a proper JSON response.",
+                    step.feedback
+                );
                 self.push_step(Map::from_iter([
                     ("source".into(), json!("agent")),
                     ("model_name".into(), json!(resp.model_name.clone().unwrap_or_else(|| self.model_name.clone()))),
@@ -1773,7 +1921,8 @@ impl Computer1 {
             } else if step.action.as_ref().is_some_and(|a| a.kind == "wait") {
                 self.wait_streak += 1;
                 if self.wait_streak > 1 {
-                    observation = format!("{observation}\n\nYou have now waited {} turns in a row without taking action.", self.wait_streak);
+                    observation =
+                        format!("{observation}\n\nYou have now waited {} turns in a row without taking action.", self.wait_streak);
                 }
             } else {
                 self.wait_streak = 0;
@@ -1782,7 +1931,12 @@ impl Computer1 {
             self.dump_trajectory();
 
             if is_complete && was_pending {
-                let answer = step.action.as_ref().and_then(|a| a.result.clone().filter(|r| !r.is_empty()).or_else(|| a.text.clone())).filter(|a| !a.is_empty()).unwrap_or(step.message.clone());
+                let answer = step
+                    .action
+                    .as_ref()
+                    .and_then(|a| a.result.clone().filter(|r| !r.is_empty()).or_else(|| a.text.clone()))
+                    .filter(|a| !a.is_empty())
+                    .unwrap_or(step.message.clone());
                 self.write_final_answer(sh, &answer).await?;
                 self.early_termination_reason = Some("task_complete".into());
                 return Ok(());
@@ -1804,7 +1958,15 @@ impl Computer1 {
         self.chat = CChat::default();
         if self.provider != "litellm" && self.native.is_none() {
             let o = &self.opts;
-            self.native = Some(native::Native::new(&self.provider, &self.model_name, o.geo.desktop_width, o.geo.desktop_height, o.aws_region_name.as_deref(), o.gemini_auto_ack_safety, &|k: &str| self.args.get_env(k))?);
+            self.native = Some(native::Native::new(
+                &self.provider,
+                &self.model_name,
+                o.geo.desktop_width,
+                o.geo.desktop_height,
+                o.aws_region_name.as_deref(),
+                o.gemini_auto_ack_safety,
+                &|k: &str| self.args.get_env(k),
+            )?);
         }
         if let Some(url) = self.opts.start_url.clone() {
             let mut a = Action::new("navigate");
@@ -1815,7 +1977,10 @@ impl Computer1 {
                 ("source".into(), json!("agent")),
                 ("model_name".into(), json!(self.model_name)),
                 ("message".into(), json!("")),
-                ("tool_calls".into(), json!([{"tool_call_id": id, "function_name": "computer_action", "arguments": {"type": "navigate", "url": url}}])),
+                (
+                    "tool_calls".into(),
+                    json!([{"tool_call_id": id, "function_name": "computer_action", "arguments": {"type": "navigate", "url": url}}]),
+                ),
                 ("observation".into(), json!({"results": [{"source_call_id": id, "content": format!("Navigated to {url}")}]})),
             ]));
         }
@@ -1839,7 +2004,11 @@ impl Computer1 {
 /// `_aggregate_step_metrics`: native providers' final metrics are the per-step sums.
 fn aggregate_step_metrics(steps: &[Value]) -> Value {
     let mut fm = Map::new();
-    for (key, total) in [("prompt_tokens", "total_prompt_tokens"), ("completion_tokens", "total_completion_tokens"), ("cached_tokens", "total_cached_tokens")] {
+    for (key, total) in [
+        ("prompt_tokens", "total_prompt_tokens"),
+        ("completion_tokens", "total_completion_tokens"),
+        ("cached_tokens", "total_cached_tokens"),
+    ] {
         let vals: Vec<i64> = steps.iter().filter_map(|s| s["metrics"][key].as_i64()).collect();
         if !vals.is_empty() {
             fm.insert(total.into(), json!(vals.iter().sum::<i64>()));
@@ -1876,7 +2045,11 @@ fn format_bash_observation(r: &Value) -> String {
     };
     let or_empty = |t: String| if t.trim_end().is_empty() { "(empty)".to_string() } else { t.trim_end().to_string() };
     let mut parts = vec![
-        format!("bash result: status={} exit_code={}", r["status"].as_str().unwrap_or("unknown"), if r["return_code"].is_null() { "?".into() } else { r["return_code"].to_string() }),
+        format!(
+            "bash result: status={} exit_code={}",
+            r["status"].as_str().unwrap_or("unknown"),
+            if r["return_code"].is_null() { "?".into() } else { r["return_code"].to_string() }
+        ),
         "--- stdout ---".into(),
         or_empty(s("stdout")),
     ];
@@ -1919,11 +2092,16 @@ mod tests {
 
     #[test]
     fn json_dialect_parser() {
-        let r = parse_response(r#"{"analysis": "see a button", "plan": "click it", "action": {"type": "click", "x": 10.7, "y": "20", "button": "left", "keys": "bad", "zoom_region": [1, 2, 3]}}"#);
+        let r = parse_response(
+            r#"{"analysis": "see a button", "plan": "click it", "action": {"type": "click", "x": 10.7, "y": "20", "button": "left", "keys": "bad", "zoom_region": [1, 2, 3]}}"#,
+        );
         assert!(r.error.is_empty() && !r.is_task_complete);
         let a = r.action.unwrap();
         assert_eq!((a.kind.as_str(), a.x, a.y, a.keys, a.zoom_region), ("click", Some(10), Some(20), None, None));
-        assert_eq!(r.warning, "- Action 'keys' must be a list of strings; ignoring\n- Action 'zoom_region' must be a 4-element list of integers; ignoring");
+        assert_eq!(
+            r.warning,
+            "- Action 'keys' must be a list of strings; ignoring\n- Action 'zoom_region' must be a 4-element list of integers; ignoring"
+        );
         let r = parse_response("Sure: {\"action\": {\"type\": \"done\", \"result\": \"42\"}}");
         assert!(r.is_task_complete && r.warning == "- Extra text detected before JSON object");
         assert_eq!(parse_response("{\"analysis\": \"x\"}").error, "Missing required field: action");
@@ -1934,7 +2112,10 @@ mod tests {
         assert!(s.needs_retry && s.feedback == "ERROR: Field 'action' must be an object");
         // Every ComputerAction field is recorded, unset ones as null.
         let args = serde_json::to_value(Action::new("wait")).unwrap();
-        assert_eq!((args["type"].clone(), args["source"].clone(), args["x"].clone()), (json!("wait"), json!("native_prescaled"), Value::Null));
+        assert_eq!(
+            (args["type"].clone(), args["source"].clone(), args["x"].clone()),
+            (json!("wait"), json!("native_prescaled"), Value::Null)
+        );
         assert!(args.get("metadata").is_none() && args.as_object().unwrap().len() == 23);
     }
 
@@ -1945,16 +2126,25 @@ mod tests {
         a.x = Some(5);
         a.y = Some(6);
         a.modifier = Some("Control".into());
-        assert_eq!(build_xdotool_argv(&a, &g).unwrap(), vec![vec!["mousemove", "5", "6", "keydown", "ctrl", "click", "--repeat", "2", "1", "keyup", "ctrl"]]);
+        assert_eq!(
+            build_xdotool_argv(&a, &g).unwrap(),
+            vec![vec!["mousemove", "5", "6", "keydown", "ctrl", "click", "--repeat", "2", "1", "keyup", "ctrl"]]
+        );
         let mut a = Action::new("keypress");
         a.keys = Some(vec!["ctrl".into(), "L".into()]);
         assert_eq!(build_xdotool_argv(&a, &g).unwrap(), vec![vec!["key", "--clearmodifiers", "ctrl+L"]]);
         a.keys = Some(vec!["Enter".into(), "a".into()]);
-        assert_eq!(build_xdotool_argv(&a, &g).unwrap(), vec![vec!["key", "--clearmodifiers", "Return"], vec!["key", "--clearmodifiers", "a"]]);
+        assert_eq!(
+            build_xdotool_argv(&a, &g).unwrap(),
+            vec![vec!["key", "--clearmodifiers", "Return"], vec!["key", "--clearmodifiers", "a"]]
+        );
         let mut a = Action::new("scroll");
         a.scroll_y = Some(-250);
         a.scroll_x = Some(50);
-        assert_eq!(build_xdotool_argv(&a, &g).unwrap(), vec![vec!["mousemove", "512", "450", "click", "--repeat", "2", "4", "click", "--repeat", "1", "7"]]);
+        assert_eq!(
+            build_xdotool_argv(&a, &g).unwrap(),
+            vec![vec!["mousemove", "512", "450", "click", "--repeat", "2", "4", "click", "--repeat", "1", "7"]]
+        );
         assert!(build_xdotool_argv(&Action::new("navigate"), &g).is_none());
         assert_eq!(xdotool_command(&["type".into(), "--".into(), "it's".into()]), "DISPLAY=:1 xdotool type -- 'it'\\''s'");
         assert!(is_blocked_key_combo(Some(&vec!["Ctrl".into(), "U".into()])));
@@ -1972,8 +2162,14 @@ mod tests {
         assert_eq!(resolve_temperature("openai/gpt-5", 0.7), None);
         assert_eq!(resolve_temperature("openai/o3", 0.7), None);
         assert_eq!(resolve_temperature("openrouter/qwen/qwen3-vl", 0.7), Some(0.7));
-        assert_eq!((supports_vision("openai/gpt-4o"), supports_vision("openai/gpt-3.5-turbo"), supports_vision("my/unknown")), (Some(true), None, None));
-        let o = Options::parse(&serde_json::from_value(json!({"desktop_width": 1280, "extra_tools": ["bash"], "enable_images": false})).unwrap()).unwrap();
+        assert_eq!(
+            (supports_vision("openai/gpt-4o"), supports_vision("openai/gpt-3.5-turbo"), supports_vision("my/unknown")),
+            (Some(true), None, None)
+        );
+        let o = Options::parse(
+            &serde_json::from_value(json!({"desktop_width": 1280, "extra_tools": ["bash"], "enable_images": false})).unwrap(),
+        )
+        .unwrap();
         assert_eq!((o.geo.desktop_width, o.extra_tools.clone(), o.enable_images), (1280, vec!["bash".to_string()], Some(false)));
         assert!(Options::parse(&serde_json::from_value(json!({"nope": 1})).unwrap()).is_err());
     }
@@ -1981,7 +2177,14 @@ mod tests {
     #[test]
     fn compaction_helpers() {
         let img = |t: &str| json!({"role": "user", "content": [{"type": "text", "text": t}, {"type": "image_url", "image_url": {"url": "data:image/webp;base64,AA"}}]});
-        let mut msgs = vec![img("a"), json!({"role": "assistant", "content": "x"}), img("b"), img("c"), img("d"), json!({"role": "user", "content": [{"type": "image_url", "image_url": {"url": "u"}}]})];
+        let mut msgs = vec![
+            img("a"),
+            json!({"role": "assistant", "content": "x"}),
+            img("b"),
+            img("c"),
+            img("d"),
+            json!({"role": "user", "content": [{"type": "image_url", "image_url": {"url": "u"}}]}),
+        ];
         assert_eq!(trim_old_screenshots(&mut msgs, 3), 2);
         assert_eq!(msgs[0]["content"], json!([{"type": "text", "text": "a"}]));
         assert_eq!(msgs[2]["content"], json!([{"type": "text", "text": "b"}]));
@@ -1989,8 +2192,14 @@ mod tests {
         assert_eq!(extract_prompt_text(&[img("hello"), json!({"role": "user", "content": "plain"})]), "hello\nplain");
         assert_eq!(text_only_message(&msgs[5])["content"], json!([{"type": "text", "text": ""}]));
         let bash = json!({"status": "error", "return_code": 1, "stdout": "out\n", "stderr": "", "stdout_truncated": true});
-        assert_eq!(format_bash_observation(&bash), "bash result: status=error exit_code=1\n--- stdout ---\nout\n[stdout truncated]\n--- stderr ---\n(empty)");
-        assert_eq!(py_repr(&json!({"status": "recovered", "recovered": true, "x": null})), "{'status': 'recovered', 'recovered': True, 'x': None}");
+        assert_eq!(
+            format_bash_observation(&bash),
+            "bash result: status=error exit_code=1\n--- stdout ---\nout\n[stdout truncated]\n--- stderr ---\n(empty)"
+        );
+        assert_eq!(
+            py_repr(&json!({"status": "recovered", "recovered": true, "x": null})),
+            "{'status': 'recovered', 'recovered': True, 'x': None}"
+        );
     }
 
     // ----- loop with mocks -----
@@ -2032,7 +2241,11 @@ mod tests {
         }
         async fn complete(&self, messages: Vec<Value>, _: &Map<String, Value>) -> Result<LlmResponse, LlmError> {
             self.seen.lock().unwrap().push(messages);
-            self.replies.lock().unwrap().pop_front().unwrap_or_else(|| Ok(LlmResponse { content: "fallback answer".into(), ..Default::default() }))
+            self.replies
+                .lock()
+                .unwrap()
+                .pop_front()
+                .unwrap_or_else(|| Ok(LlmResponse { content: "fallback answer".into(), ..Default::default() }))
         }
         fn context_limit(&self) -> i64 {
             1_000_000
@@ -2043,7 +2256,12 @@ mod tests {
     }
 
     fn reply(c: &str) -> Result<LlmResponse, LlmError> {
-        Ok(LlmResponse { content: c.into(), model_name: Some("m-1".into()), usage: Some(Usage { prompt_tokens: 50, completion_tokens: 5, cache_tokens: 0, cost_usd: 0.0 }), ..Default::default() })
+        Ok(LlmResponse {
+            content: c.into(),
+            model_name: Some("m-1".into()),
+            usage: Some(Usage { prompt_tokens: 50, completion_tokens: 5, cache_tokens: 0, cost_usd: 0.0 }),
+            ..Default::default()
+        })
     }
 
     pub(super) fn agent(kwargs: Value, llm: &MockLlm) -> (Computer1, PathBuf) {
@@ -2054,7 +2272,8 @@ mod tests {
         std::fs::write(task_dir.join("instruction.md"), "x").unwrap();
         let logs = root.join("trial/agent");
         std::fs::create_dir_all(&logs).unwrap();
-        let args = AgentArgs { load_trajectory: None,
+        let args = AgentArgs {
+            load_trajectory: None,
             model_name: Some("openai/gpt-5.4".into()),
             kwargs: serde_json::from_value(kwargs).unwrap(),
             extra_env: BTreeMap::new(),
@@ -2092,19 +2311,36 @@ mod tests {
         let seen = llm.seen.lock().unwrap().clone();
         assert!(seen[0][0]["content"][0]["text"].as_str().unwrap().contains("Task instructions:\nFind the answer"));
         assert_eq!(seen[0][0]["content"][1]["image_url"]["url"], "data:image/webp;base64,QUJD");
-        assert!(seen[2].last().unwrap()["content"].as_str().unwrap().starts_with("Previous response had parsing errors:\nERROR: No valid JSON found in response"));
+        assert!(
+            seen[2].last().unwrap()["content"]
+                .as_str()
+                .unwrap()
+                .starts_with("Previous response had parsing errors:\nERROR: No valid JSON found in response")
+        );
         assert!(seen[3].last().unwrap()["content"][0]["text"].as_str().unwrap().contains("confirm again with the same final answer"));
         assert_eq!((ctx.n_input_tokens, ctx.n_output_tokens), (Some(200), Some(20)));
         assert_eq!(ctx.metadata.as_ref().unwrap()["early_termination_reason"], "task_complete");
-        assert!(logs.join("episode-0/prompt.txt").exists() && std::fs::read_to_string(logs.join("episode-1/response.txt")).unwrap() == "not json");
+        assert!(
+            logs.join("episode-0/prompt.txt").exists()
+                && std::fs::read_to_string(logs.join("episode-1/response.txt")).unwrap() == "not json"
+        );
 
         let t: Value = serde_json::from_str(&std::fs::read_to_string(logs.join("trajectory.json")).unwrap()).unwrap();
         let steps = t["steps"].as_array().unwrap();
         assert_eq!(steps.len(), 5);
         assert_eq!(steps[1]["tool_calls"][0]["arguments"]["x"], 3);
-        assert_eq!(steps[1]["observation"]["results"][0]["content"][1], json!({"type": "image", "source": {"media_type": "image/webp", "path": "screenshot_ep0.webp"}}));
-        assert_eq!(steps[2]["observation"]["results"][0]["content"].as_str().unwrap().lines().next(), Some("Previous response had parsing errors:"));
-        assert_eq!(steps[4]["tool_calls"][1], json!({"tool_call_id": "call_3_task_complete", "function_name": "mark_task_complete", "arguments": {"result": "42"}}));
+        assert_eq!(
+            steps[1]["observation"]["results"][0]["content"][1],
+            json!({"type": "image", "source": {"media_type": "image/webp", "path": "screenshot_ep0.webp"}})
+        );
+        assert_eq!(
+            steps[2]["observation"]["results"][0]["content"].as_str().unwrap().lines().next(),
+            Some("Previous response had parsing errors:")
+        );
+        assert_eq!(
+            steps[4]["tool_calls"][1],
+            json!({"tool_call_id": "call_3_task_complete", "function_name": "mark_task_complete", "arguments": {"result": "42"}})
+        );
         assert_eq!(t["extra"]["early_termination_reason"], "task_complete");
     }
 
@@ -2124,7 +2360,12 @@ mod tests {
         assert_eq!(c.early_termination_reason.as_deref(), Some("max_turns_reached"));
         assert_eq!(c.compaction_count, 1);
         let seen = llm.seen.lock().unwrap().clone();
-        assert!(seen[2].last().unwrap()["content"].as_str().unwrap().starts_with("You are about to hand off work to a continuation of yourself."));
+        assert!(
+            seen[2].last().unwrap()["content"]
+                .as_str()
+                .unwrap()
+                .starts_with("You are about to hand off work to a continuation of yourself.")
+        );
         assert_eq!(seen[3][1]["content"], "Summary of previous work:\nSUMMARY");
         assert!(seen[3].last().unwrap()["content"][0]["text"].as_str().unwrap().starts_with("Continue from the summary above."));
         // No confirmed answer: the fallback asks the model and writes its reply.

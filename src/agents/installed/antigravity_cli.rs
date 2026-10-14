@@ -13,7 +13,8 @@ use std::time::Duration;
 
 const EFFORTS: &[&str] = &["high", "low", "medium", "minimal"]; // sorted, as upstream prints them
 const FLASH_ONLY_EFFORTS: &[&str] = &["minimal", "medium"];
-const KNOWN_OPTIONS: &[&str] = &["version", "prompt_template_path", "config", "sandbox", "reasoning_effort", "binary_path", "override_setup_timeout_sec"];
+const KNOWN_OPTIONS: &[&str] =
+    &["version", "prompt_template_path", "config", "sandbox", "reasoning_effort", "binary_path", "override_setup_timeout_sec"];
 const PRINT_TIMEOUT: &str = "24h";
 const MODEL_LIST_TIMEOUT: Duration = Duration::from_secs(15);
 const STDERR_REPLAY_BYTES: usize = 256 * 1024;
@@ -56,7 +57,8 @@ pub fn validate_base_url(url: &str, get_env: &dyn Fn(&str) -> Option<String>) ->
     } else {
         hostport.rsplit_once(':').unwrap_or((hostport, ""))
     };
-    let port_ok = port.is_empty() || (port.bytes().all(|b| b.is_ascii_digit()) && port.parse::<u32>().is_ok_and(|p| (1..=65535).contains(&p)));
+    let port_ok =
+        port.is_empty() || (port.bytes().all(|b| b.is_ascii_digit()) && port.parse::<u32>().is_ok_and(|p| (1..=65535).contains(&p)));
     if !["http", "https"].contains(&scheme.as_str()) || host.is_empty() || !port_ok || has_fragment {
         return Err(invalid());
     }
@@ -123,16 +125,23 @@ pub struct AntigravityCli {
 
 impl AntigravityCli {
     pub fn new(mut args: AgentArgs) -> Result<AntigravityCli> {
-        let unknown: Vec<String> = args.kwargs.keys().filter(|k| !KNOWN_OPTIONS.contains(&k.as_str())).map(|k| format!("  Unknown option '{k}'.")).collect();
+        let unknown: Vec<String> =
+            args.kwargs.keys().filter(|k| !KNOWN_OPTIONS.contains(&k.as_str())).map(|k| format!("  Unknown option '{k}'.")).collect();
         if !unknown.is_empty() {
-            bail!("Invalid kwargs for agent 'antigravity-cli':\n{}\nSee `hbench agents schema antigravity-cli` for available options.", unknown.join("\n"));
+            bail!(
+                "Invalid kwargs for agent 'antigravity-cli':\n{}\nSee `hbench agents schema antigravity-cli` for available options.",
+                unknown.join("\n")
+            );
         }
         if args.kwargs.get("config").is_some_and(|v| !v.is_null()) {
             bail!("Agent 'antigravity-cli' does not support config. You can implement it.");
         }
         let sandbox = match args.kwargs.get("sandbox") {
             None | Some(Value::Null) => None,
-            Some(_) => Some(args.kw_bool("sandbox").ok_or_else(|| anyhow!("Invalid kwargs for agent 'antigravity-cli':\n  sandbox: Input should be a valid boolean"))?),
+            Some(_) => Some(
+                args.kw_bool("sandbox")
+                    .ok_or_else(|| anyhow!("Invalid kwargs for agent 'antigravity-cli':\n  sandbox: Input should be a valid boolean"))?,
+            ),
         };
         let reasoning_effort = args.kw("reasoning_effort");
         if let Some(e) = &reasoning_effort {
@@ -141,10 +150,14 @@ impl AntigravityCli {
             }
             if let Some(m) = &args.model_name {
                 if m.contains("2.5") {
-                    bail!("Gemini 2.5 models do not support reasoning_effort. Use a Gemini 3 model, or add explicit thinking_budget support.");
+                    bail!(
+                        "Gemini 2.5 models do not support reasoning_effort. Use a Gemini 3 model, or add explicit thinking_budget support."
+                    );
                 }
                 if FLASH_ONLY_EFFORTS.contains(&e.as_str()) && !m.contains("flash") {
-                    bail!("Gemini model '{m}' does not support reasoning_effort='{e}'. Use 'low' or 'high', or choose a Gemini 3 Flash model.");
+                    bail!(
+                        "Gemini model '{m}' does not support reasoning_effort='{e}'. Use 'low' or 'high', or choose a Gemini 3 Flash model."
+                    );
                 }
             }
         }
@@ -166,7 +179,14 @@ impl AntigravityCli {
                 adc_disabled_via_extra_env = true;
             }
         }
-        let mut a = AntigravityCli { version: args.version_kw(), binary_path: args.kw("binary_path"), args, sandbox, reasoning_effort, adc_disabled_via_extra_env };
+        let mut a = AntigravityCli {
+            version: args.version_kw(),
+            binary_path: args.kw("binary_path"),
+            args,
+            sandbox,
+            reasoning_effort,
+            adc_disabled_via_extra_env,
+        };
         if a.use_adc_auth()? {
             for k in ["GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_GEMINI_BASE_URL"] {
                 a.args.extra_env.remove(k);
@@ -202,7 +222,9 @@ impl AntigravityCli {
     /// Non-empty AGY_CLI_* variables; agent env wins over host env.
     fn forwarded_cli_env(&self) -> BTreeMap<String, String> {
         let mut out: BTreeMap<String, String> = std::env::vars().filter(|(k, v)| k.starts_with("AGY_CLI_") && !v.is_empty()).collect();
-        out.extend(self.args.extra_env.iter().filter(|(k, v)| k.starts_with("AGY_CLI_") && !v.is_empty()).map(|(k, v)| (k.clone(), v.clone())));
+        out.extend(
+            self.args.extra_env.iter().filter(|(k, v)| k.starts_with("AGY_CLI_") && !v.is_empty()).map(|(k, v)| (k.clone(), v.clone())),
+        );
         out
     }
 
@@ -274,7 +296,11 @@ impl AntigravityCli {
             .mcp_servers
             .iter()
             .map(|s| {
-                let v = if s.transport() == "stdio" { json!({"command": s.command, "args": s.args, "disabled": false}) } else { json!({"serverUrl": s.url, "disabled": false}) };
+                let v = if s.transport() == "stdio" {
+                    json!({"command": s.command, "args": s.args, "disabled": false})
+                } else {
+                    json!({"serverUrl": s.url, "disabled": false})
+                };
                 (s.name.clone(), v)
             })
             .collect();
@@ -292,7 +318,10 @@ impl AntigravityCli {
         );
         if !self.args.mcp_servers.is_empty() || !activate_mcp {
             let mcp = if activate_mcp { self.mcp_config() } else { json!({"mcpServers": {}}) };
-            cmd += &format!(" && mkdir -p ~/.gemini/config && printf %s {} > ~/.gemini/config/mcp_config.json", quote(&serde_json::to_string_pretty(&mcp)?));
+            cmd += &format!(
+                " && mkdir -p ~/.gemini/config && printf %s {} > ~/.gemini/config/mcp_config.json",
+                quote(&serde_json::to_string_pretty(&mcp)?)
+            );
         }
         Ok(cmd)
     }
@@ -309,7 +338,14 @@ impl AntigravityCli {
         )
     }
 
-    async fn exec(&self, cx: &AgentCtx<'_>, cmd: &str, user: Option<&str>, env: &BTreeMap<String, String>, timeout: Option<Duration>) -> Result<ExecResult> {
+    async fn exec(
+        &self,
+        cx: &AgentCtx<'_>,
+        cmd: &str,
+        user: Option<&str>,
+        env: &BTreeMap<String, String>,
+        timeout: Option<Duration>,
+    ) -> Result<ExecResult> {
         let user = user.or(cx.user.as_deref());
         let r = cx.exec_as(&format!("set -o pipefail; {cmd}"), user, env, timeout).await?;
         if r.code != 0 {
@@ -394,7 +430,8 @@ pub fn stream_usage_totals(text: &str) -> Option<Totals> {
 /// agy 1.1.x step transcript: any record with an int step_index of type USER_INPUT / PLANNER_RESPONSE.
 fn is_step_transcript(text: &str) -> bool {
     text.lines().filter_map(|l| serde_json::from_str::<Value>(l).ok()).any(|r| {
-        (r["step_index"].is_i64() || r["step_index"].is_u64()) && r["type"].as_str().is_some_and(|t| ["USER_INPUT", "PLANNER_RESPONSE"].contains(&t.to_uppercase().as_str()))
+        (r["step_index"].is_i64() || r["step_index"].is_u64())
+            && r["type"].as_str().is_some_and(|t| ["USER_INPUT", "PLANNER_RESPONSE"].contains(&t.to_uppercase().as_str()))
     })
 }
 
@@ -479,7 +516,10 @@ pub fn load_gemini_messages(text: &str) -> Option<Vec<Value>> {
 /// upstream's populate_context_post_run token totals (cost needs LiteLLM pricing, unavailable here).
 pub fn usage_from_logs(logs_dir: &Path) -> Option<Totals> {
     let stream = || std::fs::read_to_string(logs_dir.join(STREAM_LOG)).ok().and_then(|t| stream_usage_totals(&t));
-    let Some(text) = ["antigravity-cli.trajectory.jsonl", "antigravity-cli.trajectory.json"].iter().find_map(|f| std::fs::read_to_string(logs_dir.join(f)).ok()) else {
+    let Some(text) = ["antigravity-cli.trajectory.jsonl", "antigravity-cli.trajectory.json"]
+        .iter()
+        .find_map(|f| std::fs::read_to_string(logs_dir.join(f)).ok())
+    else {
         return stream();
     };
     if is_step_transcript(&text) {
@@ -514,7 +554,11 @@ impl Agent for AntigravityCli {
         let none = BTreeMap::new();
         let install = async {
             if let Some(bp) = &self.binary_path {
-                let p = if let Some(rest) = bp.strip_prefix("~/") { std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(rest) } else { bp.into() };
+                let p = if let Some(rest) = bp.strip_prefix("~/") {
+                    std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(rest)
+                } else {
+                    bp.into()
+                };
                 if !p.is_file() {
                     bail!("binary_path does not point at a file: {bp}");
                 }
@@ -547,7 +591,10 @@ impl Agent for AntigravityCli {
         let env = self.run_env(&model)?;
         let none = BTreeMap::new();
         if let Some(d) = self.skills_dir() {
-            let cmd = format!("mkdir -p ~/.gemini/antigravity-cli/skills && cp -r {}/* ~/.gemini/antigravity-cli/skills/ 2>/dev/null || true", quote(&d));
+            let cmd = format!(
+                "mkdir -p ~/.gemini/antigravity-cli/skills && cp -r {}/* ~/.gemini/antigravity-cli/skills/ 2>/dev/null || true",
+                quote(&d)
+            );
             self.exec(cx, &cmd, None, &none, None).await?;
         }
         // Settings (auth opt-in, no MCP yet) must exist before `agy models` can list.
@@ -580,7 +627,8 @@ impl Agent for AntigravityCli {
 /// upstream's `_compute_cost_from_pricing`: LiteLLM rates for the model (then provider-stripped),
 /// cache reads at `cache_read_input_token_cost or input rate`. None when the model isn't priced.
 pub fn cost_from_pricing(model: &str, prompt: i64, completion: i64, cached: i64) -> Option<f64> {
-    let p = crate::agents::pricing::model_cost(model).or_else(|| crate::agents::pricing::model_cost(model.split_once('/').map_or(model, |(_, m)| m)))?;
+    let p = crate::agents::pricing::model_cost(model)
+        .or_else(|| crate::agents::pricing::model_cost(model.split_once('/').map_or(model, |(_, m)| m)))?;
     let rate = |k: &str| p.get(k).and_then(Value::as_f64).filter(|r| *r != 0.0);
     let input = rate("input_cost_per_token").unwrap_or(0.0);
     let read = rate("cache_read_input_token_cost").unwrap_or(input);
@@ -598,7 +646,8 @@ mod tests {
         std::fs::write(dir.join("task.toml"), "[environment]\ndocker_image='x'\n").unwrap();
         std::fs::write(dir.join("instruction.md"), "x").unwrap();
         let task = Arc::new(crate::task::Task::load(&dir).unwrap());
-        AgentArgs { load_trajectory: None,
+        AgentArgs {
+            load_trajectory: None,
             model_name: model.map(String::from),
             kwargs: serde_json::from_value(kwargs).unwrap(),
             extra_env: env.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect(),
@@ -626,16 +675,25 @@ mod tests {
 
     #[test]
     fn auth_env_and_flags() {
-        let a = agent(json!({"sandbox": true, "reasoning_effort": "low"}), &[("GOOGLE_API_KEY", "gk"), ("AGY_CLI_FOO", "1"), ("AGY_CLI_BAR", "")], Some("google/gemini-3-pro")).unwrap();
+        let a = agent(
+            json!({"sandbox": true, "reasoning_effort": "low"}),
+            &[("GOOGLE_API_KEY", "gk"), ("AGY_CLI_FOO", "1"), ("AGY_CLI_BAR", "")],
+            Some("google/gemini-3-pro"),
+        )
+        .unwrap();
         let e = a.run_env("gemini-3-pro").unwrap();
-        assert_eq!((e["GEMINI_API_KEY"].as_str(), e["GEMINI_CLI_TRUST_WORKSPACE"].as_str(), e["AGY_CLI_FOO"].as_str()), ("gk", "true", "1"));
+        assert_eq!(
+            (e["GEMINI_API_KEY"].as_str(), e["GEMINI_CLI_TRUST_WORKSPACE"].as_str(), e["AGY_CLI_FOO"].as_str()),
+            ("gk", "true", "1")
+        );
         assert!(!e.contains_key("AGY_CLI_BAR") && !e.contains_key("GOOGLE_API_KEY"));
         let cmd = a.agy_command("gemini-3-pro", "do it");
         assert!(cmd.contains("--add-dir \"$PWD\" --model gemini-3-pro --effort low --sandbox --prompt='do it' 2>/logs/agent/antigravity-cli.err </dev/null | stdbuf -oL tee /logs/agent/antigravity-stream.jsonl"));
         assert!(cmd.contains("tail -c 262144"));
 
         // ADC: key material dropped, modelProvider not written, 2.5 rejected.
-        let adc = agent(json!({}), &[("AGY_ADC_AUTH", "1"), ("GEMINI_API_KEY", "k"), ("GOOGLE_APPLICATION_CREDENTIALS", "/c.json")], None).unwrap();
+        let adc = agent(json!({}), &[("AGY_ADC_AUTH", "1"), ("GEMINI_API_KEY", "k"), ("GOOGLE_APPLICATION_CREDENTIALS", "/c.json")], None)
+            .unwrap();
         let e = adc.run_env("gemini-3-flash").unwrap();
         assert_eq!((e["AGY_ADC_AUTH"].as_str(), e["GOOGLE_APPLICATION_CREDENTIALS"].as_str()), ("true", "/c.json"));
         assert!(!e.contains_key("GEMINI_API_KEY"));
@@ -647,7 +705,12 @@ mod tests {
         // Insecure base URL needs an explicit opt-in.
         let b = agent(json!({}), &[("GEMINI_API_KEY", "k"), ("GOOGLE_GEMINI_BASE_URL", "http://host.docker.internal:8080")], None).unwrap();
         assert!(b.run_env("m").is_err());
-        let b = agent(json!({}), &[("GEMINI_API_KEY", "k"), ("GOOGLE_GEMINI_BASE_URL", "http://h:8080"), ("HBENCH_ALLOW_INSECURE_MODEL_BASE_URL", "true")], None).unwrap();
+        let b = agent(
+            json!({}),
+            &[("GEMINI_API_KEY", "k"), ("GOOGLE_GEMINI_BASE_URL", "http://h:8080"), ("HBENCH_ALLOW_INSECURE_MODEL_BASE_URL", "true")],
+            None,
+        )
+        .unwrap();
         assert_eq!(b.run_env("m").unwrap()["GOOGLE_GEMINI_BASE_URL"], "http://h:8080");
     }
 
@@ -656,7 +719,17 @@ mod tests {
         let no = |_: &str| None;
         assert!(validate_base_url("https://example.com/v1", &no).is_ok());
         assert!(validate_base_url("https://[::1]:443", &no).is_ok());
-        for bad in ["ftp://x", "https://", "https://h:0", "https://h:99999", "https://h:ab", "https://h/#frag", "https://u:p@h", "https://h /x", "example.com"] {
+        for bad in [
+            "ftp://x",
+            "https://",
+            "https://h:0",
+            "https://h:99999",
+            "https://h:ab",
+            "https://h/#frag",
+            "https://u:p@h",
+            "https://h /x",
+            "example.com",
+        ] {
             assert!(validate_base_url(bad, &no).is_err(), "{bad}");
         }
     }
@@ -673,16 +746,26 @@ mod tests {
         assert_eq!(c["allowNonWorkspaceAccess"], true);
         assert_eq!(a.mcp_config()["mcpServers"]["s"], json!({"serverUrl": "http://m", "disabled": false}));
         let pre = a.settings_command("custom-x", false, false).unwrap();
-        assert!(!pre.contains("mcpServers\": {\n    \"s") && pre.contains("~/.gemini/config/mcp_config.json") && !pre.contains("customModels"));
+        assert!(
+            !pre.contains("mcpServers\": {\n    \"s") && pre.contains("~/.gemini/config/mcp_config.json") && !pre.contains("customModels")
+        );
 
-        let known = parse_known_models("Fetching available models...\n  gemini-3.7-flash \tGemini 3.7 Flash\ngemini-3.5-flash-low\tX\nsome error text");
+        let known = parse_known_models(
+            "Fetching available models...\n  gemini-3.7-flash \tGemini 3.7 Flash\ngemini-3.5-flash-low\tX\nsome error text",
+        );
         assert_eq!(known, vec!["gemini-3.7-flash", "gemini-3.5-flash-low"]);
-        assert!(model_is_known("gemini-3.7-flash", &known) && model_is_known("gemini-3.5-flash", &known) && !model_is_known("custom-x", &known));
+        assert!(
+            model_is_known("gemini-3.7-flash", &known) && model_is_known("gemini-3.5-flash", &known) && !model_is_known("custom-x", &known)
+        );
     }
 
     #[test]
     fn agy_error_classification() {
-        let m = |status: &str, retry: bool| format!("error: something went wrong\nAGY_ERROR: {{\"short_error\":\"backend failed\",\"status\":\"{status}\",\"error_code\":1,\"retryable\":{retry},\"error_id\":\"t\"}}");
+        let m = |status: &str, retry: bool| {
+            format!(
+                "error: something went wrong\nAGY_ERROR: {{\"short_error\":\"backend failed\",\"status\":\"{status}\",\"error_code\":1,\"retryable\":{retry},\"error_id\":\"t\"}}"
+            )
+        };
         assert_eq!(classify_agy(&m("RESOURCE_EXHAUSTED", true)), "ApiRateLimitError");
         assert_eq!(classify_agy(&m("RESOURCE_EXHAUSTED", false)), "ApiUsageLimitError");
         assert_eq!(classify_agy(&m("UNAVAILABLE", true)), "ApiOverloadedError");
@@ -696,14 +779,23 @@ mod tests {
 
     #[test]
     fn stream_usage() {
-        let res = |i: i64, o: i64, c: i64| json!({"event": "result", "result": {"usage": {"input_tokens": i, "output_tokens": o, "cache_read_tokens": c}}}).to_string();
-        let step = |s: i64, i: i64, o: i64, c: i64| json!({"event": "step_update", "step_update": {"step_index": s, "usage": {"input_tokens": i, "output_tokens": o, "cache_read_tokens": c}}}).to_string();
+        let res = |i: i64, o: i64, c: i64| {
+            json!({"event": "result", "result": {"usage": {"input_tokens": i, "output_tokens": o, "cache_read_tokens": c}}}).to_string()
+        };
+        let step = |s: i64, i: i64, o: i64, c: i64| {
+            json!({"event": "step_update", "step_update": {"step_index": s, "usage": {"input_tokens": i, "output_tokens": o, "cache_read_tokens": c}}}).to_string()
+        };
         assert_eq!(stream_usage_totals(&res(100, 40, 900)), Some((1000, 40, 900)));
         assert_eq!(stream_usage_totals(&[res(100, 40, 0), res(100, 40, 0)].join("\n")), Some((100, 40, 0)));
         assert_eq!(stream_usage_totals(&[step(1, 10, 3, 5), step(2, 20, 4, 7)].join("\n")), Some((42, 7, 12)));
         assert_eq!(stream_usage_totals(&[step(1, 10, 3, 4), step(1, 0, 0, 0)].join("\n")), Some((14, 3, 4)));
         assert_eq!(stream_usage_totals(&[step(1, 10, 3, 0), step(1, 25, 9, 0)].join("\n")), Some((25, 9, 0)));
-        let torn = ["Authentication required. Please visit the URL to log in:".to_string(), res(5, 2, 0), "{\"event\":\"result\",\"result\":{\"usa".into()].join("\n");
+        let torn = [
+            "Authentication required. Please visit the URL to log in:".to_string(),
+            res(5, 2, 0),
+            "{\"event\":\"result\",\"result\":{\"usa".into(),
+        ]
+        .join("\n");
         assert_eq!(stream_usage_totals(&torn), Some((5, 2, 0)));
         assert_eq!(stream_usage_totals("{\"event\":\"init\",\"init\":{}}"), None);
     }
@@ -721,13 +813,18 @@ mod tests {
             json!({"type": "message_update", "id": "gemini-1", "tokens": {"input": 10, "output": 5, "cached": 3, "thoughts": 2, "tool": 1}}),
             json!({"type": "gemini", "id": "g0", "content": []}),
         ];
-        std::fs::write(dir.join("antigravity-cli.trajectory.jsonl"), session.iter().map(|v| v.to_string()).collect::<Vec<_>>().join("\n")).unwrap();
+        std::fs::write(dir.join("antigravity-cli.trajectory.jsonl"), session.iter().map(|v| v.to_string()).collect::<Vec<_>>().join("\n"))
+            .unwrap();
         assert_eq!(usage_from_logs(&dir), Some((17, 12, 4)));
         // Step transcript: usage comes from the stream log.
         let steps = json!({"step_index": 0, "source": "USER_EXPLICIT", "type": "USER_INPUT", "status": "DONE", "content": "x"}).to_string();
         std::fs::write(dir.join("antigravity-cli.trajectory.jsonl"), steps).unwrap();
         assert_eq!(usage_from_logs(&dir), None);
-        std::fs::write(dir.join(STREAM_LOG), json!({"event": "result", "result": {"usage": {"input_tokens": 70, "output_tokens": 8}}}).to_string()).unwrap();
+        std::fs::write(
+            dir.join(STREAM_LOG),
+            json!({"event": "result", "result": {"usage": {"input_tokens": 70, "output_tokens": 8}}}).to_string(),
+        )
+        .unwrap();
         let mut ctx = AgentContext::default();
         agent(json!({}), &[], Some("google/gemini-3.5-flash")).unwrap().populate_context_post_run(&dir, &mut ctx);
         assert_eq!((ctx.n_input_tokens, ctx.n_output_tokens, ctx.n_cache_tokens), (Some(70), Some(8), Some(0)));

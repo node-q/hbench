@@ -74,7 +74,13 @@ impl AgentCtx<'_> {
     pub async fn exec(&self, cmd: &str, env: &BTreeMap<String, String>, timeout: Option<Duration>) -> Result<ExecResult> {
         self.exec_as(cmd, self.user.as_deref(), env, timeout).await
     }
-    pub async fn exec_as(&self, cmd: &str, user: Option<&str>, env: &BTreeMap<String, String>, timeout: Option<Duration>) -> Result<ExecResult> {
+    pub async fn exec_as(
+        &self,
+        cmd: &str,
+        user: Option<&str>,
+        env: &BTreeMap<String, String>,
+        timeout: Option<Duration>,
+    ) -> Result<ExecResult> {
         let mut e = env.clone();
         e.extend(self.overlay.clone());
         self.env.exec(cmd, user, &e, timeout).await
@@ -202,7 +208,8 @@ pub fn agent_names() -> Vec<&'static str> {
 pub fn check_kwargs(name: &str, kwargs: &BTreeMap<String, Value>) -> Result<()> {
     let key = if name.starts_with("acp:") { "acp" } else { name };
     let Some(allowed) = allowed_kwargs::allowed(key) else { return Ok(()) };
-    let unknown: Vec<String> = kwargs.keys().filter(|k| !allowed.contains(&k.as_str())).map(|k| format!("  Unknown option '{k}'.")).collect();
+    let unknown: Vec<String> =
+        kwargs.keys().filter(|k| !allowed.contains(&k.as_str())).map(|k| format!("  Unknown option '{k}'.")).collect();
     if !unknown.is_empty() {
         bail!("Invalid kwargs for agent '{name}':\n{}\nSee `hbench agents schema {name}` for available options.", unknown.join("\n"));
     }

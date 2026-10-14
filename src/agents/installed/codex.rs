@@ -2,8 +2,8 @@
 
 use super::aider::opts;
 use super::{
-    connection, ensure_acp_node_command, ensure_system_dependencies, exec_agent, exec_error, exec_root, filter_jsonl_events, pinned_bin_wrapper_command,
-    safe_bin_symlink_command, upload_text,
+    connection, ensure_acp_node_command, ensure_system_dependencies, exec_agent, exec_error, exec_root, filter_jsonl_events,
+    pinned_bin_wrapper_command, safe_bin_symlink_command, upload_text,
 };
 use crate::agents::model_connection::Spec;
 use crate::agents::pricing;
@@ -98,9 +98,12 @@ impl Codex {
             items.push(("model", json!(m.rsplit('/').next().unwrap())));
         }
         let a = &self.args;
-        let effort = opts::choice(a, "reasoning_effort", None, &["none", "minimal", "low", "medium", "high", "xhigh", "max"]).ok().flatten();
+        let effort =
+            opts::choice(a, "reasoning_effort", None, &["none", "minimal", "low", "medium", "high", "xhigh", "max"]).ok().flatten();
         let summary = opts::choice(a, "reasoning_summary", None, &["auto", "concise", "detailed", "none"]).ok().flatten();
-        for (k, v) in [("model_reasoning_effort", effort), ("model_reasoning_summary", summary), ("web_search", self.web_search().ok().flatten())] {
+        for (k, v) in
+            [("model_reasoning_effort", effort), ("model_reasoning_summary", summary), ("web_search", self.web_search().ok().flatten())]
+        {
             if let Some(v) = v {
                 items.push((k, json!(v)));
             }
@@ -108,7 +111,8 @@ impl Codex {
         if opts::boolean(a, "dangerously_bypass_hook_trust", None).ok().flatten().unwrap_or(false) {
             items.push(("bypass_hook_trust", json!(true)));
         }
-        (!items.is_empty()).then(|| format!("{{{}}}", items.iter().map(|(k, v)| format!("{}: {v}", json!(k))).collect::<Vec<_>>().join(", ")))
+        (!items.is_empty())
+            .then(|| format!("{{{}}}", items.iter().map(|(k, v)| format!("{}: {v}", json!(k))).collect::<Vec<_>>().join(", ")))
     }
 
     /// CodexOptions -> CLI flags.
@@ -218,7 +222,11 @@ fn load_base_config(config: Option<&Value>) -> Result<serde_json::Map<String, Va
 
 fn parse_codex_version(stdout: &str) -> String {
     let text = stdout.trim();
-    text.lines().map(str::trim).find(|l| !l.is_empty()).map(|l| l.strip_prefix("codex-cli").unwrap_or(l).trim().to_string()).unwrap_or_else(|| text.to_string())
+    text.lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .map(|l| l.strip_prefix("codex-cli").unwrap_or(l).trim().to_string())
+        .unwrap_or_else(|| text.to_string())
 }
 
 /// upstream's `_validate_load_trajectory`: `.json` must be an ATIF trajectory (returned parsed);
@@ -227,7 +235,8 @@ fn validate_load_trajectory(path: Option<&Path>) -> Result<Option<Value>> {
     let Some(path) = path else { return Ok(None) };
     if path.extension().is_some_and(|e| e == "json") {
         let text = std::fs::read_to_string(path).map_err(|e| anyhow!("load_trajectory file not found: {}: {e}", path.display()))?;
-        let v: Value = serde_json::from_str(&text).map_err(|e| anyhow!("load_trajectory is not a valid ATIF trajectory file ({}): {e}", path.display()))?;
+        let v: Value = serde_json::from_str(&text)
+            .map_err(|e| anyhow!("load_trajectory is not a valid ATIF trajectory file ({}): {e}", path.display()))?;
         if !v["steps"].is_array() {
             bail!("load_trajectory is not a valid ATIF trajectory file ({}): missing steps", path.display());
         }
@@ -235,14 +244,20 @@ fn validate_load_trajectory(path: Option<&Path>) -> Result<Option<Value>> {
     }
     let name = path.file_name().unwrap_or_default().to_string_lossy();
     if !regex::Regex::new(ROLLOUT_FILENAME_RE).unwrap().is_match(&name) {
-        bail!("Codex load_trajectory must be a native rollout file named rollout-<timestamp>-<session-id>.jsonl or an ATIF trajectory .json file; got {name:?}");
+        bail!(
+            "Codex load_trajectory must be a native rollout file named rollout-<timestamp>-<session-id>.jsonl or an ATIF trajectory .json file; got {name:?}"
+        );
     }
     Ok(None)
 }
 
 /// Reuse the trajectory's session id when it is a UUID; else mint one.
 fn atif_session_id(traj: &Value) -> String {
-    traj["session_id"].as_str().filter(|s| uuid::Uuid::parse_str(s).is_ok()).map(String::from).unwrap_or_else(|| uuid::Uuid::new_v4().to_string())
+    traj["session_id"]
+        .as_str()
+        .filter(|s| uuid::Uuid::parse_str(s).is_ok())
+        .map(String::from)
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string())
 }
 
 fn rollout_text(m: &Value) -> String {
@@ -276,7 +291,9 @@ fn rollout_custom_tool_input(step: &Value, call: &Value) -> Option<String> {
 /// Session start: first step timestamp (parse failure or none -> now).
 fn rollout_timestamp(traj: &Value) -> chrono::DateTime<chrono::FixedOffset> {
     let now = || chrono::Utc::now().fixed_offset();
-    let Some(ts) = traj["steps"].as_array().into_iter().flatten().find_map(|s| s["timestamp"].as_str().filter(|t| !t.is_empty())) else { return now() };
+    let Some(ts) = traj["steps"].as_array().into_iter().flatten().find_map(|s| s["timestamp"].as_str().filter(|t| !t.is_empty())) else {
+        return now();
+    };
     chrono::DateTime::parse_from_rfc3339(ts)
         // ponytail: naive timestamps taken as UTC (Python would use local time).
         .or_else(|_| chrono::NaiveDateTime::parse_from_str(ts, "%Y-%m-%dT%H:%M:%S%.f").map(|n| n.and_utc().fixed_offset()))
@@ -292,8 +309,11 @@ pub fn atif_to_native_trajectory(traj: &Value, session_id: &str) -> (String, Str
     let mut lines = vec![json!({"timestamp": iso, "type": "session_meta", "payload": {
         "session_id": session_id, "id": session_id, "timestamp": iso, "cwd": "/app", "originator": "codex_exec",
         "cli_version": traj["agent"]["version"].as_str().filter(|v| !v.is_empty()).unwrap_or("unknown"), "source": "exec", "thread_source": "user"}})];
-    let item = |lines: &mut Vec<Value>, payload: Value, ts: &str| lines.push(json!({"timestamp": ts, "type": "response_item", "payload": payload}));
-    let event = |lines: &mut Vec<Value>, payload: Value, ts: &str| lines.push(json!({"timestamp": ts, "type": "event_msg", "payload": payload}));
+    let item = |lines: &mut Vec<Value>, payload: Value, ts: &str| {
+        lines.push(json!({"timestamp": ts, "type": "response_item", "payload": payload}))
+    };
+    let event =
+        |lines: &mut Vec<Value>, payload: Value, ts: &str| lines.push(json!({"timestamp": ts, "type": "event_msg", "payload": payload}));
     let message = |lines: &mut Vec<Value>, role: &str, text: &str, ts: &str| {
         let ct = if role == "assistant" { "output_text" } else { "input_text" };
         item(lines, json!({"type": "message", "role": role, "content": [{"type": ct, "text": text}]}), ts)
@@ -325,7 +345,9 @@ pub fn atif_to_native_trajectory(traj: &Value, session_id: &str) -> (String, Str
                     custom.push(c["tool_call_id"].clone());
                     json!({"type": "custom_tool_call", "status": "completed", "call_id": c["tool_call_id"], "name": c["function_name"], "input": input})
                 }
-                None => json!({"type": "function_call", "call_id": c["tool_call_id"], "name": c["function_name"], "arguments": c["arguments"].to_string()}),
+                None => {
+                    json!({"type": "function_call", "call_id": c["tool_call_id"], "name": c["function_name"], "arguments": c["arguments"].to_string()})
+                }
             };
             item(&mut lines, payload, &ts);
         }
@@ -333,7 +355,11 @@ pub fn atif_to_native_trajectory(traj: &Value, session_id: &str) -> (String, Str
         for c in &calls {
             let id = &c["tool_call_id"];
             // Last result per call id wins, like upstream's dict comprehension.
-            let output = results.iter().rev().find(|r| !r["source_call_id"].is_null() && r["source_call_id"] == *id).map_or("[no output recorded]".to_string(), |r| rollout_text(&r["content"]));
+            let output = results
+                .iter()
+                .rev()
+                .find(|r| !r["source_call_id"].is_null() && r["source_call_id"] == *id)
+                .map_or("[no output recorded]".to_string(), |r| rollout_text(&r["content"]));
             let kind = if custom.contains(id) { "custom_tool_call_output" } else { "function_call_output" };
             item(&mut lines, json!({"type": kind, "call_id": id, "output": output}), &ts);
         }
@@ -376,7 +402,9 @@ pub fn parse_rollout_usage(text: &str, model: Option<&str>) -> Option<AgentConte
             let u = &p["info"]["last_token_usage"];
             if p["info"].is_object() && u.is_object() {
                 let n = |k: &str| u[k].as_i64().unwrap_or(0);
-                costs.push(model.and_then(|m| pricing::total_cost(m, n("input_tokens"), n("output_tokens"), n("cache_write_input_tokens"), n("cached_input_tokens"))));
+                costs.push(model.and_then(|m| {
+                    pricing::total_cost(m, n("input_tokens"), n("output_tokens"), n("cache_write_input_tokens"), n("cached_input_tokens"))
+                }));
             }
         } else if e["type"] == "response_item"
             && match p["type"].as_str() {
@@ -394,11 +422,22 @@ pub fn parse_rollout_usage(text: &str, model: Option<&str>) -> Option<AgentConte
     if !events.iter().any(|e| e["type"] == "response_item" && e["payload"]["type"].as_str().is_some_and(|t| step_types.contains(&t))) {
         return None; // no ATIF steps -> upstream writes no trajectory
     }
-    let info = events.iter().rev().filter(|e| e["type"] == "event_msg" && e["payload"]["type"] == "token_count").map(|e| &e["payload"]["info"]).find(|i| i["total_token_usage"].is_object())?;
+    let info = events
+        .iter()
+        .rev()
+        .filter(|e| e["type"] == "event_msg" && e["payload"]["type"] == "token_count")
+        .map(|e| &e["payload"]["info"])
+        .find(|i| i["total_token_usage"].is_object())?;
     let t = &info["total_token_usage"];
     let n = |k: &str| t[k].as_i64().unwrap_or(0);
     let cost = info["total_cost"].as_f64().or_else(|| info["cost_usd"].as_f64()).or(estimate);
-    Some(AgentContext { n_input_tokens: Some(n("input_tokens")), n_cache_tokens: Some(n("cached_input_tokens")), n_output_tokens: Some(n("output_tokens")), cost_usd: cost, ..Default::default() })
+    Some(AgentContext {
+        n_input_tokens: Some(n("input_tokens")),
+        n_cache_tokens: Some(n("cached_input_tokens")),
+        n_output_tokens: Some(n("output_tokens")),
+        cost_usd: cost,
+        ..Default::default()
+    })
 }
 
 #[async_trait::async_trait]
@@ -417,7 +456,10 @@ impl Agent for Codex {
     }
 
     fn acp_command(&self) -> Option<Vec<String>> {
-        let mut c: Vec<String> = ["env", "NO_BROWSER=1", "INITIAL_AGENT_MODE=agent-full-access", "DEFAULT_AUTH_REQUEST={\"methodId\":\"api-key\"}"].map(String::from).into();
+        let mut c: Vec<String> =
+            ["env", "NO_BROWSER=1", "INITIAL_AGENT_MODE=agent-full-access", "DEFAULT_AUTH_REQUEST={\"methodId\":\"api-key\"}"]
+                .map(String::from)
+                .into();
         c.push(format!("CODEX_HOME={ACP_CODEX_HOME}"));
         if let Some(cfg) = self.acp_session_config() {
             c.push(format!("CODEX_CONFIG={cfg}"));
@@ -431,7 +473,11 @@ impl Agent for Codex {
 
     /// Keep the adapter's credential separate from an OpenAI user agent's key.
     fn acp_env(&self) -> BTreeMap<String, String> {
-        connection(&self.args, SPEC).api_key.filter(|k| !k.is_empty()).map(|k| BTreeMap::from([("CODEX_API_KEY".to_string(), k)])).unwrap_or_default()
+        connection(&self.args, SPEC)
+            .api_key
+            .filter(|k| !k.is_empty())
+            .map(|k| BTreeMap::from([("CODEX_API_KEY".to_string(), k)]))
+            .unwrap_or_default()
     }
 
     async fn acp_install(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
@@ -458,7 +504,9 @@ impl Agent for Codex {
         .await?;
         let last = r.stdout.trim().lines().last().unwrap_or_default().to_string();
         let fields: Vec<&str> = last.split(':').collect();
-        let [system_node, node, adapter, codex] = fields.as_slice() else { bail!("Could not locate node/codex-acp/codex binaries for ACP mode") };
+        let [system_node, node, adapter, codex] = fields.as_slice() else {
+            bail!("Could not locate node/codex-acp/codex binaries for ACP mode")
+        };
         if node.is_empty() || adapter.is_empty() || codex.is_empty() {
             bail!("Could not locate node/codex-acp/codex binaries for ACP mode");
         }
@@ -475,7 +523,12 @@ impl Agent for Codex {
         config.insert("cli_auth_credentials_store".into(), json!("file"));
         upload_text(cx, &format!("{ACP_CODEX_HOME}/config.toml"), &toml::to_string(&toml::Value::try_from(&config)?)?).await?;
         if let Some(d) = opts::skills_dir(&self.args) {
-            exec_agent(cx, &format!("mkdir -p $HOME/.agents/skills && cp -r {}/* $HOME/.agents/skills/ 2>/dev/null || true", quote(&d)), &BTreeMap::new()).await?;
+            exec_agent(
+                cx,
+                &format!("mkdir -p $HOME/.agents/skills && cp -r {}/* $HOME/.agents/skills/ 2>/dev/null || true", quote(&d)),
+                &BTreeMap::new(),
+            )
+            .await?;
         }
         Ok(())
     }
@@ -497,7 +550,9 @@ impl Agent for Codex {
         opts::installed_dir(cx).await?;
         let none = BTreeMap::new();
         let satisfied = match &self.version {
-            None => cx.exec("if [ -s ~/.nvm/nvm.sh ]; then . ~/.nvm/nvm.sh; fi; command -v codex >/dev/null 2>&1", &none, None).await?.code == 0,
+            None => {
+                cx.exec("if [ -s ~/.nvm/nvm.sh ]; then . ~/.nvm/nvm.sh; fi; command -v codex >/dev/null 2>&1", &none, None).await?.code == 0
+            }
             Some(v) => {
                 let r = cx.exec(VERSION_CMD, &none, None).await?;
                 r.code == 0 && parse_codex_version(&r.stdout) == *v
@@ -605,7 +660,10 @@ impl Agent for Codex {
     }
 
     fn populate_context_post_run(&self, logs_dir: &Path, ctx: &mut AgentContext) {
-        if let Some(c) = latest_session_file(logs_dir).and_then(|p| std::fs::read_to_string(p).ok()).and_then(|t| parse_rollout_usage(&t, self.args.model_name.as_deref())) {
+        if let Some(c) = latest_session_file(logs_dir)
+            .and_then(|p| std::fs::read_to_string(p).ok())
+            .and_then(|t| parse_rollout_usage(&t, self.args.model_name.as_deref()))
+        {
             ctx.n_input_tokens = c.n_input_tokens;
             ctx.n_cache_tokens = c.n_cache_tokens;
             ctx.n_output_tokens = c.n_output_tokens;
@@ -625,12 +683,20 @@ mod tests {
     #[test]
     fn flags_config_and_validation() {
         let a = agent(json!({"reasoning_effort": "high", "reasoning_summary": "auto", "web_search": "live", "disable_web_search": true, "dangerously_bypass_hook_trust": true}), &[], Some("openai/gpt-5")).unwrap();
-        assert_eq!(a.cli_flags().unwrap(), "-c model_reasoning_effort=high -c model_reasoning_summary=auto -c web_search=disabled --dangerously-bypass-hook-trust");
+        assert_eq!(
+            a.cli_flags().unwrap(),
+            "-c model_reasoning_effort=high -c model_reasoning_summary=auto -c web_search=disabled --dangerously-bypass-hook-trust"
+        );
         assert!(agent(json!({"reasoning_effort": "huge"}), &[], None).is_err());
         assert!(agent(json!({"nope": 1}), &[], None).is_err());
 
-        let mut args = opts::test_args(json!({"config": {"model_verbosity": "low", "mcp_servers": {"keep": {"url": "http://k"}}}}), &[], Some("openai/gpt-5"));
-        args.mcp_servers = vec![serde_json::from_value(json!({"name": "fs", "transport": "stdio", "command": "npx", "args": ["fs"]})).unwrap()];
+        let mut args = opts::test_args(
+            json!({"config": {"model_verbosity": "low", "mcp_servers": {"keep": {"url": "http://k"}}}}),
+            &[],
+            Some("openai/gpt-5"),
+        );
+        args.mcp_servers =
+            vec![serde_json::from_value(json!({"name": "fs", "transport": "stdio", "command": "npx", "args": ["fs"]})).unwrap()];
         let a = Codex::new(args).unwrap();
         let c = a.effective_config(Some("http://proxy/v1")).unwrap();
         assert_eq!(c["openai_base_url"], "http://proxy/v1");
@@ -652,7 +718,13 @@ not json
 "#;
         let c = parse_rollout_usage(text, None).unwrap();
         assert_eq!((c.n_input_tokens, c.n_cache_tokens, c.n_output_tokens, c.cost_usd), (Some(100), Some(40), Some(7), None));
-        assert!(parse_rollout_usage("{\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{}}}}", None).is_none());
+        assert!(
+            parse_rollout_usage(
+                "{\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{}}}}",
+                None
+            )
+            .is_none()
+        );
 
         let dir = std::env::temp_dir().join(format!("hbench-codex-{}", uuid::Uuid::new_v4()));
         let day = dir.join("sessions/2026/10/10");
@@ -687,7 +759,12 @@ not json
 
     #[test]
     fn acp_command_contents() {
-        let mut a = agent(json!({"reasoning_effort": "high", "disable_web_search": true, "dangerously_bypass_hook_trust": true}), &[("OPENAI_API_KEY", "sk")], Some("openai/gpt-5")).unwrap();
+        let mut a = agent(
+            json!({"reasoning_effort": "high", "disable_web_search": true, "dangerously_bypass_hook_trust": true}),
+            &[("OPENAI_API_KEY", "sk")],
+            Some("openai/gpt-5"),
+        )
+        .unwrap();
         a.acp_codex_executable = Some("/usr/bin/codex".into());
         assert_eq!(
             a.acp_command().unwrap(),
@@ -722,7 +799,8 @@ not json
         assert_eq!(name, "rollout-2026-03-04T05-06-07-sid.jsonl");
         assert!(regex::Regex::new(ROLLOUT_FILENAME_RE).unwrap().is_match(&name));
         let ev: Vec<Value> = content.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
-        let kinds: Vec<String> = ev.iter().map(|e| format!("{}:{}", e["type"].as_str().unwrap(), e["payload"]["type"].as_str().unwrap_or(""))).collect();
+        let kinds: Vec<String> =
+            ev.iter().map(|e| format!("{}:{}", e["type"].as_str().unwrap(), e["payload"]["type"].as_str().unwrap_or(""))).collect();
         assert_eq!(
             kinds,
             [

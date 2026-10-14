@@ -43,7 +43,13 @@ impl Devin {
     }
 
     fn run_command(&self, instruction: &str) -> String {
-        let model = self.args.model_name.as_deref().filter(|m| !m.is_empty()).map(|m| format!("--model {} ", quote(m.rsplit('/').next().unwrap()))).unwrap_or_default();
+        let model = self
+            .args
+            .model_name
+            .as_deref()
+            .filter(|m| !m.is_empty())
+            .map(|m| format!("--model {} ", quote(m.rsplit('/').next().unwrap())))
+            .unwrap_or_default();
         format!(
             "export PATH=\"$HOME/.local/bin:$PATH\"; devin {model}--permission-mode yolo --print --respect-workspace-trust false -- {} 2>&1 | tee /logs/agent/rollout.log",
             quote(instruction)
@@ -73,13 +79,26 @@ impl Agent for Devin {
         exec_agent(cx, "CONFIG_DIR=\"${XDG_CONFIG_HOME:-$HOME/.config}/devin\"; mkdir -p \"$CONFIG_DIR\"; echo '{\"shell\":{\"setup_complete\":true}}' > \"$CONFIG_DIR/config.json\"", &none).await?;
         // The API key goes into credentials.toml, never the agent's run env.
         let creds = self.credentials()?;
-        let data_dir = exec_agent(cx, "DATA_DIR=\"${XDG_DATA_HOME:-$HOME/.local/share}/devin\"; mkdir -p \"$DATA_DIR\"; echo \"$DATA_DIR\"", &none).await?;
+        let data_dir =
+            exec_agent(cx, "DATA_DIR=\"${XDG_DATA_HOME:-$HOME/.local/share}/devin\"; mkdir -p \"$DATA_DIR\"; echo \"$DATA_DIR\"", &none)
+                .await?;
         upload_text(cx, &format!("{}/credentials.toml", data_dir.stdout.trim()), &creds).await?;
         let v = self.version.as_ref().map(|v| format!(" {v}")).unwrap_or_default();
-        exec_agent(cx, &format!("curl -fsSL https://cli.devin.ai/install.sh | bash -s --{v}; export PATH=\"$HOME/.local/bin:$PATH\"; devin version"), &none).await?;
+        exec_agent(
+            cx,
+            &format!("curl -fsSL https://cli.devin.ai/install.sh | bash -s --{v}; export PATH=\"$HOME/.local/bin:$PATH\"; devin version"),
+            &none,
+        )
+        .await?;
         if !self.args.mcp_servers.is_empty() {
-            let dir = exec_agent(cx, "CONFIG_DIR=\"${XDG_CONFIG_HOME:-$HOME/.config}/devin\"; mkdir -p \"$CONFIG_DIR\"; echo \"$CONFIG_DIR\"", &none).await?;
-            upload_text(cx, &format!("{}/mcp_config.json", dir.stdout.trim()), &(serde_json::to_string_pretty(&self.mcp_config())? + "\n")).await?;
+            let dir = exec_agent(
+                cx,
+                "CONFIG_DIR=\"${XDG_CONFIG_HOME:-$HOME/.config}/devin\"; mkdir -p \"$CONFIG_DIR\"; echo \"$CONFIG_DIR\"",
+                &none,
+            )
+            .await?;
+            upload_text(cx, &format!("{}/mcp_config.json", dir.stdout.trim()), &(serde_json::to_string_pretty(&self.mcp_config())? + "\n"))
+                .await?;
         }
         if self.version.is_none() {
             let r = cx.exec("export PATH=\"$HOME/.local/bin:$PATH\"; devin version", &none, None).await?;
@@ -119,7 +138,8 @@ mod tests {
         std::fs::create_dir_all(dir.join("environment")).unwrap();
         std::fs::write(dir.join("task.toml"), "[environment]\ndocker_image='x'\n").unwrap();
         std::fs::write(dir.join("instruction.md"), "x").unwrap();
-        let args = AgentArgs { load_trajectory: None,
+        let args = AgentArgs {
+            load_trajectory: None,
             model_name: model.map(String::from),
             kwargs: Default::default(),
             extra_env: env.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect(),
@@ -140,13 +160,20 @@ mod tests {
             command: cmd.map(String::from),
             args: vec!["-y".into()],
         };
-        let a = agent(&[("DEVIN_API_KEY", "dk"), ("DEVIN_API_SERVER_URL", "https://x")], Some("devin/claude-opus-4.7"), vec![srv("s", "stdio", None, Some("npx")), srv("h", "http", Some("http://h"), None)]);
+        let a = agent(
+            &[("DEVIN_API_KEY", "dk"), ("DEVIN_API_SERVER_URL", "https://x")],
+            Some("devin/claude-opus-4.7"),
+            vec![srv("s", "stdio", None, Some("npx")), srv("h", "http", Some("http://h"), None)],
+        );
         assert_eq!(
             a.run_command("do it"),
             "export PATH=\"$HOME/.local/bin:$PATH\"; devin --model claude-opus-4.7 --permission-mode yolo --print --respect-workspace-trust false -- 'do it' 2>&1 | tee /logs/agent/rollout.log"
         );
         assert_eq!(a.credentials().unwrap(), "windsurf_api_key = \"dk\"\napi_server_url = \"https://x\"\n");
-        assert_eq!(a.mcp_config(), json!({"mcpServers": {"s": {"command": "npx", "args": ["-y"]}, "h": {"url": "http://h", "transport": "http"}}}));
+        assert_eq!(
+            a.mcp_config(),
+            json!({"mcpServers": {"s": {"command": "npx", "args": ["-y"]}, "h": {"url": "http://h", "transport": "http"}}})
+        );
         let b = agent(&[], None, vec![]);
         assert!(!b.run_command("x").contains("--model"));
     }

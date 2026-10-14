@@ -42,7 +42,13 @@ fn overlaps(a: &Path, b: &Path) -> bool {
 pub struct Claims(Vec<(PathBuf, String)>);
 
 /// Best-effort download of `specs` (restricted to `services` if given); appends to manifest.json.
-pub async fn download(env: &DockerEnv, artifacts_dir: &Path, specs: &[ArtifactSpec], services: &[&str], claims: &mut Claims) -> Result<Vec<ManifestEntry>> {
+pub async fn download(
+    env: &DockerEnv,
+    artifacts_dir: &Path,
+    specs: &[ArtifactSpec],
+    services: &[&str],
+    claims: &mut Claims,
+) -> Result<Vec<ManifestEntry>> {
     std::fs::create_dir_all(artifacts_dir)?;
     let mut entries = vec![];
     for a in specs.iter().filter(|a| services.contains(&a.service())) {
@@ -52,7 +58,14 @@ pub async fn download(env: &DockerEnv, artifacts_dir: &Path, specs: &[ArtifactSp
             Ok(r) => format!("artifacts/{}", r.display()),
             Err(_) => "artifacts".into(),
         };
-        let mut entry = ManifestEntry { source: a.source.clone(), destination: dest, kind: String::new(), status: String::new(), service: a.service.clone(), exclude: None };
+        let mut entry = ManifestEntry {
+            source: a.source.clone(),
+            destination: dest,
+            kind: String::new(),
+            status: String::new(),
+            service: a.service.clone(),
+            exclude: None,
+        };
         if claims.0.iter().any(|(t, s)| *s != a.source && overlaps(t, &target)) {
             entry.kind = if Path::new(&a.source).extension().is_some() { "file" } else { "directory" }.into();
             entry.status = "skipped".into();
@@ -78,7 +91,12 @@ pub async fn download(env: &DockerEnv, artifacts_dir: &Path, specs: &[ArtifactSp
         entry.exclude = Some(if is_dir { a.exclude.clone() } else { vec![] });
         entry.status = if res.is_ok() { "ok" } else { "failed" }.into();
         // upstream's mounted convention dir is recorded "empty" when nothing was published.
-        if a.is_convention() && a.destination.is_none() && a.exclude.is_empty() && res.is_ok() && std::fs::read_dir(&target).map(|mut d| d.next().is_none()).unwrap_or(true) {
+        if a.is_convention()
+            && a.destination.is_none()
+            && a.exclude.is_empty()
+            && res.is_ok()
+            && std::fs::read_dir(&target).map(|mut d| d.next().is_none()).unwrap_or(true)
+        {
             entry.status = "empty".into();
         }
         entries.push(entry);
@@ -122,7 +140,12 @@ mod tests {
     #[test]
     fn host_paths() {
         let d = Path::new("/t/artifacts");
-        let s = |src: &str, dst: Option<&str>| ArtifactSpec { source: src.into(), destination: dst.map(String::from), exclude: vec![], service: None };
+        let s = |src: &str, dst: Option<&str>| ArtifactSpec {
+            source: src.into(),
+            destination: dst.map(String::from),
+            exclude: vec![],
+            service: None,
+        };
         assert_eq!(host_path(d, &s("/logs/artifacts", None)), Path::new("/t/artifacts/logs/artifacts"));
         assert_eq!(host_path(d, &s("/app/hello.txt", Some("ws/h.txt"))), Path::new("/t/artifacts/ws/h.txt"));
         assert!(overlaps(Path::new("/a/b"), Path::new("/a")) && !overlaps(Path::new("/a/b"), Path::new("/a/c")));
