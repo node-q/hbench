@@ -1,6 +1,6 @@
 //! Cursor CLI (port of upstream's agents/installed/cursor_cli.py).
 
-use super::aider::opts;
+use super::common::{detect_version, installed_dir, opts, skills_dir};
 use super::{ensure_system_dependencies, exec_agent};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::quote;
@@ -225,11 +225,11 @@ impl Agent for CursorCli {
     }
 
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
-        opts::installed_dir(cx).await?;
+        installed_dir(cx).await?;
         ensure_system_dependencies(cx, &["curl", "bash"]).await?;
         let none = BTreeMap::new();
         exec_agent(cx, "set -euo pipefail; curl https://cursor.com/install -fsS | bash && export PATH=\"$HOME/.local/bin:$PATH\" && cursor-agent --version", &none).await?;
-        if let Some(d) = opts::skills_dir(&self.args) {
+        if let Some(d) = skills_dir(&self.args) {
             let d = quote(&d);
             exec_agent(
                 cx,
@@ -240,7 +240,7 @@ impl Agent for CursorCli {
         }
         if self.version.is_none() {
             self.version =
-                opts::detect_version(cx, "export PATH=\"$HOME/.local/bin:$PATH\"; cursor-agent --version", |s| s.trim().to_string()).await;
+                detect_version(cx, "export PATH=\"$HOME/.local/bin:$PATH\"; cursor-agent --version", |s| s.trim().to_string()).await;
         }
         Ok(())
     }
@@ -280,9 +280,10 @@ impl Agent for CursorCli {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agents::installed::common;
 
     fn agent(kwargs: Value, model: &str) -> Result<CursorCli> {
-        CursorCli::new(opts::test_args(kwargs, &[], Some(model)))
+        CursorCli::new(common::test_args(kwargs, &[], Some(model)))
     }
 
     #[test]

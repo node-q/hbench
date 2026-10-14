@@ -1,5 +1,6 @@
 //! Code Puppy (port of upstream's agents/installed/code_puppy.py).
 
+use super::common::installed_dir;
 use super::{connection, ensure_system_dependencies, exec_agent};
 use crate::agents::model_connection::Spec;
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
@@ -144,7 +145,7 @@ impl Agent for CodePuppy {
     }
 
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
-        cx.env.exec_root("[ -d /installed-agent ] || mkdir -p /installed-agent", None).await?;
+        installed_dir(cx).await?;
         ensure_system_dependencies(cx, &["curl", "ca_certificates", "coreutils", "ripgrep"]).await?;
         let spec = self.version.as_ref().map(|v| format!("=={v}")).unwrap_or_default();
         let none = BTreeMap::new();
@@ -188,24 +189,10 @@ impl Agent for CodePuppy {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
+    use crate::agents::installed::common;
 
     fn agent(kwargs: Value, env: &[(&str, &str)], model: Option<&str>) -> Result<CodePuppy> {
-        let dir = std::env::temp_dir().join(format!("hbench-puppy-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(dir.join("environment")).unwrap();
-        std::fs::write(dir.join("task.toml"), "[environment]\ndocker_image='x'\n").unwrap();
-        std::fs::write(dir.join("instruction.md"), "x").unwrap();
-        let task = Arc::new(crate::task::Task::load(&dir).unwrap());
-        let args = AgentArgs {
-            load_trajectory: None,
-            model_name: model.map(String::from),
-            kwargs: serde_json::from_value(kwargs).unwrap(),
-            extra_env: env.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect(),
-            mcp_servers: vec![],
-            skills: vec![],
-            logs_dir: dir,
-            task,
-        };
+        let args = common::test_args(kwargs, env, model);
         let reasoning_effort = args.kw("reasoning_effort");
         create(args.clone())?;
         Ok(CodePuppy { version: None, base_url: args.kw("base_url"), reasoning_effort, args })

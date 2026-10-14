@@ -1,5 +1,6 @@
 //! SWE-agent (port of upstream's agents/installed/swe_agent.py). Runs as root only.
 
+use super::common::installed_dir;
 use super::mini_swe_agent::{opt_str, reject_unknown};
 use super::{connection, ensure_system_dependencies, exec_agent, exec_error, exec_root};
 use crate::agents::model_connection::Spec;
@@ -286,7 +287,7 @@ impl Agent for SweAgent {
         if let Some(u) = cx.user.as_deref().filter(|u| *u != "root" && *u != "0") {
             bail!("SWE-agent requires root access and cannot run as a non-root user ({u}). Consider using mini-swe-agent instead.");
         }
-        cx.env.exec_root("[ -d /installed-agent ] || mkdir -p /installed-agent", None).await?;
+        installed_dir(cx).await?;
         ensure_system_dependencies(cx, &["curl", "build_tools", "git", "tmux", "coreutils"]).await?;
         let none = BTreeMap::new();
         exec_root(cx, "if ! command -v uv >/dev/null 2>&1; then  curl -LsSf https://astral.sh/uv/install.sh | sh; fi && if [ -f \"$HOME/.local/bin/env\" ]; then source \"$HOME/.local/bin/env\"; fi", &none).await?;

@@ -1,5 +1,6 @@
 //! Mistral Vibe (port of upstream's agents/installed/vibe.py).
 
+use super::common::{installed_dir, skills_dir};
 use super::{ensure_system_dependencies, exec_agent, exec_error};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::{kind_err, quote};
@@ -233,10 +234,6 @@ impl Vibe {
         }
     }
 
-    fn skills_dir(&self) -> Option<String> {
-        self.args.task.config.environment.skills_dir.clone().or_else(|| (!self.args.skills.is_empty()).then(|| "/hbench/skills".into()))
-    }
-
     fn config_toml(&self) -> Result<String> {
         let (backend, key_env) = self.backend_and_key_env()?;
         let api_base = if backend == "mistral" {
@@ -285,7 +282,7 @@ impl Vibe {
             ("enable_auto_update", "false".into()),
             ("enable_notifications", "false".into()),
         ];
-        if let Some(d) = self.skills_dir() {
+        if let Some(d) = skills_dir(&self.args) {
             scalars.push(("skill_paths", format!("[{}]", toml_str(&d))));
         }
         Ok(to_toml(&scalars, &[("providers", vec![provider]), ("models", vec![model])]))
@@ -429,7 +426,7 @@ impl Agent for Vibe {
     }
 
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
-        cx.env.exec_root("[ -d /installed-agent ] || mkdir -p /installed-agent", None).await?;
+        installed_dir(cx).await?;
         ensure_system_dependencies(cx, &["curl", "bash"]).await?;
         let spec = self.version.as_ref().map(|v| format!("=={v}")).unwrap_or_default();
         exec_agent(
@@ -502,25 +499,11 @@ fn parse_vibe_version(stdout: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agents::installed::common;
     use serde_json::json;
-    use std::sync::Arc;
 
     fn agent_with(kwargs: Value, env: &[(&str, &str)], model: Option<&str>, mcp: Vec<crate::task::McpServer>) -> Result<Vibe> {
-        let dir = std::env::temp_dir().join(format!("hbench-vibe-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(dir.join("environment")).unwrap();
-        std::fs::write(dir.join("task.toml"), "[environment]\ndocker_image='x'\n").unwrap();
-        std::fs::write(dir.join("instruction.md"), "x").unwrap();
-        let task = Arc::new(crate::task::Task::load(&dir).unwrap());
-        Vibe::new(AgentArgs {
-            load_trajectory: None,
-            model_name: model.map(String::from),
-            kwargs: serde_json::from_value(kwargs).unwrap(),
-            extra_env: env.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect(),
-            mcp_servers: mcp,
-            skills: vec![],
-            logs_dir: dir,
-            task,
-        })
+        Vibe::new(AgentArgs { mcp_servers: mcp, ..common::test_args(kwargs, env, model) })
     }
     fn agent(kwargs: Value, env: &[(&str, &str)], model: Option<&str>) -> Vibe {
         agent_with(kwargs, env, model, vec![]).unwrap()

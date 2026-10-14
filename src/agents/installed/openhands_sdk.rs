@@ -1,5 +1,6 @@
 //! OpenHands SDK (port of upstream's agents/installed/openhands_sdk.py + openhands_sdk_runner.py).
 
+use super::common::{installed_dir, skills_dir};
 use super::openhands::{check_known, opt_bool, opt_f64, opt_int, opt_str, py_float, raw_env};
 use super::{ensure_system_dependencies, exec_agent, exec_root};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
@@ -84,10 +85,6 @@ impl OpenHandsSdk {
         })
     }
 
-    fn skills_dir(&self) -> Option<String> {
-        self.args.task.config.environment.skills_dir.clone().or_else(|| (!self.args.skills.is_empty()).then(|| "/hbench/skills".into()))
-    }
-
     fn install_cmd(&self) -> String {
         let v = self.version.as_ref().map(|v| format!("=={v}")).unwrap_or_default();
         let py = &self.python_version;
@@ -118,7 +115,7 @@ impl OpenHandsSdk {
             Some(p) if !p.is_empty() => p.clone(),
             _ => DEFAULT_SKILL_PATHS.iter().map(|s| s.to_string()).collect(),
         };
-        if let Some(d) = self.skills_dir() {
+        if let Some(d) = skills_dir(&self.args) {
             let mut seen = vec![];
             for p in std::iter::once(d).chain(paths) {
                 if !seen.contains(&p) {
@@ -198,7 +195,7 @@ impl Agent for OpenHandsSdk {
     }
 
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
-        cx.env.exec_root("[ -d /installed-agent ] || mkdir -p /installed-agent", None).await?;
+        installed_dir(cx).await?;
         let installed = cx
             .exec(
                 "[ -f /opt/openhands-sdk-venv/bin/python ] && /opt/openhands-sdk-venv/bin/python -c \"import openhands.sdk\" 2>/dev/null",

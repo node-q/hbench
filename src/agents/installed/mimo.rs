@@ -1,5 +1,6 @@
 //! MiMo (port of upstream's agents/installed/mimo.py).
 
+use super::common::{deep_merge, installed_setup, parse_jsonl, skills_dir};
 use super::{connection, ensure_system_dependencies, exec_agent};
 use crate::agents::model_connection::Spec;
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
@@ -10,74 +11,6 @@ use std::collections::BTreeMap;
 
 const SPEC: Spec = Spec { default_provider: None, api_key_envs: &[], base_url_envs: &[], passthrough: true };
 const WEB_TOOLS: [&str; 2] = ["websearch", "webfetch"];
-
-// ponytail: helpers shared by this batch of ports; candidates for installed/mod.rs.
-
-/// upstream's `self.skills_dir`: task `skills_dir`, else `/hbench/skills` when `--skill`s were given.
-pub(crate) fn skills_dir(args: &AgentArgs) -> Option<String> {
-    args.task.config.environment.skills_dir.clone().or_else(|| (!args.skills.is_empty()).then(|| "/hbench/skills".into()))
-}
-
-/// upstream's `node_install.nvm_node_install_snippet`.
-pub(crate) fn nvm_node_install_snippet(node_major: u32) -> String {
-    format!(
-        "curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.2/install.sh | env -u NODE_VERSION bash && \
-         export NVM_DIR=\"$HOME/.nvm\" && \\. \"$NVM_DIR/nvm.sh\" || true && \
-         command -v nvm &>/dev/null || {{ echo 'Error: NVM failed to load' >&2; exit 1; }} && \
-         nvm install {node_major} && nvm alias default {node_major} && npm -v"
-    )
-}
-
-/// `BaseInstalledAgent.setup` around `install`: mkdir, install, best-effort version detection.
-pub(crate) async fn installed_setup(
-    cx: &AgentCtx<'_>,
-    version: &mut Option<String>,
-    install: impl std::future::Future<Output = Result<()>>,
-    version_cmd: &str,
-    parse: fn(&str) -> String,
-) -> Result<()> {
-    cx.env.exec_root("[ -d /installed-agent ] || mkdir -p /installed-agent", None).await?;
-    install.await?;
-    if version.is_none()
-        && let Ok(r) = cx.exec(version_cmd, &BTreeMap::new(), None).await
-        && r.code == 0
-        && !r.stdout.is_empty()
-    {
-        *version = Some(parse(&r.stdout));
-    }
-    Ok(())
-}
-
-/// upstream's `environment.upload_file` of a bundled script (root-owned, mode from the temp file).
-pub(crate) async fn upload_asset(cx: &AgentCtx<'_>, content: &str, path: &str) -> Result<()> {
-    let local = std::env::temp_dir().join(format!("hbench-asset-{}", uuid::Uuid::new_v4().simple()));
-    std::fs::write(&local, content)?;
-    let r = cx.env.upload_file(&local, path).await;
-    let _ = std::fs::remove_file(&local);
-    r
-}
-
-pub(crate) fn strip(s: &str) -> String {
-    s.trim().to_string()
-}
-
-/// Recursive dict merge (`_deep_merge`): `over` wins, nested objects merge.
-pub(crate) fn deep_merge(base: &mut Value, over: &Value) {
-    if let (Some(b), Some(o)) = (base.as_object_mut(), over.as_object()) {
-        for (k, v) in o {
-            match b.get_mut(k) {
-                Some(bv) if bv.is_object() && v.is_object() => deep_merge(bv, v),
-                _ => {
-                    b.insert(k.clone(), v.clone());
-                }
-            }
-        }
-    }
-}
-
-pub(crate) fn parse_jsonl(text: &str) -> Vec<Value> {
-    text.lines().filter_map(|l| serde_json::from_str(l.trim()).ok()).collect()
-}
 
 pub struct MiMo {
     args: AgentArgs,
@@ -230,7 +163,10 @@ impl Agent for MiMo {
             .await
             .map(|_| ())
         };
-        installed_setup(cx, &mut self.version, install, "export PATH=\"$HOME/.mimocode/bin:$PATH\" && mimo --version", strip).await
+        installed_setup(cx, &mut self.version, install, "export PATH=\"$HOME/.mimocode/bin:$PATH\" && mimo --version", |s| {
+            s.trim().to_string()
+        })
+        .await
     }
 
     async fn run(&mut self, instruction: &str, cx: &AgentCtx<'_>, _ctx: &mut AgentContext, resume: bool) -> Result<()> {
@@ -282,28 +218,9 @@ impl Agent for MiMo {
 }
 
 #[cfg(test)]
-pub(crate) mod tests {
+mod tests {
     use super::*;
-    use std::sync::Arc;
-
-    /// AgentArgs for tests (shared by this batch of ports).
-    pub(crate) fn args(kwargs: Value, env: &[(&str, &str)], model: Option<&str>) -> AgentArgs {
-        let dir = std::env::temp_dir().join(format!("hbench-test-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(dir.join("environment")).unwrap();
-        std::fs::write(dir.join("task.toml"), "[environment]\ndocker_image='x'\n").unwrap();
-        std::fs::write(dir.join("instruction.md"), "x").unwrap();
-        let task = Arc::new(crate::task::Task::load(&dir).unwrap());
-        AgentArgs {
-            load_trajectory: None,
-            model_name: model.map(String::from),
-            kwargs: serde_json::from_value(kwargs).unwrap(),
-            extra_env: env.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect(),
-            mcp_servers: vec![],
-            skills: vec![],
-            logs_dir: dir,
-            task,
-        }
-    }
+    use crate::agents::installed::common::test_args as args;
 
     fn mimo(kwargs: Value, env: &[(&str, &str)], model: Option<&str>) -> MiMo {
         let a = args(kwargs, env, model);

@@ -200,7 +200,7 @@ pub type AgentBox = Box<dyn Agent>;
 /// Every agent name the factory knows (upstream's AgentName values).
 pub fn agent_names() -> Vec<&'static str> {
     let mut v = vec!["oracle", "nop", "terminus", "terminus-1", "terminus-2", "computer-1", "dspy-rlm"];
-    v.extend(installed::NAMES.iter().copied());
+    v.extend(installed::names());
     v
 }
 

@@ -2,6 +2,7 @@
 //! Installs a registry (or git-source) ACP server plus upstream's `acp_runner.py`, which
 //! drives one prompt over the Agent Client Protocol and writes acp-summary.json.
 
+use super::common::{installed_dir, nvm_node_install_snippet};
 use super::{exec_agent, exec_root};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::quote;
@@ -582,14 +583,6 @@ async fn fetch_source(source: &AcpSource, checkout: &Path) -> Result<String> {
 // Agent
 // ---------------------------------------------------------------------------
 
-fn nvm_node_install_snippet() -> String {
-    "curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.2/install.sh | env -u NODE_VERSION bash && \
-     export NVM_DIR=\"$HOME/.nvm\" && \\. \"$NVM_DIR/nvm.sh\" || true && \
-     command -v nvm &>/dev/null || { echo 'Error: NVM failed to load' >&2; exit 1; } && \
-     nvm install 22 && nvm alias default 22 && npm -v"
-        .to_string()
-}
-
 pub struct Acp {
     args: AgentArgs,
     registry_spec: Option<String>,
@@ -978,7 +971,7 @@ fn dependencies_command(kind: &str) -> String {
 fn node_install_command() -> String {
     format!(
         "set -euo pipefail; if ldd --version 2>&1 | grep -qi musl || [ -f /etc/alpine-release ]; then node --version && npm --version; else {}; fi",
-        nvm_node_install_snippet()
+        nvm_node_install_snippet(22)
     )
 }
 
@@ -1110,7 +1103,7 @@ impl Agent for Acp {
         if self.source.is_none() {
             self.ensure_registry_entry().await?;
         }
-        cx.env.exec_root("[ -d /installed-agent ] || mkdir -p /installed-agent", None).await?;
+        installed_dir(cx).await?;
         // upstream wraps non-RuntimeError install failures; exec failures pass through classified.
         self.install(cx)
             .await
@@ -1150,7 +1143,7 @@ impl Agent for Acp {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
+    use crate::agents::installed::common;
 
     fn entry() -> Value {
         json!({
@@ -1163,21 +1156,7 @@ mod tests {
     }
 
     fn agent(kwargs: Value, model: Option<&str>) -> Result<Acp> {
-        let dir = std::env::temp_dir().join(format!("hbench-acp-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(dir.join("environment")).unwrap();
-        std::fs::write(dir.join("task.toml"), "[environment]\ndocker_image='x'\n").unwrap();
-        std::fs::write(dir.join("instruction.md"), "x").unwrap();
-        let task = Arc::new(crate::task::Task::load(&dir).unwrap());
-        Acp::new(AgentArgs {
-            load_trajectory: None,
-            model_name: model.map(String::from),
-            kwargs: serde_json::from_value(kwargs).unwrap(),
-            extra_env: BTreeMap::new(),
-            mcp_servers: vec![],
-            skills: vec![],
-            logs_dir: dir,
-            task,
-        })
+        Acp::new(common::test_args(kwargs, &[], model))
     }
 
     fn err(kwargs: Value) -> String {

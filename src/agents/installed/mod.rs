@@ -9,6 +9,7 @@ pub mod claude_code;
 pub mod cline_cli;
 pub mod code_puppy;
 pub mod codex;
+pub mod common;
 pub mod copilot_cli;
 pub mod cortex_code;
 pub mod cursor_cli;
@@ -51,96 +52,59 @@ use regex::Regex;
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
 
-/// Names of every installed agent (upstream's AgentName values).
-pub const NAMES: &[&str] = &[
-    "claude-code",
-    "acp",
-    "cline-cli",
-    "cortex-code",
-    "aider",
-    "codex",
-    "cursor-cli",
-    "gemini-cli",
-    "antigravity-cli",
-    "rovodev-cli",
-    "goose",
-    "grok-build",
-    "hermes",
-    "junie",
-    "mini-swe-agent",
-    "nemo-agent",
-    "swe-agent",
-    "opencode",
-    "openclaw",
-    "openhands",
-    "openhands-sdk",
-    "antigravity-sdk",
-    "kimi-code",
-    "kimi-cli",
-    "langgraph",
-    "deerflow",
-    "mimo",
-    "mcode",
-    "pi",
-    "qwen-coder",
-    "copilot-cli",
-    "code-puppy",
-    "devin",
-    "trae-agent",
-    "eve",
-    "fx",
-    "fx-dev",
-    "vibe",
-    "muse-code",
-    "strands",
-    "deepseek-harness",
+type Constructor = fn(AgentArgs) -> Result<AgentBox>;
+
+/// Every installed agent (upstream's AgentName values) and its constructor, in listing order.
+const REGISTRY: &[(&str, Constructor)] = &[
+    ("claude-code", |args| Ok(Box::new(claude_code::ClaudeCode::new(args)?))),
+    ("acp", acp::create),
+    ("cline-cli", cline_cli::create),
+    ("cortex-code", cortex_code::create),
+    ("aider", aider::create),
+    ("codex", codex::create),
+    ("cursor-cli", cursor_cli::create),
+    ("gemini-cli", gemini_cli::create),
+    ("antigravity-cli", antigravity_cli::create),
+    ("rovodev-cli", rovodev_cli::create),
+    ("goose", goose::create),
+    ("grok-build", grok_build::create),
+    ("hermes", hermes::create),
+    ("junie", junie::create),
+    ("mini-swe-agent", mini_swe_agent::create),
+    ("nemo-agent", nemo_agent::create),
+    ("swe-agent", swe_agent::create),
+    ("opencode", opencode::create),
+    ("openclaw", openclaw::create),
+    ("openhands", openhands::create),
+    ("openhands-sdk", openhands_sdk::create),
+    ("antigravity-sdk", antigravity_sdk::create),
+    ("kimi-code", kimi_code::create),
+    ("kimi-cli", kimi_cli::create),
+    ("langgraph", langgraph::create),
+    ("deerflow", deerflow::create),
+    ("mimo", mimo::create),
+    ("mcode", mcode::create),
+    ("pi", pi::create),
+    ("qwen-coder", qwen_code::create),
+    ("copilot-cli", copilot_cli::create),
+    ("code-puppy", code_puppy::create),
+    ("devin", devin::create),
+    ("trae-agent", trae_agent::create),
+    ("eve", eve::create),
+    ("fx", fx::create),
+    ("fx-dev", fx_dev::create),
+    ("vibe", vibe::create),
+    ("muse-code", muse_code::create),
+    ("strands", strands::create),
+    ("deepseek-harness", deepseek_harness::create),
 ];
 
+pub fn names() -> impl Iterator<Item = &'static str> {
+    REGISTRY.iter().map(|(name, _)| *name)
+}
+
 pub fn create(name: &str, args: AgentArgs) -> Result<Option<AgentBox>> {
-    Ok(Some(match name {
-        "claude-code" => Box::new(claude_code::ClaudeCode::new(args)?),
-        "acp" => acp::create(args)?,
-        "cline-cli" => cline_cli::create(args)?,
-        "cortex-code" => cortex_code::create(args)?,
-        "aider" => aider::create(args)?,
-        "codex" => codex::create(args)?,
-        "cursor-cli" => cursor_cli::create(args)?,
-        "gemini-cli" => gemini_cli::create(args)?,
-        "antigravity-cli" => antigravity_cli::create(args)?,
-        "rovodev-cli" => rovodev_cli::create(args)?,
-        "goose" => goose::create(args)?,
-        "grok-build" => grok_build::create(args)?,
-        "hermes" => hermes::create(args)?,
-        "junie" => junie::create(args)?,
-        "mini-swe-agent" => mini_swe_agent::create(args)?,
-        "nemo-agent" => nemo_agent::create(args)?,
-        "swe-agent" => swe_agent::create(args)?,
-        "opencode" => opencode::create(args)?,
-        "openclaw" => openclaw::create(args)?,
-        "openhands" => openhands::create(args)?,
-        "openhands-sdk" => openhands_sdk::create(args)?,
-        "antigravity-sdk" => antigravity_sdk::create(args)?,
-        "kimi-code" => kimi_code::create(args)?,
-        "kimi-cli" => kimi_cli::create(args)?,
-        "langgraph" => langgraph::create(args)?,
-        "deerflow" => deerflow::create(args)?,
-        "mimo" => mimo::create(args)?,
-        "mcode" => mcode::create(args)?,
-        "pi" => pi::create(args)?,
-        "qwen-coder" => qwen_code::create(args)?,
-        "copilot-cli" => copilot_cli::create(args)?,
-        "code-puppy" => code_puppy::create(args)?,
-        "devin" => devin::create(args)?,
-        "trae-agent" => trae_agent::create(args)?,
-        "eve" => eve::create(args)?,
-        "fx" => fx::create(args)?,
-        "fx-dev" => fx_dev::create(args)?,
-        "vibe" => vibe::create(args)?,
-        "muse-code" => muse_code::create(args)?,
-        "strands" => strands::create(args)?,
-        "deepseek-harness" => deepseek_harness::create(args)?,
-        _ => return Ok(None),
-    }))
+    REGISTRY.iter().find(|(n, _)| *n == name).map(|(_, construct)| construct(args)).transpose()
 }
 
 /// (commands that prove presence, per-manager packages, always install)
@@ -506,6 +470,19 @@ mod tests {
         assert_eq!(classify("violate our Usage Policy"), "AgentSafetyRefusalError");
         assert_eq!(classify("model_refusal_fallback violate our Usage Policy"), "NonZeroAgentExitCodeError");
         assert_eq!(classify("prompt is too long: 300000 tokens > 200000 maximum"), "ContextWindowExceededError");
+    }
+
+    #[test]
+    fn registry_is_consistent() {
+        let mut seen = std::collections::BTreeSet::new();
+        for name in names() {
+            assert!(seen.insert(name), "{name} registered twice");
+            assert!(crate::agents::allowed_kwargs::allowed(name).is_some(), "{name} missing from allowed_kwargs");
+            assert!(crate::schemas::agent(name).is_some(), "{name} has no options schema");
+            let created = create(name, common::test_args(serde_json::json!({}), &[], None));
+            assert!(!matches!(created, Ok(None)), "{name} not constructed by create");
+        }
+        assert!(matches!(create("no-such-agent", common::test_args(serde_json::json!({}), &[], None)), Ok(None)));
     }
 
     #[test]

@@ -1,5 +1,7 @@
 //! OpenHands (port of upstream's agents/installed/openhands.py).
 
+use super::common::installed_dir;
+use super::common::opts::lax_bool;
 use super::{connection, ensure_system_dependencies, exec_agent, exec_root};
 use crate::agents::model_connection::Spec;
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
@@ -77,24 +79,7 @@ pub(super) fn opt_str(args: &AgentArgs, agent: &str, k: &str) -> Result<Option<S
 }
 
 pub(super) fn opt_bool(args: &AgentArgs, agent: &str, k: &str) -> Result<Option<bool>> {
-    get(args, k).map(|v| parse_bool(v).ok_or_else(|| invalid(agent, k, "Input should be a valid boolean"))).transpose()
-}
-
-pub(super) fn parse_bool(v: &Value) -> Option<bool> {
-    match v {
-        Value::Bool(b) => Some(*b),
-        Value::Number(n) => match n.as_f64() {
-            Some(0.0) => Some(false),
-            Some(1.0) => Some(true),
-            _ => None,
-        },
-        Value::String(s) => match s.trim().to_lowercase().as_str() {
-            "true" | "1" | "yes" | "on" | "t" | "y" => Some(true),
-            "false" | "0" | "no" | "off" | "f" | "n" => Some(false),
-            _ => None,
-        },
-        _ => None,
-    }
+    get(args, k).map(|v| lax_bool(v).ok_or_else(|| invalid(agent, k, "Input should be a valid boolean"))).transpose()
 }
 
 pub(super) fn opt_int(args: &AgentArgs, agent: &str, k: &str) -> Result<Option<i64>> {
@@ -203,7 +188,7 @@ impl OpenHands {
         let trajectory_config = opt_dict(&args, N, "trajectory_config")?;
         let raw_content = match trajectory_config.as_ref().and_then(|t| t.get("raw_content")).filter(|v| !v.is_null()) {
             None => false,
-            Some(v) => parse_bool(v).ok_or_else(|| invalid(N, "trajectory_config.raw_content", "Input should be a valid boolean"))?,
+            Some(v) => lax_bool(v).ok_or_else(|| invalid(N, "trajectory_config.raw_content", "Input should be a valid boolean"))?,
         };
         if raw_content && !disable_tool_calls {
             bail!(
@@ -439,7 +424,7 @@ impl Agent for OpenHands {
     }
 
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
-        cx.env.exec_root("[ -d /installed-agent ] || mkdir -p /installed-agent", None).await?;
+        installed_dir(cx).await?;
         ensure_system_dependencies(cx, &["curl", "git", "build_tools", "tmux"]).await?;
         let u = cx.user.clone().unwrap_or_else(|| "root".into());
         exec_root(cx, &format!("mkdir -p /opt/openhands-venv && chown {u}:{u} /opt/openhands-venv"), &BTreeMap::new()).await?;
@@ -477,26 +462,12 @@ impl Agent for OpenHands {
 #[cfg(test)]
 pub(super) mod tests {
     use super::*;
+    use crate::agents::installed::common;
     use crate::task::McpServer;
     use serde_json::json;
-    use std::sync::Arc;
 
     pub fn args(kwargs: Value, env: &[(&str, &str)], model: Option<&str>, mcp: Vec<McpServer>) -> AgentArgs {
-        let dir = std::env::temp_dir().join(format!("hbench-oh-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(dir.join("environment")).unwrap();
-        std::fs::write(dir.join("task.toml"), "[environment]\ndocker_image='x'\n").unwrap();
-        std::fs::write(dir.join("instruction.md"), "x").unwrap();
-        let task = Arc::new(crate::task::Task::load(&dir).unwrap());
-        AgentArgs {
-            load_trajectory: None,
-            model_name: model.map(String::from),
-            kwargs: serde_json::from_value(kwargs).unwrap(),
-            extra_env: env.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect(),
-            mcp_servers: mcp,
-            skills: vec![],
-            logs_dir: dir,
-            task,
-        }
+        AgentArgs { mcp_servers: mcp, ..common::test_args(kwargs, env, model) }
     }
 
     fn agent(kwargs: Value, env: &[(&str, &str)], model: Option<&str>) -> Result<OpenHands> {

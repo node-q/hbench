@@ -1,6 +1,6 @@
 //! LangGraph (port of upstream's agents/installed/langgraph.py; runners are bundled verbatim).
 
-use super::mimo::{nvm_node_install_snippet, upload_asset};
+use super::common::{installed_dir, nvm_node_install_snippet, upload_asset};
 use super::{ensure_system_dependencies, exec_agent, exec_root};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::quote;
@@ -541,7 +541,7 @@ impl Agent for LangGraph {
     }
 
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
-        cx.env.exec_root("[ -d /installed-agent ] || mkdir -p /installed-agent", None).await?;
+        installed_dir(cx).await?;
         let none = BTreeMap::new();
         let node = self.runtime == "node";
         let (runner, runner_path, runtime_dir) =
@@ -614,7 +614,7 @@ impl Agent for LangGraph {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agents::installed::mimo::tests::args;
+    use crate::agents::installed::common::test_args as args;
 
     fn project(files: &[(&str, &str)]) -> PathBuf {
         let d = std::env::temp_dir().join(format!("hbench-lg-{}", uuid::Uuid::new_v4()));

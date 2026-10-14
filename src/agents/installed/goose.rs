@@ -1,6 +1,6 @@
 //! Goose (port of upstream's agents/installed/goose.py).
 
-use super::aider::opts;
+use super::common::{detect_version, installed_dir, opts, skills_dir};
 use super::{connection, ensure_system_dependencies, exec_agent, exec_error};
 use crate::agents::model_connection::{Resolved, Spec, with_canonical_provider_envs};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
@@ -220,7 +220,7 @@ impl Agent for Goose {
     }
 
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
-        opts::installed_dir(cx).await?;
+        installed_dir(cx).await?;
         ensure_system_dependencies(cx, &["curl", "bzip2", "libxcb", "libgomp"]).await?;
         let env =
             BTreeMap::from([("GOOSE_DISABLE_KEYRING".to_string(), "true".to_string()), ("CONFIGURE".to_string(), "false".to_string())]);
@@ -244,7 +244,7 @@ impl Agent for Goose {
         )
         .await?;
         if self.version.is_none() {
-            self.version = opts::detect_version(cx, "export PATH=\"$HOME/.local/bin:$PATH\"; goose --version", super::parse_version).await;
+            self.version = detect_version(cx, "export PATH=\"$HOME/.local/bin:$PATH\"; goose --version", super::parse_version).await;
         }
         Ok(())
     }
@@ -253,7 +253,7 @@ impl Agent for Goose {
         let instruction = self.args.render_instruction(instruction)?;
         let env = self.run_env()?;
         let recipe = self.recipe_yaml(&instruction)?;
-        if let Some(d) = opts::skills_dir(&self.args) {
+        if let Some(d) = skills_dir(&self.args) {
             exec_agent_10s(
                 cx,
                 &format!("mkdir -p ~/.config/goose/skills && cp -r {}/* ~/.config/goose/skills/ 2>/dev/null || true", quote(&d)),
@@ -288,9 +288,10 @@ impl Agent for Goose {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agents::installed::common;
 
     fn goose(kwargs: Value, env: &[(&str, &str)], model: Option<&str>) -> Goose {
-        Goose { version: None, args: opts::test_args(kwargs, env, model) }
+        Goose { version: None, args: common::test_args(kwargs, env, model) }
     }
 
     #[test]
@@ -309,9 +310,9 @@ mod tests {
         );
         assert_eq!(env["ANTHROPIC_HOST"], "http://p");
         assert!(!env.contains_key("ANTHROPIC_BASE_URL"));
-        assert!(create(opts::test_args(json!({"temperature": 1.5}), &[], None)).is_err());
-        assert!(create(opts::test_args(json!({"max_tokens": 0}), &[], None)).is_err());
-        assert!(create(opts::test_args(json!({"reasoning_effort": "extreme"}), &[], None)).is_err());
+        assert!(create(common::test_args(json!({"temperature": 1.5}), &[], None)).is_err());
+        assert!(create(common::test_args(json!({"max_tokens": 0}), &[], None)).is_err());
+        assert!(create(common::test_args(json!({"reasoning_effort": "extreme"}), &[], None)).is_err());
         assert!(goose(json!({}), &[], Some("mistral/m")).run_env().unwrap_err().to_string().contains("Unsupported provider"));
     }
 

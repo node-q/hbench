@@ -1,5 +1,6 @@
 //! Cline CLI (port of upstream's agents/installed/cline/cline.py).
 
+use super::common::{installed_dir, skills_dir};
 use super::{exec_agent, exec_root};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::{ExecResult, quote};
@@ -178,10 +179,6 @@ impl ClineCli {
         })
     }
 
-    fn skills_dir(&self) -> Option<String> {
-        self.args.task.config.environment.skills_dir.clone().or_else(|| (!self.args.skills.is_empty()).then(|| "/hbench/skills".into()))
-    }
-
     fn source_install_command(&self, reason: &str) -> String {
         let repo = quote(&format!("https://github.com/{}/cline.git", self.github_user.as_deref().unwrap_or("cline")));
         let r#ref = quote(&self.commit_hash);
@@ -316,7 +313,7 @@ impl ClineCli {
             "mkdir -p /logs/agent ~/.cline/data && echo {} > ~/.cline/data/globalState.json",
             quote(r#"{"welcomeViewCompleted": true, "isNewUser": false}"#)
         );
-        if let Some(d) = self.skills_dir() {
+        if let Some(d) = skills_dir(&self.args) {
             setup += &format!(" && mkdir -p ~/.cline/skills && (cp -r {}/* ~/.cline/skills/ 2>/dev/null || true)", quote(&d));
         }
         if let Some(m) = self.mcp_command() {
@@ -402,7 +399,7 @@ impl Agent for ClineCli {
     }
 
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
-        cx.env.exec_root("[ -d /installed-agent ] || mkdir -p /installed-agent", None).await?;
+        installed_dir(cx).await?;
         self.exec_with_retries(
             cx,
             &format!("{}{}", super::APT_INSTALL_FN, "if command -v git &> /dev/null && command -v curl &> /dev/null && command -v unzip &> /dev/null; then  echo 'git, curl, and unzip already installed, skipping apt-get...'; \
@@ -496,24 +493,10 @@ impl Agent for ClineCli {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
+    use crate::agents::installed::common;
 
     fn agent(kwargs: Value, env: &[(&str, &str)], model: Option<&str>) -> Result<ClineCli> {
-        let dir = std::env::temp_dir().join(format!("hbench-cline-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(dir.join("environment")).unwrap();
-        std::fs::write(dir.join("task.toml"), "[environment]\ndocker_image='x'\n").unwrap();
-        std::fs::write(dir.join("instruction.md"), "x").unwrap();
-        let task = Arc::new(crate::task::Task::load(&dir).unwrap());
-        ClineCli::new(AgentArgs {
-            load_trajectory: None,
-            model_name: model.map(String::from),
-            kwargs: serde_json::from_value(kwargs).unwrap(),
-            extra_env: env.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect(),
-            mcp_servers: vec![],
-            skills: vec![],
-            logs_dir: dir,
-            task,
-        })
+        ClineCli::new(common::test_args(kwargs, env, model))
     }
 
     #[test]

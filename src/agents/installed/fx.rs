@@ -1,5 +1,7 @@
 //! fx (port of upstream's agents/installed/fx.py). `fx-dev` reuses this struct with `dev = true`.
 
+use super::common::opts::check_options;
+use super::common::{installed_dir, skills_dir};
 use super::{connection, ensure_system_dependencies, exec_agent, upload_text};
 use crate::agents::model_connection::Spec;
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
@@ -33,23 +35,6 @@ pub struct Fx {
     permission_mode: String,
     /// FxOptions/FxDevOptions `Env(...)` fields, compiled.
     option_env: BTreeMap<String, String>,
-}
-
-/// Pydantic `extra="forbid"` + unsupported native config, as in upstream's BaseAgent.
-pub(crate) fn check_options(args: &AgentArgs, name: &str, fields: &[&str]) -> Result<()> {
-    let unknown: Vec<String> = args
-        .kwargs
-        .keys()
-        .filter(|k| !["version", "prompt_template_path", "config"].contains(&k.as_str()) && !fields.contains(&k.as_str()))
-        .map(|k| format!("  Unknown option '{k}'."))
-        .collect();
-    if !unknown.is_empty() {
-        bail!("Invalid kwargs for agent '{name}':\n{}\nSee `hbench agents schema {name}` for available options.", unknown.join("\n"));
-    }
-    if args.kwargs.get("config").is_some_and(|v| !v.is_null()) {
-        bail!("Agent '{name}' does not support config. You can implement it.");
-    }
-    Ok(())
 }
 
 impl Fx {
@@ -100,10 +85,6 @@ impl Fx {
             }
         }
         Ok(Fx { version: args.version_kw(), args, dev, reasoning_effort, permission_mode, option_env })
-    }
-
-    fn skills_dir(&self) -> Option<String> {
-        self.args.task.config.environment.skills_dir.clone().or_else(|| (!self.args.skills.is_empty()).then(|| "/hbench/skills".into()))
     }
 
     fn mcp_config(&self) -> Result<String> {
@@ -201,14 +182,14 @@ impl Agent for Fx {
     }
 
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
-        cx.env.exec_root("[ -d /installed-agent ] || mkdir -p /installed-agent", None).await?;
+        installed_dir(cx).await?;
         ensure_system_dependencies(cx, &["curl", "bash", "ca_certificates", "tar", "coreutils", "tmux"]).await?;
         exec_agent(cx, &self.install_command(), &BTreeMap::new()).await?;
         if let Some(r) = &self.reasoning_effort {
             let body = format!("{{\"effort\": {}}}", Value::String(r.clone()));
             Self::install_profile_file(cx, "/tmp/hbench-fx-settings.json", "settings.json", &body).await?;
         }
-        if let Some(d) = self.skills_dir() {
+        if let Some(d) = skills_dir(&self.args) {
             let src = quote(&d);
             exec_agent(
                 cx,
@@ -246,24 +227,10 @@ impl Agent for Fx {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use std::sync::Arc;
+    use crate::agents::installed::common;
 
     pub(crate) fn args(kwargs: Value, env: &[(&str, &str)], model: Option<&str>, mcp: Vec<crate::task::McpServer>) -> AgentArgs {
-        let dir = std::env::temp_dir().join(format!("hbench-fx-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(dir.join("environment")).unwrap();
-        std::fs::write(dir.join("task.toml"), "[environment]\ndocker_image='x'\n").unwrap();
-        std::fs::write(dir.join("instruction.md"), "x").unwrap();
-        let task = Arc::new(crate::task::Task::load(&dir).unwrap());
-        AgentArgs {
-            load_trajectory: None,
-            model_name: model.map(String::from),
-            kwargs: serde_json::from_value(kwargs).unwrap(),
-            extra_env: env.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect(),
-            mcp_servers: mcp,
-            skills: vec![],
-            logs_dir: dir,
-            task,
-        }
+        AgentArgs { mcp_servers: mcp, ..common::test_args(kwargs, env, model) }
     }
 
     fn mcp(name: &str, transport: &str, url: Option<&str>, command: Option<&str>, a: &[&str]) -> crate::task::McpServer {

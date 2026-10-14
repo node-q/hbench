@@ -1,7 +1,7 @@
 //! pi (port of upstream's agents/installed/pi.py).
 
-use super::mcode::kw_int;
-use super::mimo::{installed_setup, nvm_node_install_snippet, skills_dir};
+use super::common::opts::kw_int;
+use super::common::{installed_setup, nvm_node_install_snippet, skills_dir};
 use super::{connection, ensure_system_dependencies, exec_agent, upload_text};
 use crate::agents::model_connection::{Resolved, Spec};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
@@ -433,7 +433,7 @@ impl Agent for Pi {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agents::installed::mimo::tests::args;
+    use crate::agents::installed::common::test_args as args;
 
     fn pi(kwargs: Value, env: &[(&str, &str)], model: Option<&str>) -> Result<Pi> {
         Pi::new(args(kwargs, env, model))

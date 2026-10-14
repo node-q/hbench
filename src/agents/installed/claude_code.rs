@@ -1,5 +1,6 @@
 //! Claude Code (port of upstream's agents/installed/claude_code.py).
 
+use super::common::{installed_dir, skills_dir};
 use super::{
     connection, ensure_acp_node_command, ensure_system_dependencies, exec_agent, exec_error, exec_root, filter_jsonl_events, parse_version,
     pinned_bin_wrapper_command, safe_bin_symlink_command, upload_text,
@@ -157,10 +158,6 @@ impl ClaudeCode {
         }
         env.retain(|_, v| !v.is_empty());
         Ok(env)
-    }
-
-    fn skills_dir(&self) -> Option<String> {
-        self.args.task.config.environment.skills_dir.clone().or_else(|| (!self.args.skills.is_empty()).then(|| "/hbench/skills".into()))
     }
 
     fn mcp_command(&self) -> Option<String> {
@@ -393,7 +390,7 @@ impl Agent for ClaudeCode {
     }
 
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
-        cx.env.exec_root("[ -d /installed-agent ] || mkdir -p /installed-agent", None).await?;
+        installed_dir(cx).await?;
         let check = match &self.version {
             None => {
                 cx.exec("export PATH=\"$HOME/.local/bin:$PATH\"; command -v claude >/dev/null 2>&1", &BTreeMap::new(), None).await?.code
@@ -467,7 +464,7 @@ impl Agent for ClaudeCode {
         if self.settings.is_some() {
             setup += &format!(" && mkdir -p {SETTINGS_DIR}");
         }
-        if let Some(d) = self.skills_dir() {
+        if let Some(d) = skills_dir(&self.args) {
             setup += &format!(" && (cp -r {}/* $CLAUDE_CONFIG_DIR/skills/ 2>/dev/null || true)", quote(&d));
         }
         if let Some(m) = self.args.kw("memory_dir") {
@@ -555,24 +552,10 @@ impl Agent for ClaudeCode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
+    use crate::agents::installed::common;
 
     fn agent(kwargs: Value, env: &[(&str, &str)], model: Option<&str>) -> Result<ClaudeCode> {
-        let dir = std::env::temp_dir().join(format!("hbench-cc-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(dir.join("environment")).unwrap();
-        std::fs::write(dir.join("task.toml"), "[environment]\ndocker_image='x'\n").unwrap();
-        std::fs::write(dir.join("instruction.md"), "x").unwrap();
-        let task = Arc::new(crate::task::Task::load(&dir).unwrap());
-        ClaudeCode::new(AgentArgs {
-            model_name: model.map(String::from),
-            kwargs: serde_json::from_value(kwargs).unwrap(),
-            extra_env: env.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect(),
-            mcp_servers: vec![],
-            skills: vec![],
-            logs_dir: dir.clone(),
-            task,
-            load_trajectory: None,
-        })
+        ClaudeCode::new(common::test_args(kwargs, env, model))
     }
 
     #[test]

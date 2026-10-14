@@ -1,5 +1,6 @@
 //! Kimi CLI (port of upstream's agents/installed/kimi_cli.py).
 
+use super::common::{installed_dir, skills_dir};
 use super::{ensure_system_dependencies, exec_agent, exec_error};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::quote;
@@ -152,10 +153,6 @@ impl KimiCli {
         Some(json!({"mcpServers": servers}).to_string())
     }
 
-    fn skills_dir(&self) -> Option<String> {
-        self.args.task.config.environment.skills_dir.clone().or_else(|| (!self.args.skills.is_empty()).then(|| "/hbench/skills".into()))
-    }
-
     /// (setup command, run command, env) for one invocation.
     fn commands(&self, instruction: &str, resume: bool) -> Result<(String, String, BTreeMap<String, String>)> {
         let Some((provider, model)) = self.args.model_name.as_deref().and_then(|m| m.split_once('/')) else {
@@ -177,7 +174,7 @@ impl KimiCli {
             config['providers']['hbench']['api_key'] = os.environ.get('HBENCH_KIMI_API_KEY', ''); \
             pathlib.Path('/tmp/kimi-config.json').write_text(json.dumps(config))";
         let mut setup = vec![format!("export PATH=\"$HOME/.local/bin:$PATH\"; uv run --no-project python -c {}", quote(write_config))];
-        if let Some(d) = self.skills_dir() {
+        if let Some(d) = skills_dir(&self.args) {
             setup.push(format!("mkdir -p ~/.kimi/skills && cp -r {}/* ~/.kimi/skills/ 2>/dev/null || true", quote(&d)));
         }
         let mcp = self.mcp_config_json();
@@ -284,7 +281,7 @@ impl Agent for KimiCli {
     }
 
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
-        cx.env.exec_root("[ -d /installed-agent ] || mkdir -p /installed-agent", None).await?;
+        installed_dir(cx).await?;
         ensure_system_dependencies(cx, &["curl"]).await?;
         let spec = self.version.as_ref().map(|v| format!("=={v}")).unwrap_or_default();
         exec_agent(
@@ -326,27 +323,9 @@ impl Agent for KimiCli {
 }
 
 #[cfg(test)]
-pub(super) mod tests {
+mod tests {
     use super::*;
-    use std::sync::Arc;
-
-    pub fn args(kwargs: Value, env: &[(&str, &str)], model: Option<&str>) -> AgentArgs {
-        let dir = std::env::temp_dir().join(format!("hbench-kimi-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(dir.join("environment")).unwrap();
-        std::fs::write(dir.join("task.toml"), "[environment]\ndocker_image='x'\n").unwrap();
-        std::fs::write(dir.join("instruction.md"), "x").unwrap();
-        let task = Arc::new(crate::task::Task::load(&dir).unwrap());
-        AgentArgs {
-            load_trajectory: None,
-            model_name: model.map(String::from),
-            kwargs: serde_json::from_value(kwargs).unwrap(),
-            extra_env: env.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect(),
-            mcp_servers: vec![],
-            skills: vec![],
-            logs_dir: dir,
-            task,
-        }
-    }
+    use crate::agents::installed::common::test_args as args;
 
     fn agent(kwargs: Value, env: &[(&str, &str)], model: Option<&str>) -> Result<KimiCli> {
         KimiCli::new(args(kwargs, env, model))

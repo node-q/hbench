@@ -1,5 +1,6 @@
 //! mini-swe-agent (port of upstream's agents/installed/mini_swe_agent.py).
 
+use super::common::installed_dir;
 use super::{connection, ensure_system_dependencies, exec_agent};
 use crate::agents::model_connection::{Resolved, Spec};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
@@ -292,7 +293,7 @@ impl Agent for MiniSweAgent {
     }
 
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
-        cx.env.exec_root("[ -d /installed-agent ] || mkdir -p /installed-agent", None).await?;
+        installed_dir(cx).await?;
         ensure_system_dependencies(cx, &["curl", "bash", "build_tools", "git"]).await?;
         let spec = self.version.as_ref().map(|v| format!("=={v}")).unwrap_or_default();
         let py = quote(PYTHON_VERSION);
@@ -341,25 +342,13 @@ fn parse_version(stdout: &str) -> String {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use crate::agents::installed::common;
     use serde_json::json;
-    use std::sync::Arc;
 
     pub(crate) fn args(kwargs: Value, env: &[(&str, &str)], model: Option<&str>) -> AgentArgs {
-        let dir = std::env::temp_dir().join(format!("hbench-msa-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(dir.join("environment")).unwrap();
-        std::fs::write(dir.join("task.toml"), "[environment]\ndocker_image='x'\n").unwrap();
-        std::fs::write(dir.join("instruction.md"), "x").unwrap();
-        let task = Arc::new(crate::task::Task::load(&dir).unwrap());
-        AgentArgs {
-            load_trajectory: None,
-            model_name: model.map(String::from),
-            kwargs: serde_json::from_value(kwargs).unwrap(),
-            extra_env: env.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect(),
-            mcp_servers: vec![],
-            skills: vec![],
-            logs_dir: dir.join("my-trial").join("agent"),
-            task,
-        }
+        let mut args = common::test_args(kwargs, env, model);
+        args.logs_dir = args.logs_dir.join("my-trial").join("agent");
+        args
     }
 
     fn agent(kwargs: Value, env: &[(&str, &str)], model: Option<&str>) -> Result<MiniSweAgent> {

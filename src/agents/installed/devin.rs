@@ -3,6 +3,7 @@
 //! upstream's populate_context_post_run only writes an ATIF trajectory from sessions.db (it never sets
 //! token/cost on the context), so there is no usage parsing to port; sessions.db is still copied to logs.
 
+use super::common::installed_dir;
 use super::{ensure_system_dependencies, exec_agent, upload_text};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::quote;
@@ -73,7 +74,7 @@ impl Agent for Devin {
     }
 
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
-        cx.env.exec_root("[ -d /installed-agent ] || mkdir -p /installed-agent", None).await?;
+        installed_dir(cx).await?;
         ensure_system_dependencies(cx, &["curl", "bash"]).await?;
         let none = BTreeMap::new();
         exec_agent(cx, "CONFIG_DIR=\"${XDG_CONFIG_HOME:-$HOME/.config}/devin\"; mkdir -p \"$CONFIG_DIR\"; echo '{\"shell\":{\"setup_complete\":true}}' > \"$CONFIG_DIR/config.json\"", &none).await?;
@@ -131,23 +132,10 @@ impl Agent for Devin {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
+    use crate::agents::installed::common;
 
     fn agent(env: &[(&str, &str)], model: Option<&str>, mcp: Vec<crate::task::McpServer>) -> Devin {
-        let dir = std::env::temp_dir().join(format!("hbench-devin-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(dir.join("environment")).unwrap();
-        std::fs::write(dir.join("task.toml"), "[environment]\ndocker_image='x'\n").unwrap();
-        std::fs::write(dir.join("instruction.md"), "x").unwrap();
-        let args = AgentArgs {
-            load_trajectory: None,
-            model_name: model.map(String::from),
-            kwargs: Default::default(),
-            extra_env: env.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect(),
-            mcp_servers: mcp,
-            skills: vec![],
-            logs_dir: dir.clone(),
-            task: Arc::new(crate::task::Task::load(&dir).unwrap()),
-        };
+        let args = AgentArgs { mcp_servers: mcp, ..common::test_args(json!({}), env, model) };
         Devin { version: None, args }
     }
 

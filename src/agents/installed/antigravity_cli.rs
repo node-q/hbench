@@ -1,5 +1,6 @@
 //! antigravity-cli (port of upstream's agents/installed/antigravity_cli.py + antigravity_base_url.py).
 
+use super::common::{installed_dir, parse_bool_env_value, skills_dir};
 use super::{ensure_system_dependencies, exec_error};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::{ExecResult, kind_err, quote};
@@ -25,15 +26,6 @@ const AUTH_NAMES: &[&str] = &["GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_GEMINI
 
 pub fn create(args: AgentArgs) -> Result<AgentBox> {
     Ok(Box::new(AntigravityCli::new(args)?))
-}
-
-/// upstream's parse_bool_env_value.
-fn parse_bool(v: &str, name: &str) -> Result<bool> {
-    match v.trim().to_lowercase().as_str() {
-        "true" | "1" | "yes" => Ok(true),
-        "false" | "0" | "no" => Ok(false),
-        _ => bail!("Invalid value for '{name}': cannot parse '{v}' as bool (expected true/false/1/0/yes/no)"),
-    }
 }
 
 /// Transport policy for a custom Gemini endpoint (antigravity_base_url.validate_base_url).
@@ -71,7 +63,7 @@ pub fn validate_base_url(url: &str, get_env: &dyn Fn(&str) -> Option<String>) ->
     if scheme == "http" {
         let allow = get_env("HBENCH_ALLOW_INSECURE_MODEL_BASE_URL");
         let ok = match allow.as_deref() {
-            Some(a) if !a.trim().is_empty() => parse_bool(a, "HBENCH_ALLOW_INSECURE_MODEL_BASE_URL")?,
+            Some(a) if !a.trim().is_empty() => parse_bool_env_value(a, "HBENCH_ALLOW_INSECURE_MODEL_BASE_URL")?,
             _ => false,
         };
         if !ok {
@@ -172,7 +164,7 @@ impl AntigravityCli {
         if let Some(raw) = env.get("AGY_ADC_AUTH").cloned() {
             if raw.trim().is_empty() {
                 env.remove("AGY_ADC_AUTH");
-            } else if parse_bool(&raw, "AGY_ADC_AUTH")? {
+            } else if parse_bool_env_value(&raw, "AGY_ADC_AUTH")? {
                 env.insert("AGY_ADC_AUTH".into(), "true".into());
             } else {
                 env.remove("AGY_ADC_AUTH");
@@ -205,7 +197,7 @@ impl AntigravityCli {
             return Ok(false);
         }
         match self.raw_env("AGY_ADC_AUTH") {
-            Some(v) if !v.trim().is_empty() => parse_bool(&v, "AGY_ADC_AUTH"),
+            Some(v) if !v.trim().is_empty() => parse_bool_env_value(&v, "AGY_ADC_AUTH"),
             _ => Ok(false),
         }
     }
@@ -258,10 +250,6 @@ impl AntigravityCli {
         }
         env.extend(self.forwarded_cli_env());
         Ok(env)
-    }
-
-    fn skills_dir(&self) -> Option<String> {
-        self.args.task.config.environment.skills_dir.clone().or_else(|| (!self.args.skills.is_empty()).then(|| "/hbench/skills".into()))
     }
 
     fn settings_config(&self, model: &str, register_model: bool) -> Result<Value> {
@@ -550,7 +538,7 @@ impl Agent for AntigravityCli {
     }
 
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
-        cx.env.exec_root("[ -d /installed-agent ] || mkdir -p /installed-agent", None).await?;
+        installed_dir(cx).await?;
         let none = BTreeMap::new();
         let install = async {
             if let Some(bp) = &self.binary_path {
@@ -590,7 +578,7 @@ impl Agent for AntigravityCli {
         };
         let env = self.run_env(&model)?;
         let none = BTreeMap::new();
-        if let Some(d) = self.skills_dir() {
+        if let Some(d) = skills_dir(&self.args) {
             let cmd = format!(
                 "mkdir -p ~/.gemini/antigravity-cli/skills && cp -r {}/* ~/.gemini/antigravity-cli/skills/ 2>/dev/null || true",
                 quote(&d)
@@ -638,25 +626,8 @@ pub fn cost_from_pricing(model: &str, prompt: i64, completion: i64, cached: i64)
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
+    use crate::agents::installed::common::test_args as args;
 
-    fn args(kwargs: Value, env: &[(&str, &str)], model: Option<&str>) -> AgentArgs {
-        let dir = std::env::temp_dir().join(format!("hbench-agy-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(dir.join("environment")).unwrap();
-        std::fs::write(dir.join("task.toml"), "[environment]\ndocker_image='x'\n").unwrap();
-        std::fs::write(dir.join("instruction.md"), "x").unwrap();
-        let task = Arc::new(crate::task::Task::load(&dir).unwrap());
-        AgentArgs {
-            load_trajectory: None,
-            model_name: model.map(String::from),
-            kwargs: serde_json::from_value(kwargs).unwrap(),
-            extra_env: env.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect(),
-            mcp_servers: vec![],
-            skills: vec![],
-            logs_dir: dir,
-            task,
-        }
-    }
     fn agent(kwargs: Value, env: &[(&str, &str)], model: Option<&str>) -> Result<AntigravityCli> {
         AntigravityCli::new(args(kwargs, env, model))
     }

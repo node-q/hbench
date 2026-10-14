@@ -1,5 +1,6 @@
 //! Hermes (port of upstream's agents/installed/hermes.py).
 
+use super::common::{installed_dir, skills_dir};
 use super::{ensure_system_dependencies, exec_agent, exec_error};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::quote;
@@ -60,10 +61,6 @@ impl Hermes {
             reported: Mutex::new(None),
             args,
         })
-    }
-
-    fn skills_dir(&self) -> Option<String> {
-        self.args.task.config.environment.skills_dir.clone().or_else(|| (!self.args.skills.is_empty()).then(|| "/hbench/skills".into()))
     }
 
     /// (env, --provider flag, cli model) for the configured model.
@@ -220,7 +217,7 @@ impl Agent for Hermes {
     }
 
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
-        cx.env.exec_root("[ -d /installed-agent ] || mkdir -p /installed-agent", None).await?;
+        installed_dir(cx).await?;
         ensure_system_dependencies(cx, &["curl", "git", "ripgrep", "xz"]).await?;
         let branch = self.version.as_ref().map(|v| format!(" --branch {v}")).unwrap_or_default();
         let none = BTreeMap::new();
@@ -253,7 +250,7 @@ impl Agent for Hermes {
         if let Some(c) = self.mcp_command() {
             exec_timeout(cx, &c, &env, 10).await?;
         }
-        if let Some(d) = self.skills_dir() {
+        if let Some(d) = skills_dir(&self.args) {
             exec_timeout(
                 cx,
                 &format!("mkdir -p /tmp/hermes/skills && cp -r {}/* /tmp/hermes/skills/ 2>/dev/null || true", quote(&d)),
@@ -301,24 +298,10 @@ impl Agent for Hermes {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
+    use crate::agents::installed::common;
 
     fn agent(kwargs: Value, env: &[(&str, &str)], model: Option<&str>) -> Result<Hermes> {
-        let dir = std::env::temp_dir().join(format!("hbench-hermes-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(dir.join("environment")).unwrap();
-        std::fs::write(dir.join("task.toml"), "[environment]\ndocker_image='x'\n").unwrap();
-        std::fs::write(dir.join("instruction.md"), "x").unwrap();
-        let task = Arc::new(crate::task::Task::load(&dir).unwrap());
-        Hermes::new(AgentArgs {
-            load_trajectory: None,
-            model_name: model.map(String::from),
-            kwargs: serde_json::from_value(kwargs).unwrap(),
-            extra_env: env.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect(),
-            mcp_servers: vec![],
-            skills: vec![],
-            logs_dir: dir,
-            task,
-        })
+        Hermes::new(common::test_args(kwargs, env, model))
     }
 
     #[test]

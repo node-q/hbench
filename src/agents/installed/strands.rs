@@ -1,6 +1,6 @@
 //! Strands (port of upstream's agents/installed/strands.py + strands_trajectory.py usage).
 
-use super::mimo::upload_asset;
+use super::common::{installed_dir, upload_asset};
 use super::{connection, ensure_system_dependencies, exec_agent, exec_root, upload_text};
 use crate::agents::model_connection::{Resolved, Spec, with_canonical_provider_envs};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
@@ -267,7 +267,7 @@ impl Agent for Strands {
     }
 
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
-        cx.env.exec_root("[ -d /installed-agent ] || mkdir -p /installed-agent", None).await?;
+        installed_dir(cx).await?;
         let none = BTreeMap::new();
         ensure_system_dependencies(cx, &["curl", "git"]).await?;
         exec_root(cx, &format!("mkdir -p {INSTALL_DIR}"), &none).await?;
@@ -349,7 +349,7 @@ impl Agent for Strands {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agents::installed::mimo::tests::args;
+    use crate::agents::installed::common::test_args as args;
 
     #[test]
     fn options_and_install() {

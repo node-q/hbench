@@ -1,7 +1,8 @@
 //! antigravity-sdk (port of upstream's agents/installed/antigravity_sdk.py + antigravity_base_url.py).
 
 use super::antigravity_cli::validate_base_url;
-use super::fx::check_options;
+use super::common::opts::check_options;
+use super::common::{installed_dir, skills_dir};
 use super::{ensure_system_dependencies, exec_agent, exec_root};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::quote;
@@ -119,10 +120,6 @@ impl AntigravitySdk {
         t.strip_prefix("Version:").map(|v| v.trim().to_string()).unwrap_or_else(|| t.to_string())
     }
 
-    fn skills_dir(&self) -> Option<String> {
-        self.args.task.config.environment.skills_dir.clone().or_else(|| (!self.args.skills.is_empty()).then(|| "/hbench/skills".into()))
-    }
-
     fn run_env(&self) -> Result<BTreeMap<String, String>> {
         let mut env = BTreeMap::new();
         let Some(key) = self.args.get_env("GEMINI_API_KEY") else { bail!("GEMINI_API_KEY environment variable must be set") };
@@ -146,7 +143,7 @@ impl AntigravitySdk {
         }
         let mut skills: Vec<String> = vec![];
         if self.load_skills {
-            skills.extend(self.skills_dir());
+            skills.extend(skills_dir(&self.args));
             let defaults: Vec<String> = DEFAULT_SKILL_PATHS.iter().map(|s| s.to_string()).collect();
             for p in self.skill_paths.as_ref().filter(|p| !p.is_empty()).unwrap_or(&defaults) {
                 if !skills.contains(p) {
@@ -239,7 +236,7 @@ impl Agent for AntigravitySdk {
     }
 
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
-        cx.env.exec_root("[ -d /installed-agent ] || mkdir -p /installed-agent", None).await?;
+        installed_dir(cx).await?;
         // upstream re-raises exec (RuntimeError) failures as-is and wraps anything else.
         self.install(cx)
             .await
