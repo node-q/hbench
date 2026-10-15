@@ -55,7 +55,7 @@ jobs:
         working-directory: dist
         run: sha256sum -- *.tar.gz > SHA256SUMS
       - name: Publish GitHub release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           name: hbench ${{ github.ref_name }}
           generate_release_notes: true
