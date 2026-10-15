@@ -21,7 +21,7 @@ $B view jobs [--port 8080-8089] [--tasks|--jobs]                # web viewer for
 $B traces export -p jobs/<job> -o traces.jsonl                 # upstream trace rows (ATIF episodes)
 $B datasets list | download <name@ver> | init | add | remove
 $B init <org/name> [--steps N]   $B add|remove|sync ...             # task/dataset authoring (dataset.toml)
-$B tasks init|check|start-env|migrate|schema                      # start-env: shell into a task's env
+$B tasks init|check|digest|start-env|migrate|schema               # digest: task_checksum + lock digest
 $B analyze jobs/<job> | <trial>    $B check <tasks>                 # agent-run trajectory analysis / task QA
 $B exec "summarize ./notes/*.md" --print-config                  # experimental: compile prompt+paths into tasks
 $B agents list | schema <agent>    $B trials schema    $B cache clean
