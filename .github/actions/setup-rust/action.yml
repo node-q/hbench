@@ -1,6 +1,6 @@
 name: Setup Rust
 description: >
-  Rust toolchain + cargo cache for the self-hosted pool. starship-hpg-1..4 share one
+  The Rust toolchain pinned in rust-toolchain.toml + cargo cache for the self-hosted pool. starship-hpg-1..4 share one
   user (runner-hpg), so a shared ~/.rustup gets corrupted by concurrent installs;
   keep rustup/cargo homes in each runner instance's own tool cache instead.
 inputs:
@@ -18,9 +18,14 @@ runs:
       run: |
         echo "RUSTUP_HOME=$RUNNER_TOOL_CACHE/rustup" >> "$GITHUB_ENV"
         echo "CARGO_HOME=$RUNNER_TOOL_CACHE/cargo" >> "$GITHUB_ENV"
+    - name: Read pinned toolchain
+      id: pin
+      shell: bash
+      run: echo "channel=$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)" >> "$GITHUB_OUTPUT"
     - name: Install Rust toolchain
-      uses: dtolnay/rust-toolchain@stable
+      uses: dtolnay/rust-toolchain@master
       with:
+        toolchain: ${{ steps.pin.outputs.channel }}
         components: ${{ inputs.components }}
         targets: ${{ inputs.targets }}
     - name: Restore cargo cache
