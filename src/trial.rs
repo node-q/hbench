@@ -1212,6 +1212,8 @@ pub fn trial_lock(c: &TrialConfig) -> Value {
         "environment_build_timeout_multiplier": c.environment_build_timeout_multiplier,
         "extra_instructions": if extra.is_empty() { Value::Null } else { Value::Array(extra) },
         "agent": c.agent,
+        "prompt_template": c.agent.kwargs.get("prompt_template_path").and_then(Value::as_str)
+            .map(|p| serde_json::json!({"path": p, "digest": file_digest(Path::new(p))})),
         "user_agent": user_agent,
         "user_persona": user_agent.and_then(|u| u.user_persona_path.as_ref()).map(|p| serde_json::json!({"path": p, "digest": file_digest(p)})),
         "user_prompt_template": user_agent.and_then(|u| u.user_prompt_template_path.as_ref()).map(|p| serde_json::json!({"path": p, "digest": file_digest(p)})),
@@ -1390,6 +1392,23 @@ mod tests {
         let d = std::env::temp_dir().join(format!("hbench-test-{name}-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    #[test]
+    fn lock_records_the_prompt_template_digest() {
+        let d = tmp("lock-tpl");
+        let tpl = d.join("prompt.j2");
+        std::fs::write(&tpl, "Fix it: {{ instruction }}").unwrap();
+        let cfg = |kwargs: Value| -> TrialConfig {
+            serde_json::from_value(serde_json::json!({
+                "task": {"path": d}, "trial_name": "t", "trials_dir": d, "agent": {"name": "terminus-2", "kwargs": kwargs},
+            }))
+            .unwrap()
+        };
+        let lock = trial_lock(&cfg(serde_json::json!({"prompt_template_path": tpl})));
+        assert_eq!(lock["prompt_template"]["path"], tpl.to_string_lossy().as_ref());
+        assert_eq!(lock["prompt_template"]["digest"], sha256_prefixed(b"Fix it: {{ instruction }}"));
+        assert!(trial_lock(&cfg(serde_json::json!({}))).get("prompt_template").is_none());
     }
 
     #[test]
