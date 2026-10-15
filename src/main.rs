@@ -429,6 +429,12 @@ enum TasksCmd {
         #[arg(long)]
         gpus: Option<i64>,
     },
+    /// Print each task's checksum and lock digest, as trial results and lock.json record them.
+    Digest {
+        /// A task directory, or a directory of tasks.
+        #[arg(short = 'p', long = "path")]
+        path: PathBuf,
+    },
     /// Validate task dirs (config, files, test scripts).
     Check {
         #[arg(short = 'p', long = "path")]
@@ -547,6 +553,16 @@ struct RunArgs {
     /// Don't ask for confirmation (with --diff).
     #[arg(short = 'y', long)]
     yes: bool,
+}
+
+/// One task directory, or every task directory directly under `path`, sorted.
+fn task_dirs(path: &std::path::Path) -> Result<Vec<PathBuf>> {
+    if Task::is_task_dir(path) {
+        return Ok(vec![path.to_path_buf()]);
+    }
+    let mut dirs: Vec<PathBuf> = std::fs::read_dir(path)?.flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect();
+    dirs.sort();
+    Ok(dirs)
 }
 
 fn parse_kv(s: &str) -> Result<(String, String), String> {
@@ -999,14 +1015,20 @@ async fn main() -> Result<()> {
             let name = authoring::resolve_name(name, org)?;
             authoring::init_dataset(&name, &output_dir, &description, with_metric, &authoring::parse_authors(&author))
         }
+        Cmd::Tasks { cmd: TasksCmd::Digest { path } } => {
+            let rows: Vec<Value> = task_dirs(&path)?
+                .iter()
+                .filter(|d| Task::is_task_dir(d))
+                .map(|d| -> Result<Value> {
+                    let t = Task::load(d)?;
+                    Ok(serde_json::json!({"name": t.name(), "checksum": t.checksum()?, "digest": crate::task::content_digest(d)}))
+                })
+                .collect::<Result<_>>()?;
+            println!("{}", serde_json::to_string_pretty(&rows)?);
+            Ok(())
+        }
         Cmd::Tasks { cmd: TasksCmd::Check { path } } => {
-            let dirs: Vec<PathBuf> = if Task::is_task_dir(&path) {
-                vec![path]
-            } else {
-                let mut v: Vec<PathBuf> = std::fs::read_dir(&path)?.flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect();
-                v.sort();
-                v
-            };
+            let dirs = task_dirs(&path)?;
             let mut bad = 0;
             for d in dirs {
                 match Task::load(&d).and_then(|t| t.validate_tests().map(|_| t)) {
