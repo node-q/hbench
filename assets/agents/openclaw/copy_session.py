@@ -1,52 +1,37 @@
-def _openclaw_container_copy_session_transcript() -> None:
-    """
-    Stdlib-only logic run inside the agent container ("python3 -c").
-    Serialized via "inspect.getsource" as a **single** self-contained function.
-    Parse "openclaw.txt" by finding the last JSON object that consumes the file suffix,
-    then copy "agentMeta.sessionFile".
-    """
-    import json
-    import shutil
-    import sys
-    from pathlib import Path
+# Run in the container via `python3 -c`: copy OpenClaw's session transcript next to its log.
+# The CLI's --json envelope is the trailing JSON object in openclaw.txt; it names the session file.
+import json
+import shutil
+from pathlib import Path
 
-    log_path = Path("/logs/agent/openclaw.txt")
-    if not log_path.is_file():
-        sys.exit(0)
-    raw = log_path.read_text(encoding="utf-8", errors="replace")
-    text = raw.strip()
-    if not text:
-        sys.exit(0)
-    dec = json.JSONDecoder()
-    envelope = None
-    for start in range(len(text) - 1, -1, -1):
-        if text[start] != "{":
-            continue
+LOG_DIR = Path("/logs/agent")
+
+
+def trailing_object(text):
+    decoder = json.JSONDecoder()
+    pos = text.rfind("{")
+    while pos >= 0:
         try:
-            obj, consumed = dec.raw_decode(text[start:])
-        except (json.JSONDecodeError, ValueError):
-            continue
-        if not isinstance(obj, dict):
-            continue
-        if text[start + consumed :].strip():
-            continue
-        envelope = obj
-        break
-    if not envelope:
-        sys.exit(0)
-    meta = envelope.get("meta")
-    if not isinstance(meta, dict):
-        sys.exit(0)
-    agent_meta = meta.get("agentMeta")
-    if not isinstance(agent_meta, dict):
-        sys.exit(0)
-    session_file = agent_meta.get("sessionFile")
-    if not isinstance(session_file, str) or not session_file.strip():
-        sys.exit(0)
-    src = Path(session_file)
-    if not src.is_file():
-        sys.exit(0)
-    dst = Path("/logs/agent") / "openclaw.session.jsonl"
-    shutil.copy2(src, dst)
+            value, end = decoder.raw_decode(text, pos)
+        except ValueError:
+            value, end = None, 0
+        if isinstance(value, dict) and not text[end:].strip():
+            return value
+        pos = text.rfind("{", 0, pos)
+    return None
 
-_openclaw_container_copy_session_transcript()
+
+def session_file():
+    log = LOG_DIR / "openclaw.txt"
+    if not log.is_file():
+        return None
+    envelope = trailing_object(log.read_text(encoding="utf-8", errors="replace").strip()) or {}
+    meta = envelope.get("meta")
+    agent = meta.get("agentMeta") if isinstance(meta, dict) else None
+    path = agent.get("sessionFile") if isinstance(agent, dict) else None
+    return Path(path) if isinstance(path, str) and path.strip() else None
+
+
+src = session_file()
+if src is not None and src.is_file():
+    shutil.copy2(src, LOG_DIR / "openclaw.session.jsonl")

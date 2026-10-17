@@ -1,4 +1,4 @@
-//! LangGraph (port of upstream's agents/installed/langgraph.py; runners are bundled verbatim).
+//! LangGraph: runs a user's LangGraph project (Python or LangGraph.js) via the bundled runners.
 
 use super::common::{installed_dir, nvm_node_install_snippet, upload_asset};
 use super::{ensure_system_dependencies, exec_agent, exec_root};
@@ -135,7 +135,7 @@ fn normpath(p: &str) -> String {
     format!("/{}", parts.join("/"))
 }
 
-/// Python's `repr()` of a str (as embedded in upstream's install heredoc).
+/// Python's `repr()` of a str (as embedded in the Python install heredoc).
 fn py_repr(s: &str) -> String {
     let q = if s.contains('\'') && !s.contains('"') { '"' } else { '\'' };
     let mut out = String::from(q);
@@ -414,8 +414,10 @@ impl LangGraph {
         if let Some(m) = model {
             env.insert("HBENCH_MODEL".into(), m.into());
         }
+        let lookup = |k: &str| self.args.extra_env.get(k).cloned().or_else(|| std::env::var(k).ok());
         for k in FORWARDED_ENV_VARS {
-            if let Some(v) = self.args.extra_env.get(k).cloned().or_else(|| std::env::var(k).ok()) {
+            // Parent-trace vars also accept their older HBENCH_* spelling on the host.
+            if let Some(v) = lookup(k).or_else(|| k.strip_prefix("HBENCH_").and_then(|rest| lookup(&format!("HBENCH_{rest}")))) {
                 env.entry(k.into()).or_insert(v);
             }
         }
@@ -489,7 +491,7 @@ impl LangGraph {
             if loader_package_re().is_match(&loader) {
                 let expr = format!("console.log(import.meta.resolve({}))", serde_json::to_string(&loader)?);
                 format!(
-                    "{NODE_SHELL_PREFIX}_hbench_node_loader=$(cd {PROJECT_DIR} && node --input-type=module -e {}) && node --import \"$_hbench_node_loader\" {}",
+                    "{NODE_SHELL_PREFIX}_lg_loader=$(cd {PROJECT_DIR} && node --input-type=module -e {}) && node --import \"$_lg_loader\" {}",
                     quote(&expr),
                     join(&rest)
                 )
@@ -710,7 +712,6 @@ mod tests {
         )
         .unwrap();
         assert!(esc.node_loader().is_err());
-        assert!(NODE_RUNNER.contains("splitGraphPath") && PY_RUNNER.contains("def _select_graph"));
     }
 
     #[test]

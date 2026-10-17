@@ -1,4 +1,4 @@
-//! antigravity-sdk (port of upstream's agents/installed/antigravity_sdk.py + antigravity_base_url.py).
+//! antigravity-sdk: Google's Antigravity SDK driven by an uploaded uv script (assets/agents/antigravity-sdk).
 
 use super::antigravity_cli::validate_base_url;
 use super::common::opts::check_options;
@@ -51,7 +51,7 @@ pub struct AntigravitySdk {
     skill_paths: Option<Vec<String>>,
 }
 
-/// upstream computes cost from built-in pricing when the trajectory has none.
+/// Cost from the built-in price table, for trajectories that report none.
 fn cost_from_pricing(model_name: Option<&str>, prompt: i64, completion: i64, cached: i64) -> Option<f64> {
     let (input, output, cache_read) = pricing(model_name?.rsplit('/').next()?)?;
     let uncached = (prompt - cached).max(0) as f64;
@@ -177,7 +177,6 @@ impl AntigravitySdk {
         Ok(env)
     }
 
-    /// upstream's triple-quoted command with `\`-newline continuations (joined by Python).
     fn run_command(instruction: &str) -> String {
         format!(
             "/installed-agent/run_agent.py     --instruction={}     --logs-dir=\"$AGENT_LOGS_DIR\"     --trajectory-path=\"$TRAJECTORY_PATH\"     2>&1 | stdbuf -oL tee /logs/agent/{OUTPUT_FILENAME}",
@@ -186,7 +185,7 @@ impl AntigravitySdk {
     }
 
     /// The runner with its `google-antigravity` dependency pinned to an uploaded wheel, if any.
-    /// Beyond upstream: pinned to Python 3.12. With only `requires-python = ">=3.12"`, uv now downloads CPython 3.15,
+    /// Pinned to Python 3.12. With only `requires-python = ">=3.12"`, uv now downloads CPython 3.15,
     /// for which cffi/pydantic-core have no wheels, so the install needs a C compiler most task images lack.
     fn runner_script(remote_wheel: Option<&str>) -> String {
         let runner = RUNNER.replacen("#!/usr/bin/env -S uv run --script", "#!/usr/bin/env -S uv run --python 3.12 --script", 1);
@@ -237,7 +236,7 @@ impl Agent for AntigravitySdk {
 
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
         installed_dir(cx).await?;
-        // upstream re-raises exec (RuntimeError) failures as-is and wraps anything else.
+        // Exec failures pass through unchanged; anything else is wrapped as an install failure.
         self.install(cx)
             .await
             .map_err(|e| if e.downcast_ref::<crate::env::KindError>().is_some() { e } else { anyhow!("Agent install failed: {e:#}") })?;
@@ -317,10 +316,7 @@ mod tests {
         assert!(validate_base_url("https://x.test:99999", &none).is_err());
         assert!(validate_base_url("https://a b", &none).unwrap_err().to_string().contains("whitespace"));
         assert!(
-            validate_base_url("http://host.docker.internal:8080", &none)
-                .unwrap_err()
-                .to_string()
-                .contains("HBENCH_ALLOW_INSECURE_MODEL_BASE_URL")
+            validate_base_url("http://host.docker.internal:8080", &none).unwrap_err().to_string().contains("ALLOW_INSECURE_MODEL_BASE_URL")
         );
         assert!(validate_base_url("http://host.docker.internal:8080", &allow).is_ok());
         assert!(validate_base_url("ftp://x.test", &none).is_err());

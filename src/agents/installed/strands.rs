@@ -1,4 +1,4 @@
-//! Strands (port of upstream's agents/installed/strands.py + strands_trajectory.py usage).
+//! Strands: runs a user factory (`module:symbol`) that returns a `strands.Agent`, via assets/agents/strands/strands_runner.py.
 
 use super::common::{installed_dir, upload_asset};
 use super::{connection, ensure_system_dependencies, exec_agent, exec_root, upload_text};
@@ -53,7 +53,7 @@ fn normalize_version(v: &str) -> Result<String> {
     Ok(out)
 }
 
-/// `_validate_factory_kwargs`: JSON values only, finite numbers.
+/// Kwarg dicts must be plain JSON (numbers are finite by construction).
 fn validate_json(v: &Value, path: &str) -> Result<()> {
     match v {
         Value::Object(o) => o.iter().try_for_each(|(k, c)| validate_json(c, &format!("{path}.{k}"))),
@@ -66,7 +66,7 @@ fn ignored(name: &str) -> bool {
     IGNORE.contains(&name) || name.starts_with(".env.")
 }
 
-/// Copy `src` into `dst` skipping upstream's ignore patterns; symlinks are rejected.
+/// Copy `src` into `dst` minus VCS/venv/cache/.env entries; symlinks are rejected.
 fn copy_tree(src: &Path, dst: &Path, root: &Path) -> Result<()> {
     std::fs::create_dir_all(dst)?;
     for e in std::fs::read_dir(src)? {
@@ -199,7 +199,7 @@ impl Strands {
     }
 }
 
-/// `_usage_counts` -> (prompt, completion, cached, cache_write), all None when no usage keys.
+/// Strands usage -> (prompt, completion, cached, cache_write); None when no usage keys are present.
 fn usage_counts(u: &Value, provider: Option<&str>) -> Option<(i64, Option<i64>, i64, i64)> {
     if !["inputTokens", "cacheReadInputTokens", "cacheWriteInputTokens", "outputTokens"].iter().any(|k| !u[*k].is_null()) {
         return None;
@@ -272,7 +272,7 @@ impl Agent for Strands {
         ensure_system_dependencies(cx, &["curl", "git"]).await?;
         exec_root(cx, &format!("mkdir -p {INSTALL_DIR}"), &none).await?;
         upload_asset(cx, RUNNER, RUNNER_PATH).await?;
-        // Stage the factory under logs/source (like upstream), then upload it.
+        // Stage the factory under logs/source (kept with the trial for reference), then upload it.
         let mut editable = false;
         if let Some(fp) = &self.factory_path {
             let target = self.args.logs_dir.join("source");

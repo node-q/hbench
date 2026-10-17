@@ -1,10 +1,9 @@
-"""Headless DeerFlow runner used by upstream's DeerFlow installed agent.
+"""hbench entrypoint for DeerFlow inside the task container.
 
-The stock ``deerflow --json`` CLI hardcodes ``DeerFlowClient`` defaults, so this
-runner constructs the client with upstream's runtime flags. It writes the original
-NDJSON event stream to stdout and a compact result summary to the path in
-``DEERFLOW_SUMMARY_PATH``. Provider failures that DeerFlow converts into fallback
-messages are restored to non-zero exits so upstream can classify and retry them.
+Reads the instruction from stdin, streams DeerFlow events to stdout as NDJSON and
+leaves a small JSON report (status, token usage, error) at $DEERFLOW_SUMMARY_PATH.
+DeerFlow swallows provider failures into a fallback reply; those exit non-zero here
+so the host can classify and retry the trial.
 """
 
 from __future__ import annotations
@@ -13,279 +12,166 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import Any
 
-_SUMMARY_SCHEMA_VERSION = 1
-_DEFAULT_SUMMARY_PATH = "/logs/agent/deerflow_summary.json"
-_TERMINAL_TASK_EVENTS = {
-    "task_completed",
-    "task_failed",
-    "task_cancelled",
-    "task_timed_out",
-}
+REPORT_VERSION = 1
+TOKEN_KEYS = ("input_tokens", "output_tokens", "total_tokens")
+TASK_DONE = frozenset({"task_completed", "task_failed", "task_cancelled", "task_timed_out"})
+TRUTHY = frozenset({"1", "true", "yes", "on"})
 
 
-def _flag(name: str, default: bool = False) -> bool:
-    value = os.environ.get(name)
-    if value is None:
-        return default
-    return value.strip().lower() in {"1", "true", "yes", "on"}
+def env_bool(key, default):
+    raw = os.environ.get(key)
+    return default if raw is None else raw.strip().lower() in TRUTHY
 
 
-def _int(name: str, default: int) -> int:
+def env_int(key, default):
     try:
-        return int(os.environ[name])
+        return int(os.environ[key])
     except (KeyError, ValueError):
         return default
 
 
-def _zero_usage() -> dict[str, int]:
-    return {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+def count(v):
+    """A token count: a non-negative int that is not a bool."""
+    return type(v) is int and v >= 0
 
 
-def _normalize_usage(value: Any) -> dict[str, int] | None:
-    if not isinstance(value, dict):
+def tokens(raw):
+    """Usage dict with all three counts, or None when anything is malformed."""
+    if not isinstance(raw, dict):
         return None
-
-    normalized: dict[str, int] = {}
-    for key in ("input_tokens", "output_tokens"):
-        token_count = value.get(key, 0)
-        if isinstance(token_count, bool) or not isinstance(token_count, int):
-            return None
-        if token_count < 0:
-            return None
-        normalized[key] = token_count
-
-    total_tokens = value.get(
-        "total_tokens",
-        normalized["input_tokens"] + normalized["output_tokens"],
-    )
-    if isinstance(total_tokens, bool) or not isinstance(total_tokens, int):
+    i, o = raw.get("input_tokens", 0), raw.get("output_tokens", 0)
+    if not (count(i) and count(o)):
         return None
-    if total_tokens < 0:
-        return None
-    normalized["total_tokens"] = total_tokens
-    return normalized
+    t = raw.get("total_tokens", i + o)
+    return {"input_tokens": i, "output_tokens": o, "total_tokens": t} if count(t) else None
 
 
-def _add_usage(left: dict[str, int], right: dict[str, int]) -> dict[str, int]:
-    return {
-        key: left[key] + right[key]
-        for key in ("input_tokens", "output_tokens", "total_tokens")
-    }
+def plus(*usages):
+    return {k: sum(u[k] for u in usages) for k in TOKEN_KEYS}
 
 
-def _clean_error_field(value: Any, *, fallback: str, limit: int) -> str:
-    if isinstance(value, str) and value.strip():
-        return value.strip()[:limit]
-    return fallback
+class Usage:
+    """Token bookkeeping over the event stream.
+
+    The final `end` event is authoritative for the lead agent; without it we sum
+    per-message metadata (first report per message id wins). Subagent tasks report
+    separately and are always added on top.
+    """
+
+    def __init__(self):
+        self.end = None
+        self.by_msg = {}
+        self.unkeyed = []
+        self.by_task = {}
+
+    def see(self, kind, data):
+        if not isinstance(data, dict):
+            return
+        if kind == "end":
+            u = tokens(data.get("usage"))
+            if u is not None:
+                self.end = u
+        elif kind == "messages-tuple":
+            u = tokens(data.get("usage_metadata"))
+            if u is not None:
+                mid = data.get("id")
+                if isinstance(mid, str) and mid:
+                    self.by_msg.setdefault(mid, u)
+                else:
+                    self.unkeyed.append(u)
+        elif kind == "custom" and data.get("type") in TASK_DONE:
+            tid, u = data.get("task_id"), tokens(data.get("usage"))
+            if isinstance(tid, str) and tid and u is not None:
+                self.by_task.setdefault(tid, u)
+
+    def total(self):
+        lead = self.end if self.end is not None else plus(*self.by_msg.values(), *self.unkeyed)
+        return plus(lead, *self.by_task.values())
 
 
-def _find_llm_error(value: Any) -> dict[str, str] | None:
-    if isinstance(value, dict):
-        additional_kwargs = value.get("additional_kwargs")
-        if isinstance(additional_kwargs, dict) and additional_kwargs.get(
-            "deerflow_error_fallback"
-        ):
-            content = value.get("content")
-            return {
-                "type": _clean_error_field(
-                    additional_kwargs.get("error_type"),
-                    fallback="LLMError",
-                    limit=200,
-                ),
-                "reason": _clean_error_field(
-                    additional_kwargs.get("error_reason"),
-                    fallback="generic",
-                    limit=200,
-                ),
-                "detail": _clean_error_field(
-                    additional_kwargs.get("error_detail"),
-                    fallback=_clean_error_field(
-                        content,
-                        fallback="LLM provider failed after retries",
-                        limit=2_000,
-                    ),
-                    limit=2_000,
-                ),
-            }
-        for item in value.values():
-            found = _find_llm_error(item)
-            if found is not None:
-                return found
-    elif isinstance(value, (list, tuple)):
-        for item in value:
-            found = _find_llm_error(item)
-            if found is not None:
-                return found
+def text_or(v, default, cap):
+    return v.strip()[:cap] if isinstance(v, str) and v.strip() else default
+
+
+def provider_failure(node):
+    """Depth-first search for DeerFlow's error-fallback marker on a message."""
+    stack = [node]
+    while stack:
+        cur = stack.pop()
+        if isinstance(cur, dict):
+            extra = cur.get("additional_kwargs")
+            if isinstance(extra, dict) and extra.get("deerflow_error_fallback"):
+                body = text_or(cur.get("content"), "LLM provider failed after retries", 2000)
+                return {
+                    "type": text_or(extra.get("error_type"), "LLMError", 200),
+                    "reason": text_or(extra.get("error_reason"), "generic", 200),
+                    "detail": text_or(extra.get("error_detail"), body, 2000),
+                }
+            stack.extend(reversed(list(cur.values())))
+        elif isinstance(cur, (list, tuple)):
+            stack.extend(reversed(cur))
     return None
 
 
-def _record_event_usage(
-    event_type: str,
-    data: Any,
-    *,
-    message_usage: dict[str, dict[str, int]],
-    anonymous_usage: list[dict[str, int]],
-    task_usage: dict[str, dict[str, int]],
-) -> dict[str, int] | None:
-    if not isinstance(data, dict):
-        return None
-
-    if event_type == "end":
-        return _normalize_usage(data.get("usage"))
-
-    if event_type == "messages-tuple":
-        usage = _normalize_usage(data.get("usage_metadata"))
-        if usage is not None:
-            message_id = data.get("id")
-            if isinstance(message_id, str) and message_id:
-                message_usage.setdefault(message_id, usage)
-            else:
-                anonymous_usage.append(usage)
-
-    if event_type == "custom" and data.get("type") in _TERMINAL_TASK_EVENTS:
-        task_id = data.get("task_id")
-        usage = _normalize_usage(data.get("usage"))
-        if isinstance(task_id, str) and task_id and usage is not None:
-            task_usage.setdefault(task_id, usage)
-    return None
+def say(msg):
+    print(f"deerflow_runner: {msg}", file=sys.stderr)
 
 
-def _sum_usage(usages: Any) -> dict[str, int]:
-    total = _zero_usage()
-    for usage in usages:
-        total = _add_usage(total, usage)
-    return total
+def save_report(status, usage, error):
+    dest = Path(os.environ.get("DEERFLOW_SUMMARY_PATH", "/logs/agent/deerflow_summary.json"))
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    body = {"schema_version": REPORT_VERSION, "status": status, "usage": usage, "error": error}
+    tmp = dest.with_name(f".{dest.name}.{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(body, separators=(",", ":")) + "\n")
+    tmp.replace(dest)
 
 
-def _write_summary(
-    *,
-    status: str,
-    usage: dict[str, int],
-    error: dict[str, str] | None,
-) -> None:
-    path = Path(os.environ.get("DEERFLOW_SUMMARY_PATH", _DEFAULT_SUMMARY_PATH))
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    temporary.write_text(
-        json.dumps(
-            {
-                "schema_version": _SUMMARY_SCHEMA_VERSION,
-                "status": status,
-                "usage": usage,
-                "error": error,
-            },
-            separators=(",", ":"),
-        )
-        + "\n"
-    )
-    temporary.replace(path)
-
-
-def _print_llm_error(error: dict[str, str]) -> None:
-    if error["reason"] == "quota":
-        print(
-            "deerflow_runner: specified API usage limits were reached: "
-            f"{error['detail']}",
-            file=sys.stderr,
-        )
-        return
-    print(
-        f"deerflow_runner: LLM provider failure ({error['reason']}): {error['detail']}",
-        file=sys.stderr,
-    )
-
-
-def main() -> int:
-    # Imported lazily so module-level tests and help/errors do not require the
-    # heavyweight harness installation.
+def run():
+    # Heavy imports stay inside run() so the module loads without DeerFlow installed.
     from deerflow.client import DeerFlowClient
     from langgraph.errors import GraphRecursionError
 
-    message = sys.stdin.read().strip()
-    if not message:
-        error = {
-            "type": "ValueError",
-            "reason": "runner_error",
-            "detail": "empty instruction on stdin",
-        }
-        _write_summary(status="runner_error", usage=_zero_usage(), error=error)
-        print(f"deerflow_runner: {error['detail']}", file=sys.stderr)
+    prompt = sys.stdin.read().strip()
+    if not prompt:
+        err = {"type": "ValueError", "reason": "runner_error", "detail": "empty instruction on stdin"}
+        save_report("runner_error", plus(), err)
+        say(err["detail"])
         return 2
 
     client = DeerFlowClient(
         model_name=os.environ.get("DEERFLOW_MODEL_NAME", "hbench-model"),
-        subagent_enabled=_flag("DEERFLOW_SUBAGENT_ENABLED", False),
-        thinking_enabled=_flag("DEERFLOW_THINKING_ENABLED", True),
-        plan_mode=_flag("DEERFLOW_PLAN_MODE", False),
+        subagent_enabled=env_bool("DEERFLOW_SUBAGENT_ENABLED", False),
+        thinking_enabled=env_bool("DEERFLOW_THINKING_ENABLED", True),
+        plan_mode=env_bool("DEERFLOW_PLAN_MODE", False),
     )
-
-    message_usage: dict[str, dict[str, int]] = {}
-    anonymous_usage: list[dict[str, int]] = []
-    task_usage: dict[str, dict[str, int]] = {}
-    end_usage: dict[str, int] | None = None
-    llm_error: dict[str, str] | None = None
-    status = "completed"
-    runner_error: dict[str, str] | None = None
-    return_code = 0
-
+    usage, failure = Usage(), None
+    status, error, code = "completed", None, 0
     try:
-        for event in client.stream(
-            message, recursion_limit=_int("DEERFLOW_RECURSION_LIMIT", 1000)
-        ):
-            event_type = str(event.type)
-            data = event.data
-            sys.stdout.write(
-                json.dumps({"type": event_type, "data": data}, default=str)
-            )
-            sys.stdout.write("\n")
+        for ev in client.stream(prompt, recursion_limit=env_int("DEERFLOW_RECURSION_LIMIT", 1000)):
+            kind = str(ev.type)
+            sys.stdout.write(json.dumps({"type": kind, "data": ev.data}, default=str) + "\n")
             sys.stdout.flush()
-
-            recorded_end = _record_event_usage(
-                event_type,
-                data,
-                message_usage=message_usage,
-                anonymous_usage=anonymous_usage,
-                task_usage=task_usage,
-            )
-            if recorded_end is not None:
-                end_usage = recorded_end
-            if llm_error is None:
-                llm_error = _find_llm_error(data)
-    except GraphRecursionError as exc:
+            usage.see(kind, ev.data)
+            failure = failure or provider_failure(ev.data)
+    except GraphRecursionError as e:
         status = "recursion_limit"
-        print(
-            f"deerflow_runner: recursion limit reached, stopping: {exc}",
-            file=sys.stderr,
-        )
-    except Exception as exc:  # noqa: BLE001 - convert runner crashes to its protocol
-        status = "runner_error"
-        return_code = 1
-        runner_error = {
-            "type": type(exc).__name__,
-            "reason": "runner_error",
-            "detail": str(exc)[:2_000] or type(exc).__name__,
-        }
-        print(
-            f"deerflow_runner: {runner_error['detail']}",
-            file=sys.stderr,
-        )
+        say(f"recursion limit reached, stopping: {e}")
+    except Exception as e:  # noqa: BLE001 - any crash becomes a runner_error report
+        status, code = "runner_error", 1
+        error = {"type": type(e).__name__, "reason": "runner_error", "detail": str(e)[:2000] or type(e).__name__}
+        say(error["detail"])
 
-    fallback_usage = _sum_usage([*message_usage.values(), *anonymous_usage])
-    usage = end_usage if end_usage is not None else fallback_usage
-    usage = _add_usage(usage, _sum_usage(task_usage.values()))
+    if failure is not None and status != "runner_error":
+        status, code, error = "llm_error", 1, failure
+        if failure["reason"] == "quota":
+            say(f"specified API usage limits were reached: {failure['detail']}")
+        else:
+            say(f"LLM provider failure ({failure['reason']}): {failure['detail']}")
 
-    error = runner_error
-    if status != "runner_error" and llm_error is not None:
-        status = "llm_error"
-        return_code = 1
-        error = llm_error
-        _print_llm_error(llm_error)
-
-    _write_summary(status=status, usage=usage, error=error)
-    return return_code
+    save_report(status, usage.total(), error)
+    return code
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    sys.exit(run())

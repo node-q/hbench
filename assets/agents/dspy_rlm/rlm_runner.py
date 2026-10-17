@@ -1,8 +1,9 @@
-"""hbench host-side runner for upstream's dspy-rlm agent (agents/dspy_rlm.py).
+"""Host-side dspy.RLM driver for hbench's dspy-rlm agent.
 
-dspy.RLM runs here, in the host Python, exactly as in upstream. Its environment tools are
-proxied to hbench over stdio: one JSON request per line on the original stdout, one JSON
-response per line on stdin. Everything else that writes to stdout goes to stderr.
+hbench starts this with `python3 -c` and speaks newline-delimited JSON with it: the
+first stdin line is the run config; afterwards every tool call is sent on the real
+stdout as {"op": "exec", ...} and answered on stdin. The run ends with one
+{"op": "done", ...} message carrying usage and, on failure, the exception.
 """
 
 import json
@@ -11,205 +12,172 @@ import shlex
 import sys
 import threading
 
-_proto = os.fdopen(os.dup(1), "w")
+# Keep fd 1 for the protocol only; anything dspy or user code prints goes to stderr.
+wire = os.fdopen(os.dup(1), "w")
 os.dup2(2, 1)
 sys.stdout = sys.stderr
-_lock = threading.Lock()
+wire_lock = threading.Lock()
 
 
-def _send(msg):
-    _proto.write(json.dumps(msg, default=str) + "\n")
-    _proto.flush()
+def emit(msg):
+    wire.write(json.dumps(msg, default=str) + "\n")
+    wire.flush()
 
 
-def _request(msg):
-    with _lock:
-        _send(msg)
-        line = sys.stdin.readline()
-    if not line:
+def remote(command, cwd, timeout):
+    """Run `command` in the task environment via hbench; returns (code, stdout, stderr)."""
+    with wire_lock:
+        emit({"op": "exec", "command": command, "cwd": cwd, "timeout_sec": timeout})
+        reply = sys.stdin.readline()
+    if not reply:
         raise RuntimeError("hbench bridge closed")
-    resp = json.loads(line)
-    if resp.get("error"):
-        raise RuntimeError(resp["error"])
-    return resp
+    r = json.loads(reply)
+    if r.get("error"):
+        raise RuntimeError(r["error"])
+    return r.get("return_code", 0), r.get("stdout") or None, r.get("stderr") or None
 
 
-class ExecResult:
-    def __init__(self, return_code, stdout, stderr):
-        self.return_code = return_code
-        self.stdout = stdout
-        self.stderr = stderr
+def describe(res, if_empty="(no output)"):
+    code, out, err = res
+    lines = [out] if out else []
+    if err:
+        lines.append(f"[stderr] {err}")
+    if code != 0:
+        lines.append(f"[exit code {code}]")
+    return "\n".join(lines) or if_empty
 
 
-def _format_exec_result(result, empty_msg="(no output)"):
-    """Format an ExecResult into a human-readable string for RLM tools."""
-    parts = []
-    if result.stdout:
-        parts.append(result.stdout)
-    if result.stderr:
-        parts.append(f"[stderr] {result.stderr}")
-    if result.return_code != 0:
-        parts.append(f"[exit code {result.return_code}]")
-    return "\n".join(parts) if parts else empty_msg
+def sq(text):
+    """Body of a single-quoted shell string."""
+    return text.replace("'", "'\\''")
 
 
-class EnvironmentToolBridge:
-    """Tools exposed to dspy.RLM (same names, docstrings and commands as upstream's bridge)."""
+def make_tools(workdir, timeout):
+    # Names, signatures and docstrings are what the model sees; keep them stable.
+    def sh(command, cwd=None):
+        return remote(command, cwd or workdir, timeout)
 
-    def __init__(self, cwd="/", timeout_sec=30):
-        self._cwd = cwd
-        self._timeout_sec = timeout_sec
-
-    def _exec(self, command, cwd=None):
-        r = _request({"op": "exec", "command": command, "cwd": cwd or self._cwd, "timeout_sec": self._timeout_sec})
-        return ExecResult(r.get("return_code", 0), r.get("stdout") or None, r.get("stderr") or None)
-
-    def exec_command(self, command: str, cwd: str | None = None) -> str:
+    def exec_command(command: str, cwd: str | None = None) -> str:
         """Execute a shell command in the environment. Returns stdout+stderr."""
-        return _format_exec_result(self._exec(command, cwd))
+        return describe(sh(command, cwd))
 
-    def read_file(self, path: str) -> str:
+    def read_file(path: str) -> str:
         """Read a file from the environment. Returns file contents."""
-        result = self._exec(f"cat {shlex.quote(path)}")
-        if result.return_code != 0:
-            return f"[error] {result.stderr or 'file not found'}"
-        return result.stdout or ""
+        code, out, err = sh(f"cat {shlex.quote(path)}")
+        return f"[error] {err or 'file not found'}" if code else out or ""
 
-    def write_file(self, path: str, content: str) -> str:
+    def write_file(path: str, content: str) -> str:
         """Write content to a file in the environment."""
-        escaped = content.replace("'", "'\\''")
-        result = self._exec(
-            f'mkdir -p "$(dirname {shlex.quote(path)})" && '
-            f"printf '%s' '{escaped}' > {shlex.quote(path)}"
-        )
-        if result.return_code != 0:
-            return f"[error] {result.stderr or 'write failed'}"
-        return "ok"
+        p = shlex.quote(path)
+        code, _, err = sh(f'mkdir -p "$(dirname {p})" && ' f"printf '%s' '{sq(content)}' > {p}")
+        return f"[error] {err or 'write failed'}" if code else "ok"
 
-    def list_directory(self, path: str = ".") -> str:
+    def list_directory(path: str = ".") -> str:
         """List files and directories. Returns ls -la output."""
-        result = self._exec(f"ls -la {shlex.quote(path)}")
-        if result.return_code != 0:
-            return f"[error] {result.stderr or 'directory not found'}"
-        return result.stdout or ""
+        code, out, err = sh(f"ls -la {shlex.quote(path)}")
+        return f"[error] {err or 'directory not found'}" if code else out or ""
 
-    def find_files(self, pattern: str, path: str = ".") -> str:
+    def find_files(pattern: str, path: str = ".") -> str:
         """Find files matching a glob pattern."""
-        result = self._exec(
-            f"find {shlex.quote(path)} -name {shlex.quote(pattern)} -type f 2>/dev/null | head -50"
-        )
-        if result.return_code != 0:
-            return f"[error] {result.stderr or 'find failed'}"
-        return result.stdout or "(no matches)"
+        code, out, err = sh(f"find {shlex.quote(path)} -name {shlex.quote(pattern)} -type f 2>/dev/null | head -50")
+        return f"[error] {err or 'find failed'}" if code else out or "(no matches)"
 
-    def search_content(self, pattern: str, path: str = ".", file_glob: str = "") -> str:
+    def search_content(pattern: str, path: str = ".", file_glob: str = "") -> str:
         """Search file contents with grep. Returns matching lines."""
-        glob_flag = f"--include={shlex.quote(file_glob)}" if file_glob else ""
-        result = self._exec(
-            f"grep -rn {glob_flag} {shlex.quote(pattern)} {shlex.quote(path)} 2>/dev/null | head -100"
-        )
-        if result.return_code != 0:
-            return "(no matches)"
-        return result.stdout or "(no matches)"
+        include = f"--include={shlex.quote(file_glob)}" if file_glob else ""
+        code, out, _ = sh(f"grep -rn {include} {shlex.quote(pattern)} {shlex.quote(path)} 2>/dev/null | head -100")
+        return "(no matches)" if code else out or "(no matches)"
 
-    def apply_patch(self, patch: str) -> str:
+    def apply_patch(patch: str) -> str:
         """Apply a unified diff patch. The patch should be in unified diff format."""
-        escaped = patch.replace("'", "'\\''")
-        return _format_exec_result(
-            self._exec(f"printf '%s' '{escaped}' | patch -p1 --no-backup-if-mismatch"),
-            empty_msg="patch applied successfully",
-        )
+        return describe(sh(f"printf '%s' '{sq(patch)}' | patch -p1 --no-backup-if-mismatch"), "patch applied successfully")
 
-    def get_tools(self):
-        return [
-            self.exec_command,
-            self.read_file,
-            self.write_file,
-            self.list_directory,
-            self.find_files,
-            self.search_content,
-            self.apply_patch,
-        ]
+    return [exec_command, read_file, write_file, list_directory, find_files, search_content, apply_patch]
 
 
-def _save_logs(prediction, logs_dir):
-    rlm_dir = os.path.join(logs_dir, "rlm")
-    os.makedirs(rlm_dir, exist_ok=True)
-    keys = list(prediction.keys())
-    solution = str(prediction[keys[0]]) if keys else str(prediction)
-    with open(os.path.join(rlm_dir, "solution.txt"), "w") as f:
-        f.write(solution)
-    trajectory = getattr(prediction, "trajectory", None)
-    if trajectory:
-        with open(os.path.join(rlm_dir, "trajectory.json"), "w") as f:
-            f.write(json.dumps(trajectory, indent=2, default=str))
-    final_reasoning = getattr(prediction, "final_reasoning", None)
-    if final_reasoning:
-        with open(os.path.join(rlm_dir, "final_reasoning.txt"), "w") as f:
-            f.write(str(final_reasoning))
+def dump_outputs(pred, logs_dir):
+    """Write solution / trajectory / final reasoning under <logs>/rlm."""
+    d = os.path.join(logs_dir, "rlm")
+    os.makedirs(d, exist_ok=True)
+
+    def put(name, text):
+        with open(os.path.join(d, name), "w") as f:
+            f.write(text)
+
+    fields = list(pred.keys())
+    put("solution.txt", str(pred[fields[0]]) if fields else str(pred))
+    steps = getattr(pred, "trajectory", None)
+    if steps:
+        put("trajectory.json", json.dumps(steps, indent=2, default=str))
+    reasoning = getattr(pred, "final_reasoning", None)
+    if reasoning:
+        put("final_reasoning.txt", str(reasoning))
 
 
-def _usage(prediction, lm):
-    """upstream's _populate_context, as a dict."""
-    out = {}
-    if prediction is None:
-        return out
+def metrics(pred, lm):
+    """Token, cost and step counts for the done message (best effort)."""
+    m = {}
+    if pred is None:
+        return m
     try:
-        usage = prediction.get_lm_usage()
-        if usage:
-            out["n_input_tokens"] = sum(u.get("input_tokens", 0) for u in usage.values())
-            out["n_output_tokens"] = sum(u.get("output_tokens", 0) for u in usage.values())
+        per_model = pred.get_lm_usage()
+        if per_model:
+            m["n_input_tokens"] = sum(u.get("input_tokens", 0) for u in per_model.values())
+            m["n_output_tokens"] = sum(u.get("output_tokens", 0) for u in per_model.values())
     except (AttributeError, TypeError):
         pass
     try:
-        cost = sum(x.get("cost", 0) or 0 for x in lm.history if isinstance(x, dict))
-        if cost > 0:
-            out["cost_usd"] = cost
+        spent = sum(h.get("cost", 0) or 0 for h in lm.history if isinstance(h, dict))
+        if spent > 0:
+            m["cost_usd"] = spent
     except (AttributeError, TypeError):
         pass
-    trajectory = getattr(prediction, "trajectory", None)
-    if trajectory:
-        out["rlm_trajectory_steps"] = len(trajectory)
-    return out
+    steps = getattr(pred, "trajectory", None)
+    if steps:
+        m["rlm_trajectory_steps"] = len(steps)
+    return m
 
 
-def main():
-    cfg = json.loads(sys.stdin.readline())
-    if cfg.get("op") == "version":
-        try:
-            import dspy
+def version_probe():
+    try:
+        import dspy
 
-            _send({"op": "done", "version": dspy.__version__})
-        except Exception:
-            _send({"op": "done"})
-        return
+        emit({"op": "done", "version": dspy.__version__})
+    except Exception:
+        emit({"op": "done"})
+
+
+def solve(cfg):
     try:
         import dspy
     except ImportError:
-        _send({"op": "done", "kind": "DspyImportError", "error": "dspy is required for the dspy-rlm agent. Install it with: pip install 'hbench[dspy]'"})
+        emit({"op": "done", "kind": "DspyImportError", "error": "dspy is required for the dspy-rlm agent. Install it with: pip install dspy"})
         return
-    lm = None
-    prediction = None
+    lm = pred = None
     try:
-        bridge = EnvironmentToolBridge(cfg["working_dir"], cfg["tool_timeout_sec"])
+        tools = make_tools(cfg["working_dir"], cfg["tool_timeout_sec"])
         lm = dspy.LM(cfg["model_name"], max_tokens=16_000)
-        sub_lm = dspy.LM(cfg["sub_model_name"], max_tokens=8_000) if cfg.get("sub_model_name") else None
-        rlm = dspy.RLM(
+        helper = cfg.get("sub_model_name")
+        agent = dspy.RLM(
             signature=cfg["signature"],
             max_iterations=cfg["max_iterations"],
             max_llm_calls=cfg["max_llm_calls"],
             max_output_chars=cfg["max_output_chars"],
             verbose=cfg["verbose"],
-            tools=bridge.get_tools(),
-            sub_lm=sub_lm,
+            tools=tools,
+            sub_lm=dspy.LM(helper, max_tokens=8_000) if helper else None,
         )
         dspy.configure(lm=lm, track_usage=True)
-        prediction = rlm(**cfg["input_kwargs"])
-        _save_logs(prediction, cfg["logs_dir"])
-        _send({"op": "done", **_usage(prediction, lm)})
+        pred = agent(**cfg["input_kwargs"])
+        dump_outputs(pred, cfg["logs_dir"])
+        emit({"op": "done", **metrics(pred, lm)})
     except Exception as e:
-        _send({"op": "done", "kind": type(e).__name__, "error": str(e), **_usage(prediction, lm)})
+        emit({"op": "done", "kind": type(e).__name__, "error": str(e), **metrics(pred, lm)})
 
 
 if __name__ == "__main__":
-    main()
+    first = json.loads(sys.stdin.readline())
+    if first.get("op") == "version":
+        version_probe()
+    else:
+        solve(first)

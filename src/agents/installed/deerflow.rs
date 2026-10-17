@@ -1,4 +1,5 @@
-//! DeerFlow (port of upstream's agents/installed/deerflow.py).
+//! DeerFlow: installs the harness package from git into a uv venv and drives it with
+//! `assets/agents/deerflow/deerflow_runner.py`.
 
 use super::common::opts::kw_int;
 use super::common::{installed_dir, upload_asset};
@@ -18,6 +19,7 @@ const VENV_DIR: &str = "/opt/hbench-deerflow-venv";
 const PROJECT_DIR: &str = "/installed-agent/deerflow-project";
 const RUNNER_PATH: &str = "/installed-agent/deerflow-project/deerflow_runner.py";
 const VENV_PYTHON: &str = "/opt/hbench-deerflow-venv/bin/python";
+const MODEL_NAME: &str = "hbench-model";
 const SUMMARY_PATH: &str = "/logs/agent/deerflow_summary.json";
 const MAX_SUMMARY_BYTES: u64 = 65_536;
 const FORWARDED_ENV_VARS: [&str; 14] = [
@@ -157,7 +159,7 @@ impl DeerFlow {
 
     fn model_entry(&self) -> Value {
         let (use_, model, base_url, key) = self.model_provider_config();
-        let mut e = json!({"name": "hbench-model", "use": use_, "model": model});
+        let mut e = json!({"name": MODEL_NAME, "use": use_, "model": model});
         if let Some(u) = base_url {
             e["base_url"] = json!(u);
         }
@@ -209,28 +211,29 @@ impl DeerFlow {
             config["tool_groups"] = groups;
             config["tools"] = tools;
         }
-        // Authoritative hbench-model entry; user models (and hbench-model capabilities) survive.
+        // Our model entry is authoritative; other user models (and extra keys on ours) survive.
+        // A legacy `hbench-model` entry is adopted as ours.
         let models = match &config["models"] {
             Value::Null => vec![],
             Value::Array(a) if a.iter().all(Value::is_object) => a.clone(),
             _ => bail!("DeerFlow config models must be a list of mappings"),
         };
         let mut preserved = vec![];
-        let mut hbench: Option<Value> = None;
+        let mut ours: Option<Value> = None;
         for m in models {
-            if m["name"] == "hbench-model" {
-                hbench.get_or_insert(m);
+            if m["name"] == MODEL_NAME || m["name"] == "hbench-model" {
+                ours.get_or_insert(m);
             } else {
                 preserved.push(m);
             }
         }
-        let mut hbench = hbench.unwrap_or_else(|| json!({}));
-        let h = hbench.as_object_mut().unwrap();
+        let mut ours = ours.unwrap_or_else(|| json!({}));
+        let h = ours.as_object_mut().unwrap();
         for f in ["name", "use", "model", "api_key", "base_url", "request_timeout", "max_retries"] {
             h.remove(f);
         }
         h.extend(self.model_entry().as_object().unwrap().clone());
-        preserved.push(hbench);
+        preserved.push(ours);
         config["models"] = json!(preserved);
         // Local sandbox + host bash + identity mount of the workdir.
         let workdir = self.workdir()?;
@@ -286,7 +289,7 @@ impl DeerFlow {
             ("DEERFLOW_THINKING_ENABLED".into(), b(self.thinking)),
             ("DEERFLOW_PLAN_MODE".into(), b(self.plan_mode)),
             ("DEERFLOW_RECURSION_LIMIT".into(), self.recursion_limit.to_string()),
-            ("DEERFLOW_MODEL_NAME".into(), "hbench-model".into()),
+            ("DEERFLOW_MODEL_NAME".into(), MODEL_NAME.into()),
             ("DEERFLOW_SUMMARY_PATH".into(), SUMMARY_PATH.into()),
         ]);
         for k in FORWARDED_ENV_VARS {
@@ -384,7 +387,7 @@ impl Agent for DeerFlow {
         let _ = std::fs::write(cx.logs_dir.join("instruction.txt"), &steered);
         let remote_instruction = format!("{PROJECT_DIR}/instruction.txt");
         upload_asset(cx, &steered, &remote_instruction).await?;
-        // upstream passes cwd=workdir; stderr and exit code stay intact for classification.
+        // Runs with cwd=workdir; stderr and exit code stay intact for classification.
         let cmd = format!("cd {} && {VENV_PYTHON} {RUNNER_PATH} < {remote_instruction} > /logs/agent/deerflow.jsonl", quote(&workdir));
         exec_agent(cx, &cmd, &self.run_env()).await?;
 

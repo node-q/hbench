@@ -1,4 +1,10 @@
-"""Container entrypoint for upstream's installed Strands adapter."""
+"""Run a user-supplied Strands agent factory inside the task container.
+
+hbench uploads a JSON config and the instruction, then calls
+``strands_runner.py --config C --instruction I --result R --events E``.
+Every message the agent adds is appended to E as JSONL; R gets one JSON
+document describing the outcome (output, usage, observed model, tools, error).
+"""
 
 from __future__ import annotations
 
@@ -13,757 +19,456 @@ import os
 import signal
 import sys
 import traceback
-from collections.abc import AsyncGenerator, Mapping
-from dataclasses import dataclass, field
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, override
+from typing import Any
 
 from strands import Agent, SandboxTimeoutError
 from strands.hooks import MessageAddedEvent
-from strands.sandbox import (
-    ExecutionResult,
-    PosixShellSandbox,
-    StreamChunk,
-    StreamType,
-)
+from strands.sandbox import ExecutionResult, PosixShellSandbox, StreamChunk
 from strands.tools.mcp import MCPClient
 from strands.vended_tools import make_file_editor, make_shell
-from strands.vended_tools.file_editor.file_editor import (
-    DEFAULT_FILE_EDITOR_DESCRIPTION,
-)
+from strands.vended_tools.file_editor.file_editor import DEFAULT_FILE_EDITOR_DESCRIPTION
 from strands.vended_tools.shell.types import SANDBOX_SHELL_DESCRIPTION
 
-
-@dataclass(frozen=True)
-class _EnvironmentArgument:
-    path: tuple[str, ...]
-    names: tuple[str, ...]
-    default: Any = None
+# --------------------------------------------------------------------------- sandbox
 
 
-@dataclass(frozen=True)
-class _ProviderSpec:
-    module: str
-    class_name: str
-    model_id_path: tuple[str, ...] = ("model_id",)
-    base_url_path: tuple[str, ...] | None = None
-    defaults: Mapping[str, Any] = field(default_factory=dict)
-    environment_arguments: tuple[_EnvironmentArgument, ...] = ()
+def _kill_tree(proc: asyncio.subprocess.Process) -> None:
+    if proc.returncode is None:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
 
 
-class TaskLocalSandbox(PosixShellSandbox):
-    """Vend Strands' standard tools inside the upstream task container."""
+class ContainerShell(PosixShellSandbox):
+    """Runs the vended shell/editor tools directly in this container."""
 
     def __init__(self, workdir: str | None = None) -> None:
         self.workdir = workdir or os.getcwd()
 
-    @staticmethod
-    def _kill_process_group(process: asyncio.subprocess.Process) -> None:
-        if process.returncode is not None:
-            return
-        try:
-            kill_process_group = getattr(os, "killpg", None)
-            if kill_process_group is None:
-                process.kill()
-            else:
-                kill_process_group(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-
-    @override
-    async def execute_streaming(
-        self,
-        command: str,
-        *,
-        timeout: float | None = None,
-        cwd: str | None = None,
-        env: dict[str, str] | None = None,
-        **kwargs: Any,
-    ) -> AsyncGenerator[StreamChunk | ExecutionResult, None]:
-        del kwargs
-        process_env = os.environ.copy()
-        if env is not None:
-            process_env.update(env)
-
-        process = await asyncio.create_subprocess_exec(
-            "sh",
-            "-c",
-            command,
+    async def execute_streaming(self, command, *, timeout=None, cwd=None, env=None, **_):
+        proc = await asyncio.create_subprocess_exec(
+            "sh", "-c", command,
             cwd=cwd,
-            env=process_env,
+            env={**os.environ, **(env or {})},
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            start_new_session=True,
+            start_new_session=True,  # own process group, so a timeout kills children too
         )
-        assert process.stdout is not None
-        assert process.stderr is not None
+        chunks: asyncio.Queue[StreamChunk | None] = asyncio.Queue()
+        captured: dict[str, list[str]] = {"stdout": [], "stderr": []}
+        expired = False
 
-        queue: asyncio.Queue[StreamChunk | None] = asyncio.Queue()
-        stdout: list[str] = []
-        stderr: list[str] = []
-        timed_out = False
+        async def drain(reader: asyncio.StreamReader, kind: str) -> None:
+            while block := await reader.read(65536):
+                text = block.decode(errors="replace")
+                captured[kind].append(text)
+                chunks.put_nowait(StreamChunk(data=text, stream_type=kind))
 
-        async def pump(
-            stream: asyncio.StreamReader,
-            stream_type: StreamType,
-            buffer: list[str],
-        ) -> None:
-            while data := await stream.read(64 * 1024):
-                text = data.decode(errors="replace")
-                buffer.append(text)
-                await queue.put(StreamChunk(data=text, stream_type=stream_type))
-
-        pumps = [
-            asyncio.create_task(pump(process.stdout, "stdout", stdout)),
-            asyncio.create_task(pump(process.stderr, "stderr", stderr)),
+        readers = [
+            asyncio.create_task(drain(proc.stdout, "stdout")),
+            asyncio.create_task(drain(proc.stderr, "stderr")),
         ]
 
-        async def supervise() -> None:
-            nonlocal timed_out
+        async def wait_exit() -> None:
+            nonlocal expired
             try:
-                if timeout is None:
-                    await process.wait()
-                else:
-                    await asyncio.wait_for(process.wait(), timeout)
+                await asyncio.wait_for(proc.wait(), timeout)
             except TimeoutError:
-                timed_out = True
-                self._kill_process_group(process)
-                await process.wait()
+                expired = True
+                _kill_tree(proc)
+                await proc.wait()
             finally:
-                await asyncio.gather(*pumps, return_exceptions=True)
-                await queue.put(None)
+                await asyncio.gather(*readers, return_exceptions=True)
+                chunks.put_nowait(None)
 
-        supervisor = asyncio.create_task(supervise())
+        watcher = asyncio.create_task(wait_exit())
         try:
-            while (chunk := await queue.get()) is not None:
+            while (chunk := await chunks.get()) is not None:
                 yield chunk
-            if timed_out:
+            if expired:
                 raise SandboxTimeoutError(timeout)
-
-            return_code = process.returncode if process.returncode is not None else 1
-            exit_code = 128 - return_code if return_code < 0 else return_code
+            code = 1 if proc.returncode is None else proc.returncode
             yield ExecutionResult(
-                exit_code=exit_code,
-                stdout="".join(stdout),
-                stderr="".join(stderr),
+                exit_code=128 - code if code < 0 else code,
+                stdout="".join(captured["stdout"]),
+                stderr="".join(captured["stderr"]),
             )
         finally:
-            self._kill_process_group(process)
-            if process.returncode is None:
-                await asyncio.shield(process.wait())
-            for task in [*pumps, supervisor]:
+            _kill_tree(proc)
+            if proc.returncode is None:
+                await asyncio.shield(proc.wait())
+            for task in (*readers, watcher):
                 task.cancel()
-            await asyncio.gather(*pumps, supervisor, return_exceptions=True)
+            await asyncio.gather(*readers, watcher, return_exceptions=True)
 
-    @override
     def get_tools(self) -> list[Any]:
-        hint = f"\n\nThe task working directory is {self.workdir}."
+        where = f"\n\nThe task working directory is {self.workdir}."
         return [
-            make_file_editor(
-                sandbox=self,
-                name="sandbox_file_editor",
-                description=DEFAULT_FILE_EDITOR_DESCRIPTION + hint,
-            ),
-            make_shell(
-                sandbox=self,
-                name="sandbox_shell",
-                description=SANDBOX_SHELL_DESCRIPTION + hint,
-            ),
+            make_file_editor(sandbox=self, name="sandbox_file_editor", description=DEFAULT_FILE_EDITOR_DESCRIPTION + where),
+            make_shell(sandbox=self, name="sandbox_shell", description=SANDBOX_SHELL_DESCRIPTION + where),
         ]
 
 
-class _ModelBuilder:
-    """Construct Strands models from upstream's resolved model configuration."""
+# --------------------------------------------------------------------------- model
 
-    _ANTHROPIC_MAX_TOKENS = 8192
-    _PROVIDERS: dict[str, _ProviderSpec] = {
-        "amazon-bedrock": _ProviderSpec("strands.models.bedrock", "BedrockModel"),
-        "anthropic": _ProviderSpec(
-            "strands.models.anthropic",
-            "AnthropicModel",
-            defaults={"max_tokens": _ANTHROPIC_MAX_TOKENS},
-        ),
-        "google": _ProviderSpec(
-            "strands.models.gemini",
-            "GeminiModel",
-            base_url_path=("client_args", "http_options", "base_url"),
-        ),
-        "llama": _ProviderSpec("strands.models.llamaapi", "LlamaAPIModel"),
-        "llamacpp": _ProviderSpec(
-            "strands.models.llamacpp",
-            "LlamaCppModel",
-            defaults={"base_url": "http://localhost:8080"},
-            environment_arguments=(
-                _EnvironmentArgument(
-                    ("base_url",),
-                    ("LLAMACPP_BASE_URL",),
-                ),
-            ),
-        ),
-        "litellm": _ProviderSpec("strands.models.litellm", "LiteLLMModel"),
-        "mistral": _ProviderSpec(
-            "strands.models.mistral",
-            "MistralModel",
-            base_url_path=("client_args", "server_url"),
-        ),
-        "ollama": _ProviderSpec(
-            "strands.models.ollama",
-            "OllamaModel",
-            defaults={"host": None},
-            environment_arguments=(
-                _EnvironmentArgument(
-                    ("host",),
-                    ("OLLAMA_BASE_URL", "OLLAMA_API_BASE"),
-                ),
-            ),
-        ),
-        "openai": _ProviderSpec(
-            "strands.models.openai",
-            "OpenAIModel",
-            base_url_path=("client_args", "base_url"),
-        ),
-        "openai-responses": _ProviderSpec(
-            "strands.models.openai_responses",
-            "OpenAIResponsesModel",
-            base_url_path=("client_args", "base_url"),
-        ),
-        "sagemaker": _ProviderSpec(
-            "strands.models.sagemaker",
-            "SageMakerAIModel",
-            model_id_path=("endpoint_config", "endpoint_name"),
-            defaults={
-                "endpoint_config": {},
-                "payload_config": {"max_tokens": 8192, "stream": True},
-            },
-        ),
-        "writer": _ProviderSpec("strands.models.writer", "WriterModel"),
-    }
-    _ALIASES = {
-        "bedrock": "amazon-bedrock",
-        "gemini": "google",
-        "llama.cpp": "llamacpp",
-        "llamaapi": "llama",
-        "litellm_proxy": "openai",
-        "openai_responses": "openai-responses",
-    }
-    _OPENAI_COMPATIBLE_PROVIDERS: dict[str, str] = {
-        "ovhcloud": "OVHCLOUD_API_KEY",
-        "xai": "XAI_API_KEY",
-    }
-
-    def __init__(self, config: Mapping[str, Any]) -> None:
-        self.config = config
-
-    @classmethod
-    def _merge_mappings(
-        cls,
-        defaults: Mapping[str, Any],
-        overrides: Mapping[str, Any],
-    ) -> dict[str, Any]:
-        result = copy.deepcopy(dict(defaults))
-        for key, value in overrides.items():
-            if isinstance(result.get(key), dict) and isinstance(value, Mapping):
-                result[key] = cls._merge_mappings(result[key], value)
-            else:
-                result[key] = copy.deepcopy(value)
-        return result
-
-    @staticmethod
-    def _set_path(
-        target: dict[str, Any],
-        path: tuple[str, ...],
-        value: Any,
-    ) -> None:
-        parent = target
-        for part in path[:-1]:
-            child = parent.setdefault(part, {})
-            if not isinstance(child, dict):
-                raise ValueError(f"model_kwargs.{part} must be an object")
-            parent = child
-        parent[path[-1]] = value
-
-    @staticmethod
-    def _environment_value(argument: _EnvironmentArgument) -> Any:
-        for name in argument.names:
-            value = os.environ.get(name)
-            if value:
-                return value
-        return argument.default
-
-    @classmethod
-    def _provider_spec(
-        cls,
-        raw_provider: str | None,
-        resolved_provider: str | None,
-    ) -> tuple[_ProviderSpec, str, bool]:
-        raw_key = cls._ALIASES.get(raw_provider or "", raw_provider)
-        resolved_key = cls._ALIASES.get(resolved_provider or "", resolved_provider)
-        for key in (resolved_key, raw_key):
-            if key in cls._PROVIDERS:
-                return cls._PROVIDERS[key], str(key), False
-
-        compatible_key = str(resolved_key or raw_key or "")
-        api_key_env = cls._OPENAI_COMPATIBLE_PROVIDERS.get(compatible_key)
-        if api_key_env is not None:
-            return (
-                _ProviderSpec(
-                    "strands.models.openai",
-                    "OpenAIModel",
-                    base_url_path=("client_args", "base_url"),
-                    environment_arguments=(
-                        _EnvironmentArgument(
-                            ("client_args", "api_key"),
-                            (api_key_env,),
-                        ),
-                    ),
-                ),
-                compatible_key,
-                False,
-            )
-
-        return cls._PROVIDERS["litellm"], compatible_key or "litellm", True
-
-    def build(self) -> Any | None:
-        model_name = self.config.get("model_name")
-        if model_name is None or model_name == "":
-            return None
-        if not isinstance(model_name, str):
-            raise ValueError("Strands runner model_name must be a string")
-
-        model_id = self.config.get("model_id")
-        if not isinstance(model_id, str) or not model_id:
-            model_id = model_name.split("/", 1)[1] if "/" in model_name else model_name
-
-        raw_provider = model_name.split("/", 1)[0] if "/" in model_name else None
-        resolved_provider = self.config.get("model_provider")
-        if resolved_provider is not None and not isinstance(resolved_provider, str):
-            raise ValueError("Strands runner model_provider must be a string")
-        if raw_provider is None and not resolved_provider:
-            raise ValueError(
-                f"cannot determine a provider for model {model_name!r}; "
-                "pass --model in provider/model-id form"
-            )
-
-        model_kwargs = self.config.get("model_kwargs") or {}
-        if not isinstance(model_kwargs, Mapping):
-            raise ValueError("Strands runner model_kwargs must be a JSON object")
-
-        spec, provider, use_full_model_name = self._provider_spec(
-            raw_provider,
-            resolved_provider,
-        )
-        constructor_kwargs = copy.deepcopy(dict(spec.defaults))
-        for argument in spec.environment_arguments:
-            value = self._environment_value(argument)
-            if value is not None:
-                self._set_path(constructor_kwargs, argument.path, value)
-
-        model_base_url = self.config.get("model_base_url")
-        if model_base_url == "":
-            model_base_url = None
-        if model_base_url is not None and not isinstance(model_base_url, str):
-            raise ValueError("Strands runner model_base_url must be a string")
-        if model_base_url is not None and spec.base_url_path is not None:
-            self._set_path(constructor_kwargs, spec.base_url_path, model_base_url)
-
-        constructor_kwargs = self._merge_mappings(constructor_kwargs, model_kwargs)
-        selected_model_id = model_name if use_full_model_name else model_id
-        self._set_path(constructor_kwargs, spec.model_id_path, selected_model_id)
-
-        try:
-            model_class = getattr(
-                importlib.import_module(spec.module),
-                spec.class_name,
-            )
-        except (ImportError, AttributeError) as exc:
-            raise ValueError(
-                f"Strands provider {provider!r} is unavailable. Ensure the selected "
-                "strands-agents version includes that provider."
-            ) from exc
-        return model_class(**constructor_kwargs)
+# provider -> constructor recipe. Paths are dotted keys into the constructor kwargs:
+# "id" receives the model id, "url" the base URL, "env" maps a kwarg to env vars tried in order.
+MODELS: dict[str, dict[str, Any]] = {
+    "amazon-bedrock": {"cls": "bedrock.BedrockModel"},
+    "anthropic": {"cls": "anthropic.AnthropicModel", "defaults": {"max_tokens": 8192}},
+    "google": {"cls": "gemini.GeminiModel", "url": "client_args.http_options.base_url"},
+    "llama": {"cls": "llamaapi.LlamaAPIModel"},
+    "llamacpp": {
+        "cls": "llamacpp.LlamaCppModel",
+        "defaults": {"base_url": "http://localhost:8080"},
+        "env": {"base_url": ["LLAMACPP_BASE_URL"]},
+    },
+    "litellm": {"cls": "litellm.LiteLLMModel"},
+    "mistral": {"cls": "mistral.MistralModel", "url": "client_args.server_url"},
+    "ollama": {
+        "cls": "ollama.OllamaModel",
+        "defaults": {"host": None},
+        "env": {"host": ["OLLAMA_BASE_URL", "OLLAMA_API_BASE"]},
+    },
+    "openai": {"cls": "openai.OpenAIModel", "url": "client_args.base_url"},
+    "openai-responses": {"cls": "openai_responses.OpenAIResponsesModel", "url": "client_args.base_url"},
+    "sagemaker": {
+        "cls": "sagemaker.SageMakerAIModel",
+        "id": "endpoint_config.endpoint_name",
+        "defaults": {"endpoint_config": {}, "payload_config": {"max_tokens": 8192, "stream": True}},
+    },
+    "writer": {"cls": "writer.WriterModel"},
+}
+PROVIDER_ALIASES = {
+    "bedrock": "amazon-bedrock",
+    "gemini": "google",
+    "llama.cpp": "llamacpp",
+    "llamaapi": "llama",
+    "litellm_proxy": "openai",
+    "openai_responses": "openai-responses",
+}
+# OpenAI-compatible endpoints that need their own API key variable.
+OPENAI_LIKE = {"ovhcloud": "OVHCLOUD_API_KEY", "xai": "XAI_API_KEY"}
 
 
-@dataclass
-class _InvocationArtifacts:
-    """Capture one invocation's event stream and terminal result."""
+def _put(target: dict, dotted: str, value: Any) -> None:
+    *parents, leaf = dotted.split(".")
+    for key in parents:
+        target = target.setdefault(key, {})
+        if not isinstance(target, dict):
+            raise ValueError(f"model_kwargs.{key} must be an object")
+    target[leaf] = value
 
-    result_path: Path
-    events_path: Path
-    output: str = ""
-    usage: dict[str, Any] = field(default_factory=dict)
-    checkpoint: Any = None
-    stop_reason: str | None = None
-    observed_model: dict[str, Any] | None = None
-    tools: list[dict[str, Any]] = field(default_factory=list)
-    error: dict[str, Any] | None = None
-    sequence: int = 0
 
-    def initialize(self) -> None:
-        self.result_path.parent.mkdir(parents=True, exist_ok=True)
-        self.events_path.parent.mkdir(parents=True, exist_ok=True)
-        self.result_path.unlink(missing_ok=True)
-        self.events_path.write_text("")
-
-    @staticmethod
-    def _json_default(value: Any) -> Any:
-        if isinstance(value, bytes):
-            return {
-                "type": "bytes",
-                "length": len(value),
-                "sha256": hashlib.sha256(value).hexdigest(),
-            }
-        to_dict = getattr(value, "to_dict", None)
-        if callable(to_dict):
-            return to_dict()
-        raise TypeError(f"{type(value).__name__} is not JSON serializable")
-
-    @classmethod
-    def _write_json(cls, path: Path, value: Any) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            json.dumps(
-                value,
-                default=cls._json_default,
-                indent=2,
-                sort_keys=True,
-            )
-            + "\n"
-        )
-
-    @staticmethod
-    def _exception_payload(error: BaseException) -> dict[str, Any]:
-        return {
-            "type": type(error).__name__,
-            "message": str(error),
-            "traceback": "".join(
-                traceback.format_exception(type(error), error, error.__traceback__)
-            ),
-        }
-
-    @classmethod
-    def redact(cls, value: Any) -> Any:
-        if isinstance(value, Mapping):
-            result: dict[str, Any] = {}
-            for raw_key, child in value.items():
-                key = str(raw_key)
-                normalized = key.lower()
-                key_parts = set(normalized.replace("-", "_").split("_"))
-                if key_parts.intersection(
-                    {"credential", "password", "secret", "token"}
-                ) or any(
-                    marker in normalized
-                    for marker in ("access_key", "api_key", "private_key")
-                ):
-                    continue
-                result[key] = cls.redact(child)
-            return result
-        if isinstance(value, list | tuple):
-            return [cls.redact(item) for item in value]
-        if value is None or isinstance(value, str | int | float | bool):
-            return value
-        return str(value)
-
-    @classmethod
-    def observe_model(cls, agent: Agent) -> dict[str, Any]:
-        model = agent.model
-        config: Any = {}
-        get_config = getattr(model, "get_config", None)
-        if callable(get_config):
-            try:
-                config = get_config()
-            except Exception:
-                config = {}
-
-        model_id = None
-        if isinstance(config, Mapping):
-            for key in ("model_id", "modelId", "model", "endpoint_name"):
-                if config.get(key) is not None:
-                    model_id = config[key]
-                    break
-        if model_id is None:
-            model_id = getattr(model, "model_id", None)
-
-        observed_config = dict(config) if isinstance(config, Mapping) else {}
-        client_args = getattr(model, "client_args", None)
-        if isinstance(client_args, Mapping) and client_args:
-            observed_config["client_args"] = dict(client_args)
-
-        for attribute in ("base_url", "host"):
-            value = getattr(model, attribute, None)
-            if value is not None:
-                observed_config.setdefault(attribute, str(value))
-
-        client = getattr(model, "client", None)
-        client_base_url = getattr(client, "base_url", None)
-        if client_base_url is not None:
-            observed_config.setdefault("base_url", str(client_base_url))
-        client_meta = getattr(client, "meta", None)
-        region_name = getattr(client_meta, "region_name", None)
-        if region_name is not None:
-            observed_config.setdefault("region_name", str(region_name))
-        endpoint_url = getattr(client_meta, "endpoint_url", None)
-        if endpoint_url is not None:
-            observed_config.setdefault("base_url", str(endpoint_url))
-
-        model_type = type(model)
-        return {
-            "provider": f"{model_type.__module__}.{model_type.__qualname__}",
-            "model_id": str(model_id) if model_id is not None else None,
-            "config": cls.redact(observed_config),
-        }
-
-    @staticmethod
-    def observe_tools(agent: Agent) -> list[dict[str, Any]]:
-        configs = agent.tool_registry.get_all_tools_config()
-        return [
-            dict(config)
-            for _, config in sorted(configs.items())
-            if isinstance(config, Mapping)
-        ]
-
-    def observe(self, agent: Agent) -> None:
-        self.observed_model = self.observe_model(agent)
-        self.tools = self.observe_tools(agent)
-
-    def _record(
-        self,
-        message: Mapping[str, Any],
-        *,
-        is_preexisting_context: bool = False,
-    ) -> None:
-        self.sequence += 1
-        event = {
-            "sequence": self.sequence,
-            "kind": "message",
-            "message": dict(message),
-        }
-        if is_preexisting_context:
-            event["is_preexisting_context"] = True
+def _deep_merge(base: dict, extra: Mapping) -> dict:
+    out = copy.deepcopy(base)
+    for key, value in extra.items():
+        if isinstance(out.get(key), dict) and isinstance(value, Mapping):
+            out[key] = _deep_merge(out[key], value)
         else:
-            event["timestamp"] = datetime.now(UTC).isoformat()
-        with self.events_path.open("a") as stream:
-            stream.write(
-                json.dumps(
-                    event,
-                    default=self._json_default,
-                    sort_keys=True,
-                )
-                + "\n"
-            )
-            stream.flush()
+            out[key] = copy.deepcopy(value)
+    return out
 
-    def attach(self, agent: Agent) -> None:
+
+def _recipe(prefix: str | None, resolved: str | None) -> tuple[dict, str, bool]:
+    """(recipe, provider label, pass the full model name as the id)."""
+    keys = [PROVIDER_ALIASES.get(k, k) if k else k for k in (resolved, prefix)]
+    for key in keys:
+        if key in MODELS:
+            return MODELS[key], key, False
+    label = keys[0] or keys[1] or ""
+    if label in OPENAI_LIKE:
+        recipe = {**MODELS["openai"], "env": {"client_args.api_key": [OPENAI_LIKE[label]]}}
+        return recipe, label, False
+    return MODELS["litellm"], label or "litellm", True
+
+
+def build_model(cfg: Mapping[str, Any]) -> Any | None:
+    name = cfg.get("model_name")
+    if name in (None, ""):
+        return None
+    if not isinstance(name, str):
+        raise ValueError("Strands runner model_name must be a string")
+    prefix, _, rest = name.partition("/") if "/" in name else (None, "", name)
+    model_id = cfg.get("model_id")
+    if not isinstance(model_id, str) or not model_id:
+        model_id = rest
+
+    resolved = cfg.get("model_provider")
+    if resolved is not None and not isinstance(resolved, str):
+        raise ValueError("Strands runner model_provider must be a string")
+    if prefix is None and not resolved:
+        raise ValueError(f"cannot determine a provider for model {name!r}; pass --model in provider/model-id form")
+    overrides = cfg.get("model_kwargs") or {}
+    if not isinstance(overrides, Mapping):
+        raise ValueError("Strands runner model_kwargs must be a JSON object")
+
+    recipe, label, full_name = _recipe(prefix, resolved)
+    kwargs = copy.deepcopy(recipe.get("defaults", {}))
+    for dotted, names in recipe.get("env", {}).items():
+        value = next((os.environ[n] for n in names if os.environ.get(n)), None)
+        if value is not None:
+            _put(kwargs, dotted, value)
+
+    base_url = cfg.get("model_base_url") or None
+    if base_url is not None and not isinstance(base_url, str):
+        raise ValueError("Strands runner model_base_url must be a string")
+    if base_url and "url" in recipe:
+        _put(kwargs, recipe["url"], base_url)
+
+    kwargs = _deep_merge(kwargs, overrides)
+    _put(kwargs, recipe.get("id", "model_id"), name if full_name else model_id)
+
+    module, _, cls_name = recipe["cls"].rpartition(".")
+    try:
+        cls = getattr(importlib.import_module(f"strands.models.{module}"), cls_name)
+    except (ImportError, AttributeError) as exc:
+        raise ValueError(
+            f"Strands provider {label!r} is unavailable. Ensure the selected strands-agents version includes that provider."
+        ) from exc
+    return cls(**kwargs)
+
+
+# --------------------------------------------------------------------------- recording
+
+SECRET_WORDS = {"credential", "password", "secret", "token"}
+SECRET_SUBSTRINGS = ("access_key", "api_key", "private_key")
+
+
+def _encode(value: Any) -> Any:
+    if isinstance(value, bytes):
+        return {"type": "bytes", "length": len(value), "sha256": hashlib.sha256(value).hexdigest()}
+    if callable(getattr(value, "to_dict", None)):
+        return value.to_dict()
+    raise TypeError(f"{type(value).__name__} is not JSON serializable")
+
+
+def _scrub(value: Any) -> Any:
+    """Drop credential-looking keys and stringify anything that is not plain JSON."""
+    if isinstance(value, Mapping):
+        kept = {}
+        for key, child in value.items():
+            key = str(key)
+            lower = key.lower()
+            if SECRET_WORDS & set(lower.replace("-", "_").split("_")) or any(s in lower for s in SECRET_SUBSTRINGS):
+                continue
+            kept[key] = _scrub(child)
+        return kept
+    if isinstance(value, list | tuple):
+        return [_scrub(v) for v in value]
+    if value is None or isinstance(value, str | int | float | bool):
+        return value
+    return str(value)
+
+
+def _describe_error(err: BaseException) -> dict[str, Any]:
+    return {
+        "type": type(err).__name__,
+        "message": str(err),
+        "traceback": "".join(traceback.format_exception(type(err), err, err.__traceback__)),
+    }
+
+
+def describe_model(agent: Agent) -> dict[str, Any]:
+    model = agent.model
+    try:
+        config = model.get_config() if callable(getattr(model, "get_config", None)) else {}
+    except Exception:
+        config = {}
+    seen = dict(config) if isinstance(config, Mapping) else {}
+    model_id = next((seen[k] for k in ("model_id", "modelId", "model", "endpoint_name") if seen.get(k) is not None), None)
+    if model_id is None:
+        model_id = getattr(model, "model_id", None)
+
+    client_args = getattr(model, "client_args", None)
+    if isinstance(client_args, Mapping) and client_args:
+        seen["client_args"] = dict(client_args)
+    # First match wins, so the order below is the precedence.
+    client = getattr(model, "client", None)
+    client_meta = getattr(client, "meta", None)
+    for key, value in (
+        ("base_url", getattr(model, "base_url", None)),
+        ("host", getattr(model, "host", None)),
+        ("base_url", getattr(client, "base_url", None)),
+        ("region_name", getattr(client_meta, "region_name", None)),
+        ("base_url", getattr(client_meta, "endpoint_url", None)),
+    ):
+        if value is not None:
+            seen.setdefault(key, str(value))
+
+    kind = type(model)
+    return {
+        "provider": f"{kind.__module__}.{kind.__qualname__}",
+        "model_id": None if model_id is None else str(model_id),
+        "config": _scrub(seen),
+    }
+
+
+class Recorder:
+    """Streams agent messages to the events file and writes the final result file."""
+
+    def __init__(self, result: Path, events: Path) -> None:
+        self.result_file, self.events_file = result, events
+        self.count = 0
+        self.report: dict[str, Any] = {
+            "output": "",
+            "usage": {},
+            "checkpoint": None,
+            "stop_reason": None,
+            "observed_model": None,
+            "tools": [],
+            "error": None,
+        }
+        for p in (result, events):
+            p.parent.mkdir(parents=True, exist_ok=True)
+        result.unlink(missing_ok=True)
+        events.write_text("")
+
+    def _append(self, message: Mapping[str, Any], preexisting: bool = False) -> None:
+        self.count += 1
+        line = {"sequence": self.count, "kind": "message", "message": dict(message)}
+        if preexisting:
+            line["is_preexisting_context"] = True
+        else:
+            line["timestamp"] = datetime.now(UTC).isoformat()
+        with self.events_file.open("a") as f:
+            f.write(json.dumps(line, default=_encode, sort_keys=True) + "\n")
+
+    def watch(self, agent: Agent) -> None:
+        self.report["observed_model"] = describe_model(agent)
+        tools = agent.tool_registry.get_all_tools_config()
+        self.report["tools"] = [dict(c) for _, c in sorted(tools.items()) if isinstance(c, Mapping)]
         for message in agent.messages:
-            self._record(message, is_preexisting_context=True)
-        agent.add_hook(self._message_added, MessageAddedEvent)
+            self._append(message, preexisting=True)
+        agent.add_hook(lambda event: self._append(event.message), MessageAddedEvent)
 
-    def _message_added(self, event: MessageAddedEvent) -> None:
-        self._record(event.message)
+    def finish(self, outcome: Any) -> None:
+        usage = getattr(getattr(outcome, "metrics", None), "accumulated_usage", None)
+        checkpoint = getattr(outcome, "checkpoint", None)
+        stop = getattr(outcome, "stop_reason", None)
+        self.report.update(
+            output=str(outcome).strip(),
+            usage=dict(usage) if isinstance(usage, Mapping) else {},
+            checkpoint=checkpoint.to_dict() if callable(getattr(checkpoint, "to_dict", None)) else checkpoint,
+            stop_reason=None if stop is None else str(stop),
+        )
 
-    def complete(self, result: Any) -> None:
-        self.output = str(result).strip()
-        metrics = getattr(result, "metrics", None)
-        usage = getattr(metrics, "accumulated_usage", None)
-        self.usage = dict(usage) if isinstance(usage, Mapping) else {}
+    def failed(self, err: BaseException) -> None:
+        self.report["error"] = _describe_error(err)
 
-        checkpoint = getattr(result, "checkpoint", None)
-        to_dict = getattr(checkpoint, "to_dict", None)
-        self.checkpoint = to_dict() if callable(to_dict) else checkpoint
-
-        stop_reason = getattr(result, "stop_reason", None)
-        self.stop_reason = str(stop_reason) if stop_reason is not None else None
-
-    def fail(self, error: BaseException) -> None:
-        self.error = self._exception_payload(error)
-
-    def cleanup(self, agent: Any) -> None:
+    def close_agent(self, agent: Any) -> None:
         if agent is None:
             return
         try:
             agent.cleanup()
-        except Exception as error:
-            cleanup_error = self._exception_payload(error)
-            if self.error is None:
-                self.error = cleanup_error
+        except Exception as err:
+            if self.report["error"] is None:
+                self.report["error"] = _describe_error(err)
             else:
-                self.error["cleanup_error"] = cleanup_error
+                self.report["error"]["cleanup_error"] = _describe_error(err)
 
-    def _payload(self) -> dict[str, Any]:
-        return {
-            "output": self.output,
-            "usage": self.usage,
-            "checkpoint": self.checkpoint,
-            "stop_reason": self.stop_reason,
-            "observed_model": self.observed_model,
-            "tools": self.tools,
-            "error": self.error,
-        }
+    def _dump(self, doc: dict[str, Any]) -> None:
+        self.result_file.parent.mkdir(parents=True, exist_ok=True)
+        self.result_file.write_text(json.dumps(doc, default=_encode, indent=2, sort_keys=True) + "\n")
 
-    def write(self) -> dict[str, Any] | None:
-        payload = self._payload()
+    def save(self) -> dict[str, Any] | None:
+        """Write the result; returns the error recorded (if any)."""
         try:
-            self._write_json(self.result_path, payload)
-            return self.error
-        except Exception as error:
-            serialization_error = self._exception_payload(error)
-            if self.error is not None:
-                final_error = {
-                    **self.error,
-                    "result_serialization_error": serialization_error,
-                }
-            else:
-                final_error = {
-                    "type": "ResultSerializationError",
-                    "message": "Strands result contained non-JSON values",
-                    "traceback": serialization_error["traceback"],
-                }
-
-            self._write_json(
-                self.result_path,
-                {
-                    "output": self.output,
-                    "usage": {},
-                    "checkpoint": None,
-                    "stop_reason": self.stop_reason,
-                    "observed_model": self.observed_model,
-                    "tools": [],
-                    "error": final_error,
-                },
-            )
-            return final_error
+            self._dump(self.report)
+            return self.report["error"]
+        except Exception as err:
+            # Something in usage/checkpoint/tools was not JSON: keep the rest.
+            bad = _describe_error(err)
+            prior = self.report["error"]
+            error = {**prior, "result_serialization_error": bad} if prior is not None else {
+                "type": "ResultSerializationError",
+                "message": "Strands result contained non-JSON values",
+                "traceback": bad["traceback"],
+            }
+            self._dump({**self.report, "usage": {}, "checkpoint": None, "tools": [], "error": error})
+            return error
 
 
-@dataclass(frozen=True)
-class _RunnerConfig:
-    """Validated configuration passed from upstream to the container."""
-
-    raw: Mapping[str, Any] = field(repr=False)
-    factory_reference: str
-    factory_kwargs: dict[str, Any]
-    mcp_servers: dict[str, Any]
-    workdir: str | None
-
-    @classmethod
-    def load(cls, path: Path) -> _RunnerConfig:
-        raw = json.loads(path.read_text())
-        if not isinstance(raw, dict):
-            raise ValueError("Strands runner config must be a JSON object")
-
-        factory_reference = raw.get("factory")
-        if not isinstance(factory_reference, str):
-            raise ValueError("Strands runner config requires a string factory")
-
-        factory_kwargs = raw.get("factory_kwargs") or {}
-        if not isinstance(factory_kwargs, dict):
-            raise ValueError("Strands runner factory_kwargs must be a JSON object")
-
-        mcp_servers = raw.get("mcp_servers") or {}
-        if not isinstance(mcp_servers, dict):
-            raise ValueError("Strands runner mcp_servers must be a JSON object")
-
-        workdir = raw.get("workdir")
-        if workdir is not None and not isinstance(workdir, str):
-            raise ValueError("Strands runner workdir must be a string")
-
-        return cls(
-            raw=raw,
-            factory_reference=factory_reference,
-            factory_kwargs=factory_kwargs,
-            mcp_servers=mcp_servers,
-            workdir=workdir,
-        )
+# --------------------------------------------------------------------------- entrypoint
 
 
-class _StrandsRunner:
-    """Construct, invoke, and clean up one candidate Strands agent."""
-
-    def __init__(self, args: argparse.Namespace) -> None:
-        self.args = args
-        self.artifacts = _InvocationArtifacts(
-            result_path=Path(args.result),
-            events_path=Path(args.events),
-        )
-        self.agent: Any = None
-
-    def _create_agent(self, config: _RunnerConfig) -> Agent:
-        module_name, separator, symbol_name = config.factory_reference.partition(":")
-        if not separator or not module_name or not symbol_name:
-            raise ValueError(
-                "factory must use the form 'module:symbol', "
-                f"got {config.factory_reference!r}"
-            )
-        factory = getattr(importlib.import_module(module_name), symbol_name)
-
-        factory_kwargs = dict(config.factory_kwargs)
-        if "model" not in factory_kwargs:
-            model = _ModelBuilder(config.raw).build()
-            if model is not None:
-                factory_kwargs["model"] = model
-
-        sandbox = TaskLocalSandbox(config.workdir)
-        try:
-            inspect.signature(factory).bind(sandbox, **factory_kwargs)
-        except (TypeError, ValueError) as exc:
-            raise TypeError(
-                f"Strands factory {config.factory_reference!r} must accept "
-                "(sandbox, model=None, **factory_kwargs)"
-            ) from exc
-
-        self.agent = factory(sandbox, **factory_kwargs)
-        if not isinstance(self.agent, Agent):
-            raise TypeError(
-                f"Strands factory {config.factory_reference!r} returned "
-                f"{type(self.agent).__name__}; expected strands.Agent"
-            )
-
-        clients = (
-            MCPClient.load_servers(config.mcp_servers) if config.mcp_servers else []
-        )
-        if clients:
-            self.agent.tool_registry.process_tools(clients)
-        return self.agent
-
-    async def run(self) -> int:
-        self.artifacts.initialize()
-        fatal_error: BaseException | None = None
-
-        try:
-            config = _RunnerConfig.load(Path(self.args.config))
-            agent = self._create_agent(config)
-            self.artifacts.observe(agent)
-            self.artifacts.attach(agent)
-            result = await agent.invoke_async(Path(self.args.instruction).read_text())
-            self.artifacts.complete(result)
-        except Exception as error:
-            self.artifacts.fail(error)
-        except BaseException as error:
-            self.artifacts.fail(error)
-            fatal_error = error
-        finally:
-            self.artifacts.cleanup(self.agent)
-            error = self.artifacts.write()
-
-        if fatal_error is not None:
-            raise fatal_error
-        if error is not None:
-            print(error["traceback"], file=sys.stderr)
-            return 1
-        print(self.artifacts.output)
-        return 0
+def read_config(path: Path) -> dict[str, Any]:
+    cfg = json.loads(path.read_text())
+    if not isinstance(cfg, dict):
+        raise ValueError("Strands runner config must be a JSON object")
+    if not isinstance(cfg.get("factory"), str):
+        raise ValueError("Strands runner config requires a string factory")
+    for key in ("factory_kwargs", "mcp_servers"):
+        cfg[key] = cfg.get(key) or {}
+        if not isinstance(cfg[key], dict):
+            raise ValueError(f"Strands runner {key} must be a JSON object")
+    if cfg.get("workdir") is not None and not isinstance(cfg["workdir"], str):
+        raise ValueError("Strands runner workdir must be a string")
+    return cfg
 
 
-async def _run(args: argparse.Namespace) -> int:
-    return await _StrandsRunner(args).run()
+def load_factory(ref: str) -> Any:
+    module, sep, attr = ref.partition(":")
+    if not (sep and module and attr):
+        raise ValueError(f"factory must use the form 'module:symbol', got {ref!r}")
+    return getattr(importlib.import_module(module), attr)
+
+
+def make_agent(cfg: dict[str, Any], keep: list[Any]) -> Agent:
+    """Build the agent; it is pushed onto `keep` as soon as it exists so it can be cleaned up."""
+    ref = cfg["factory"]
+    factory = load_factory(ref)
+    kwargs = dict(cfg["factory_kwargs"])
+    if "model" not in kwargs and (model := build_model(cfg)) is not None:
+        kwargs["model"] = model
+    sandbox = ContainerShell(cfg.get("workdir"))
+    try:
+        inspect.signature(factory).bind(sandbox, **kwargs)
+    except (TypeError, ValueError) as exc:
+        raise TypeError(f"Strands factory {ref!r} must accept (sandbox, model=None, **factory_kwargs)") from exc
+    agent = factory(sandbox, **kwargs)
+    keep.append(agent)
+    if not isinstance(agent, Agent):
+        raise TypeError(f"Strands factory {ref!r} returned {type(agent).__name__}; expected strands.Agent")
+    if cfg["mcp_servers"]:
+        agent.tool_registry.process_tools(MCPClient.load_servers(cfg["mcp_servers"]))
+    return agent
+
+
+async def invoke(opts: argparse.Namespace) -> int:
+    rec = Recorder(Path(opts.result), Path(opts.events))
+    built: list[Any] = []
+    interrupt: BaseException | None = None
+    try:
+        agent = make_agent(read_config(Path(opts.config)), built)
+        rec.watch(agent)
+        rec.finish(await agent.invoke_async(Path(opts.instruction).read_text()))
+    except BaseException as err:  # noqa: BLE001 - recorded, and re-raised below unless it is an Exception
+        rec.failed(err)
+        if not isinstance(err, Exception):
+            interrupt = err
+    finally:
+        rec.close_agent(built[0] if built else None)
+        error = rec.save()
+
+    if interrupt is not None:
+        raise interrupt
+    if error is not None:
+        print(error["traceback"], file=sys.stderr)
+        return 1
+    print(rec.report["output"])
+    return 0
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--config", required=True)
-    parser.add_argument("--instruction", required=True)
-    parser.add_argument("--result", required=True)
-    parser.add_argument("--events", required=True)
-    return asyncio.run(_run(parser.parse_args()))
+    cli = argparse.ArgumentParser()
+    for flag in ("--config", "--instruction", "--result", "--events"):
+        cli.add_argument(flag, required=True)
+    return asyncio.run(invoke(cli.parse_args()))
 
 
 if __name__ == "__main__":

@@ -1,520 +1,332 @@
+// Runs one LangGraph.js graph on a task instruction inside the task container.
+// Invoked by hbench's `langgraph` agent; writes the final state, the answer text and an
+// answer/token-usage summary. Same CLI as langgraph_runner.py plus --runner-tools-dir,
+// where hbench installs tsx and a fallback copy of langsmith.
 import { createRequire } from "node:module";
 import { readFile, realpath, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
-import { parseArgs as parseNodeArgs } from "node:util";
+import { parseArgs } from "node:util";
 
-const PARENT_TRACE_FALLBACK_MESSAGE =
-  "LangSmith trace context unavailable; continuing without parent trace";
+const REQUIRED = ["project-dir", "graph", "graph-path", "instruction-file", "result-path", "output-path"];
+const OPTIONAL = ["runner-tools-dir", "summary-path", "model", "model-kwargs-json", "configurable-json"];
+const NO_TRACE = "LangSmith trace context unavailable; continuing without parent trace";
+const IDENT = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 
-async function main() {
-  const args = parseCliArgs(process.argv.slice(2));
-  const projectDir = await realpath(args.projectDir);
-  const runnerToolsDir = args.runnerToolsDir
-    ? await resolveRunnerToolsDir(args.runnerToolsDir)
-    : undefined;
-  const instruction = await readFile(args.instructionFile, "utf8");
-  const graphTarget = await loadGraph(projectDir, args.graphPath);
+const camel = (flag) => flag.replace(/-(\w)/g, (_, c) => c.toUpperCase());
+const isObj = (v) => v !== null && typeof v === "object";
+const isPlain = (v) => isObj(v) && [Object.prototype, null].includes(Object.getPrototypeOf(v));
+const jsonOut = (v) => `${JSON.stringify(v, null, 2)}\n`;
 
-  const modelKwargs = loadJsonArg(args.modelKwargsJson, "model_kwargs_json");
-  const configurable = loadJsonArg(args.configurableJson, "configurable_json");
-  configurable.thread_id ??= process.env.HBENCH_SESSION_ID ?? crypto.randomUUID();
-  if (args.model) {
-    configurable.model ??= args.model;
-  }
-  if (Object.keys(modelKwargs).length > 0) {
-    configurable.model_kwargs ??= modelKwargs;
-  }
-
-  const usage = createUsageCollector();
-  const invokeConfig = {
-    configurable,
-    callbacks: [usage.handler],
-    metadata: {
-      ls_runner: "hbench",
-      hbench_agent: "langgraph",
-      langgraph_graph: args.graph,
-    },
-  };
-  const invoke = await resolveInvoke(graphTarget, invokeConfig);
-  const input = { messages: [{ role: "user", content: instruction }] };
-  const result = await invokeWithParentTrace(
-    projectDir,
-    runnerToolsDir,
-    invoke,
-    input,
-    invokeConfig,
-  );
-  const jsonableResult = toJsonable(result);
-  const answer = extractText(result, jsonableResult);
-
-  await writeFile(args.resultPath, `${JSON.stringify(jsonableResult, null, 2)}\n`);
-  await writeFile(args.outputPath, answer);
-  if (args.summaryPath) {
-    // Callback totals cover every model call the graph made; the message walk only
-    // sees what survived in the returned state. Never add the two together.
-    const observedCallbacks = usage.observedLlmRuns() > 0;
-    await writeFile(
-      args.summaryPath,
-      `${JSON.stringify(
-        {
-          answer_written: answer,
-          usage: observedCallbacks ? usage.totals() : aggregateUsage(result),
-          usage_source: observedCallbacks ? "callbacks" : "messages",
-        },
-        null,
-        2,
-      )}\n`,
-    );
-  }
-}
-
-function parseCliArgs(argv) {
-  const names = {
-    "project-dir": "projectDir",
-    "runner-tools-dir": "runnerToolsDir",
-    graph: "graph",
-    "graph-path": "graphPath",
-    "instruction-file": "instructionFile",
-    "result-path": "resultPath",
-    "output-path": "outputPath",
-    "summary-path": "summaryPath",
-    model: "model",
-    "model-kwargs-json": "modelKwargsJson",
-    "configurable-json": "configurableJson",
-  };
-  const { values } = parseNodeArgs({
+function readOptions(argv) {
+  const { values } = parseArgs({
     args: argv,
-    options: Object.fromEntries(
-      Object.keys(names).map((name) => [name, { type: "string" }]),
-    ),
     strict: true,
+    options: Object.fromEntries([...REQUIRED, ...OPTIONAL].map((f) => [f, { type: "string" }])),
   });
-  const args = {};
-  for (const [name, value] of Object.entries(values)) {
-    args[names[name]] = value;
-  }
-  for (const required of [
-    "project-dir",
-    "graph",
-    "graph-path",
-    "instruction-file",
-    "result-path",
-    "output-path",
-  ]) {
-    if (!values[required]) {
-      throw new Error(`Missing required argument: --${required}`);
-    }
-  }
-  return args;
+  const missing = REQUIRED.find((f) => !values[f]);
+  if (missing) throw new Error(`Missing required argument: --${missing}`);
+  return Object.fromEntries(Object.entries(values).map(([k, v]) => [camel(k), v]));
 }
 
-function loadJsonArg(value, label) {
-  if (!value) {
-    return {};
-  }
-  let parsed;
+function objectArg(raw, what) {
+  if (!raw) return {};
+  let v;
   try {
-    parsed = JSON.parse(value);
+    v = JSON.parse(raw);
   } catch {
-    throw new TypeError(`${label} must be a JSON object`);
+    v = undefined;
   }
-  if (!isPlainObject(parsed)) {
-    throw new TypeError(`${label} must be a JSON object`);
-  }
-  return parsed;
+  if (!isPlain(v)) throw new TypeError(`${what} must be a JSON object`);
+  return v;
 }
 
-function splitGraphPath(pathSpec) {
-  if (pathSpec.split(":").length !== 2) {
+const outside = (root, p) => {
+  const rel = relative(root, p);
+  return isAbsolute(rel) || rel === ".." || rel.startsWith(`..${sep}`);
+};
+
+function splitGraphPath(spec) {
+  const parts = spec.split(":");
+  const [file, attr] = parts;
+  if (parts.length !== 2 || !file || !attr || !attr.split(".").every((p) => IDENT.test(p))) {
     throw new Error("Invalid graph path. Expected './path/to/file.mjs:attribute'");
   }
-  const [modulePath, attributePath] = pathSpec.split(":");
-  if (
-    !modulePath ||
-    !attributePath ||
-    !attributePath.split(".").every((part) => /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(part))
-  ) {
-    throw new Error("Invalid graph path. Expected './path/to/file.mjs:attribute'");
-  }
-  return [modulePath, attributePath];
+  return [file, attr.split(".")];
 }
 
-async function loadGraph(projectDir, pathSpec) {
-  const [modulePathRaw, attributePath] = splitGraphPath(pathSpec);
-  const modulePath = await realpath(resolve(projectDir, modulePathRaw));
-  const pathFromProject = relative(projectDir, modulePath);
-  if (
-    isAbsolute(pathFromProject) ||
-    pathFromProject === ".." ||
-    pathFromProject.startsWith(`..${sep}`)
-  ) {
-    throw new Error("Graph module must resolve within the LangGraph project directory");
+async function importTarget(root, spec) {
+  const [file, attrs] = splitGraphPath(spec);
+  const path = await realpath(resolve(root, file));
+  if (outside(root, path)) throw new Error("Graph module must resolve within the LangGraph project directory");
+  let v = await import(pathToFileURL(path).href);
+  for (const a of attrs) {
+    if (v == null || !(a in Object(v))) throw new Error("Graph export was not found");
+    v = v[a];
   }
-  const module = await import(pathToFileURL(modulePath).href);
-  let value = module;
-  for (const part of attributePath.split(".")) {
-    if (value === null || value === undefined || !(part in Object(value))) {
-      throw new Error("Graph export was not found");
-    }
-    value = value[part];
-  }
-  return value;
+  return v;
 }
 
-async function resolveInvoke(target, invokeConfig) {
-  let graph = target;
-  for (let step = 0; step < 3; step += 1) {
-    if (typeof graph?.invoke === "function") {
-      return (input, config) => graph.invoke(input, config);
-    }
-    if (typeof graph?.compile === "function") {
-      graph = await graph.compile();
-      continue;
-    }
-    if (typeof graph === "function") {
-      graph = await graph(invokeConfig);
-      continue;
-    }
-    break;
+// Accept a compiled graph, a StateGraph builder (compiled here) or a factory taking the
+// run config; at most three unwrapping steps.
+async function invoker(target, config) {
+  let g = target;
+  for (let i = 0; i < 3; i++) {
+    if (typeof g?.invoke === "function") return (input, cfg) => g.invoke(input, cfg);
+    if (typeof g?.compile === "function") g = await g.compile();
+    else if (typeof g === "function") g = await g(config);
+    else break;
   }
   throw new TypeError("Selected graph must expose invoke()");
 }
 
-/**
- * The canonical runner tools directory, or undefined when it is unusable.
- *
- * This directory serves one optional feature: locating the LangSmith package for parent
- * trace linking. Refusing an unexpected path is deliberate — langsmith gets require()d
- * from it — but refusing is all that is needed, so anything other than an absolute,
- * traversal-free, canonical path returns undefined and the run continues untraced rather
- * than failing outright. Not loading langsmith is the conservative outcome either way.
- */
-async function resolveRunnerToolsDir(runnerToolsDir) {
-  if (!isAbsolute(runnerToolsDir) || runnerToolsDir.split(sep).includes("..")) {
+// ---------------------------------------------------------------- LangSmith parent trace
+
+// The tools dir is only used to require() langsmith, so anything but an absolute,
+// canonical, `..`-free path is ignored (the run just goes untraced).
+async function trustedToolsDir(dir) {
+  if (!dir || !isAbsolute(dir) || dir.split(sep).includes("..")) return undefined;
+  const real = await realpath(dir).catch(() => undefined);
+  return real === dir ? real : undefined;
+}
+
+function langsmithPaths(req) {
+  return { runTrees: req.resolve("langsmith/run_trees"), traceable: req.resolve("langsmith/traceable") };
+}
+
+async function locateLangsmith(root, toolsDir) {
+  try {
+    return langsmithPaths(createRequire(resolve(root, "package.json")));
+  } catch (err) {
+    if (!toolsDir) throw err;
+    const pkg = await realpath(resolve(toolsDir, "node_modules", "langsmith", "package.json"));
+    if (dirname(dirname(dirname(pkg))) !== toolsDir) throw new Error("langsmith must be installed directly in the runner tools directory");
+    return langsmithPaths(createRequire(pkg));
+  }
+}
+
+async function parentTrace(root, toolsDir) {
+  const trace = process.env.HBENCH_LANGSMITH_PARENT;
+  if (!trace) return undefined;
+  try {
+    const paths = await locateLangsmith(root, toolsDir);
+    const { RunTree } = await import(pathToFileURL(paths.runTrees).href);
+    const { withRunTree } = await import(pathToFileURL(paths.traceable).href);
+    const headers = { "langsmith-trace": trace };
+    if (process.env.HBENCH_LANGSMITH_BAGGAGE) headers.baggage = process.env.HBENCH_LANGSMITH_BAGGAGE;
+    const parent = RunTree.fromHeaders(headers);
+    return parent && typeof withRunTree === "function" ? (fn) => withRunTree(parent, fn) : undefined;
+  } catch {
+    // Never print the header values.
+    console.error(NO_TRACE);
     return undefined;
   }
-  let toolsDir;
+}
+
+async function traced(wrap, fn) {
+  if (!wrap) return fn();
+  let entered = false;
   try {
-    toolsDir = await realpath(runnerToolsDir);
-  } catch {
-    return undefined;
+    return await wrap(() => {
+      entered = true;
+      return fn();
+    });
+  } catch (err) {
+    // A failure inside the graph is the graph's; only tracing set-up failures fall back.
+    if (entered) throw err;
+    console.error(NO_TRACE);
+    return fn();
   }
-  return toolsDir === runnerToolsDir ? toolsDir : undefined;
 }
 
-async function resolveRunnerToolsPackage(runnerToolsDir) {
-  const packagePath = await realpath(
-    resolve(runnerToolsDir, "node_modules", "langsmith", "package.json"),
-  );
-  if (dirname(dirname(dirname(packagePath))) !== runnerToolsDir) {
-    throw new Error("runner tools directory must contain the upstream LangSmith package");
-  }
-  return packagePath;
-}
+// ---------------------------------------------------------------- serialisation
 
-function resolveLangsmithModules(requireFromPackage) {
-  return {
-    runTreesPath: requireFromPackage.resolve("langsmith/run_trees"),
-    traceablePath: requireFromPackage.resolve("langsmith/traceable"),
-  };
-}
-
-async function invokeWithParentTrace(
-  projectDir,
-  runnerToolsDir,
-  invoke,
-  input,
-  invokeConfig,
-) {
-  const parent = process.env.HBENCH_LANGSMITH_PARENT;
-  if (!parent) {
-    return invoke(input, invokeConfig);
+// `stack` holds only the current ancestors, so shared (non-cyclic) references are
+// serialised every time they appear and only real cycles become "[Circular]".
+function plain(v, stack = new WeakSet()) {
+  switch (typeof v) {
+    case "string":
+    case "boolean":
+      return v;
+    case "number":
+      return Number.isFinite(v) ? v : null;
+    case "bigint":
+      return v.toString();
+    case "undefined":
+      return null;
+    case "symbol":
+    case "function":
+      return String(v);
   }
-  let traceContext;
+  if (v === null) return null;
+  if (stack.has(v)) return "[Circular]";
+  stack.add(v);
   try {
-    const requireFromProject = createRequire(resolve(projectDir, "package.json"));
-    let traceModules;
-    try {
-      traceModules = resolveLangsmithModules(requireFromProject);
-    } catch (projectResolutionError) {
-      if (!runnerToolsDir) {
-        throw projectResolutionError;
-      }
-      const runnerToolsPackage = await resolveRunnerToolsPackage(runnerToolsDir);
-      traceModules = resolveLangsmithModules(createRequire(runnerToolsPackage));
-    }
-    const { runTreesPath, traceablePath } = traceModules;
-    const { RunTree } = await import(pathToFileURL(runTreesPath).href);
-    const { withRunTree } = await import(pathToFileURL(traceablePath).href);
-    const headers = { "langsmith-trace": parent };
-    if (process.env.HBENCH_LANGSMITH_BAGGAGE) {
-      headers.baggage = process.env.HBENCH_LANGSMITH_BAGGAGE;
-    }
-    const parentRun = RunTree.fromHeaders(headers);
-    if (parentRun && typeof withRunTree === "function") {
-      traceContext = { parentRun, withRunTree };
-    }
-  } catch {
-    // Trace setup is optional. Avoid logging distributed-tracing header values.
-    console.error(PARENT_TRACE_FALLBACK_MESSAGE);
-  }
-  if (traceContext) {
-    let callbackStarted = false;
-    try {
-      return await traceContext.withRunTree(traceContext.parentRun, () => {
-        callbackStarted = true;
-        return invoke(input, invokeConfig);
-      });
-    } catch (error) {
-      if (callbackStarted) {
-        throw error;
-      }
-      console.error(PARENT_TRACE_FALLBACK_MESSAGE);
-    }
-  }
-  return invoke(input, invokeConfig);
-}
-
-function toJsonable(value, seen = new WeakSet()) {
-  if (value === null || typeof value === "string" || typeof value === "boolean") {
-    return value;
-  }
-  if (typeof value === "number") {
-    return Number.isFinite(value) ? value : null;
-  }
-  if (typeof value === "bigint") {
-    return value.toString();
-  }
-  if (typeof value === "undefined") {
-    return null;
-  }
-  if (typeof value === "symbol" || typeof value === "function") {
-    return String(value);
-  }
-  if (seen.has(value)) {
-    return "[Circular]";
-  }
-  // `seen` holds the current ancestor chain, not everything ever visited: graph state
-  // routinely reaches one object from several keys, and that repetition is real data, not
-  // a cycle. Dropping the value once its subtree is done keeps only true cycles marked.
-  seen.add(value);
-  try {
-    if (Array.isArray(value)) {
-      return value.map((item) => toJsonable(item, seen));
-    }
-    if (value instanceof Date) {
-      return Number.isNaN(value.valueOf()) ? null : value.toISOString();
-    }
-    if (isPlainObject(value) || isMessageLike(value)) {
-      const normalized = {};
-      for (const key of Object.keys(value)) {
+    if (Array.isArray(v)) return v.map((x) => plain(x, stack));
+    if (v instanceof Date) return Number.isNaN(v.valueOf()) ? null : v.toISOString();
+    if (isPlain(v) || ("type" in v && "content" in v)) {
+      const out = {};
+      for (const k of Object.keys(v)) {
         try {
-          normalized[key] = toJsonable(value[key], seen);
+          out[k] = plain(v[k], stack);
         } catch {
-          normalized[key] = "[Unreadable]";
+          out[k] = "[Unreadable]";
         }
       }
-      return normalized;
+      return out;
     }
   } finally {
-    seen.delete(value);
+    stack.delete(v);
   }
   try {
-    return String(value);
+    return String(v);
   } catch {
     return "[Unserializable]";
   }
 }
 
-function isPlainObject(value) {
-  if (value === null || typeof value !== "object") {
-    return false;
-  }
-  const prototype = Object.getPrototypeOf(value);
-  return prototype === Object.prototype || prototype === null;
+// Only text blocks count: tool calls, reasoning and images stay in result.json and must
+// not leak into the graded answer (or make a tool-call-only message look non-blank).
+function textOf(content) {
+  if (content == null) return undefined;
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return JSON.stringify(plain(content));
+  return content
+    .map((b) => (typeof b === "string" ? b : typeof b?.text === "string" ? b.text : typeof b?.content === "string" ? b.content : ""))
+    .join("");
 }
 
-function isMessageLike(value) {
-  return (
-    value !== null &&
-    typeof value === "object" &&
-    "type" in value &&
-    "content" in value
-  );
+function answerOf(state, serialised) {
+  const msgs = Array.isArray(state?.messages) ? state.messages : [];
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    const t = textOf(msgs[i]?.content);
+    if (t?.trim()) return t;
+  }
+  return JSON.stringify(serialised, null, 2);
 }
 
-function extractText(result, jsonableResult) {
-  const messages = result?.messages;
-  if (Array.isArray(messages)) {
-    for (let index = messages.length - 1; index >= 0; index -= 1) {
-      const text = messageText(messages[index]?.content);
-      // Blank content is not an answer: a message that only made tool calls carries
-      // `content: ""` or an empty array, so keep walking back for one that holds text.
-      if (text?.trim()) {
-        return text;
-      }
-    }
-  }
-  return JSON.stringify(jsonableResult, null, 2);
-}
+// ---------------------------------------------------------------- token usage
 
-function messageText(content) {
-  if (content === null || content === undefined) {
-    return undefined;
-  }
-  if (typeof content === "string") {
-    return content;
-  }
-  if (Array.isArray(content)) {
-    return content.map(contentBlockText).join("");
-  }
-  return JSON.stringify(toJsonable(content));
-}
+// Providers spell usage fields differently; each total takes the first finite one.
+const PICKS = {
+  input_tokens: (u) => [u.input_tokens, u.inputTokens, u.promptTokens],
+  output_tokens: (u) => [u.output_tokens, u.outputTokens, u.completionTokens],
+  total_tokens: (u) => [u.total_tokens, u.totalTokens],
+  cache_read_tokens: (u) => {
+    const d = u.input_token_details;
+    const D = u.inputTokenDetails;
+    return [u.cache_read_tokens, u.cacheReadTokens, d?.cache_read, d?.cacheRead, D?.cache_read, D?.cacheRead];
+  },
+};
 
-function contentBlockText(block) {
-  if (typeof block === "string") {
-    return block;
-  }
-  if (block && typeof block === "object") {
-    if (typeof block.text === "string") {
-      return block.text;
-    }
-    if (typeof block.content === "string") {
-      return block.content;
-    }
-  }
-  // Tool calls, reasoning and images carry no answer text. Serializing them here would
-  // splice machine data into a graded answer, and would let a tool-call-only message
-  // pass extractText's blank check instead of falling back to the last message with
-  // text. They stay in result.json, which records the whole result untouched.
-  return "";
-}
+const zeroUsage = () => Object.fromEntries(Object.keys(PICKS).map((k) => [k, 0]));
 
-// Providers disagree on usage field naming, so each total takes the first one present.
-const USAGE_FIELDS = [
-  ["input_tokens", (u) => [u.input_tokens, u.inputTokens, u.promptTokens]],
-  ["output_tokens", (u) => [u.output_tokens, u.outputTokens, u.completionTokens]],
-  ["total_tokens", (u) => [u.total_tokens, u.totalTokens]],
-  [
-    "cache_read_tokens",
-    (u) => [
-      u.cache_read_tokens,
-      u.cacheReadTokens,
-      u.input_token_details?.cache_read,
-      u.input_token_details?.cacheRead,
-      u.inputTokenDetails?.cache_read,
-      u.inputTokenDetails?.cacheRead,
-    ],
-  ],
-];
-
-function emptyUsage() {
-  return Object.fromEntries(USAGE_FIELDS.map(([field]) => [field, 0]));
-}
-
-// Returning false matters: a usage object can be present while carrying no field this
-// recognizes, and calling that counted would suppress handleLLMEnd's run-level fallback
-// and mark the callback totals as observed — an empty object becoming a hard zero.
-function addUsage(totals, usage) {
-  if (!usage || typeof usage !== "object") {
-    return false;
-  }
-  let counted = false;
-  for (const [field, candidates] of USAGE_FIELDS) {
-    const value = numberValue(...candidates(usage));
-    if (value !== undefined) {
-      totals[field] += value;
-      counted = true;
-    }
-  }
-  return counted;
-}
-
-/**
- * Accumulate token usage from every model call the graph makes.
- *
- * upstream reports one token count per rollout, so the count has to cover subagents.
- * Summing the returned state's `messages` cannot do that: a subagent runs as its own
- * graph invocation inside a tool and its messages are excluded from the update it
- * returns to the parent — only a `ToolMessage` (which carries no usage metadata) comes
- * back. Middleware that summarizes or evicts history drops usage-bearing messages from
- * the parent state too. A callback handler instead observes every model run in the
- * tree, including nested ones, because `callbacks` in a RunnableConfig are inherited by
- * child runs.
- */
-function createUsageCollector() {
-  const totals = emptyUsage();
-  const countedRunIds = new Set();
-  let observedLlmRuns = 0;
-  const handler = {
-    // langchain's ensureHandler() wraps a plain-object handler only when it has no
-    // `name`, so this object deliberately omits one. `awaitHandlers` makes the wrapper
-    // await handleLLMEnd inline; by default it is queued in the background, where the
-    // last call's usage can still be pending when summary.json gets written.
-    awaitHandlers: true,
-    handleLLMEnd(output, runId) {
-      // One model call can be delivered more than once, because a run nested inside a
-      // subagent is observed by several callback managers that each hold this handler.
-      // The duplicates grow with nesting depth (a subagent call arrived four times
-      // under a parent trace), so key on the run id and count each call exactly once.
-      // Deliveries without a run id cannot be deduplicated and are always counted.
-      if (typeof runId === "string") {
-        if (countedRunIds.has(runId)) {
-          return;
-        }
-        countedRunIds.add(runId);
-      }
-      let counted = false;
-      for (const generations of Array.isArray(output?.generations)
-        ? output.generations
-        : []) {
-        for (const generation of Array.isArray(generations) ? generations : []) {
-          const message = generation?.message;
-          const usage = message?.usage_metadata ?? message?.usageMetadata;
-          counted = addUsage(totals, usage) || counted;
-        }
-      }
-      // Providers that only report usage at the run level. Consulted just once per
-      // run, and only when no message carried usage, so nothing is counted twice.
-      if (!counted) {
-        counted = addUsage(totals, output?.llmOutput?.tokenUsage);
-      }
-      if (counted) {
-        observedLlmRuns += 1;
-      }
-    },
-  };
-  return {
-    handler,
-    observedLlmRuns: () => observedLlmRuns,
-    totals: () => ({ ...totals }),
-  };
-}
-
-function aggregateUsage(result) {
-  const totals = emptyUsage();
-  for (const message of Array.isArray(result?.messages) ? result.messages : []) {
-    addUsage(totals, message?.usage_metadata ?? message?.usageMetadata);
-  }
-  return totals;
-}
-
-// Undefined rather than 0 when nothing is present, so callers can tell absent from zero.
-function numberValue(...values) {
-  for (const value of values) {
-    if (value === null || value === undefined) {
-      continue;
-    }
-    const numeric = Number(value);
-    if (Number.isFinite(numeric)) {
-      return numeric;
-    }
+function firstNumber(values) {
+  for (const v of values) {
+    if (v == null) continue;
+    const n = Number(v);
+    if (Number.isFinite(n)) return n;
   }
   return undefined;
 }
 
-main().catch((error) => {
-  console.error(error instanceof Error ? error.message : "LangGraph.js runner failed");
-  process.exitCode = 1;
-});
+/** Add `usage` into `into`; false when it carried no recognised field. */
+function addUsage(into, usage) {
+  if (!isObj(usage)) return false;
+  let hit = false;
+  for (const [k, pick] of Object.entries(PICKS)) {
+    const n = firstNumber(pick(usage));
+    if (n !== undefined) {
+      into[k] += n;
+      hit = true;
+    }
+  }
+  return hit;
+}
+
+const usageOf = (msg) => msg?.usage_metadata ?? msg?.usageMetadata;
+
+/**
+ * Callback handler that sums usage over every model call in the run tree. Summing the
+ * final state's messages misses subagents (their messages never reach the parent state)
+ * and anything history-trimming middleware dropped; callbacks are inherited by child
+ * runs, so this sees all of them.
+ */
+function usageMeter() {
+  const total = zeroUsage();
+  const seen = new Set();
+  let runs = 0;
+  return {
+    total,
+    runs: () => runs,
+    // No `name`: langchain only wraps nameless plain-object handlers. awaitHandlers makes
+    // handleLLMEnd run inline, so the last call is counted before summary.json is written.
+    handler: {
+      awaitHandlers: true,
+      handleLLMEnd(output, runId) {
+        // Nested runs reach this handler once per enclosing callback manager.
+        if (typeof runId === "string") {
+          if (seen.has(runId)) return;
+          seen.add(runId);
+        }
+        let hit = false;
+        for (const gens of Array.isArray(output?.generations) ? output.generations : []) {
+          for (const g of Array.isArray(gens) ? gens : []) hit = addUsage(total, usageOf(g?.message)) || hit;
+        }
+        // Run-level usage only when no message carried any, so nothing is counted twice.
+        if (!hit) hit = addUsage(total, output?.llmOutput?.tokenUsage);
+        if (hit) runs++;
+      },
+    },
+  };
+}
+
+// ---------------------------------------------------------------- main
+
+async function run(opts) {
+  const root = await realpath(opts.projectDir);
+  const toolsDir = await trustedToolsDir(opts.runnerToolsDir);
+  const prompt = await readFile(opts.instructionFile, "utf8");
+  const target = await importTarget(root, opts.graphPath);
+
+  const kwargs = objectArg(opts.modelKwargsJson, "model_kwargs_json");
+  const configurable = objectArg(opts.configurableJson, "configurable_json");
+  configurable.thread_id ??= process.env.HBENCH_SESSION_ID ?? crypto.randomUUID();
+  if (opts.model) configurable.model ??= opts.model;
+  if (Object.keys(kwargs).length) configurable.model_kwargs ??= kwargs;
+
+  const meter = usageMeter();
+  const config = {
+    configurable,
+    callbacks: [meter.handler],
+    metadata: { ls_runner: "hbench", hbench_agent: "langgraph", langgraph_graph: opts.graph },
+  };
+  const invoke = await invoker(target, config);
+  const input = { messages: [{ role: "user", content: prompt }] };
+  const state = await traced(await parentTrace(root, toolsDir), () => invoke(input, config));
+
+  const serialised = plain(state);
+  const answer = answerOf(state, serialised);
+  await writeFile(opts.resultPath, jsonOut(serialised));
+  await writeFile(opts.outputPath, answer);
+  if (opts.summaryPath) {
+    // Callback totals and message totals overlap; use one or the other, never both.
+    const fromCallbacks = meter.runs() > 0;
+    let usage = { ...meter.total };
+    if (!fromCallbacks) {
+      usage = zeroUsage();
+      for (const m of Array.isArray(state?.messages) ? state.messages : []) addUsage(usage, usageOf(m));
+    }
+    await writeFile(
+      opts.summaryPath,
+      jsonOut({ answer_written: answer, usage, usage_source: fromCallbacks ? "callbacks" : "messages" }),
+    );
+  }
+}
+
+Promise.resolve()
+  .then(() => run(readOptions(process.argv.slice(2))))
+  .catch((err) => {
+    console.error(err instanceof Error ? err.message : "LangGraph.js runner failed");
+    process.exitCode = 1;
+  });

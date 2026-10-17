@@ -1,9 +1,9 @@
-//! DSPy RLM agent (port of upstream's agents/dspy_rlm.py).
+//! DSPy RLM agent.
 //!
-//! As in upstream, `dspy.RLM` runs host-side in Python: the host `python3` needs `dspy`
-//! (`pip install 'hbench[dspy]'`) and Deno for dspy's interpreter sandbox. The embedded runner
-//! (assets/agents/dspy_rlm/rlm_runner.py) carries upstream's tool bridge; each tool call comes back
-//! to hbench over stdio and runs in the environment with `docker compose exec`.
+//! `dspy.RLM` runs host-side in Python: the host `python3` needs `dspy` (`pip install dspy`)
+//! and Deno for dspy's interpreter sandbox. The embedded runner (assets/agents/dspy_rlm/rlm_runner.py)
+//! exposes the environment tools to RLM; each tool call comes back to hbench over stdio and runs in
+//! the environment with `docker compose exec`.
 
 use super::terminus2::{Kw, mcp_info, pyrepr};
 use super::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
@@ -64,7 +64,7 @@ impl Options {
     }
 }
 
-/// Map upstream's (instruction, file_tree) onto the signature's two input fields, by position.
+/// Map (instruction, file_tree) onto the signature's two input fields, by position.
 fn input_kwargs(signature: &str, instruction: &str, file_tree: &str) -> Result<Map<String, Value>> {
     let inputs = signature.split_once("->").map_or(signature, |(i, _)| i);
     let fields: Vec<&str> =
@@ -101,7 +101,7 @@ async fn run_runner(cfg: &Value, env: &BTreeMap<String, String>, log: &Path, ex:
         .stderr(std::fs::File::create(log)?)
         .kill_on_drop(true)
         .spawn()
-        .with_context(|| format!("running `{PYTHON}`: dspy-rlm runs dspy.RLM in the host Python, as upstream does"))?;
+        .with_context(|| format!("running `{PYTHON}`: dspy-rlm runs dspy.RLM in the host Python"))?;
     let mut stdin = child.stdin.take().unwrap();
     let mut lines = BufReader::new(child.stdout.take().unwrap()).lines();
     stdin.write_all(format!("{cfg}\n").as_bytes()).await?;
@@ -177,7 +177,7 @@ impl DspyRlm {
         let done = run_runner(&cfg, &self.host_env(), &self.args.logs_dir.join("rlm").join("runner.log"), ex).await?;
         self.apply(ctx, &done);
         match done["error"].as_str() {
-            // The Python exception class is the trial's exception type, as in upstream.
+            // The Python exception class becomes the trial's exception type.
             // ponytail: leaks the (short) class name once per failed run; kind_err wants &'static str.
             Some(e) => {
                 Err(kind_err(Box::leak(done["kind"].as_str().unwrap_or("RuntimeError").to_string().into_boxed_str()), e.to_string()))

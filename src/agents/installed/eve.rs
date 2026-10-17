@@ -1,4 +1,4 @@
-//! Eve (port of upstream's agents/installed/eve.py): runs a local Eve app through
+//! Eve: runs a local Eve app through
 //! Eve's HTTP session API via the uploaded `eve_runner.mjs`.
 
 use super::common::{installed_dir, parse_bool_env_value, skills_dir};
@@ -437,7 +437,7 @@ impl Eve {
     }
 }
 
-/// upstream's Metrics extracted from an event's `usage` (or the data itself).
+/// Step metrics extracted from an event's `usage` (or the data itself).
 #[derive(Clone, Copy, Default)]
 struct Metrics {
     prompt: Option<i64>,
@@ -506,8 +506,8 @@ fn extract_actions(data: &Map<String, Value>) -> Vec<Map<String, Value>> {
     if data.is_empty() { vec![] } else { vec![data.clone()] }
 }
 
-/// Totals upstream's ATIF converter would put in final_metrics: replays the step
-/// structure of `_convert_events_to_trajectory` (only what affects metrics).
+/// Trajectory final_metrics totals: replays how events become steps (only the
+/// parts that affect metrics).
 /// Returns None when the trajectory would have no steps.
 fn event_totals(text: &str) -> Option<(i64, i64, i64, f64)> {
     let empty = Map::new();
@@ -568,7 +568,7 @@ fn event_totals(text: &str) -> Option<(i64, i64, i64, f64)> {
     }))
 }
 
-/// upstream's Eve.populate_context_post_run: runner summary first, then event totals override when non-zero.
+/// Post-run context: runner summary first, then event totals override when non-zero.
 fn populate(logs_dir: &Path, ctx: &mut AgentContext) {
     if let Ok(raw) = std::fs::read_to_string(logs_dir.join("eve-result.json")) {
         let result = serde_json::from_str::<Value>(&raw).unwrap_or(json!({}));
@@ -696,7 +696,7 @@ impl Eve {
             exec_agent(cx, &in_project(&c), &no_env).await?;
         }
         let rt = self.runtime_env()?;
-        // `eve info` failing is non-fatal in upstream.
+        // `eve info` failing is non-fatal.
         let _ = cx
             .exec(
                 &format!(
@@ -893,7 +893,7 @@ mod tests {
             (Some("session.waiting"), Some("s1"), true)
         );
 
-        // upstream's representative event stream: step.completed usage attaches to the final message.
+        // Representative event stream: step.completed usage attaches to the final message.
         let events = [
             json!({"type": "message.received", "timestamp": "2026-06-17T00:00:00Z", "data": {"sessionId": "s1", "message": "What is the weather?"}}),
             json!({"type": "actions.requested", "data": {"actions": [{"id": "call-1", "name": "get_weather", "arguments": {"city": "SF"}}]}}),
@@ -901,7 +901,7 @@ mod tests {
             json!({"type": "reasoning.completed", "data": {"message": "I checked the tool."}}),
             json!({"type": "message.completed", "data": {"message": "It is 72F."}}),
             json!({"type": "step.completed", "data": {"usage": {"inputTokens": 10, "outputTokens": 4, "cachedTokens": 2, "costUsd": 0.01}}}),
-            // No agent step without metrics remains; this usage is dropped like upstream.
+            // No agent step without metrics remains; this usage is dropped.
             json!({"type": "step.completed", "data": {"usage": {"inputTokens": 99}}}),
         ];
         let text = events.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("\n");
@@ -928,8 +928,8 @@ mod tests {
     }
 
     #[test]
-    fn runner_payload_is_verbatim() {
-        assert!(RUNNER.contains(r#"["start", "--host", host, "--port", String(port)]"#));
-        assert!(RUNNER.contains("session.unsettled") && !RUNNER.contains(r#"event.type === "step.failed""#));
+    fn runner_payload() {
+        assert!(RUNNER.contains(r#"["start", "--host", cfg.host, "--port", String(cfg.port)]"#));
+        assert!(RUNNER.contains("session.unsettled") && !RUNNER.contains("step.failed"));
     }
 }

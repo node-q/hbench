@@ -1,4 +1,4 @@
-//! OpenHands SDK (port of upstream's agents/installed/openhands_sdk.py + openhands_sdk_runner.py).
+//! openhands-sdk: the OpenHands SDK in its own venv, driven by assets/agents/openhands-sdk/openhands_sdk_runner.py.
 
 use super::common::{installed_dir, skills_dir};
 use super::openhands::{check_known, opt_bool, opt_f64, opt_int, opt_str, py_float, raw_env};
@@ -36,7 +36,7 @@ const DEFAULT_SKILL_PATHS: &[&str] = &[
     "~/.factory/skills",
     "~/.opencode/skill",
 ];
-/// upstream's command literal; its `\`-newlines are Python line continuations, so only the spaces survive.
+/// One line; the instruction is passed by file.
 const RUN_CMD: &str = "/opt/openhands-sdk-venv/bin/python /installed-agent/run_agent.py     --instruction-file=/installed-agent/instruction.txt     \
                        --logs-dir=\"$AGENT_LOGS_DIR\"     --trajectory-path=\"$TRAJECTORY_PATH\"     2>&1 | stdbuf -oL tee /logs/agent/openhands_sdk.txt";
 
@@ -126,7 +126,7 @@ impl OpenHandsSdk {
         }
         env.insert("SKILL_PATHS".into(), paths.join(":"));
         if !self.args.mcp_servers.is_empty() {
-            // ponytail: compact JSON; upstream's json.dumps adds spaces, but the runner only json.loads it.
+            // ponytail: compact JSON; the runner only json.loads it.
             let list: Vec<Value> = self
                 .args
                 .mcp_servers
@@ -273,7 +273,7 @@ mod tests {
         assert!(agent(json!({"max_iterations": "x"}), &[], None).is_err());
         assert!(agent(json!({"skill_paths": "/a"}), &[], None).is_err());
         assert!(agent(json!({"unknown": 1}), &[], None).is_err());
-        assert!(RUNNER.contains("upstream runner script for OpenHands SDK agent"));
+        assert!(RUNNER.contains("--instruction-file"));
         assert!(!RUN_CMD.contains('\n') && RUN_CMD.contains("--instruction-file=/installed-agent/instruction.txt"));
     }
 

@@ -1,3 +1,9 @@
+"""Runs one LangGraph (Python) graph on a task instruction inside the task container.
+
+Invoked by hbench's `langgraph` agent. Writes the raw final state (--result-path),
+the answer text (--output-path) and an answer/token-usage summary (--summary-path).
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -7,349 +13,180 @@ import importlib.util
 import inspect
 import json
 import os
-import re
 import sys
 import uuid
-from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
-
-_PYTHON_GRAPH_SUFFIXES = frozenset({".py"})
-_NODE_GRAPH_SUFFIXES = frozenset(
-    {".js", ".mjs", ".cjs", ".ts", ".mts", ".cts", ".jsx", ".tsx"}
-)
-# Mirrors splitGraphPath() in langgraphjs_runner.mjs, which accepts the `$` that Python
-# identifiers disallow. Without this, a valid export such as `graph$` would be refused
-# here before the Node runner ever got the chance to load it.
-_NODE_ATTRIBUTE_PART = re.compile(r"[A-Za-z_$][A-Za-z0-9_$]*")
+USAGE = ("input_tokens", "output_tokens", "total_tokens")
 
 
-def _load_config(config_path: Path) -> dict[str, Any]:
-    with config_path.open() as f:
-        config = json.load(f)
-    if not isinstance(config, dict):
-        raise TypeError(f"Expected {config_path} to contain a JSON object")
-    return config
+def parse_args() -> argparse.Namespace:
+    ap = argparse.ArgumentParser(description=__doc__)
+    for flag in ("--project-dir", "--graph", "--graph-path", "--instruction-file", "--result-path", "--output-path"):
+        ap.add_argument(flag, required=True)
+    for flag in ("--summary-path", "--model", "--model-kwargs-json", "--configurable-json"):
+        ap.add_argument(flag)
+    return ap.parse_args()
 
 
-def _graph_path(spec: Any) -> str:
-    if isinstance(spec, str):
-        return spec
-    if isinstance(spec, dict) and isinstance(spec.get("path"), str):
-        return spec["path"]
-    raise TypeError("Graph spec must be a string or object with a string 'path' field")
-
-
-def _split_graph_path(path_spec: str) -> tuple[str, str]:
-    if path_spec.count(":") != 1:
-        raise ValueError(
-            f"Invalid graph path '{path_spec}'. Expected './path/to/file.py:attribute'"
-        )
-    module_path, attribute_path = path_spec.split(":", maxsplit=1)
-    if not module_path or not attribute_path:
-        raise ValueError(
-            f"Invalid graph path '{path_spec}'. Expected './path/to/file.py:attribute'"
-        )
-    parts = attribute_path.split(".")
-    if Path(module_path).suffix in _NODE_GRAPH_SUFFIXES:
-        valid = all(_NODE_ATTRIBUTE_PART.fullmatch(part) for part in parts)
-        dialect = "JavaScript"
-    else:
-        valid = all(part.isidentifier() for part in parts)
-        dialect = "Python"
-    if not valid:
-        raise ValueError(
-            "Invalid graph attribute path "
-            f"'{attribute_path}'. Expected dot-separated {dialect} identifiers"
-        )
-    return module_path, attribute_path
-
-
-def _graph_runtime(path_spec: str) -> str:
-    module_path, _ = _split_graph_path(path_spec)
-    suffix = Path(module_path).suffix
-    if suffix in _PYTHON_GRAPH_SUFFIXES:
-        return "python"
-    if suffix in _NODE_GRAPH_SUFFIXES:
-        return "node"
-    supported = ", ".join(sorted(_PYTHON_GRAPH_SUFFIXES | _NODE_GRAPH_SUFFIXES))
-    raise ValueError(
-        "Unsupported LangGraph graph module suffix "
-        f"'{suffix or '(none)'}' in '{path_spec}'. Supported suffixes: {supported}"
-    )
-
-
-def _resolve_graph_module(project_dir: Path, path_spec: str) -> Path:
-    module_path_raw, _ = _split_graph_path(path_spec)
-    resolved_project_dir = project_dir.resolve()
-    module_path = (resolved_project_dir / module_path_raw).resolve()
-    if not module_path.is_relative_to(resolved_project_dir):
-        raise ValueError(
-            "Graph module must resolve within the LangGraph project directory: "
-            f"{module_path_raw}"
-        )
-    if not module_path.is_file():
-        raise FileNotFoundError(f"Graph module not found: {module_path}")
-    return module_path
-
-
-def _select_graph(config: dict[str, Any], graph_name: str | None) -> tuple[str, str]:
-    graphs = config.get("graphs")
-    if not isinstance(graphs, dict) or not graphs:
-        raise ValueError("langgraph.json must define at least one graph")
-
-    if graph_name is None:
-        if len(graphs) != 1:
-            available = ", ".join(sorted(str(name) for name in graphs))
-            raise ValueError(
-                "langgraph.json defines multiple graphs; pass --graph. "
-                f"Available graphs: {available}"
-            )
-        graph_name = next(iter(graphs))  # ty: ignore[invalid-assignment]
-
-    if graph_name not in graphs:
-        available = ", ".join(sorted(str(name) for name in graphs))
-        raise ValueError(f"Unknown graph '{graph_name}'. Available graphs: {available}")
-
-    return graph_name, _graph_path(graphs[graph_name])
-
-
-def _load_graph(project_dir: Path, path_spec: str) -> Any:
-    _, attribute_path = _split_graph_path(path_spec)
-    module_path = _resolve_graph_module(project_dir, path_spec)
-
-    sys.path.insert(0, str(project_dir))
-    module_name = f"_hbench_langgraph_{module_path.stem}_{uuid.uuid4().hex}"
-    spec = importlib.util.spec_from_file_location(module_name, module_path)
-    if spec is None or spec.loader is None:
-        raise ImportError(f"Could not import graph module: {module_path}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = module
-    spec.loader.exec_module(module)
-
-    value: Any = module
-    for part in attribute_path.split("."):
-        value = getattr(value, part)
+def json_object(raw: str | None, what: str) -> dict[str, Any]:
+    value = json.loads(raw) if raw else {}
+    if not isinstance(value, dict):
+        raise TypeError(f"{what} must be a JSON object")
     return value
 
 
-def _message_to_jsonable(value: Any) -> dict[str, Any] | None:
-    if not hasattr(value, "type") or not hasattr(value, "content"):
-        return None
-    data: dict[str, Any] = {
-        "type": getattr(value, "type"),
-        "content": _to_jsonable(getattr(value, "content")),
-    }
-    tool_calls = getattr(value, "tool_calls", None)
-    if tool_calls:
-        data["tool_calls"] = _to_jsonable(tool_calls)
-    usage_metadata = getattr(value, "usage_metadata", None)
-    if usage_metadata:
-        data["usage_metadata"] = _to_jsonable(usage_metadata)
-    return data
+def import_target(root: Path, spec: str) -> Any:
+    """Import `./file.py:attr.path` from the project and return the attribute."""
+    file_part, sep, attr = spec.partition(":")
+    usage = f"Invalid graph path '{spec}'. Expected './path/to/file.py:attribute'"
+    if not sep or not file_part or not attr or ":" in attr:
+        raise ValueError(usage)
+    if not all(name.isidentifier() for name in attr.split(".")):
+        raise ValueError(f"Invalid graph attribute path '{attr}'. Expected dot-separated Python identifiers")
 
+    root = root.resolve()
+    source = (root / file_part).resolve()
+    if not source.is_relative_to(root):
+        raise ValueError(f"Graph module must resolve within the LangGraph project directory: {file_part}")
+    if not source.is_file():
+        raise FileNotFoundError(f"Graph module not found: {source}")
 
-def _to_jsonable(value: Any) -> Any:
-    message = _message_to_jsonable(value)
-    if message is not None:
-        return message
-    if isinstance(value, dict):
-        return {str(k): _to_jsonable(v) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_to_jsonable(item) for item in value]
-    if isinstance(value, (str, int, float, bool)) or value is None:
-        return value
-    return repr(value)
+    sys.path.insert(0, str(root))
+    name = f"hbench_graph_{uuid.uuid4().hex}"
+    loader_spec = importlib.util.spec_from_file_location(name, source)
+    if loader_spec is None or loader_spec.loader is None:
+        raise ImportError(f"Could not import graph module: {source}")
+    module = importlib.util.module_from_spec(loader_spec)
+    sys.modules[name] = module
+    loader_spec.loader.exec_module(module)
 
-
-def _extract_text(value: Any) -> str:
-    if isinstance(value, dict) and isinstance(value.get("messages"), list):
-        for message in reversed(value["messages"]):
-            if hasattr(message, "content"):
-                content = getattr(message, "content", None)
-                if isinstance(content, str):
-                    return content
-                return repr(content)
-            if isinstance(message, dict):
-                content = message.get("content")
-                if isinstance(content, str):
-                    return content
-                if content is not None:
-                    return repr(content)
-    return json.dumps(_to_jsonable(value), indent=2)
-
-
-def _aggregate_usage(result: Any) -> dict[str, int]:
-    """Sum token usage across the result's messages (best effort, always ints)."""
-    totals = {
-        "input_tokens": 0,
-        "output_tokens": 0,
-        "total_tokens": 0,
-        "cache_read_tokens": 0,
-    }
-    messages = result.get("messages") if isinstance(result, dict) else None
-    for message in messages or []:
-        usage = getattr(message, "usage_metadata", None)
-        if isinstance(usage, dict):
-            totals["input_tokens"] += int(usage.get("input_tokens") or 0)
-            totals["output_tokens"] += int(usage.get("output_tokens") or 0)
-            totals["total_tokens"] += int(usage.get("total_tokens") or 0)
-            details = usage.get("input_token_details")
-            if isinstance(details, dict):
-                totals["cache_read_tokens"] += int(details.get("cache_read") or 0)
-    return totals
-
-
-def _load_json_arg(value: str | None, *, label: str) -> dict[str, Any]:
-    if not value:
-        return {}
-    parsed = json.loads(value)
-    if not isinstance(parsed, dict):
-        raise TypeError(f"{label} must be a JSON object")
-    return parsed
+    obj: Any = module
+    for name in attr.split("."):
+        obj = getattr(obj, name)
+    return obj
 
 
 @contextlib.asynccontextmanager
-async def _resolved_graph(loaded: Any, config: dict[str, Any]) -> AsyncIterator[Any]:
-    """Yield an invokable graph from a loaded ``langgraph.json`` target.
-
-    Supports two shapes:
-
-    - a pre-compiled graph (exposes ``invoke``/``ainvoke``): used as-is.
-    - a factory callable that builds the graph from ``config`` (the LangGraph
-      deployment convention, e.g. ``def make_graph(config): ...``). The factory may
-      be sync or async and may return the graph directly or a sync/async context
-      manager. Building the graph here, from ``config``, lets the model be chosen at
-      runtime via ``config["configurable"]["model"]`` instead of being baked in at
-      import time — the same pattern LangGraph platform / agent builder use.
-    """
-    if hasattr(loaded, "ainvoke") or hasattr(loaded, "invoke"):
-        yield loaded
+async def build_graph(target: Any, config: dict[str, Any]):
+    """A compiled graph is used as-is; anything else is a factory (sync/async, optionally
+    taking the run config, optionally returning a context manager) that builds one."""
+    if hasattr(target, "ainvoke") or hasattr(target, "invoke"):
+        yield target
         return
-    if not callable(loaded):
-        raise TypeError(
-            "Graph target must be a compiled graph or a factory callable that returns one"
-        )
-
+    if not callable(target):
+        raise TypeError("Graph target must be a compiled graph or a factory callable that returns one")
     try:
-        takes_arg = len(inspect.signature(loaded).parameters) >= 1
+        wants_config = bool(inspect.signature(target).parameters)
     except (TypeError, ValueError):
-        takes_arg = True
-    produced = loaded(config) if takes_arg else loaded()
-
-    if hasattr(produced, "__aenter__"):
-        async with produced as graph:
+        wants_config = True
+    made = target(config) if wants_config else target()
+    if hasattr(made, "__aenter__"):
+        async with made as graph:
             yield graph
-    elif hasattr(produced, "__enter__"):
-        with produced as graph:
+    elif hasattr(made, "__enter__"):
+        with made as graph:
             yield graph
-    elif inspect.isawaitable(produced):
-        yield await produced
     else:
-        yield produced
+        yield await made if inspect.isawaitable(made) else made
 
 
-async def _ainvoke(
-    graph: Any, input_value: dict[str, Any], config: dict[str, Any]
-) -> Any:
-    if hasattr(graph, "ainvoke"):
-        return await graph.ainvoke(input_value, config=config)
-    if hasattr(graph, "invoke"):
-        return graph.invoke(input_value, config=config)
-    raise TypeError("Selected graph must expose invoke() or ainvoke()")
-
-
-def _invoke_config(configurable: dict[str, Any], graph_name: str) -> dict[str, Any]:
-    return {
-        "configurable": configurable,
-        "metadata": {
-            "ls_runner": "hbench",
-            "hbench_agent": "langgraph",
-            "langgraph_graph": graph_name,
-        },
-    }
-
-
-def _parent_tracing_context() -> Any:
-    """Nest this rollout under a hbench-provided LangSmith parent run.
-
-    When hbench passes a parent trace context (the ``langsmith-trace`` /
-    ``baggage`` distributed-tracing headers) via ``HBENCH_LANGSMITH_PARENT`` /
-    ``HBENCH_LANGSMITH_BAGGAGE``, the graph's trace is attached under that parent
-    so the agent trajectory shows up inside the hbench experiment run rather than
-    as a disconnected trace. Returns a no-op context when no parent is set.
-    """
+def trace_parent():
+    """Attach the run under a LangSmith parent trace when hbench was given one."""
     parent = os.environ.get("HBENCH_LANGSMITH_PARENT")
     if not parent:
         return contextlib.nullcontext()
     try:
-        # langsmith is provided by the project's venv inside the environment, not by
-        # hbench itself, so this import is intentionally lazy and may be absent.
-        from langsmith.run_helpers import tracing_context
+        from langsmith.run_helpers import tracing_context  # only present if the project installs it
     except ImportError:
-        print(
-            "HBENCH_LANGSMITH_PARENT is set but langsmith is not installed; "
-            "rollout will not nest under the hbench experiment run",
-            file=sys.stderr,
-        )
+        print("HBENCH_LANGSMITH_PARENT is set but langsmith is not installed; the run will not be nested under it", file=sys.stderr)
         return contextlib.nullcontext()
     headers = {"langsmith-trace": parent}
-    baggage = os.environ.get("HBENCH_LANGSMITH_BAGGAGE")
-    if baggage:
-        headers["baggage"] = baggage
+    if os.environ.get("HBENCH_LANGSMITH_BAGGAGE"):
+        headers["baggage"] = os.environ["HBENCH_LANGSMITH_BAGGAGE"]
     return tracing_context(parent=headers)
 
 
-async def main() -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--project-dir", required=True)
-    parser.add_argument("--graph", required=True)
-    parser.add_argument("--graph-path", required=True)
-    parser.add_argument("--instruction-file", required=True)
-    parser.add_argument("--result-path", required=True)
-    parser.add_argument("--output-path", required=True)
-    parser.add_argument("--summary-path")
-    parser.add_argument("--model")
-    parser.add_argument("--model-kwargs-json")
-    parser.add_argument("--configurable-json")
-    args = parser.parse_args()
+def plain(v: Any) -> Any:
+    """JSON-safe copy of graph state; LangChain messages become small dicts."""
+    if hasattr(v, "type") and hasattr(v, "content"):
+        out = {"type": v.type, "content": plain(v.content)}
+        for extra in ("tool_calls", "usage_metadata"):
+            if getattr(v, extra, None):
+                out[extra] = plain(getattr(v, extra))
+        return out
+    if isinstance(v, dict):
+        return {str(k): plain(x) for k, x in v.items()}
+    if isinstance(v, (list, tuple)):
+        return [plain(x) for x in v]
+    if v is None or isinstance(v, (str, int, float, bool)):
+        return v
+    return repr(v)
 
-    project_dir = Path(args.project_dir).resolve()
-    instruction = Path(args.instruction_file).read_text()
 
-    graph = _load_graph(project_dir, args.graph_path)
+def answer_of(state: Any) -> str:
+    """Content of the last message that has any, else the whole state as JSON."""
+    messages = state.get("messages") if isinstance(state, dict) else None
+    for m in reversed(messages if isinstance(messages, list) else []):
+        if hasattr(m, "content"):
+            c = m.content
+        elif isinstance(m, dict) and m.get("content") is not None:
+            c = m["content"]
+        else:
+            continue
+        return c if isinstance(c, str) else repr(c)
+    return json.dumps(plain(state), indent=2)
 
-    model_kwargs = _load_json_arg(args.model_kwargs_json, label="model_kwargs_json")
-    configurable = _load_json_arg(args.configurable_json, label="configurable_json")
-    configurable.setdefault(
-        "thread_id", os.environ.get("HBENCH_SESSION_ID") or str(uuid.uuid4())
-    )
-    if args.model:
-        configurable.setdefault("model", args.model)
-    if model_kwargs:
-        configurable.setdefault("model_kwargs", model_kwargs)
 
-    invoke_config = _invoke_config(configurable, args.graph)
-    async with _resolved_graph(graph, invoke_config) as resolved:
-        with _parent_tracing_context():
-            result = await _ainvoke(
-                resolved,
-                {"messages": [{"role": "user", "content": instruction}]},
-                invoke_config,
-            )
+def token_usage(state: Any) -> dict[str, int]:
+    totals = dict.fromkeys((*USAGE, "cache_read_tokens"), 0)
+    messages = state.get("messages") if isinstance(state, dict) else None
+    for m in messages or []:
+        u = getattr(m, "usage_metadata", None)
+        if not isinstance(u, dict):
+            continue
+        for k in USAGE:
+            totals[k] += int(u.get(k) or 0)
+        details = u.get("input_token_details")
+        if isinstance(details, dict):
+            totals["cache_read_tokens"] += int(details.get("cache_read") or 0)
+    return totals
 
-    jsonable_result = _to_jsonable(result)
-    Path(args.result_path).write_text(json.dumps(jsonable_result, indent=2))
-    Path(args.output_path).write_text(_extract_text(result))
 
-    if args.summary_path:
-        summary = {
-            "answer_written": _extract_text(result),
-            "usage": _aggregate_usage(result),
-        }
-        Path(args.summary_path).write_text(json.dumps(summary, indent=2))
+async def run(opts: argparse.Namespace) -> None:
+    root = Path(opts.project_dir).resolve()
+    prompt = Path(opts.instruction_file).read_text()
+    target = import_target(root, opts.graph_path)
+
+    configurable = json_object(opts.configurable_json, "configurable_json")
+    kwargs = json_object(opts.model_kwargs_json, "model_kwargs_json")
+    configurable.setdefault("thread_id", os.environ.get("HBENCH_SESSION_ID") or str(uuid.uuid4()))
+    if opts.model:
+        configurable.setdefault("model", opts.model)
+    if kwargs:
+        configurable.setdefault("model_kwargs", kwargs)
+    config = {
+        "configurable": configurable,
+        "metadata": {"ls_runner": "hbench", "hbench_agent": "langgraph", "langgraph_graph": opts.graph},
+    }
+
+    async with build_graph(target, config) as graph:
+        with trace_parent():
+            inputs = {"messages": [{"role": "user", "content": prompt}]}
+            if hasattr(graph, "ainvoke"):
+                state = await graph.ainvoke(inputs, config=config)
+            elif hasattr(graph, "invoke"):
+                state = graph.invoke(inputs, config=config)
+            else:
+                raise TypeError("Selected graph must expose invoke() or ainvoke()")
+
+    answer = answer_of(state)
+    Path(opts.result_path).write_text(json.dumps(plain(state), indent=2))
+    Path(opts.output_path).write_text(answer)
+    if opts.summary_path:
+        Path(opts.summary_path).write_text(json.dumps({"answer_written": answer, "usage": token_usage(state)}, indent=2))
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(run(parse_args()))

@@ -1,17 +1,11 @@
 #!/usr/bin/env python3
-"""Wrapper to run an nvidia-nat workflow and print the raw text result to stdout.
+"""Run a NeMo Agent Toolkit workflow headless and print its answer as plain text.
 
-The nvidia-nat `nat run` CLI uses Rich console formatting which loses text content
-when stdout is redirected. This wrapper calls the workflow API directly
-and prints the plain text response.
+`nat run` renders through Rich, which drops text when stdout is not a TTY, so the
+workflow API is driven directly. With `--trajectory-output PATH` the workflow's
+intermediate steps are also saved as an ATIF trajectory.
 
-When --trajectory-output <path> is provided, intermediate steps are collected
-during workflow execution and converted to an ATIF trajectory JSON file using
-NAT's built-in IntermediateStepToATIFConverter.
-
-Usage:
-    python3 nemo-agent-run-wrapper.py <config_file> <instruction>
-    python3 nemo-agent-run-wrapper.py <config_file> <instruction> --trajectory-output /logs/agent/trajectory.json
+    nemo_agent_run_wrapper.py CONFIG INSTRUCTION... [--trajectory-output PATH]
 """
 
 import asyncio
@@ -22,109 +16,71 @@ import sys
 import traceback
 from uuid import uuid4
 
-# Honour NVIDIA_NAT_LOG_LEVEL passed by NemoAgent ENV_VARS descriptor
-_log_level_str = os.environ.get("NVIDIA_NAT_LOG_LEVEL", "WARNING").upper()
-logging.basicConfig(level=getattr(logging, _log_level_str, logging.WARNING))
-os.environ.setdefault("NAT_LOG_LEVEL", _log_level_str)
+LEVEL = os.environ.get("NVIDIA_NAT_LOG_LEVEL", "WARNING").upper()
+logging.basicConfig(level=getattr(logging, LEVEL, logging.WARNING))
+os.environ.setdefault("NAT_LOG_LEVEL", LEVEL)
 
 
-def _write_trajectory(intermediate_steps_dicts: list[dict], output_path: str) -> None:
-    """Convert intermediate steps to ATIF trajectory and write to JSON file."""
+def warn(what: str) -> None:
+    print(f"[nemo-agent-wrapper] {what}:", file=sys.stderr)
+    traceback.print_exc(file=sys.stderr)
+
+
+def save_atif(raw_steps: list[dict], path: str) -> None:
     from nat.plugins.eval.utils.intermediate_step_adapter import IntermediateStepAdapter
     from nat.utils.atif_converter import IntermediateStepToATIFConverter
 
-    adapter = IntermediateStepAdapter()
-    steps = adapter.validate_intermediate_steps(intermediate_steps_dicts)
-
-    converter = IntermediateStepToATIFConverter()
-    atif_trajectory = converter.convert(
-        steps,
-        session_id=str(uuid4()),
-        agent_name="nemo-agent",
-    )
-
-    trajectory_dict = atif_trajectory.to_json_dict(exclude_none=True)
-    with open(output_path, "w", encoding="utf-8") as f:
-        json.dump(trajectory_dict, f, indent=2, ensure_ascii=False)
+    steps = IntermediateStepAdapter().validate_intermediate_steps(raw_steps)
+    doc = IntermediateStepToATIFConverter().convert(steps, session_id=str(uuid4()), agent_name="nemo-agent")
+    with open(path, "w", encoding="utf-8") as out:
+        json.dump(doc.to_json_dict(exclude_none=True), out, indent=2, ensure_ascii=False)
 
 
-async def main(
-    config_path: str, instruction: str, trajectory_path: str | None = None
-) -> None:
-    from nat.utils.io.yaml_tools import yaml_load
+async def run(config_file: str, prompt: str, atif_path: str | None) -> None:
+    from nat.builder.workflow_builder import WorkflowBuilder
     from nat.data_models.config import Config
     from nat.runtime.loader import PluginTypes, discover_and_register_plugins
-    from nat.builder.workflow_builder import WorkflowBuilder
     from nat.runtime.session import SessionManager
+    from nat.utils.io.yaml_tools import yaml_load
 
-    # Discover plugins (registers workflow types, LLM providers, etc.)
     discover_and_register_plugins(PluginTypes.COMPONENT)
-
-    # Load and parse config
-    config_dict = yaml_load(config_path)
-    config = Config(**config_dict)
+    config = Config(**yaml_load(config_file))
 
     async with WorkflowBuilder.from_config(config) as builder:
-        session_manager = await SessionManager.create(
-            config=config, shared_builder=builder
-        )
-        async with session_manager.session(user_id="hbench") as session:
-            async with session.run(instruction) as runner:
-                # Collect intermediate steps in parallel with execution
-                intermediate_task = None
-                if trajectory_path:
-                    try:
-                        from nat.builder.runtime_event_subscriber import (
-                            pull_intermediate,
-                        )
+        sessions = await SessionManager.create(config=config, shared_builder=builder)
+        async with sessions.session(user_id="hbench") as session, session.run(prompt) as runner:
+            steps = None
+            if atif_path:
+                # Must subscribe before the run produces events, hence a task started up front.
+                try:
+                    from nat.builder.runtime_event_subscriber import pull_intermediate
 
-                        intermediate_task = asyncio.ensure_future(pull_intermediate())
-                    except Exception:
-                        print(
-                            "[nemo-agent-wrapper] Failed to start trajectory collection:",
-                            file=sys.stderr,
-                        )
-                        traceback.print_exc(file=sys.stderr)
+                    steps = asyncio.ensure_future(pull_intermediate())
+                except Exception:
+                    warn("Failed to start trajectory collection")
 
-                result = await runner.result()
-                # Print raw text result to stdout — no Rich formatting
-                print(str(result))
+            print(str(await runner.result()))
 
-                # Convert intermediate steps to ATIF and write trajectory
-                if intermediate_task is not None and trajectory_path is not None:
-                    try:
-                        intermediate_steps_dicts = await intermediate_task
-                        _write_trajectory(intermediate_steps_dicts, trajectory_path)
-                    except Exception:
-                        print(
-                            "[nemo-agent-wrapper] Failed to write trajectory:",
-                            file=sys.stderr,
-                        )
-                        traceback.print_exc(file=sys.stderr)
+            if steps is not None:
+                try:
+                    save_atif(await steps, atif_path)
+                except Exception:
+                    warn("Failed to write trajectory")
+        await sessions.shutdown()
 
-        await session_manager.shutdown()
+
+def parse(argv: list[str]) -> tuple[str, str, str | None]:
+    atif_path = None
+    if "--trajectory-output" in argv:
+        i = argv.index("--trajectory-output")
+        if i + 1 >= len(argv):
+            sys.exit("--trajectory-output requires a path argument")
+        atif_path = argv[i + 1]
+        argv = argv[:i] + argv[i + 2 :]
+    if len(argv) < 2:
+        sys.exit(f"Usage: {sys.argv[0]} <config_file> <instruction> [--trajectory-output <path>]")
+    return argv[0], " ".join(argv[1:]), atif_path
 
 
 if __name__ == "__main__":
-    # Parse --trajectory-output flag before joining remaining args as instruction
-    trajectory_path = None
-    args = sys.argv[1:]
-    if "--trajectory-output" in args:
-        idx = args.index("--trajectory-output")
-        if idx + 1 < len(args):
-            trajectory_path = args[idx + 1]
-            args = args[:idx] + args[idx + 2 :]
-        else:
-            print("--trajectory-output requires a path argument", file=sys.stderr)
-            sys.exit(1)
-
-    if len(args) < 2:
-        print(
-            f"Usage: {sys.argv[0]} <config_file> <instruction> [--trajectory-output <path>]",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-
-    config_path = args[0]
-    instruction = " ".join(args[1:])
-    asyncio.run(main(config_path, instruction, trajectory_path))
+    asyncio.run(run(*parse(sys.argv[1:])))

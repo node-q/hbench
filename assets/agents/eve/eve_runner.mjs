@@ -1,261 +1,146 @@
+// hbench driver for an Eve app: boots `eve start`, sends the instruction over Eve's
+// session API, then writes the event log and a result summary under the logs dir.
 import { spawn } from "node:child_process";
 import { createWriteStream } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { setTimeout as sleep } from "node:timers/promises";
 
-const projectDir = requireEnv("EVE_PROJECT_DIR");
-const instructionPath = requireEnv("EVE_INSTRUCTION_PATH");
-const logsDir = process.env.EVE_AGENT_LOGS_DIR ?? "/logs/agent";
-const host = process.env.EVE_HOST ?? "127.0.0.1";
-const port = Number(process.env.EVE_PORT ?? "3024");
-const serverUrl = `http://${host}:${port}`;
-const startupTimeoutMs = Number(process.env.EVE_STARTUP_TIMEOUT_MS ?? "60000");
+const env = process.env;
+const must = (k) => {
+  if (!env[k]) throw new Error(`${k} must be set`);
+  return env[k];
+};
 
-await mkdir(logsDir, { recursive: true });
+const cfg = {
+  project: must("EVE_PROJECT_DIR"),
+  instruction: must("EVE_INSTRUCTION_PATH"),
+  logs: env.EVE_AGENT_LOGS_DIR ?? "/logs/agent",
+  host: env.EVE_HOST ?? "127.0.0.1",
+  port: Number(env.EVE_PORT ?? "3024"),
+  bootMs: Number(env.EVE_STARTUP_TIMEOUT_MS ?? "60000"),
+};
+const base = `http://${cfg.host}:${cfg.port}`;
+const out = (name) => join(cfg.logs, name);
 
-const eventsPath = join(logsDir, "eve-events.ndjson");
-const resultPath = join(logsDir, "eve-result.json");
-const serverLogPath = join(logsDir, "eve-server.log");
+// Status values that mean the session settled normally.
+const SETTLED = new Set(["waiting", "completed", "session.waiting", "session.completed"]);
 
-let server;
-let wroteResult = false;
-try {
-  server = startServer();
-  await waitForHealth(server);
+// Usage field aliases seen across Eve providers; first finite number wins.
+const ALIASES = {
+  inputTokens: ["inputTokens", "input_tokens", "promptTokens", "prompt_tokens", "totalPromptTokens"],
+  outputTokens: ["outputTokens", "output_tokens", "completionTokens", "completion_tokens", "totalCompletionTokens"],
+  cachedTokens: ["cachedTokens", "cached_tokens", "cachedInputTokens", "cached_input_tokens"],
+  costUsd: ["costUsd", "cost_usd", "totalCostUsd", "total_cost_usd", "totalCost"],
+};
 
-  const instruction = await readFile(instructionPath, "utf8");
-  const { Client } = await importEveClient();
-  const client = new Client({ host: serverUrl });
-  const session = client.session();
-  const response = await session.send(instruction);
-  const result = await response.result();
-  const events = result.events ?? [];
-
-  await writeFile(
-    eventsPath,
-    events.map((event) => JSON.stringify(event)).join("\n") + "\n",
-  );
-
-  const summary = {
-    status: result.status,
-    sessionId: result.sessionId,
-    continuationToken: response.continuationToken,
-    message: result.message,
-    data: result.data,
-    inputRequests: result.inputRequests ?? [],
-    usage: summarizeUsage(events),
-    eventCount: events.length,
-    failure: failureFromEvents(events) ?? failureFromStatus(result.status),
-  };
-  await writeFile(resultPath, `${JSON.stringify(summary, null, 2)}\n`);
-  wroteResult = true;
-
-  if (summary.failure) {
-    throw new Error(summary.failure.message);
+function tally(events) {
+  const sum = Object.fromEntries(Object.keys(ALIASES).map((k) => [k, 0]));
+  for (const ev of events) {
+    if (ev.type !== "step.completed") continue;
+    const src = ev.data?.usage ?? ev.data ?? {};
+    for (const [k, names] of Object.entries(ALIASES)) {
+      const hit = names.map((n) => src[n]).find((v) => typeof v === "number" && Number.isFinite(v));
+      sum[k] += hit ?? 0;
+    }
   }
-} catch (error) {
-  if (!wroteResult) {
-    await writeFile(
-      resultPath,
-      `${JSON.stringify(
-        {
-          status: "failed",
-          sessionId: undefined,
-          continuationToken: undefined,
-          message: undefined,
-          data: undefined,
-          inputRequests: [],
-          usage: {},
-          eventCount: 0,
-          failure: {
-            type: "runner.error",
-            message: error?.message ?? String(error),
-          },
-        },
-        null,
-        2,
-      )}\n`,
-    );
-  }
-  throw error;
-} finally {
-  if (server) {
-    await stopServer(server);
-  }
+  // Zero totals are reported as absent.
+  return Object.fromEntries(Object.entries(sum).map(([k, v]) => [k, v || undefined]));
 }
 
-function requireEnv(name) {
-  const value = process.env[name];
-  if (!value) {
-    throw new Error(`${name} must be set`);
+function diagnose(events, status) {
+  for (const ev of events) {
+    if (ev.type === "input.requested") {
+      return { type: ev.type, message: "Eve requested human input during a non-interactive hbench run", data: ev.data };
+    }
+    if (ev.type === "turn.failed" || ev.type === "session.failed") {
+      const message = ev.data?.message ?? ev.data?.error?.message ?? `${ev.type} emitted during Eve run`;
+      return { type: ev.type, message, data: ev.data };
+    }
   }
-  return value;
+  if (SETTLED.has(status)) return null;
+  return { type: "session.unsettled", message: `Eve run ended with unexpected status: ${status ?? "unknown"}` };
 }
 
-function localEveBin() {
-  return join(projectDir, "node_modules", ".bin", "eve");
-}
-
-function startServer() {
-  const log = createWriteStream(serverLogPath, { flags: "a" });
-  const child = spawn(
-    localEveBin(),
-    ["start", "--host", host, "--port", String(port)],
-    {
-      cwd: projectDir,
-      env: process.env,
-      stdio: ["ignore", "pipe", "pipe"],
-    },
-  );
-
-  child.stdout.pipe(log, { end: false });
-  child.stderr.pipe(log, { end: false });
-  child.once("exit", (code, signal) => {
-    log.write(`\n[eve-server exited code=${code ?? ""} signal=${signal ?? ""}]\n`);
+function boot() {
+  const log = createWriteStream(out("eve-server.log"), { flags: "a" });
+  const proc = spawn(join(cfg.project, "node_modules", ".bin", "eve"), ["start", "--host", cfg.host, "--port", String(cfg.port)], {
+    cwd: cfg.project,
+    env,
+    stdio: ["ignore", "pipe", "pipe"],
   });
-
-  return child;
+  proc.stdout.pipe(log, { end: false });
+  proc.stderr.pipe(log, { end: false });
+  proc.once("exit", (code, signal) => log.write(`\n[eve-server exited code=${code ?? ""} signal=${signal ?? ""}]\n`));
+  return proc;
 }
 
-async function waitForHealth(child) {
-  const deadline = Date.now() + startupTimeoutMs;
-  let lastError;
-
-  while (Date.now() < deadline) {
-    if (child.exitCode !== null) {
-      throw new Error(`eve start exited before becoming healthy (code ${child.exitCode})`);
-    }
-
+async function healthy(proc) {
+  const stopAt = Date.now() + cfg.bootMs;
+  let why;
+  while (Date.now() < stopAt) {
+    if (proc.exitCode !== null) throw new Error(`eve start exited before becoming healthy (code ${proc.exitCode})`);
     try {
-      const response = await fetch(`${serverUrl}/eve/v1/health`);
-      if (response.ok) {
-        return;
-      }
-      lastError = new Error(`health returned ${response.status}`);
-    } catch (error) {
-      lastError = error;
+      const r = await fetch(`${base}/eve/v1/health`);
+      if (r.ok) return;
+      why = new Error(`health returned ${r.status}`);
+    } catch (e) {
+      why = e;
     }
-
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await sleep(500);
   }
-
-  throw new Error(`Timed out waiting for eve start health: ${lastError?.message ?? "unknown"}`);
+  throw new Error(`Timed out waiting for eve start health: ${why?.message ?? "unknown"}`);
 }
 
-async function importEveClient() {
-  const require = createRequire(join(projectDir, "package.json"));
-  const clientPath = require.resolve("eve/client");
-  return await import(pathToFileURL(clientPath).href);
+async function shutdown(proc) {
+  if (proc.exitCode !== null) return;
+  proc.kill("SIGTERM");
+  const gone = await Promise.race([new Promise((r) => proc.once("exit", () => r(true))), sleep(5000, false)]);
+  if (!gone && proc.exitCode === null) proc.kill("SIGKILL");
 }
 
-function failureFromEvents(events) {
-  for (const event of events) {
-    if (event.type === "input.requested") {
-      return {
-        type: event.type,
-        message: "Eve requested human input during a non-interactive upstream run",
-        data: event.data,
-      };
-    }
-
-    if (event.type === "turn.failed" || event.type === "session.failed") {
-      const message =
-        event.data?.message ??
-        event.data?.error?.message ??
-        `${event.type} emitted during Eve run`;
-      return { type: event.type, message, data: event.data };
-    }
-  }
-  return null;
+// The client ships inside the app's own `eve` dependency.
+async function loadClient() {
+  const req = createRequire(join(cfg.project, "package.json"));
+  return import(pathToFileURL(req.resolve("eve/client")).href);
 }
 
-function failureFromStatus(status) {
-  if (
-    status === "waiting" ||
-    status === "completed" ||
-    status === "session.waiting" ||
-    status === "session.completed"
-  ) {
-    return null;
-  }
-  return {
-    type: "session.unsettled",
-    message: `Eve run ended with unexpected status: ${status ?? "unknown"}`,
-  };
-}
+const saveResult = (obj) => writeFile(out("eve-result.json"), `${JSON.stringify(obj, null, 2)}\n`);
 
-function summarizeUsage(events) {
-  const usage = {
-    inputTokens: 0,
-    outputTokens: 0,
-    cachedTokens: 0,
-    costUsd: 0,
-  };
+await mkdir(cfg.logs, { recursive: true });
+let proc;
+let saved = false;
+try {
+  proc = boot();
+  await healthy(proc);
+  const text = await readFile(cfg.instruction, "utf8");
+  const { Client } = await loadClient();
+  const reply = await new Client({ host: base }).session().send(text);
+  const res = await reply.result();
+  const events = res.events ?? [];
+  await writeFile(out("eve-events.ndjson"), events.map((e) => JSON.stringify(e)).join("\n") + "\n");
 
-  for (const event of events) {
-    if (event.type !== "step.completed") {
-      continue;
-    }
-    const data = event.data ?? {};
-    const source = data.usage ?? data;
-    usage.inputTokens += numberValue(
-      source.inputTokens,
-      source.input_tokens,
-      source.promptTokens,
-      source.prompt_tokens,
-      source.totalPromptTokens,
-    );
-    usage.outputTokens += numberValue(
-      source.outputTokens,
-      source.output_tokens,
-      source.completionTokens,
-      source.completion_tokens,
-      source.totalCompletionTokens,
-    );
-    usage.cachedTokens += numberValue(
-      source.cachedTokens,
-      source.cached_tokens,
-      source.cachedInputTokens,
-      source.cached_input_tokens,
-    );
-    usage.costUsd += numberValue(
-      source.costUsd,
-      source.cost_usd,
-      source.totalCostUsd,
-      source.total_cost_usd,
-      source.totalCost,
-    );
+  const failure = diagnose(events, res.status);
+  await saveResult({
+    status: res.status,
+    sessionId: res.sessionId,
+    continuationToken: reply.continuationToken,
+    message: res.message,
+    data: res.data,
+    inputRequests: res.inputRequests ?? [],
+    usage: tally(events),
+    eventCount: events.length,
+    failure,
+  });
+  saved = true;
+  if (failure) throw new Error(failure.message);
+} catch (e) {
+  if (!saved) {
+    await saveResult({ status: "failed", inputRequests: [], usage: {}, eventCount: 0, failure: { type: "runner.error", message: e?.message ?? String(e) } });
   }
-
-  return {
-    inputTokens: usage.inputTokens || undefined,
-    outputTokens: usage.outputTokens || undefined,
-    cachedTokens: usage.cachedTokens || undefined,
-    costUsd: usage.costUsd || undefined,
-  };
-}
-
-function numberValue(...values) {
-  for (const value of values) {
-    if (typeof value === "number" && Number.isFinite(value)) {
-      return value;
-    }
-  }
-  return 0;
-}
-
-async function stopServer(child) {
-  if (child.exitCode !== null) {
-    return;
-  }
-  child.kill("SIGTERM");
-  const exited = await Promise.race([
-    new Promise((resolve) => child.once("exit", () => resolve(true))),
-    new Promise((resolve) => setTimeout(() => resolve(false), 5000)),
-  ]);
-  if (!exited && child.exitCode === null) {
-    child.kill("SIGKILL");
-  }
+  throw e;
+} finally {
+  if (proc) await shutdown(proc);
 }

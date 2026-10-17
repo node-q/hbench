@@ -1,4 +1,4 @@
-//! OpenClaw (port of upstream's agents/installed/openclaw.py).
+//! OpenClaw: `openclaw agent --local --json`, usage read from the trailing JSON envelope.
 
 use super::common::opts::kw_int;
 use super::common::{deep_merge, installed_dir, skills_dir};
@@ -10,7 +10,7 @@ use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-/// upstream's `_openclaw_container_copy_session_transcript` source + call (sent via `python3 -c`).
+/// Copies the session transcript named in the CLI envelope into /logs/agent (sent via `python3 -c`).
 const COPY_SESSION_SCRIPT: &str = include_str!("../../../assets/agents/openclaw/copy_session.py");
 const SUPPORTED_PROVIDERS: [&str; 3] = ["anthropic", "nvidia", "openai"];
 const INSTALL_TIMEOUT: Duration = Duration::from_secs(1200);
@@ -160,7 +160,7 @@ pub fn load_envelope(raw: &str) -> Option<Map<String, Value>> {
     text.match_indices('{').rev().find_map(|(i, _)| serde_json::from_str::<Value>(&text[i..]).ok().and_then(|v| v.as_object().cloned()))
 }
 
-/// Final metrics from the CLI envelope's `meta.agentMeta.usage` (both upstream trajectory paths use it).
+/// Final metrics from the CLI envelope's `meta.agentMeta.usage` (the same source the trajectory uses).
 pub fn parse_usage(raw: &str) -> Option<AgentContext> {
     let env = load_envelope(raw).filter(|e| !e.is_empty())?;
     let usage = &env.get("meta").cloned().unwrap_or_default()["agentMeta"]["usage"];
@@ -236,7 +236,7 @@ impl Agent for OpenClaw {
                 env.insert(k, v);
             }
         }
-        // upstream writes these into the mounted logs dir; hbench has no live mount, so upload them.
+        // No live logs mount here, so write locally and upload.
         let config = serde_json::to_string_pretty(&self.full_config())? + "\n";
         let _ = std::fs::write(cx.logs_dir.join("openclaw.upload.json"), &config);
         upload_text(cx, "/logs/agent/openclaw.upload.json", &config).await?;
@@ -301,7 +301,7 @@ mod tests {
         assert_eq!(user.full_config()["models"]["providers"]["openai"]["baseUrl"], "https://example.com/v1");
         assert_eq!(oc(json!({"reasoning_effort": "high", "timeout": 60}), &[]).cli_flags(), "--agent main --thinking high --timeout 60");
         assert!(OpenClaw::new(args(json!({"failover_retries": -1}), &[], None)).is_err());
-        assert!(COPY_SESSION_SCRIPT.ends_with("shutil.copy2(src, dst)\n\n_openclaw_container_copy_session_transcript()\n"));
+        assert!(COPY_SESSION_SCRIPT.contains("openclaw.session.jsonl"));
     }
 
     #[test]
