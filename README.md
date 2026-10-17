@@ -3,6 +3,14 @@
 A Rust agent-harness benchmark runner with behavior parity with [upstream](https://github.com/node-q/hbench).
 It reads the same task format, registry datasets, and job configs, and writes the same result layout.
 
+Install the latest release (Linux/macOS, x86_64/arm64; `HBENCH_VERSION=vX.Y.Z` pins, `HBENCH_INSTALL_DIR` overrides `~/.local/bin`):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/sapphirestd/harness-benchmark/master/scripts/install.sh | sh
+```
+
+Or build from source:
+
 ```bash
 cargo build --release
 B=target/release/hbench
