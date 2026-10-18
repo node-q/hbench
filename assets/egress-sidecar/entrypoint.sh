@@ -14,7 +14,9 @@ INITIAL_ALLOWED_HOSTS="${EGRESS_CONTROL_INITIAL_ALLOWED_HOSTS:-}"
 
 cleanup() {
   rm -f "$READY_FILE"
-  nft delete table inet "$NFTABLES_RULESET_NAME" 2>/dev/null || true
+  [ "${EGRESS_CONTROL_METHOD:-nft+proxy}" = proxy ] && return
+  nft delete table ip "$NFTABLES_RULESET_NAME" 2>/dev/null || true
+  nft delete table ip6 "$NFTABLES_RULESET_NAME" 2>/dev/null || true
 }
 
 mkdir -p "$(dirname "$ALLOWLIST")"

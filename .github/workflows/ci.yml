@@ -87,4 +87,4 @@ jobs:
       - name: Run the e2e suite
         run: scripts/e2e.sh
         env:
-          E2E_REQUIRE_EGRESS: "1"
+          E2E_REQUIRE_NFT: "1"

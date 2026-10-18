@@ -55,31 +55,48 @@ print("integrity assertions OK")
 EOF
 
 # A public task under a run-level allowlist: upstream ignores the hosts, enforce_allowlist applies them.
-# Allowlists need nftables fib support in the daemon's kernel (Docker Desktop's lacks it).
-nft='[ ! -f /proc/config.gz ] || zcat /proc/config.gz | grep -qE "^CONFIG_NFT_FIB_INET=[ym]"'
-if docker container run --rm alpine:3.23 sh -c "$nft"; then
-  for enforce in false true; do
-    cat > "$JOBS/egress-$enforce.yaml" <<EOF
+# The agent phase must reach the allowlisted hosts and a stand-in for the model server on the host,
+# and nothing else, under the default method (nft+proxy wherever the kernel takes the nftables rules,
+# Docker Desktop included; E2E_REQUIRE_NFT insists on it) and under the proxy-only fallback.
+if docker info --format '{{.OperatingSystem}}' | grep -q 'Docker Desktop'; then model_host=host.docker.internal; else model_host=172.17.0.1; fi
+model_port=18080
+python3 -m http.server "$model_port" --bind 0.0.0.0 --directory "$JOBS" >/dev/null 2>&1 &
+model_pid=$!
+trap 'kill $model_pid 2>/dev/null' EXIT
+default_method=${E2E_REQUIRE_NFT:+nft+proxy}
+runs="false true true:proxy"
+for run in $runs; do
+  enforce=${run%%:*} method=${run#*:}
+  [ "$method" = "$run" ] && method=
+  cat > "$JOBS/egress-$enforce$method.yaml" <<EOF
 jobs_dir: $JOBS
-job_name: egress-$enforce
+job_name: egress-$enforce$method
 tasks: [{path: tests/egress/public-task}]
-agents: [{name: oracle, extra_allowed_hosts: [pypi.org], enforce_allowlist: $enforce}]
+environment: {env: {MODEL_PROBE: "$model_host:$model_port"}}
+agents: [{name: oracle, extra_allowed_hosts: [pypi.org, "*.python.org", $model_host], enforce_allowlist: $enforce}]
 EOF
-    $BIN run -c "$JOBS/egress-$enforce.yaml" >/dev/null
-  done
-  python3 - "$JOBS" <<'EOF'
+  HBENCH_EGRESS_METHOD=$method $BIN run -c "$JOBS/egress-$enforce$method.yaml" >/dev/null
+done
+python3 - "$JOBS" "$default_method" $runs <<'EOF'
 import json, sys, pathlib
-for enforce, want in [("false", 0.0), ("true", 1.0)]:
-    (r,) = pathlib.Path(sys.argv[1], f"egress-{enforce}").glob("*/result.json")
-    got = json.loads(r.read_text())["verifier_result"]["rewards"]["reward"]
-    assert got == want, f"enforce_allowlist={enforce}: reward {got}, want {want}"
+jobs, default = sys.argv[1], sys.argv[2]
+for run in sys.argv[3:]:
+    enforce, _, method = run.partition(":")
+    (r,) = pathlib.Path(jobs, f"egress-{enforce}{method}").glob("*/result.json")
+    d = json.loads(r.read_text())
+    got = (d["verifier_result"] or {}).get("rewards", {}).get("reward")
+    egress = d.get("egress")
+    if enforce == "false":
+        assert got == 0.0 and egress is None, f"{run}: reward {got}, egress {egress}, want 0.0 and no egress control"
+        continue
+    want = method or default or egress["method"]
+    stdout = next(r.parent.glob("verifier/test-stdout.txt"), None)
+    detail = stdout.read_text() if stdout else d["exception_info"]
+    assert got == 1.0, f"{run}: reward {got}, want 1.0\n{detail}"
+    assert egress["enforced"] and egress["method"] == want and want in ("nft+proxy", "proxy"), f"{run}: egress {egress}, want {want}"
+    assert "example.com:80" in egress["denied"], f"{run}: denials {egress['denied']}"
 print("egress assertions OK")
 EOF
-elif [ -n "${E2E_REQUIRE_EGRESS:-}" ]; then
-  echo "egress assertions required, but this docker host has no nftables fib support"; exit 1
-else
-  echo "egress assertions skipped: no nftables fib support on this docker host"
-fi
 
 left=$(docker ps -a --filter label=com.docker.compose.service=main --format '{{.Names}}' | grep -E '__[0-9a-f]{7}-main' || true)
 [ -z "$left" ] || { echo "leaked containers: $left"; exit 1; }

@@ -607,6 +607,7 @@ mod tests {
             agent_execution: None,
             verifier: None,
             step_results: None,
+            egress: None,
         }
     }
 

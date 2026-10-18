@@ -108,6 +108,9 @@ pub struct TrialResult {
     pub verifier: Option<TimingInfo>,
     #[serde(default)]
     pub step_results: Option<Vec<StepResult>>,
+    /// How the agent's environment enforced its network policy, when it had one to enforce.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub egress: Option<crate::env::EgressInfo>,
 }
 
 impl TrialResult {
@@ -263,6 +266,7 @@ impl Trial {
             agent_execution: None,
             verifier: None,
             step_results: None,
+            egress: None,
         };
         Ok(Trial {
             cfg,
@@ -461,6 +465,7 @@ impl Trial {
             && !self.env_stopped
         {
             self.env_stopped = true;
+            self.result.egress = env.egress_info().await;
             if let Err(e) = env.stop().await {
                 self.log.line(&format!("env stop failed: {e:#}"));
                 self.record(&e);

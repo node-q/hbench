@@ -1,7 +1,8 @@
 # addr, so_mark, and file.path must stay in sync with the constants in
-# bin/network-policy (GOST_PORT, GOST_MARK, ALLOWLIST); the `reload` interval
-# must stay below RELOAD_WAIT there.
+# bin/network-policy (GOST_PORT, GOST_MARK, ALLOWLIST) and src/env.rs
+# (PROXY_PORT); the `reload` interval must stay below RELOAD_WAIT there.
 services:
+  # nft+proxy: nftables redirects the task container's TCP here.
   - name: transparent-egress
     addr: ":12345"
     bypass: allowlist
@@ -15,6 +16,16 @@ services:
         sniffing.fallback: true
     listener:
       type: red
+  # Both methods: the HTTP/CONNECT proxy HTTP_PROXY and HTTPS_PROXY point at.
+  - name: http-proxy
+    addr: ":3128"
+    bypass: allowlist
+    metadata:
+      so_mark: 114514
+    handler:
+      type: http
+    listener:
+      type: tcp
 
 bypasses:
   - name: allowlist
@@ -22,3 +33,8 @@ bypasses:
     reload: 1s
     file:
       path: /opt/egress-sidecar/allowlist.txt
+
+# Debug is the level that names the host of a refused connection.
+log:
+  level: debug
+  format: json
