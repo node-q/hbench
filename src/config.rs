@@ -2,10 +2,50 @@
 
 use crate::task::{Artifact, McpServer, normalize_hosts};
 use anyhow::{Context, Result, bail};
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+
+/// Deserialize `T`, failing on any key `T` does not define: a misspelt key would otherwise be dropped
+/// silently, and for keys like `enforce_allowlist` that changes what a run is allowed to do.
+pub fn strict<'de, T, D>(d: D) -> Result<T>
+where
+    T: Deserialize<'de>,
+    D: Deserializer<'de>,
+    D::Error: Send + Sync + 'static,
+{
+    let mut unknown = vec![];
+    let v = serde_ignored::deserialize(d, |path| unknown.push(dotted(&path)))?;
+    if !unknown.is_empty() {
+        bail!("unknown key{} {}", if unknown.len() == 1 { "" } else { "s" }, unknown.join(", "));
+    }
+    Ok(v)
+}
+
+fn dotted(path: &serde_ignored::Path) -> String {
+    use serde_ignored::Path;
+    let join = |parent: &Path, seg: String| match dotted(parent) {
+        p if p.is_empty() => seg,
+        p => format!("{p}.{seg}"),
+    };
+    match path {
+        Path::Root => String::new(),
+        Path::Seq { parent, index } => join(parent, index.to_string()),
+        Path::Map { parent, key } => join(parent, key.clone()),
+        Path::Some { parent } | Path::NewtypeStruct { parent } | Path::NewtypeVariant { parent } => dotted(parent),
+    }
+}
+
+/// [`strict`] for a JSON value, also checking `user_agent`, whose flattened agent fields serde cannot check.
+pub fn strict_value<T: DeserializeOwned>(v: Value) -> Result<T> {
+    if let Some(Value::Object(ua)) = v.get("user_agent") {
+        let agent = ua.iter().filter(|(k, _)| !UserAgentConfig::OWN_KEYS.contains(&k.as_str()));
+        strict::<AgentConfig, _>(Value::Object(agent.map(|(k, v)| (k.clone(), v.clone())).collect())).context("user_agent")?;
+    }
+    strict(v)
+}
 
 fn one() -> f64 {
     1.0
@@ -128,6 +168,10 @@ pub struct UserAgentConfig {
     #[serde(default)]
     pub user_prompt_template_path: Option<PathBuf>,
     pub bridge: BridgeConfig,
+}
+
+impl UserAgentConfig {
+    const OWN_KEYS: &[&str] = &["user_persona_path", "user_prompt_template_path", "bridge"];
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -431,6 +475,10 @@ pub struct JobConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SourceJob {
     pub action: String,
+    #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub job_id: Option<uuid::Uuid>,
     pub path: PathBuf,
 }
 
@@ -479,7 +527,7 @@ impl JobConfig {
             serde_yaml_ng::from_str(&raw).with_context(|| format!("parsing {}", path.display()))?
         };
         migrate_legacy(&mut v);
-        let cfg: JobConfig = serde_json::from_value(v).with_context(|| format!("invalid job config {}", path.display()))?;
+        let cfg: JobConfig = strict_value(v).with_context(|| format!("invalid job config {}", path.display()))?;
         cfg.validate()?;
         Ok(cfg)
     }
@@ -610,13 +658,31 @@ impl JobConfig {
     }
 }
 
-/// Move legacy `orchestrator.{n_concurrent_trials,quiet,retry}` to the top level.
+/// Rewrite the legacy keys upstream still accepts to their current form, so the strict parse sees only
+/// current keys: `orchestrator.{n_concurrent_trials,quiet,retry}` move to the top level, `plugins` and
+/// `environment.suppress_override_warnings` (both no-ops) go, `environment.mounts_json` becomes `mounts`,
+/// and a dataset's `registry: {url, path}` becomes `registry_url` / `registry_path`.
 pub fn migrate_legacy(v: &mut Value) {
     let Some(obj) = v.as_object_mut() else { return };
+    obj.remove("plugins");
     if let Some(Value::Object(orch)) = obj.remove("orchestrator") {
-        for (k, val) in orch {
-            if k != "type" && k != "kwargs" {
-                obj.entry(k).or_insert(val);
+        for (k, val) in orch.into_iter().filter(|(k, _)| ["n_concurrent_trials", "quiet", "retry"].contains(&k.as_str())) {
+            obj.entry(k).or_insert(val);
+        }
+    }
+    if let Some(Value::Object(env)) = obj.get_mut("environment") {
+        env.remove("suppress_override_warnings");
+        if let Some(m) = env.remove("mounts_json") {
+            env.entry("mounts").or_insert(m);
+        }
+    }
+    for d in obj.get_mut("datasets").and_then(Value::as_array_mut).into_iter().flatten() {
+        let Some(d) = d.as_object_mut() else { continue };
+        if let Some(Value::Object(reg)) = d.remove("registry") {
+            for (from, to) in [("url", "registry_url"), ("path", "registry_path")] {
+                if let Some(val) = reg.get(from) {
+                    d.entry(to).or_insert(val.clone());
+                }
             }
         }
     }
@@ -653,6 +719,40 @@ mod tests {
         assert!(JobConfig::load(&p).is_err());
         std::fs::write(&p, "environment:\n  type: daytona\n").unwrap();
         assert!(JobConfig::load(&p).is_err());
+    }
+
+    #[test]
+    fn unknown_keys_are_errors() {
+        let load = |v: Value| -> Result<JobConfig> {
+            let mut v = v;
+            migrate_legacy(&mut v);
+            strict_value(v)
+        };
+        let err = |v: Value| format!("{:#}", load(v).unwrap_err());
+        assert_eq!(
+            err(serde_json::json!({"agents": [{"name": "nop", "enforce_allow_list": true}]})),
+            "unknown key agents.0.enforce_allow_list"
+        );
+        assert_eq!(
+            err(serde_json::json!({"n_attempt": 2, "environment": {"forcebuild": true}})),
+            "unknown keys n_attempt, environment.forcebuild"
+        );
+        assert!(
+            err(serde_json::json!({"user_agent": {"name": "nop", "modle_name": "m", "bridge": {"kind": "acp"}}})).contains("modle_name")
+        );
+        assert!(err(serde_json::json!({"artifacts": [{"source": "/a", "dest": "b"}]})).contains("Artifact"));
+        let ok = load(serde_json::json!({
+            "plugins": ["x"],
+            "orchestrator": {"type": "local", "n_concurrent_trials": 2, "kwargs": {}},
+            "environment": {"suppress_override_warnings": true, "mounts_json": [{"type": "bind"}]},
+            "datasets": [{"name": "terminal-bench", "registry": {"url": "https://r/registry.json"}}],
+            "user_agent": {"name": "nop", "user_persona_path": "p.md", "bridge": {"kind": "acp"}},
+            "source_jobs": [{"action": "regrade", "type": "local", "path": "jobs/j"}],
+        }))
+        .unwrap();
+        assert_eq!(ok.n_concurrent_trials, 2);
+        assert_eq!(ok.environment.mounts.as_ref().map(Vec::len), Some(1));
+        assert_eq!(ok.datasets[0].registry_url.as_deref(), Some("https://r/registry.json"));
     }
 
     #[test]

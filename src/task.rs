@@ -25,6 +25,17 @@ pub struct TaskConfig {
     pub artifacts: Vec<Artifact>,
 }
 
+impl TaskConfig {
+    /// Parse task.toml, rejecting unknown keys; the legacy top-level `version` means `schema_version`.
+    pub fn parse(text: &str) -> Result<TaskConfig> {
+        let mut t: toml::Table = toml::from_str(text)?;
+        if let Some(v) = t.remove("version") {
+            t.entry("schema_version").or_insert(v);
+        }
+        crate::config::strict(toml::Value::Table(t))
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum RewardStrategy {
@@ -38,6 +49,10 @@ pub struct PackageInfo {
     pub name: Option<String>,
     pub version: Option<String>,
     pub description: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub authors: Vec<toml::Value>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub keywords: Vec<String>,
 }
 
 /// `[agent]` / `[steps.agent]`.
@@ -157,7 +172,7 @@ fn three() -> u32 {
 
 /// Artifact entry: `"/path"` or `{ source, destination?, exclude?, service? }`.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
-#[serde(untagged)]
+#[serde(untagged, deny_unknown_fields)]
 pub enum Artifact {
     Path(String),
     Full {
@@ -281,6 +296,8 @@ pub struct EnvironmentConfig {
     pub storage: Option<String>,
     pub gpus: Option<u32>,
     pub gpu_types: Option<Vec<String>>,
+    /// Accepted for upstream compatibility; docker has no TPUs.
+    pub tpu: Option<toml::Value>,
     pub env: BTreeMap<String, String>,
     pub workdir: Option<String>,
     pub network_mode: Option<NetworkMode>,
@@ -305,6 +322,7 @@ impl Default for EnvironmentConfig {
             storage: None,
             gpus: None,
             gpu_types: None,
+            tpu: None,
             env: BTreeMap::new(),
             workdir: None,
             network_mode: None,
@@ -429,7 +447,7 @@ impl Task {
         let dir = dir.canonicalize().with_context(|| format!("task dir {}", dir.display()))?;
         let toml_path = dir.join("task.toml");
         let raw = std::fs::read_to_string(&toml_path).with_context(|| format!("reading {}", toml_path.display()))?;
-        let mut config: TaskConfig = toml::from_str(&raw).with_context(|| format!("parsing {}", toml_path.display()))?;
+        let mut config = TaskConfig::parse(&raw).with_context(|| format!("parsing {}", toml_path.display()))?;
         if config.environment.is_windows() {
             bail!("{}: windows tasks are not supported", dir.display());
         }
@@ -688,17 +706,18 @@ mod tests {
 
     #[test]
     fn parses_legacy_and_current_task_toml() {
-        let mut legacy: TaskConfig = toml::from_str(
+        let mut legacy = TaskConfig::parse(
             "version = \"1.0\"\n[metadata]\ndifficulty='easy'\nexpert_time_estimate_min = 45\n\
              [verifier]\ntimeout_sec = 900.0\n[agent]\ntimeout_sec = 900.0\n\
              [environment]\ndocker_image = \"x:1\"\nmemory = \"2G\"\nallow_internet = false\n",
         )
         .unwrap();
         normalize_env_config(&mut legacy.environment).unwrap();
+        assert_eq!(legacy.schema_version.as_deref(), Some("1.0"));
         assert_eq!(legacy.verifier.timeout_sec, Some(900.0));
         assert_eq!(legacy.environment.memory_mb, Some(2048));
         assert_eq!(legacy.environment.baseline().mode, NetworkMode::NoNetwork);
-        let cur: TaskConfig = toml::from_str(
+        let cur = TaskConfig::parse(
             "schema_version='1.4'\nartifacts=['/a', {source='/b', service='api', exclude=['*.log']}]\n\
              [task]\nname='hbench/hello'\n[agent]\nuser = 1000\n[environment]\nworkdir='/w'\n\
              [verifier]\nenvironment_mode='separate'\n[[verifier.collect]]\ncommand='x'\nservice='api'\n\
@@ -716,6 +735,18 @@ mod tests {
         assert_eq!(steps[0].healthcheck.as_ref().unwrap().retries, 3);
         let specs = with_convention(&cur.artifacts);
         assert!(specs[0].is_convention() && specs[2].service() == "api" && specs.len() == 3);
+    }
+
+    #[test]
+    fn task_toml_rejects_unknown_keys() {
+        let err = |t: &str| format!("{:#}", TaskConfig::parse(t).unwrap_err());
+        assert_eq!(err("[agent]\ntimeout_sec = 60\nnetwork = 'none'\n"), "unknown key agent.network");
+        assert_eq!(err("[[steps]]\nname = 'a'\n[steps.verifier]\ntimeout = 5\n"), "unknown key steps.0.verifier.timeout");
+        let ok = TaskConfig::parse(
+            "[task]\nname = 'o/t'\nauthors = [{name = 'A', email = 'a@x'}]\nkeywords = ['k']\n\
+             [metadata]\nanything = 1\n[environment]\ntpu = {type = 'v6e', topology = '2x2'}\n",
+        );
+        assert!(ok.is_ok(), "{ok:?}");
     }
 
     #[test]

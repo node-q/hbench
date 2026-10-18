@@ -252,12 +252,12 @@ impl ExecJobConfig {
                 bail!("1 validation error for ExecJobConfig\n{k}\n  Input should be greater than or equal to 1");
             }
         }
-        serde_json::from_value::<RetryConfig>(Value::Object(self.retry.clone())).context("retry")?;
-        serde_json::from_value::<EnvConfig>(Value::Object(self.environment.clone())).context("environment")?;
-        serde_json::from_value::<VerifierRunConfig>(Value::Object(self.verifier.clone())).context("verifier")?;
-        serde_json::from_value::<Vec<MetricConfig>>(Value::Array(self.metrics.clone())).context("metrics")?;
+        crate::config::strict_value::<RetryConfig>(Value::Object(self.retry.clone())).context("retry")?;
+        crate::config::strict_value::<EnvConfig>(Value::Object(self.environment.clone())).context("environment")?;
+        crate::config::strict_value::<VerifierRunConfig>(Value::Object(self.verifier.clone())).context("verifier")?;
+        crate::config::strict_value::<Vec<MetricConfig>>(Value::Array(self.metrics.clone())).context("metrics")?;
         for a in &self.agents {
-            serde_json::from_value::<AgentConfig>(Value::Object(a.clone())).context("agents")?;
+            crate::config::strict_value::<AgentConfig>(Value::Object(a.clone())).context("agents")?;
         }
         Ok(())
     }
