@@ -20,13 +20,13 @@ fn read_json(p: &Path) -> Option<Value> {
     serde_json::from_str(&std::fs::read_to_string(p).ok()?).ok()
 }
 
-/// Python truthiness `a or b or ...` over JSON values.
+/// The first value that is set: not null, `false`, `""` or zero.
 fn first_truthy<'a>(vals: impl IntoIterator<Item = &'a Value>) -> Option<&'a Value> {
     vals.into_iter().find(|v| !matches!(v, Value::Null | Value::Bool(false)) && v.as_str() != Some("") && v.as_f64() != Some(0.0))
 }
 
-/// Python `str(float(x))`.
-fn py_float_str(v: &Value) -> Option<String> {
+/// A number, numeric string or bool as float text (`1.0`, `0.25`, `1e20`); None for other values.
+fn float_text(v: &Value) -> Option<String> {
     let f = match v {
         Value::Number(n) => n.as_f64()?,
         Value::String(s) => s.trim().parse().ok()?,
@@ -108,7 +108,7 @@ fn trial_result_value(trial_dir: &Path, trial_name: &str) -> Option<String> {
                 return Some(name.clone());
             }
             if let Some((k, _)) = e["reward_stats"]["reward"].as_object().and_then(|m| m.iter().find(|(_, v)| has(v))) {
-                return Some(py_float_str(&Value::String(k.clone())).unwrap_or_else(|| k.clone()));
+                return Some(float_text(&Value::String(k.clone())).unwrap_or_else(|| k.clone()));
             }
         }
     }
@@ -117,7 +117,7 @@ fn trial_result_value(trial_dir: &Path, trial_name: &str) -> Option<String> {
         return Some(t.as_str().map(str::to_string).unwrap_or_else(|| t.to_string()));
     }
     let reward = &r["verifier_result"]["rewards"]["reward"];
-    (!reward.is_null()).then(|| py_float_str(reward).unwrap_or_else(|| reward.to_string()))
+    (!reward.is_null()).then(|| float_text(reward).unwrap_or_else(|| reward.to_string()))
 }
 
 fn trial_is_success(trial_dir: &Path) -> Option<bool> {
@@ -136,9 +136,9 @@ fn normalize_content(c: &Value) -> String {
         Value::String(s) => s.clone(),
         Value::Array(a) if a.first().is_some_and(|f| f.get("text").is_some()) => {
             let t = &a[0]["text"];
-            t.as_str().map(str::to_string).unwrap_or_else(|| crate::atif::py_dumps(t))
+            t.as_str().map(str::to_string).unwrap_or_else(|| crate::fmt::json_spaced_utf8(t))
         }
-        other => crate::atif::py_dumps(other),
+        other => crate::fmt::json_spaced_utf8(other),
     }
 }
 
@@ -192,11 +192,11 @@ fn episodes_from_trajectory(traj: &Value, meta: &RunMeta) -> Vec<Map<String, Val
                     }
                     for tc in s["tool_calls"].as_array().into_iter().flatten() {
                         let args = tc.get("arguments").cloned().unwrap_or(json!({}));
-                        // name before arguments, as Python's insertion-ordered dict dumps it
+                        // `name` key first, then `arguments`
                         let call = format!(
                             "{{\"name\": {}, \"arguments\": {}}}",
-                            crate::atif::py_dumps(&tc["function_name"]),
-                            crate::atif::py_dumps(&args)
+                            crate::fmt::json_spaced_utf8(&tc["function_name"]),
+                            crate::fmt::json_spaced_utf8(&args)
                         );
                         parts.push(format!("<tool_call>\n{call}\n</tool_call>"));
                     }
@@ -470,7 +470,7 @@ mod tests {
         let out = job.join("out.jsonl");
         run(&job, Some(&out), &opts()).unwrap();
         assert_eq!(std::fs::read_to_string(&out).unwrap().lines().count(), 2);
-        assert_eq!(py_float_str(&json!("1")).as_deref(), Some("1.0"));
-        assert_eq!(py_float_str(&json!(0.25)).as_deref(), Some("0.25"));
+        assert_eq!(float_text(&json!("1")).as_deref(), Some("1.0"));
+        assert_eq!(float_text(&json!(0.25)).as_deref(), Some("0.25"));
     }
 }

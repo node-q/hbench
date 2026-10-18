@@ -54,8 +54,8 @@ pub(super) fn config_from_flags(a: &ExecArgs) -> Result<ExecConfig> {
     let verify = !a.disable_verification;
     let verifiers = compile_verifiers(&artifacts, verify, reward.as_deref());
     let tasks_output_dir = match &a.tasks_dir {
-        Some(d) => PyPath::new(d),
-        None => PyPath::new(&temp_root().join(format!("hbench-exec-map-tasks-{}", uuid::Uuid::new_v4().simple())).to_string_lossy()),
+        Some(d) => NormPath::new(d),
+        None => NormPath::new(&temp_root().join(format!("hbench-exec-map-tasks-{}", uuid::Uuid::new_v4().simple())).to_string_lossy()),
     };
     let timestamp = chrono::Local::now().format("%Y-%m-%d__%H-%M-%S").to_string();
     let mut retry = Map::new();
@@ -66,7 +66,7 @@ pub(super) fn config_from_flags(a: &ExecArgs) -> Result<ExecConfig> {
     let environment = environment_config(a.environment.as_deref())?;
     let map_job = ExecJobConfig {
         job_name: Some(a.job_name.clone().unwrap_or_else(|| format!("{timestamp}-map"))),
-        jobs_dir: Some(PyPath::new(a.jobs_dir.as_deref().unwrap_or("jobs"))),
+        jobs_dir: Some(NormPath::new(a.jobs_dir.as_deref().unwrap_or("jobs"))),
         n_attempts: a.n_attempts.unwrap_or(1),
         n_concurrent_trials: a.n_concurrent.unwrap_or(4),
         quiet: a.quiet,
@@ -82,7 +82,7 @@ pub(super) fn config_from_flags(a: &ExecArgs) -> Result<ExecConfig> {
         task_name_prefix: a.job_name.clone(),
         output_dir: Some(tasks_output_dir.clone()),
         instructions: map_instructions,
-        task_template: a.task_template.as_deref().map(PyPath::new),
+        task_template: a.task_template.as_deref().map(NormPath::new),
         artifacts: artifacts.into_iter().map(Value::String).collect(),
         environments: compile_environments(&a.paths, a.scan(), a.limit, a.image.as_deref(), a.workdir.as_deref())?,
         verifiers,
@@ -99,7 +99,7 @@ fn reduce_config_from_flags(
     verify: bool,
     default_job_name: &str,
     map_job: &ExecJobConfig,
-    output_dir: &PyPath,
+    output_dir: &NormPath,
 ) -> Result<Option<ExecReduceConfig>> {
     if !reduce_flags_passed(a) {
         return Ok(None);
@@ -115,7 +115,7 @@ fn reduce_config_from_flags(
     let instruction = match (&a.reduce_instruction, &a.reduce_instruction_path) {
         (Some(_), Some(_)) => bail!("--reduce-instruction and --reduce-instruction-path are mutually exclusive."),
         (Some(t), None) => CompileInstruction::text(t),
-        (None, Some(p)) => CompileInstruction { text: None, path: Some(PyPath::new(p)) },
+        (None, Some(p)) => CompileInstruction { text: None, path: Some(NormPath::new(p)) },
         (None, None) => bail!("Reducer requires --reduce-instruction/--reduce-prompt or --reduce-instruction-path."),
     };
     instruction.validate()?;
@@ -136,7 +136,7 @@ fn reduce_config_from_flags(
         task: ExecReduceTaskConfig {
             task_name: reduce_name(),
             output_dir: output_dir.clone(),
-            task_template: a.reduce_task_template.as_deref().map(PyPath::new),
+            task_template: a.reduce_task_template.as_deref().map(NormPath::new),
             instruction,
             artifacts: artifacts.into_iter().map(Value::String).collect(),
             environment: ExecReduceEnvironment {
@@ -153,7 +153,7 @@ fn compile_instructions(instruction: Option<&str>, path: Option<&str>) -> Result
     let v = match (instruction, path) {
         (Some(_), Some(_)) => bail!("--instruction and --instruction-path are mutually exclusive."),
         (Some(t), None) => vec![CompileInstruction::text(t)],
-        (None, Some(p)) => vec![CompileInstruction { text: None, path: Some(PyPath::new(p)) }],
+        (None, Some(p)) => vec![CompileInstruction { text: None, path: Some(NormPath::new(p)) }],
         (None, None) => vec![],
     };
     for i in &v {
@@ -267,14 +267,15 @@ pub fn scan_paths(values: &[String], limit: Option<u64>) -> Result<Vec<String>> 
 
 fn scan_one_path(value: &str) -> Result<Vec<String>> {
     if has_magic(value) {
-        let mut matches: Vec<PathBuf> = py_glob(&py_path(&expanduser(value))).iter().map(|m| PathBuf::from(py_path(m))).collect();
+        let mut matches: Vec<PathBuf> =
+            glob_paths(&posix_normalize(&expanduser(value))).iter().map(|m| PathBuf::from(posix_normalize(m))).collect();
         matches.sort();
         if matches.is_empty() {
             bail!("Path pattern did not match anything: {value}");
         }
         return Ok(matches.into_iter().map(|p| p.to_string_lossy().into_owned()).collect());
     }
-    let base = py_path(&expanduser(value));
+    let base = posix_normalize(&expanduser(value));
     let path = Path::new(&base);
     if path.is_dir() {
         let mut kids: Vec<PathBuf> = std::fs::read_dir(path)?

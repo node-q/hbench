@@ -1,12 +1,12 @@
 //! mini-swe-agent installed agent.
 
-use super::common::fmt::type_name;
 use super::common::{installed_dir, uv_install};
 use super::pins;
 use super::{connection, ensure_system_dependencies, exec_agent};
 use crate::agents::model_connection::{Resolved, Spec};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::quote;
+use crate::fmt::type_name;
 use anyhow::{Result, anyhow, bail};
 use regex::Regex;
 use serde_json::Value;

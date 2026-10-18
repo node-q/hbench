@@ -1,11 +1,11 @@
 //! Muse Code installed agent.
 
-use super::common::fmt::json_spaced;
 use super::common::{installed_dir, skills_dir};
 use super::{connection, ensure_system_dependencies, exec_agent, exec_root, upload_text};
 use crate::agents::model_connection::{Resolved, Spec};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::quote;
+use crate::fmt::json_spaced;
 use anyhow::{Result, anyhow, bail};
 use regex::Regex;
 use serde_json::{Map, Value, json};

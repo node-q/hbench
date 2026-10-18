@@ -172,7 +172,7 @@ mod tests {
     #[test]
     fn version_parsing() {
         assert_eq!(parse_aider_version("\naider 0.86.1\n"), "0.86.1");
-        assert_eq!(crate::agents::installed::common::fmt::float_with_point(1.0), "1.0");
-        assert_eq!(crate::agents::installed::common::fmt::float_with_point(0.25), "0.25");
+        assert_eq!(crate::fmt::float_with_point(1.0), "1.0");
+        assert_eq!(crate::fmt::float_with_point(0.25), "0.25");
     }
 }

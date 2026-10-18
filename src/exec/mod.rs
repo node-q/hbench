@@ -8,12 +8,12 @@ mod executor;
 mod flags;
 mod mentions;
 mod models;
+mod paths;
 mod print_config;
-mod py_toml;
-mod pypath;
 mod task_toml;
 #[cfg(test)]
 mod tests;
+mod toml_writer;
 
 // Submodules reach each other's items through these globs and their own `use super::*`.
 use cli::*;
@@ -22,10 +22,10 @@ use executor::*;
 use flags::*;
 use mentions::*;
 use models::*;
+use paths::*;
 use print_config::*;
-use py_toml::*;
-use pypath::*;
 use task_toml::*;
+use toml_writer::*;
 
 pub(crate) use cli::{ExecArgs, run};
 

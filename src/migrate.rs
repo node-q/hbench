@@ -11,7 +11,7 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
-use yaml::pyyaml_dump;
+use yaml::to_yaml;
 
 mod yaml;
 
@@ -263,7 +263,7 @@ fn process_docker_compose(src: &Path, env_dir: &Path, task: &str) -> Result<Hash
             if *name == main_name {
                 continue;
             }
-            let svc = svc.as_mapping().ok_or_else(|| anyhow!("service {} must be a mapping", py_str(name)))?;
+            let svc = svc.as_mapping().ok_or_else(|| anyhow!("service {} must be a mapping", yaml_text(name)))?;
             let ctx = build_context(svc);
             if ctx != "." && src.join(&ctx).is_dir() {
                 let dst = env_dir.join(&ctx);
@@ -284,13 +284,13 @@ fn main_service(services: &Mapping) -> Result<(Value, &Mapping)> {
     } else {
         services.keys().next().cloned().ok_or_else(|| anyhow!("no services"))?
     };
-    let svc = services[&name].as_mapping().ok_or_else(|| anyhow!("service {} must be a mapping", py_str(&name)))?;
+    let svc = services[&name].as_mapping().ok_or_else(|| anyhow!("service {} must be a mapping", yaml_text(&name)))?;
     Ok((name, svc))
 }
 
 fn build_context(svc: &Mapping) -> String {
     match svc.get("build") {
-        Some(Value::Mapping(b)) => b.get("context").map(py_str).unwrap_or_else(|| ".".into()),
+        Some(Value::Mapping(b)) => b.get("context").map(yaml_text).unwrap_or_else(|| ".".into()),
         Some(Value::String(s)) => s.clone(),
         _ => ".".into(),
     }
@@ -307,7 +307,7 @@ fn can_collapse_to_dockerfile(root: &Mapping, services: &Mapping) -> Result<bool
         bail!("'NoneType' object has no attribute 'items'");
     };
     for (k, v) in svc {
-        let k = py_str(k);
+        let k = yaml_text(k);
         if !DOCKERFILE_FIELDS.contains(&k.as_str()) && !IGNORED_FIELDS.contains(&k.as_str()) {
             return Ok(false);
         }
@@ -363,13 +363,13 @@ fn dockerfile_additions(svc: &Mapping) -> Vec<String> {
             for it in items {
                 if it.as_str() != Some(TBENCH_DEFAULT_ENV) {
                     // "KEY=VALUE" -> "ENV KEY=VALUE"; bare "KEY" -> "ENV KEY": same text either way.
-                    add.push(format!("ENV {}", py_str(it)));
+                    add.push(format!("ENV {}", yaml_text(it)));
                 }
             }
         }
         Some(Value::Mapping(m)) => {
             for (k, v) in m {
-                let s = format!("{}={}", py_str(k), py_str(v));
+                let s = format!("{}={}", yaml_text(k), yaml_text(v));
                 if s != TBENCH_DEFAULT_ENV {
                     add.push(format!("ENV {s}"));
                 }
@@ -378,19 +378,19 @@ fn dockerfile_additions(svc: &Mapping) -> Vec<String> {
         _ => {}
     }
     if let Some(wd) = svc.get("working_dir") {
-        let wd = py_str(wd);
+        let wd = yaml_text(wd);
         if !wd.contains("${") {
             add.push(format!("WORKDIR {wd}"));
         }
     }
     match svc.get("expose") {
-        Some(Value::Sequence(ports)) => add.extend(ports.iter().map(|p| format!("EXPOSE {}", py_str(p)))),
-        Some(p) => add.push(format!("EXPOSE {}", py_str(p))),
+        Some(Value::Sequence(ports)) => add.extend(ports.iter().map(|p| format!("EXPOSE {}", yaml_text(p)))),
+        Some(p) => add.push(format!("EXPOSE {}", yaml_text(p))),
         None => {}
     }
     match svc.get("entrypoint") {
-        Some(ep @ Value::Sequence(_)) => add.push(format!("ENTRYPOINT {}", py_json(ep))),
-        Some(ep) => add.push(format!("ENTRYPOINT {}", py_json(&Value::Sequence(vec![ep.clone()])))),
+        Some(ep @ Value::Sequence(_)) => add.push(format!("ENTRYPOINT {}", yaml_json(ep))),
+        Some(ep) => add.push(format!("ENTRYPOINT {}", yaml_json(&Value::Sequence(vec![ep.clone()])))),
         None => {}
     }
     add
@@ -402,7 +402,7 @@ fn append_to_dockerfile(path: &Path, svc: &Mapping, task: &str) -> Result<()> {
     let additions = dockerfile_additions(svc);
     let mut content = read_text(path)?;
     if let Some(p) = svc.get("platform") {
-        let platform = py_str(p);
+        let platform = yaml_text(p);
         let mut count = PLATFORM_RE.find_iter(&content).count();
         if count > 0 {
             content =
@@ -419,7 +419,7 @@ fn append_to_dockerfile(path: &Path, svc: &Mapping, task: &str) -> Result<()> {
     }
     content += "\n# Mapped from docker-compose.yaml\n";
     content += &(additions.join("\n") + "\n");
-    let non_default: Vec<String> = additions.iter().filter(|a| *a != "ENV TEST_DIR=/tests").map(|a| py_repr_str(a)).collect();
+    let non_default: Vec<String> = additions.iter().filter(|a| *a != "ENV TEST_DIR=/tests").map(|a| str_literal(a)).collect();
     if !non_default.is_empty() {
         println!("[{task}] Moved to Dockerfile: [{}]", non_default.join(", "));
     }
@@ -495,7 +495,7 @@ fn write_compose(root: &Mapping, services: &Mapping, main_name: &Value, main: &M
     }
     converted["services"] = Value::Mapping(out_services);
     fs::create_dir_all(target.parent().unwrap())?;
-    let content = pyyaml_dump(&Value::Mapping(converted)).replace("${T_BENCH_TASK_DOCKER_NAME_PREFIX}", "hb");
+    let content = to_yaml(&Value::Mapping(converted)).replace("${T_BENCH_TASK_DOCKER_NAME_PREFIX}", "hb");
     fs::write(target, content)?;
     Ok(())
 }
@@ -563,8 +563,8 @@ fn copy_tree(src: &Path, dst: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Python `repr(float)`.
-fn py_float_repr(f: f64) -> String {
+/// Shortest round-trip float text: positional for exponents -4..16 (`0.001`, `1.0`), else `1e+20` style.
+fn float_repr(f: f64) -> String {
     if f.is_nan() {
         return "nan".into();
     }
@@ -597,19 +597,20 @@ fn py_float_repr(f: f64) -> String {
 }
 
 fn toml_float(f: f64) -> String {
-    py_float_repr(f).replace("e+0", "e+").replace("e-0", "e-")
+    float_repr(f).replace("e+0", "e+").replace("e-0", "e-")
 }
 
-/// Python `str.isprintable()` for non-ASCII.
+/// Whether a non-ASCII char is printed as-is in a quoted literal (vs escaped).
 // Approximates Unicode categories Cc/Cf/Zs/Zl/Zp/Co; exact tables if it ever matters.
-fn py_printable(c: char) -> bool {
+fn is_printable(c: char) -> bool {
     !c.is_control()
         && !matches!(c, '\u{a0}' | '\u{ad}' | '\u{1680}' | '\u{2000}'..='\u{200f}' | '\u{2028}'..='\u{202f}'
             | '\u{205f}'..='\u{206f}' | '\u{3000}' | '\u{feff}' | '\u{fff9}'..='\u{fffb}' | '\u{e000}'..='\u{f8ff}')
 }
 
-/// Python `repr(str)`.
-fn py_repr_str(s: &str) -> String {
+/// `s` as a quoted literal: single quotes unless it holds only single quotes; control and
+/// non-printable characters as `\x`/`\u`/`\U` escapes.
+fn str_literal(s: &str) -> String {
     let q = if s.contains('\'') && !s.contains('"') { '"' } else { '\'' };
     let mut o = String::from(q);
     for c in s.chars() {
@@ -623,7 +624,7 @@ fn py_repr_str(s: &str) -> String {
                 o.push(c)
             }
             c if (c as u32) < 0x20 || c as u32 == 0x7f => o += &format!("\\x{:02x}", c as u32),
-            c if c.is_ascii() || py_printable(c) => o.push(c),
+            c if c.is_ascii() || is_printable(c) => o.push(c),
             c if (c as u32) <= 0xff => o += &format!("\\x{:02x}", c as u32),
             c if (c as u32) <= 0xffff => o += &format!("\\u{:04x}", c as u32),
             c => o += &format!("\\U{:08x}", c as u32),
@@ -633,31 +634,31 @@ fn py_repr_str(s: &str) -> String {
     o
 }
 
-/// Python `str(x)` of a YAML-loaded value.
-fn py_str(v: &Value) -> String {
+/// Display text of a YAML value: strings as-is, `None`/`True`/`False` literals, collections in literal form.
+fn yaml_text(v: &Value) -> String {
     match v {
         Value::String(s) => s.clone(),
         Value::Null => "None".into(),
         Value::Bool(b) => if *b { "True" } else { "False" }.into(),
-        Value::Number(n) if n.is_f64() => py_float_repr(n.as_f64().unwrap()),
+        Value::Number(n) if n.is_f64() => float_repr(n.as_f64().unwrap()),
         Value::Number(n) => n.to_string(),
-        Value::Sequence(s) => format!("[{}]", s.iter().map(py_repr).collect::<Vec<_>>().join(", ")),
+        Value::Sequence(s) => format!("[{}]", s.iter().map(yaml_literal).collect::<Vec<_>>().join(", ")),
         Value::Mapping(m) => {
-            format!("{{{}}}", m.iter().map(|(k, v)| format!("{}: {}", py_repr(k), py_repr(v))).collect::<Vec<_>>().join(", "))
+            format!("{{{}}}", m.iter().map(|(k, v)| format!("{}: {}", yaml_literal(k), yaml_literal(v))).collect::<Vec<_>>().join(", "))
         }
-        Value::Tagged(t) => py_str(&t.value),
+        Value::Tagged(t) => yaml_text(&t.value),
     }
 }
 
-fn py_repr(v: &Value) -> String {
+fn yaml_literal(v: &Value) -> String {
     match v {
-        Value::String(s) => py_repr_str(s),
-        _ => py_str(v),
+        Value::String(s) => str_literal(s),
+        _ => yaml_text(v),
     }
 }
 
-/// Python `json.dumps(x)` (ensure_ascii, default separators).
-fn py_json(v: &Value) -> String {
+/// A YAML value as JSON with `, `/`: ` separators and non-ASCII escaped as `\uXXXX`.
+fn yaml_json(v: &Value) -> String {
     match v {
         Value::String(s) => {
             let mut o = String::from('"');
@@ -687,21 +688,21 @@ fn py_json(v: &Value) -> String {
         Value::Number(n) if n.is_f64() => match n.as_f64().unwrap() {
             f if f.is_nan() => "NaN".into(),
             f if f.is_infinite() => if f > 0.0 { "Infinity" } else { "-Infinity" }.into(),
-            f => py_float_repr(f),
+            f => float_repr(f),
         },
         Value::Number(n) => n.to_string(),
-        Value::Sequence(s) => format!("[{}]", s.iter().map(py_json).collect::<Vec<_>>().join(", ")),
+        Value::Sequence(s) => format!("[{}]", s.iter().map(yaml_json).collect::<Vec<_>>().join(", ")),
         Value::Mapping(m) => format!(
             "{{{}}}",
-            m.iter().map(|(k, v)| format!("{}: {}", py_json(&Value::String(py_str(k))), py_json(v))).collect::<Vec<_>>().join(", ")
+            m.iter().map(|(k, v)| format!("{}: {}", yaml_json(&Value::String(yaml_text(k))), yaml_json(v))).collect::<Vec<_>>().join(", ")
         ),
-        Value::Tagged(t) => py_json(&t.value),
+        Value::Tagged(t) => yaml_json(&t.value),
     }
 }
 
-/// python `toml` 0.10.2 `_dump_str`, quirks and all.
+/// A TOML basic string as the `toml` 0.10 encoder writes it, including its `\x` -> `\u00` rewriting.
 fn toml_str(s: &str) -> Result<String> {
-    let r = py_repr_str(s);
+    let r = str_literal(s);
     let single = r.starts_with('\'');
     let mut v = r[1..r.len() - 1].to_string();
     if single {
@@ -715,7 +716,7 @@ fn toml_str(s: &str) -> Result<String> {
         parts[0] = parts[0].replace("\\\\", "\\");
         let p0: Vec<char> = parts[0].chars().collect();
         let (Some(&last), true) = (p0.last(), parts.len() > 1) else {
-            bail!("toml: cannot encode string {s:?} (IndexError in python toml)");
+            bail!("toml: cannot encode string {s:?} (unencodable escape sequence)");
         };
         let mut joinx = last != '\\';
         let mut k = 1;
@@ -933,7 +934,7 @@ junior_time_estimate_min: 7.5
     }
 
     #[test]
-    fn multi_service_writes_pyyaml_identical_compose() {
+    fn multi_service_writes_expected_compose() {
         let compose = r#"version: "3"
 services:
   db:
@@ -1096,7 +1097,7 @@ networks:
     }
 
     #[test]
-    fn python_formatting_helpers() {
+    fn literal_formatting_helpers() {
         for (f, s) in [
             (60.0, "60.0"),
             (1e20, "1e+20"),
@@ -1106,10 +1107,10 @@ networks:
             (1e15, "1000000000000000.0"),
             (-2.5, "-2.5"),
         ] {
-            assert_eq!(py_float_repr(f), s);
+            assert_eq!(float_repr(f), s);
         }
         assert_eq!(toml_float(1e-7), "1e-7");
         assert_eq!(toml_str("Jo \\ \"x\"\n\u{1}é").unwrap(), "\"Jo \\ \\\"x\\\"\\nx01é\"");
-        assert_eq!(py_repr_str("it's"), "\"it's\"");
+        assert_eq!(str_literal("it's"), "\"it's\"");
     }
 }

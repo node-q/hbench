@@ -1,11 +1,11 @@
 //! Mistral Vibe installed agent.
 
-use super::common::fmt::float_with_point;
 use super::common::{installed_dir, skills_dir, uv_install};
 use super::pins;
 use super::{ensure_system_dependencies, exec_agent, exec_error};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::{kind_err, quote};
+use crate::fmt::float_with_point;
 use anyhow::{Result, anyhow, bail};
 use regex::Regex;
 use serde_json::{Map, Value};

@@ -1,7 +1,6 @@
 //! Helpers shared by the installed agents: common setup steps, the nvm node install
 //! snippet, and small parsing utilities.
 
-pub mod fmt;
 pub mod opts;
 
 use super::pins;

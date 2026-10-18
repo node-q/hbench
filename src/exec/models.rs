@@ -6,20 +6,20 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value, json};
 
-/// Python `pathlib.Path` string: serialized the way pydantic dumps a Path.
+/// A path string normalized on construction (repeated and trailing `/` and `.` segments dropped; empty -> `.`).
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(transparent)]
-pub struct PyPath(pub(super) String);
+pub struct NormPath(pub(super) String);
 
-impl PyPath {
-    pub(super) fn new(s: &str) -> PyPath {
-        PyPath(py_path(s))
+impl NormPath {
+    pub(super) fn new(s: &str) -> NormPath {
+        NormPath(posix_normalize(s))
     }
 }
 
-impl<'de> Deserialize<'de> for PyPath {
+impl<'de> Deserialize<'de> for NormPath {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        Ok(PyPath::new(&String::deserialize(d)?))
+        Ok(NormPath::new(&String::deserialize(d)?))
     }
 }
 
@@ -28,7 +28,7 @@ pub struct CompileInstruction {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub path: Option<PyPath>,
+    pub path: Option<NormPath>,
 }
 
 impl CompileInstruction {
@@ -57,7 +57,7 @@ fn is_default_workdir(v: &Option<String>) -> bool {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct CompileEnvironment {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub path: Option<PyPath>,
+    pub path: Option<NormPath>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub paths: Vec<String>,
     #[serde(default, skip_serializing_if = "is_default_image")]
@@ -88,7 +88,7 @@ pub struct AutoVerifier {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct CompileVerifier {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub path: Option<PyPath>,
+    pub path: Option<NormPath>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_verifier: Option<AutoVerifier>,
 }
@@ -120,11 +120,11 @@ pub struct CompileConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task_name_prefix: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub output_dir: Option<PyPath>,
+    pub output_dir: Option<NormPath>,
     #[serde(default, deserialize_with = "coerce_instructions", skip_serializing_if = "Vec::is_empty")]
     pub instructions: Vec<CompileInstruction>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub task_template: Option<PyPath>,
+    pub task_template: Option<NormPath>,
     /// `str | ArtifactConfig` entries.
     #[serde(default, skip_serializing_if = "Vec::is_empty", serialize_with = "ser_artifacts")]
     pub artifacts: Vec<Value>,
@@ -220,7 +220,7 @@ pub struct ExecJobConfig {
     #[serde(default)]
     pub job_name: Option<String>,
     #[serde(default)]
-    pub jobs_dir: Option<PyPath>,
+    pub jobs_dir: Option<NormPath>,
     #[serde(default = "one")]
     pub n_attempts: i64,
     #[serde(default = "four")]
@@ -305,9 +305,9 @@ fn is_reduce_name(s: &String) -> bool {
 pub struct ExecReduceTaskConfig {
     #[serde(default = "reduce_name", skip_serializing_if = "is_reduce_name")]
     pub task_name: String,
-    pub output_dir: PyPath,
+    pub output_dir: NormPath,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub task_template: Option<PyPath>,
+    pub task_template: Option<NormPath>,
     pub instruction: CompileInstruction,
     #[serde(default, skip_serializing_if = "Vec::is_empty", serialize_with = "ser_artifacts")]
     pub artifacts: Vec<Value>,

@@ -1,4 +1,4 @@
-//! Python path helpers (`os.path`, `glob`).
+//! Path helpers: `~` expansion, lexical POSIX normalization, and recursive glob matching.
 
 use std::path::{Path, PathBuf};
 
@@ -11,8 +11,8 @@ pub(super) fn expanduser(s: &str) -> String {
     s.to_string()
 }
 
-/// `str(pathlib.PurePosixPath(s))`.
-pub(super) fn py_path(s: &str) -> String {
+/// Lexical POSIX normalization: repeated `/` and `.` segments dropped, a leading `//` kept, empty -> `.`.
+pub(super) fn posix_normalize(s: &str) -> String {
     if s.is_empty() {
         return ".".into();
     }
@@ -76,9 +76,9 @@ pub(super) fn has_magic(s: &str) -> bool {
     s.contains(['*', '?', '['])
 }
 
-/// Python's `tempfile.gettempdir()`.
+/// The system temp directory, normalized.
 pub(super) fn temp_root() -> PathBuf {
-    PathBuf::from(py_path(&std::env::temp_dir().to_string_lossy()))
+    PathBuf::from(posix_normalize(&std::env::temp_dir().to_string_lossy()))
 }
 
 /// `Path(p).expanduser().resolve()` (non-strict).
@@ -102,9 +102,9 @@ pub(super) fn resolve(p: &str) -> PathBuf {
     abs
 }
 
-/// `glob.glob(pattern, recursive=True)` (unsorted, hidden entries skipped unless the pattern
+/// Paths matching `pattern`, with `**` spanning directories (unsorted, hidden entries skipped unless the pattern
 /// component starts with '.').
-pub(super) fn py_glob(pattern: &str) -> Vec<String> {
+pub(super) fn glob_paths(pattern: &str) -> Vec<String> {
     let mut out = iglob(pattern, false);
     if (pattern.is_empty() || pattern.starts_with("**")) && out.first().is_some_and(String::is_empty) {
         out.remove(0);

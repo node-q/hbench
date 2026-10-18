@@ -10,9 +10,10 @@
 //!
 
 use super::llm::{ChatClient, Llm, LlmConfig, LlmError, LlmResponse, add_anthropic_caching, api_err, lookup_model_info};
-use super::terminus2::{Kw, Shell, fill_template, limit_output_length, now, pyf, quote_repr};
+use super::terminus2::{Kw, Shell, fill_template, limit_output_length, now, quote_repr};
 use super::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx, ModelUsage};
 use crate::env::{error_kind, quote};
+use crate::fmt::float_with_point;
 use anyhow::{Result, anyhow, bail};
 use base64::Engine;
 use serde::Serialize;
@@ -42,16 +43,16 @@ mod native;
 
 type BoxFut<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
-/// Python `repr()` of a JSON value (dict-style), for `str(exec_result)` observations.
-fn py_repr(v: &Value) -> String {
+/// A JSON value in literal form (`None`, `True`, quoted strings, `{'k': v}` dicts), as exec results appear in observations.
+fn repr_value(v: &Value) -> String {
     match v {
         Value::Null => "None".into(),
         Value::Bool(b) => if *b { "True" } else { "False" }.into(),
         Value::Number(n) => n.to_string(),
         Value::String(s) => quote_repr(s),
-        Value::Array(a) => format!("[{}]", a.iter().map(py_repr).collect::<Vec<_>>().join(", ")),
+        Value::Array(a) => format!("[{}]", a.iter().map(repr_value).collect::<Vec<_>>().join(", ")),
         Value::Object(o) => {
-            format!("{{{}}}", o.iter().map(|(k, v)| format!("{}: {}", quote_repr(k), py_repr(v))).collect::<Vec<_>>().join(", "))
+            format!("{{{}}}", o.iter().map(|(k, v)| format!("{}: {}", quote_repr(k), repr_value(v))).collect::<Vec<_>>().join(", "))
         }
     }
 }
@@ -1256,7 +1257,7 @@ impl Computer1 {
         let unknown: BTreeSet<String> =
             opts.extra_tools.iter().map(|t| t.trim().to_lowercase()).filter(|t| !t.is_empty() && t != "bash").collect();
         if !unknown.is_empty() {
-            bail!("Unknown computer-1 extra_tools: {}. Supported tools: bash.", py_repr(&json!(unknown)));
+            bail!("Unknown computer-1 extra_tools: {}. Supported tools: bash.", repr_value(&json!(unknown)));
         }
         let enable_bash = opts.extra_tools.iter().any(|t| t.trim().eq_ignore_ascii_case("bash"));
         let enable_images = opts.enable_images.unwrap_or_else(|| supports_vision(&model).unwrap_or(true));
@@ -1564,7 +1565,8 @@ impl Computer1 {
         let r = match self.desktop()?.execute(sh, a).await {
             Ok(r) => r,
             Err(e) if e.downcast_ref::<ReadinessTimeout>().is_some() => {
-                let msg = fill_template(TIMEOUT_TEMPLATE, &[("timeout_sec", &pyf(self.opts.action_timeout)), ("action", &a.kind)]);
+                let msg =
+                    fill_template(TIMEOUT_TEMPLATE, &[("timeout_sec", &float_with_point(self.opts.action_timeout)), ("action", &a.kind)]);
                 return Ok((msg, vec![], true));
             }
             Err(e) => return Ok((format!("Action {} failed: {e}", quote_repr(&a.kind)), vec![self.capture(sh, &shot).await?], true)),
@@ -1574,7 +1576,7 @@ impl Computer1 {
         let text = if a.kind == "bash" {
             format_bash_observation(&r)
         } else if is_error {
-            py_repr(&r)
+            repr_value(&r)
         } else if a.kind == "cursor_position" {
             format!("X={}, Y={} (desktop pixels)", r["x"], r["y"])
         } else {
@@ -2117,7 +2119,7 @@ mod tests {
             "bash result: status=error exit_code=1\n--- stdout ---\nout\n[stdout truncated]\n--- stderr ---\n(empty)"
         );
         assert_eq!(
-            py_repr(&json!({"status": "recovered", "recovered": true, "x": null})),
+            repr_value(&json!({"status": "recovered", "recovered": true, "x": null})),
             "{'status': 'recovered', 'recovered': True, 'x': None}"
         );
     }

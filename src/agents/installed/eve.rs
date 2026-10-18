@@ -1,12 +1,12 @@
 //! Eve: runs a local Eve app through
 //! Eve's HTTP session API via the uploaded `eve_runner.mjs`.
 
-use super::common::fmt::single_quoted;
 use super::common::{installed_dir, nvm_install_script, parse_bool_env_value, skills_dir};
 use super::pins;
 use super::{ensure_system_dependencies, exec_agent, exec_error, exec_root};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::quote;
+use crate::fmt::single_quoted;
 use anyhow::{Result, anyhow, bail};
 use regex::Regex;
 use serde_json::{Map, Value, json};

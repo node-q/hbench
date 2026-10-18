@@ -1,6 +1,5 @@
 //! Goose.
 
-use super::common::fmt::float_with_point;
 use super::common::parse_jsonl;
 use super::common::{detect_version, installed_dir, opts, skills_dir};
 use super::pins;
@@ -8,6 +7,7 @@ use super::{connection, ensure_system_dependencies, exec_agent, exec_error};
 use crate::agents::model_connection::{Resolved, Spec, with_canonical_provider_envs};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::quote;
+use crate::fmt::float_with_point;
 use anyhow::{Result, bail};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;

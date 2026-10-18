@@ -147,7 +147,7 @@ pub(super) async fn execute_and_render(config: ExecConfig, cleanup: bool) -> Res
     let tmp = temp_root().join(format!("hbench-exec-map-tasks-{}", &uuid::Uuid::new_v4().simple().to_string()[..8]));
     std::fs::create_dir_all(&tmp)?;
     let mut run = config;
-    let out = PyPath(tmp.to_string_lossy().into_owned());
+    let out = NormPath(tmp.to_string_lossy().into_owned());
     run.map.compile.output_dir = Some(out.clone());
     if let Some(r) = run.reduce.as_mut() {
         r.task.output_dir = out;

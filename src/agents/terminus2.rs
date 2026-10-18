@@ -7,6 +7,7 @@ use super::llm::{Chat, ChatClient, Llm, LlmConfig, LlmError, LlmResponse, conten
 use super::{Agent, AgentArgs, AgentContext, AgentCtx, ModelUsage};
 use crate::agents::installed::{APT_INSTALL_FN, pins};
 use crate::env::{ExecResult, quote};
+use crate::fmt::{float_with_point, truthy};
 use anyhow::{Result, anyhow, bail};
 use base64::Engine;
 use regex::Regex;
@@ -29,7 +30,7 @@ pub use tmux::{Shell, Tmux};
 /// Re-asks after a truncated (output-length) response before giving up.
 const MAX_OUTPUT_LENGTH_RETRIES: usize = 3;
 
-/// Python `str.format` with named fields (`{{` / `}}` escapes).
+/// Substitutes `{name}` fields from `vars` (missing names become empty); `{{` / `}}` are literal braces.
 pub(crate) fn fill_template(tpl: &str, vars: &[(&str, &str)]) -> String {
     let mut out = String::with_capacity(tpl.len());
     let mut it = tpl.chars().peekable();
@@ -49,12 +50,8 @@ pub(crate) fn fill_template(tpl: &str, vars: &[(&str, &str)]) -> String {
     out
 }
 
-/// Python float `str()`.
-pub(crate) fn pyf(f: f64) -> String {
-    if f.is_finite() && f.fract() == 0.0 && f.abs() < 1e16 { format!("{f:.1}") } else { format!("{f}") }
-}
-
-/// Python `repr()` of a str.
+/// `s` as a quoted literal: single quotes unless it holds only single quotes, with backslash, quote and
+/// control characters escaped.
 pub(crate) fn quote_repr(s: &str) -> String {
     let q = if s.contains('\'') && !s.contains('"') { '"' } else { '\'' };
     let mut out = String::from(q);
@@ -76,18 +73,8 @@ pub(crate) fn quote_repr(s: &str) -> String {
     out
 }
 
-fn py_truthy(v: &Value) -> bool {
-    match v {
-        Value::Null => false,
-        Value::Bool(b) => *b,
-        Value::Number(n) => n.as_f64() != Some(0.0),
-        Value::String(s) => !s.is_empty(),
-        Value::Array(a) => !a.is_empty(),
-        Value::Object(o) => !o.is_empty(),
-    }
-}
-
-fn py_str(v: Option<&Value>) -> String {
+/// A response field as text: empty when missing or null, `True`/`False` for bools, JSON otherwise.
+fn field_text(v: Option<&Value>) -> String {
     match v {
         None | Some(Value::Null) => String::new(),
         Some(Value::String(s)) => s.clone(),
@@ -96,7 +83,7 @@ fn py_str(v: Option<&Value>) -> String {
     }
 }
 
-/// Python `s[-n:]`.
+/// The last `n` characters of `s`.
 fn last_chars(s: &str, n: usize) -> &str {
     let count = s.chars().count();
     if count <= n {
@@ -231,10 +218,10 @@ pub mod json_parser {
         let o = data.as_object().expect("validated");
         let is_complete = match o.get("task_complete") {
             Some(Value::String(s)) => matches!(s.to_lowercase().as_str(), "true" | "1" | "yes"),
-            Some(v) => py_truthy(v),
+            Some(v) => truthy(v),
             None => false,
         };
-        let (analysis, plan) = (py_str(o.get("analysis")), py_str(o.get("plan")));
+        let (analysis, plan) = (field_text(o.get("analysis")), field_text(o.get("plan")));
         let empty = vec![];
         match parse_commands(o["commands"].as_array().unwrap_or(&empty), &mut w) {
             Err(e) if is_complete => {
@@ -838,8 +825,8 @@ impl Options {
             proactive_summarization_threshold: kw.int("proactive_summarization_threshold").unwrap_or(8000),
             max_thinking_tokens: kw.int("max_thinking_tokens"),
             model_info: kw.object("model_info").map(Value::Object),
-            raw_content: tc.get("raw_content").is_some_and(py_truthy),
-            linear_history: tc.get("linear_history").is_some_and(py_truthy),
+            raw_content: tc.get("raw_content").is_some_and(truthy),
+            linear_history: tc.get("linear_history").is_some_and(truthy),
             pane_width: kw.int("tmux_pane_width").unwrap_or(160),
             pane_height: kw.int("tmux_pane_height").unwrap_or(40),
             store_all_messages: kw.boolean("store_all_messages", false),
@@ -1271,7 +1258,7 @@ impl Terminus2 {
                 let state = limit_output_length(&t.get_incremental_output(sh).await?, 10_000);
                 let msg = fill_template(
                     TIMEOUT_TEMPLATE,
-                    &[("timeout_sec", &pyf(c.duration_sec)), ("command", &c.keystrokes), ("terminal_state", &state)],
+                    &[("timeout_sec", &float_with_point(c.duration_sec)), ("command", &c.keystrokes), ("terminal_state", &state)],
                 );
                 return Ok((true, msg));
             }
@@ -1815,9 +1802,13 @@ mod tests {
         );
         let p = fill_template(XML_TEMPLATE, &[("instruction", "T"), ("terminal_state", "S")]);
         assert!(p.contains("<keystrokes duration=\"0.1\">ls -la") && p.contains("Task Description:\nT\n"));
-        let t = fill_template(TIMEOUT_TEMPLATE, &[("timeout_sec", &pyf(5.0)), ("command", "sleep 99\n"), ("terminal_state", "S")]);
+        let t =
+            fill_template(TIMEOUT_TEMPLATE, &[("timeout_sec", &float_with_point(5.0)), ("command", "sleep 99\n"), ("terminal_state", "S")]);
         assert!(t.starts_with("Previous command:\nsleep 99\n") && t.contains("timed out after 5.0 seconds") && t.ends_with("\n\nS ")); // template ends with a space
-        assert_eq!((pyf(1.0), pyf(0.1), pyf(60.0)), ("1.0".to_string(), "0.1".to_string(), "60.0".to_string()));
+        assert_eq!(
+            (float_with_point(1.0), float_with_point(0.1), float_with_point(60.0)),
+            ("1.0".to_string(), "0.1".to_string(), "60.0".to_string())
+        );
         assert_eq!(quote_repr("it's"), "\"it's\"");
         assert_eq!(quote_repr("a\nb'\""), "'a\\nb\\'\"'");
         assert_eq!(last_chars("héllo", 3), "llo");

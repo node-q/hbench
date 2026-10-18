@@ -407,8 +407,9 @@ pub fn build_file_tree(dir: &Path) -> String {
     if lines.is_empty() { "No files found".into() } else { lines.join("\n") }
 }
 
-/// Python `str.format_map(defaultdict(str, vars))`: `{name}` substituted (missing -> ""), `{{`/`}}` escapes.
-pub fn py_format(t: &str, vars: &[(&str, &str)]) -> Result<String> {
+/// Substitutes `{name}` fields (missing -> ""; any `.attr`, `[i]`, `!conv` or `:spec` suffix ignored), `{{`/`}}` escapes;
+/// unbalanced braces are an error.
+pub fn render_template(t: &str, vars: &[(&str, &str)]) -> Result<String> {
     let mut out = String::new();
     let mut it = t.chars().peekable();
     while let Some(c) = it.next() {
@@ -462,8 +463,10 @@ fn posix_join(base: &str, name: &str) -> String {
 }
 
 fn write_instruction(dest: &Path, rendered: &str, t: &Template, schema: &Value) -> Result<()> {
-    let output =
-        py_format(t.output_prompt, &[("result_filename", t.result_filename), ("output_schema", &serde_json::to_string_pretty(schema)?)])?;
+    let output = render_template(
+        t.output_prompt,
+        &[("result_filename", t.result_filename), ("output_schema", &serde_json::to_string_pretty(schema)?)],
+    )?;
     std::fs::write(dest.join("instruction.md"), format!("{}\n\n{}\n", rendered.trim_end(), output.trim()))?;
     Ok(())
 }
@@ -497,7 +500,7 @@ pub fn assemble_analyze_task(
         }
         None => "The task definition is not available. Use the trajectory and test output to infer what the task required.".into(),
     };
-    let rendered = py_format(
+    let rendered = render_template(
         template,
         &[("trial_path", &trial_path), ("task_section", &task_section), ("criteria_guidance", &criteria_guidance(rubric))],
     )?;
@@ -510,7 +513,7 @@ pub fn assemble_check_task(task_dir: &Path, rubric: &Rubric, template: &str, sch
     let workdir = write_skeleton(dest, &CHECK, rubric)?;
     let review = dest.join("environment/task");
     copy_tree(task_dir, &review, &[".git"])?;
-    let rendered = py_format(
+    let rendered = render_template(
         template,
         &[
             ("file_tree", &build_file_tree(&review)),
@@ -957,7 +960,7 @@ mod tests {
     }
 
     #[test]
-    fn schemas_match_pydantic() {
+    fn schemas_match_golden() {
         // Generated with pydantic 2.14 model_json_schema() on the reference models.
         let defs = r##""CheckOutcome": {"enum": ["pass", "fail", "not_applicable"], "title": "CheckOutcome", "type": "string"},
             "QualityCheckModel": {"properties": {"explanation": {"title": "Explanation", "type": "string"}, "outcome": {"$ref": "#/$defs/CheckOutcome"}},
@@ -982,14 +985,14 @@ mod tests {
     }
 
     #[test]
-    fn python_format() {
+    fn render_template_fields() {
         let v = [("a", "1"), ("b", "{x}")];
-        assert_eq!(py_format("{a}-{b}-{missing}-{{lit}}-{a!r:>3}", &v).unwrap(), "1-{x}--{lit}-1");
-        assert!(py_format("oops }", &v).is_err() && py_format("{a", &v).is_err());
+        assert_eq!(render_template("{a}-{b}-{missing}-{{lit}}-{a!r:>3}", &v).unwrap(), "1-{x}--{lit}-1");
+        assert!(render_template("oops }", &v).is_err() && render_template("{a", &v).is_err());
     }
 
     #[test]
-    fn file_tree_sorted_like_python() {
+    fn file_tree_sorted() {
         let d = tmp();
         assert_eq!(build_file_tree(&d), "No files found");
         for f in ["a.txt", "a/b", "tests/test.sh", "B"] {

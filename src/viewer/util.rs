@@ -119,17 +119,7 @@ pub(super) fn str_or_null(o: Option<&str>) -> Value {
     o.map_or(Value::Null, |x| Value::String(x.into()))
 }
 
-/// Whether a JSON value is non-empty: not null, false, zero, or an empty string/array/object.
-pub(super) fn truthy(v: &Value) -> bool {
-    match v {
-        Value::Null => false,
-        Value::Bool(b) => *b,
-        Value::Number(n) => n.as_f64() != Some(0.0),
-        Value::String(s) => !s.is_empty(),
-        Value::Array(a) => !a.is_empty(),
-        Value::Object(o) => !o.is_empty(),
-    }
-}
+pub(super) use crate::fmt::truthy;
 
 /// An ISO-8601 datetime: aware timestamps as given, naive ones taken as UTC.
 pub(super) fn parse_dt(v: &Value) -> Option<DateTime<Utc>> {

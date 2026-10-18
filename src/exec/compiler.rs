@@ -167,7 +167,7 @@ fn expand_input_paths(patterns: &[String]) -> Result<Vec<PathBuf>> {
     let mut out = vec![];
     for pat in patterns {
         let resolved = resolve(pat).to_string_lossy().into_owned();
-        let mut paths: Vec<PathBuf> = py_glob(&resolved).iter().map(|p| PathBuf::from(py_path(p))).collect();
+        let mut paths: Vec<PathBuf> = glob_paths(&resolved).iter().map(|p| PathBuf::from(posix_normalize(p))).collect();
         paths.sort();
         if paths.is_empty() {
             bail!("Input path pattern did not match anything: {pat}");
@@ -200,7 +200,7 @@ fn write_auto_verifier(cfg: &CompileConfig, tests_dir: &Path, av: &AutoVerifier)
         std::fs::create_dir_all(&schemas)?;
         let mut checks = vec![];
         for (i, (artifact, schema)) in av.artifact_json_schemas.iter().enumerate() {
-            let src = resolve(&py_path(schema.as_str().unwrap_or_default()));
+            let src = resolve(&posix_normalize(schema.as_str().unwrap_or_default()));
             if !src.is_file() {
                 bail!("Artifact schema path must be a file: {}", src.display());
             }

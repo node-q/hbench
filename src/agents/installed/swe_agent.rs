@@ -1,6 +1,5 @@
 //! SWE-agent installed agent. Runs as root only.
 
-use super::common::fmt::json_spaced;
 use super::common::{installed_dir, uv_install};
 use super::mini_swe_agent::opt_str;
 use super::pins;
@@ -8,6 +7,7 @@ use super::{connection, ensure_system_dependencies, exec_agent, exec_error, exec
 use crate::agents::model_connection::Spec;
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::quote;
+use crate::fmt::json_spaced;
 use anyhow::{Result, bail};
 use serde_json::Value;
 use std::collections::BTreeMap;

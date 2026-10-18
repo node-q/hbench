@@ -1,11 +1,11 @@
 //! Cline CLI.
 
-use super::common::fmt::value_text;
 use super::common::{installed_dir, nvm_install_script, skills_dir};
 use super::pins;
 use super::{exec_agent, exec_root};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::{ExecResult, quote};
+use crate::fmt::value_text;
 use anyhow::{Result, anyhow, bail};
 use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;

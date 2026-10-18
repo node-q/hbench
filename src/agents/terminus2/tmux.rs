@@ -275,7 +275,7 @@ impl Tmux {
             }
             keys.extend([COMPLETION_COMMAND.to_string(), "Enter".to_string()]);
             self.send_keys_to_session(sh, &keys, "blocking").await?;
-            let r = sh.sh(&format!("timeout {}s tmux wait done", pyf(max_timeout_sec)), false, None).await?;
+            let r = sh.sh(&format!("timeout {}s tmux wait done", float_with_point(max_timeout_sec)), false, None).await?;
             return Ok(r.code == 0);
         }
         let start = Instant::now();

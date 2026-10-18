@@ -1,4 +1,5 @@
-//! Value formatting for the config files, env vars and messages the installed agents write.
+//! Value formatting shared across the crate: quoted literals, JSON with spaced separators, float text,
+//! truthiness, and type names for messages.
 
 use serde_json::Value;
 
@@ -69,5 +70,29 @@ pub fn type_name(v: &Value) -> &'static str {
         Value::String(_) => "str",
         Value::Array(_) => "list",
         Value::Object(_) => "dict",
+    }
+}
+
+/// JSON with `, ` and `: ` separators, non-ASCII characters kept as-is.
+pub fn json_spaced_utf8(v: &Value) -> String {
+    match v {
+        Value::Array(a) => format!("[{}]", a.iter().map(json_spaced_utf8).collect::<Vec<_>>().join(", ")),
+        Value::Object(o) => format!(
+            "{{{}}}",
+            o.iter().map(|(k, v)| format!("{}: {}", Value::from(k.as_str()), json_spaced_utf8(v))).collect::<Vec<_>>().join(", ")
+        ),
+        _ => v.to_string(),
+    }
+}
+
+/// Whether a JSON value counts as set: not null, `false`, zero, or an empty string/array/object.
+pub fn truthy(v: &Value) -> bool {
+    match v {
+        Value::Null => false,
+        Value::Bool(b) => *b,
+        Value::Number(n) => n.as_f64() != Some(0.0),
+        Value::String(s) => !s.is_empty(),
+        Value::Array(a) => !a.is_empty(),
+        Value::Object(o) => !o.is_empty(),
     }
 }

@@ -1,6 +1,5 @@
 //! OpenHands installed agent.
 
-use super::common::fmt::value_text;
 use super::common::opts::lax_bool;
 use super::common::{installed_dir, uv_install};
 use super::pins;
@@ -8,6 +7,7 @@ use super::{connection, ensure_system_dependencies, exec_agent, exec_root};
 use crate::agents::model_connection::Spec;
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::quote;
+use crate::fmt::value_text;
 use anyhow::{Result, bail};
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
