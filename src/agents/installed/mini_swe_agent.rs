@@ -1,6 +1,7 @@
 //! mini-swe-agent installed agent.
 
 use super::common::installed_dir;
+use super::pins;
 use super::{connection, ensure_system_dependencies, exec_agent};
 use crate::agents::model_connection::{Resolved, Spec};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
@@ -18,10 +19,6 @@ const SPEC: Spec = Spec {
 };
 const DEFAULT_LITELLM_TIMEOUT_SEC: u32 = 3600;
 const PYTHON_VERSION: &str = "3.12";
-/// Exact versions, so a new upstream release cannot break the install (litellm 1.106.0 imports `mcp`, which
-/// it does not depend on, and every model call fails). The `version` kwarg still picks mini-swe-agent.
-const DEFAULT_VERSION: &str = "2.4.6";
-const PINNED_DEPS: &[&str] = &["litellm==1.105.1", "orjson==3.13.0", "fastapi==0.143.2"];
 const TRAJECTORY_PATH: &str = "/logs/agent/mini-swe-agent.trajectory.json";
 const ENV_PRELUDE: &str =
     "if [ -f \"$HOME/.local/bin/env\" ]; then . \"$HOME/.local/bin/env\"; else export PATH=\"$HOME/.local/bin:$PATH\"; fi; ";
@@ -72,15 +69,16 @@ pub fn create(args: AgentArgs) -> Result<AgentBox> {
 
 impl MiniSweAgent {
     fn install_command(&self) -> String {
-        let version = self.version.as_deref().unwrap_or(DEFAULT_VERSION);
         let py = quote(PYTHON_VERSION);
-        let pkg = quote(&format!("mini-swe-agent=={version}"));
-        let deps: String = PINNED_DEPS.iter().map(|d| format!(" --with {}", quote(d))).collect();
+        let pkg = quote(&format!("mini-swe-agent{}", pins::MINI_SWE_AGENT.pip_constraint(self.version.as_deref())));
+        let deps: String =
+            [pins::LITELLM, pins::ORJSON, pins::FASTAPI].iter().map(|d| format!(" --with {}", quote(&d.requirement()))).collect();
         format!(
-            "set -euo pipefail; if ! command -v uv >/dev/null 2>&1; then  curl -LsSf https://astral.sh/uv/install.sh | sh; fi && \
+            "set -euo pipefail; if ! command -v uv >/dev/null 2>&1; then  curl -LsSf {uv_installer} | sh; fi && \
              if ! grep -q 'export PATH=\"$HOME/.local/bin:$PATH\"' \"$HOME/.bashrc\" 2>/dev/null; then  echo 'export PATH=\"$HOME/.local/bin:$PATH\"' >> \"$HOME/.bashrc\"; fi && \
              if [ -f \"$HOME/.local/bin/env\" ]; then source \"$HOME/.local/bin/env\"; fi && export PATH=\"$HOME/.local/bin:$PATH\" && \
-             uv python install {py} && uv tool install --python {py} {pkg}{deps} && mini-swe-agent --help"
+             uv python install {py} && uv tool install --python {py} {pkg}{deps} && mini-swe-agent --help",
+            uv_installer = pins::uv_installer()
         )
     }
 
@@ -293,7 +291,7 @@ impl Agent for MiniSweAgent {
         ensure_system_dependencies(cx, &["curl", "bash", "build_tools", "git"]).await?;
         exec_agent(cx, &self.install_command(), &BTreeMap::new()).await?;
         if self.version.is_none() {
-            self.version = Some(DEFAULT_VERSION.into());
+            self.version = Some(pins::MINI_SWE_AGENT.version.into());
         }
         Ok(())
     }

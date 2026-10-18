@@ -60,7 +60,8 @@ pub fn create(args: AgentArgs) -> Result<AgentBox> {
 fn opt_bool(args: &AgentArgs, k: &str, default: bool) -> Result<bool> {
     match args.kwargs.get(k) {
         None => Ok(default),
-        Some(v) => super::common::opts::lax_bool(v).ok_or_else(|| anyhow!("Invalid kwargs for agent 'junie':\n  {k}: Input should be a valid boolean")),
+        Some(v) => super::common::opts::lax_bool(v)
+            .ok_or_else(|| anyhow!("Invalid kwargs for agent 'junie':\n  {k}: Input should be a valid boolean")),
     }
 }
 

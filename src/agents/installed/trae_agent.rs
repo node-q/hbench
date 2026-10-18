@@ -1,6 +1,7 @@
 //! trae-agent installed agent.
 
 use super::common::installed_dir;
+use super::pins;
 use super::{connection, ensure_system_dependencies, exec_agent};
 use crate::agents::model_connection::{Resolved, Spec, with_canonical_provider_envs};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
@@ -191,13 +192,17 @@ impl Agent for TraeAgent {
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
         installed_dir(cx).await?;
         ensure_system_dependencies(cx, &["curl", "git"]).await?;
-        let vs = self.version.as_ref().map(|v| format!("@{v}")).unwrap_or_default();
+        let vs = match pins::TRAE_AGENT.or(self.version.as_deref()) {
+            "latest" => String::new(),
+            v => format!("@{v}"),
+        };
         exec_agent(
             cx,
             &format!(
-                "set -euo pipefail; if ! command -v uv &>/dev/null; then  curl -LsSf https://astral.sh/uv/install.sh | sh &&  \
+                "set -euo pipefail; if ! command -v uv &>/dev/null; then  curl -LsSf {uv_installer} | sh &&  \
                  export PATH=\"$HOME/.local/bin:$PATH\"; fi && uv tool install --python 3.12 \"trae-agent[test,evaluation] @ \
-                 git+https://github.com/bytedance/trae-agent.git{vs}\" && export PATH=\"$HOME/.local/bin:$PATH\" && trae-cli --help"
+                 git+https://github.com/bytedance/trae-agent.git{vs}\" && export PATH=\"$HOME/.local/bin:$PATH\" && trae-cli --help",
+                uv_installer = pins::uv_installer()
             ),
             &BTreeMap::new(),
         )

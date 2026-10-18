@@ -5,7 +5,7 @@
 
 use super::llm::{Chat, LiteLlm, Llm, LlmConfig, LlmError, LlmResponse, content_text};
 use super::{Agent, AgentArgs, AgentContext, AgentCtx, ModelUsage};
-use crate::agents::installed::APT_INSTALL_FN;
+use crate::agents::installed::{APT_INSTALL_FN, pins};
 use crate::env::{ExecResult, quote};
 use anyhow::{Result, anyhow, bail};
 use base64::Engine;
@@ -923,8 +923,12 @@ async fn build_tmux_from_source(sh: &dyn Shell) {
                 break;
             }
         }
+        let v = pins::TMUX.version;
         sh.sh(
-            "cd /tmp && curl -L https://github.com/tmux/tmux/releases/download/3.4/tmux-3.4.tar.gz -o tmux.tar.gz && tar -xzf tmux.tar.gz && cd tmux-3.4 && ./configure --prefix=/usr/local && make && make install",
+            &format!(
+                "cd /tmp && curl -L https://github.com/tmux/tmux/releases/download/{v}/tmux-{v}.tar.gz -o tmux.tar.gz && tar -xzf tmux.tar.gz && \
+                 cd tmux-{v} && ./configure --prefix=/usr/local && make && make install"
+            ),
             true,
             Some(INSTALL_TIMEOUT),
         )
@@ -946,8 +950,9 @@ async fn install_asciinema_with_pip(sh: &dyn Shell) {
                 break;
             }
         }
-        for cmd in ["pip3 install asciinema", "pip install asciinema"] {
-            if sh.sh(cmd, true, Some(INSTALL_TIMEOUT)).await?.code == 0 && sh.sh("asciinema --version", true, None).await?.code == 0 {
+        for pip in ["pip3", "pip"] {
+            let cmd = format!("{pip} install {}", pins::ASCIINEMA.requirement());
+            if sh.sh(&cmd, true, Some(INSTALL_TIMEOUT)).await?.code == 0 && sh.sh("asciinema --version", true, None).await?.code == 0 {
                 break;
             }
         }

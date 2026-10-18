@@ -1,6 +1,7 @@
 //! Code Puppy.
 
 use super::common::installed_dir;
+use super::pins;
 use super::{connection, ensure_system_dependencies, exec_agent};
 use crate::agents::model_connection::Spec;
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
@@ -147,11 +148,11 @@ impl Agent for CodePuppy {
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
         installed_dir(cx).await?;
         ensure_system_dependencies(cx, &["curl", "ca_certificates", "coreutils", "ripgrep"]).await?;
-        let spec = self.version.as_ref().map(|v| format!("=={v}")).unwrap_or_default();
+        let spec = pins::CODE_PUPPY.pip_constraint(self.version.as_deref());
         let none = BTreeMap::new();
         exec_agent(
             cx,
-            &format!("set -euo pipefail; curl -LsSf https://astral.sh/uv/install.sh | sh && {PATH_EXPORT} && uv tool install --python 3.13 code-puppy{spec} && code-puppy --version"),
+            &format!("set -euo pipefail; curl -LsSf {uv_installer} | sh && {PATH_EXPORT} && uv tool install --python 3.13 code-puppy{spec} && code-puppy --version", uv_installer = pins::uv_installer()),
             &none,
         )
         .await?;

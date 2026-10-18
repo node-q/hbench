@@ -1,6 +1,7 @@
 //! Hermes.
 
 use super::common::{installed_dir, skills_dir};
+use super::pins;
 use super::{ensure_system_dependencies, exec_agent, exec_error};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::quote;
@@ -219,12 +220,16 @@ impl Agent for Hermes {
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
         installed_dir(cx).await?;
         ensure_system_dependencies(cx, &["curl", "git", "ripgrep", "xz"]).await?;
-        let branch = self.version.as_ref().map(|v| format!(" --branch {v}")).unwrap_or_default();
+        // The `version` kwarg names a branch; the default pins a commit on main (release v0.22.2).
+        let (script_ref, pin) = match &self.version {
+            Some(v) => ("main", format!("--branch {v}")),
+            None => (pins::HERMES.version, format!("--commit {}", pins::HERMES.version)),
+        };
         let none = BTreeMap::new();
         exec_agent(
             cx,
             &format!(
-                "set -euo pipefail; curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash -s -- --skip-setup{branch} && \
+                "set -euo pipefail; curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/{script_ref}/scripts/install.sh | bash -s -- --skip-setup {pin} && \
                  {PATH_EXPORT} && export HERMES_HOME=\"${{HERMES_HOME:-/tmp/hermes}}\" && \
                  mkdir -p \"$HERMES_HOME\" \"$HERMES_HOME/sessions\" \"$HERMES_HOME/skills\" \"$HERMES_HOME/memories\" && hermes version"
             ),

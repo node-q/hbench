@@ -1,6 +1,7 @@
 //! aider.
 
 use super::common::{detect_version, installed_dir, opts};
+use super::pins;
 use super::{connection, ensure_system_dependencies, exec_agent};
 use crate::agents::model_connection::{Spec, provider};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
@@ -103,8 +104,13 @@ impl Agent for Aider {
         ensure_system_dependencies(cx, &["curl", "git", "coreutils"]).await?;
         exec_agent(
             cx,
-            "set -euo pipefail; curl -LsSf https://aider.chat/install.sh | sh && \
-             if [ -f \"$HOME/.local/bin/env\" ]; then source \"$HOME/.local/bin/env\"; fi && aider --version",
+            &format!(
+                "set -euo pipefail; curl -LsSf {} | sh && \
+                 if [ -f \"$HOME/.local/bin/env\" ]; then source \"$HOME/.local/bin/env\"; else export PATH=\"$HOME/.local/bin:$PATH\"; fi && \
+                 uv tool install --force --python python3.12 --with pip aider-chat{} && aider --version",
+                pins::uv_installer(),
+                pins::AIDER.pip_constraint(self.version.as_deref())
+            ),
             &BTreeMap::new(),
         )
         .await?;

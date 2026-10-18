@@ -2,6 +2,7 @@
 
 use super::common::{installed_dir, nvm_node_install_snippet, skills_dir};
 use super::kimi_cli::loads_lenient;
+use super::pins;
 use super::{exec_agent, exec_root};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx, pricing};
 use crate::env::quote;
@@ -10,7 +11,6 @@ use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
-const PACKAGE_NAME: &str = "@moonshot-ai/kimi-code";
 const KIMI_CODE_HOME: &str = "/logs/agent/.kimi-code";
 const OUTPUT_PATH: &str = "/logs/agent/kimi-code.txt";
 const NODE_PATH_SETUP: &str = "if [ -s \"$HOME/.nvm/nvm.sh\" ]; then . \"$HOME/.nvm/nvm.sh\"; fi; export PATH=\"$HOME/.local/bin:$PATH\"; ";
@@ -115,12 +115,12 @@ impl Agent for KimiCode {
             &BTreeMap::from([("DEBIAN_FRONTEND".to_string(), "noninteractive".to_string())]),
         )
         .await?;
-        let spec = self.version.as_ref().map(|v| format!("@{v}")).unwrap_or_else(|| "@latest".into());
+        let spec = pins::KIMI_CODE.npm_spec(self.version.as_deref());
         exec_agent(
             cx,
             &format!(
                 "set -euo pipefail\nif command -v apk >/dev/null 2>&1; then\n  node --version\n  npm --version\nelse\n  {nvm}\nfi\n\n\
-                 mkdir -p \"$HOME/.local\"\nnpm install --global --prefix \"$HOME/.local\" {PACKAGE_NAME}{spec}\n{NODE_PATH_SETUP}kimi --version",
+                 mkdir -p \"$HOME/.local\"\nnpm install --global --prefix \"$HOME/.local\" {spec}\n{NODE_PATH_SETUP}kimi --version",
                 nvm = nvm_node_install_snippet(22)
             ),
             &BTreeMap::new(),

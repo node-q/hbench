@@ -3,6 +3,7 @@
 //! drives one prompt over the Agent Client Protocol and writes acp-summary.json.
 
 use super::common::{installed_dir, nvm_node_install_snippet};
+use super::pins;
 use super::{exec_agent, exec_root};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::quote;
@@ -956,7 +957,7 @@ fn dependencies_command(kind: &str) -> String {
             # independently, then use it to provision the runner with a supported Python.
             if [ ! -x {uv} ]; then
               mkdir -p {UV_INSTALL_DIR}
-              curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR={UV_INSTALL_DIR} sh
+              curl -LsSf {uv_installer} | env UV_INSTALL_DIR={UV_INSTALL_DIR} sh
             fi
 
             if [ ! -x {py} ] || ! {py} -c \"import acp, sys; raise SystemExit(sys.version_info < (3, 12))\" >/dev/null 2>&1; then
@@ -964,14 +965,17 @@ fn dependencies_command(kind: &str) -> String {
               mkdir -p {PYTHON_INSTALL_DIR}
               {uv} python install {RUNNER_PYTHON_VERSION}
               {uv} venv --python {RUNNER_PYTHON_VERSION} {RUNNER_VENV_PATH}
-              {uv} pip install --python {py} agent-client-protocol==0.12.1
+              {uv} pip install --python {py} {protocol}
             fi
 
             chmod -R a+rX {PYTHON_INSTALL_DIR} {RUNNER_VENV_PATH}
 
             if [ \"{install_uv}\" = \"1\" ] && [ ! -x {RUNNER_VENV_PATH}/bin/uvx ]; then
-              {uv} pip install --python {py} uv==0.13.1
-            fi"
+              {uv} pip install --python {py} {uv_pip}
+            fi",
+        uv_installer = pins::uv_installer(),
+        protocol = pins::ACP_PROTOCOL.requirement(),
+        uv_pip = pins::UV.requirement(),
     )
 }
 
@@ -1260,7 +1264,7 @@ mod tests {
             "set -euo pipefail\n{}            export UV_PYTHON_INSTALL_DIR=/opt/hbench-acp-python\n",
             super::super::APT_INSTALL_FN
         )));
-        assert!(d.contains("curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/opt/hbench-acp-tools sh"));
+        assert!(d.contains("curl -LsSf https://astral.sh/uv/0.13.1/install.sh | env UV_INSTALL_DIR=/opt/hbench-acp-tools sh"));
         assert!(d.contains("/opt/hbench-acp-tools/uv venv --python 3.12 /opt/hbench-acp-venv") && d.contains("[ \"1\" = \"1\" ]"));
         assert!(dependencies_command("binary").contains("xz-utils"));
         let n = node_install_command();

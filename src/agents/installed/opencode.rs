@@ -1,6 +1,7 @@
 //! OpenCode installed agent, incl. ACP target mode.
 
 use super::common::{deep_merge_maps, detect_version, installed_dir, nvm_node_install_snippet, opts, skills_dir};
+use super::pins;
 use super::{connection, ensure_system_dependencies, exec_agent, exec_root, safe_bin_symlink_command};
 use crate::agents::model_connection::Spec;
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
@@ -204,12 +205,12 @@ impl Agent for OpenCode {
         installed_dir(cx).await?;
         // nodejs/npm cover musl images (nvm can't); coreutils provides stdbuf.
         ensure_system_dependencies(cx, &["curl", "bash", "coreutils", "nodejs", "npm"]).await?;
-        let spec = format!("@{}", self.version.as_deref().unwrap_or("latest"));
+        let spec = pins::OPENCODE.npm_spec(self.version.as_deref());
         exec_agent(
             cx,
             &format!(
                 "set -euo pipefail; if ldd --version 2>&1 | grep -qi musl || [ -f /etc/alpine-release ]; then node --version && npm --version; \
-                 else {nvm}; fi && npm i -g opencode-ai{spec} && opencode --version",
+                 else {nvm}; fi && npm i -g {spec} && opencode --version",
                 nvm = nvm_node_install_snippet(22)
             ),
             &BTreeMap::new(),

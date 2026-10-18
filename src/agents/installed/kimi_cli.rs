@@ -1,6 +1,7 @@
 //! Kimi CLI installed agent.
 
 use super::common::{installed_dir, skills_dir};
+use super::pins;
 use super::{ensure_system_dependencies, exec_agent, exec_error};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::quote;
@@ -265,12 +266,13 @@ impl Agent for KimiCli {
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
         installed_dir(cx).await?;
         ensure_system_dependencies(cx, &["curl"]).await?;
-        let spec = self.version.as_ref().map(|v| format!("=={v}")).unwrap_or_default();
+        let spec = pins::KIMI_CLI.pip_constraint(self.version.as_deref());
         exec_agent(
             cx,
             &format!(
-                "set -euo pipefail; curl -LsSf https://astral.sh/uv/install.sh | bash && export PATH=\"$HOME/.local/bin:$PATH\" && \
-                 uv tool install --python 3.13 kimi-cli{spec} && kimi --version"
+                "set -euo pipefail; curl -LsSf {uv_installer} | bash && export PATH=\"$HOME/.local/bin:$PATH\" && \
+                 uv tool install --python 3.13 kimi-cli{spec} && kimi --version",
+                uv_installer = pins::uv_installer()
             ),
             &BTreeMap::new(),
         )

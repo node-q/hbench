@@ -2,6 +2,7 @@
 
 use super::common::opts::kw_int;
 use super::common::{deep_merge, installed_dir, skills_dir};
+use super::pins;
 use super::{ensure_system_dependencies, exec_agent, exec_error, upload_text};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::{ExecResult, quote};
@@ -199,11 +200,13 @@ impl Agent for OpenClaw {
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
         installed_dir(cx).await?;
         ensure_system_dependencies(cx, &["curl", "ca_certificates"]).await?;
-        let pkg = quote(&format!("openclaw@{}", self.version.as_deref().unwrap_or("latest")));
+        let pkg = quote(&pins::OPENCLAW.npm_spec(self.version.as_deref()));
         for cmd in [
-            "set -o pipefail; retry_all=$(curl --help all 2>/dev/null | grep -q -- '--retry-all-errors' && echo '--retry-all-errors'); \
-             curl -fsSL --retry 5 --retry-delay 2 $retry_all https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.2/install.sh | bash"
-                .to_string(),
+            format!(
+                "set -o pipefail; retry_all=$(curl --help all 2>/dev/null | grep -q -- '--retry-all-errors' && echo '--retry-all-errors'); \
+                 curl -fsSL --retry 5 --retry-delay 2 $retry_all {} | bash",
+                pins::nvm_installer()
+            ),
             "export NVM_DIR=\"${NVM_DIR:-$HOME/.nvm}\" && . \"$NVM_DIR/nvm.sh\" && nvm install 22".to_string(),
             nvm22("node -v && npm -v"),
             nvm22(&format!("npm install -g {pkg} --fetch-retries=5 --fetch-retry-mintimeout=20000 --fetch-retry-maxtimeout=120000")),

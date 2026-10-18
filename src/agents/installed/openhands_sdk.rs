@@ -2,6 +2,7 @@
 
 use super::common::{installed_dir, skills_dir};
 use super::openhands::{opt_bool, opt_f64, opt_int, opt_str, py_float, raw_env};
+use super::pins;
 use super::{ensure_system_dependencies, exec_agent, exec_root};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::quote;
@@ -73,13 +74,15 @@ impl OpenHandsSdk {
     }
 
     fn install_cmd(&self) -> String {
-        let v = self.version.as_ref().map(|v| format!("=={v}")).unwrap_or_default();
+        let v = pins::OPENHANDS_SDK.pip_constraint(self.version.as_deref());
         let py = &self.python_version;
         format!(
-            "set -euo pipefail; curl -LsSf https://astral.sh/uv/install.sh | sh && \
+            "set -euo pipefail; curl -LsSf {uv_installer} | sh && \
              if [ -f \"$HOME/.local/bin/env\" ]; then source \"$HOME/.local/bin/env\"; fi && \
              uv python install {py} && uv venv /opt/openhands-sdk-venv --python {py} --clear && \
-             source /opt/openhands-sdk-venv/bin/activate && uv pip install openhands-sdk{v} openhands-tools{v} fastapi==0.143.2"
+             source /opt/openhands-sdk-venv/bin/activate && uv pip install openhands-sdk{v} openhands-tools{v} {fastapi}",
+            uv_installer = pins::uv_installer(),
+            fastapi = pins::FASTAPI.requirement()
         )
     }
 
@@ -251,7 +254,7 @@ mod tests {
         assert!(a.load_skills && !a.collect_token_ids && a.python_version == "3.12");
         assert!(
             a.install_cmd().contains("--python 3.12 --clear")
-                && a.install_cmd().ends_with("uv pip install openhands-sdk openhands-tools fastapi==0.143.2")
+                && a.install_cmd().ends_with("uv pip install openhands-sdk==1.55.1 openhands-tools==1.55.1 fastapi==0.143.2")
         );
         let v = agent(json!({"version": "1.2.3", "python_version": "3.13"}), &[], None).unwrap();
         assert!(

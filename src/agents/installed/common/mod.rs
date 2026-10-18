@@ -3,6 +3,7 @@
 
 pub mod opts;
 
+use super::pins;
 use crate::agents::{AgentArgs, AgentCtx};
 use anyhow::{Result, anyhow};
 use serde_json::{Map, Value};
@@ -16,10 +17,11 @@ pub fn skills_dir(args: &AgentArgs) -> Option<String> {
 /// Shell snippet installing Node via nvm.
 pub fn nvm_node_install_snippet(node_major: u32) -> String {
     format!(
-        "curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.2/install.sh | env -u NODE_VERSION bash && \
+        "curl -o- {nvm_installer} | env -u NODE_VERSION bash && \
          export NVM_DIR=\"$HOME/.nvm\" && \\. \"$NVM_DIR/nvm.sh\" || true && \
          command -v nvm &>/dev/null || {{ echo 'Error: NVM failed to load' >&2; exit 1; }} && \
-         nvm install {node_major} && nvm alias default {node_major} && npm -v"
+         nvm install {node_major} && nvm alias default {node_major} && npm -v",
+        nvm_installer = pins::nvm_installer()
     )
 }
 

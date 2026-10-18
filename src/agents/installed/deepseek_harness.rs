@@ -3,6 +3,7 @@
 //! Follows the installed-agent conventions of the other agents.
 
 use super::common::{detect_version, installed_dir, nvm_node_install_snippet, opts};
+use super::pins;
 use super::{classify, connection, ensure_system_dependencies, exec_agent, upload_text};
 use crate::agents::model_connection::Spec;
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx, pricing};
@@ -278,10 +279,10 @@ impl Agent for DeepSeekHarness {
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
         installed_dir(cx).await?;
         ensure_system_dependencies(cx, &["curl", "bash", "coreutils"]).await?;
-        let spec = format!("@{}", self.version.as_deref().unwrap_or("latest"));
+        let spec = pins::DEEPSEEK_HARNESS.npm_spec(self.version.as_deref());
         exec_agent(
             cx,
-            &format!("set -euo pipefail; {} && npm i -g @deepseek-ai/dsh{spec} && dsh --version", nvm_node_install_snippet(22)),
+            &format!("set -euo pipefail; {} && npm i -g {spec} && dsh --version", nvm_node_install_snippet(22)),
             &BTreeMap::new(),
         )
         .await?;

@@ -2,6 +2,7 @@
 
 use super::common::installed_dir;
 use super::mini_swe_agent::opt_str;
+use super::pins;
 use super::{connection, ensure_system_dependencies, exec_agent, exec_error, exec_root};
 use crate::agents::model_connection::Spec;
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
@@ -59,11 +60,12 @@ fn py_json(v: &Value) -> String {
     }
 }
 
-fn clone_command(version: Option<&str>) -> String {
+/// A branch, tag or commit; empty or `latest` is the default branch's head.
+fn clone_command(revision: &str) -> String {
     let (repo, dest) = (quote(REPO_URL), quote(REPO_PATH));
-    match version.filter(|v| !v.trim().is_empty()) {
-        None => format!("git clone --depth 1 {repo} {dest}"),
-        Some(v) => format!(
+    match revision.trim() {
+        "" | "latest" => format!("git clone --depth 1 {repo} {dest}"),
+        v => format!(
             "git init {dest} && git -C {dest} remote add origin {repo} && revision={} && \
              (git -C {dest} fetch --depth 1 origin -- \"refs/heads/$revision\" || git -C {dest} fetch --depth 1 origin -- \"refs/tags/$revision\" || \
              git -C {dest} fetch --depth 1 origin -- \"$revision\") && git -C {dest} checkout --detach FETCH_HEAD",
@@ -274,7 +276,15 @@ impl Agent for SweAgent {
         installed_dir(cx).await?;
         ensure_system_dependencies(cx, &["curl", "build_tools", "git", "tmux", "coreutils"]).await?;
         let none = BTreeMap::new();
-        exec_root(cx, "if ! command -v uv >/dev/null 2>&1; then  curl -LsSf https://astral.sh/uv/install.sh | sh; fi && if [ -f \"$HOME/.local/bin/env\" ]; then source \"$HOME/.local/bin/env\"; fi", &none).await?;
+        exec_root(
+            cx,
+            &format!(
+                "if ! command -v uv >/dev/null 2>&1; then  curl -LsSf {} | sh; fi && if [ -f \"$HOME/.local/bin/env\" ]; then source \"$HOME/.local/bin/env\"; fi",
+                pins::uv_installer()
+            ),
+            &none,
+        )
+        .await?;
         exec_root(
             cx,
             &format!(
@@ -284,7 +294,7 @@ impl Agent for SweAgent {
                  cp -r /opt/sweagent-repo/config \"$SITE_PACKAGES/config\" && cp -r /opt/sweagent-repo/tools \"$SITE_PACKAGES/tools\" && \
                  mkdir -p /opt/sweagent-configs && cp /opt/sweagent-repo/config/default.yaml /opt/sweagent-configs/default.yaml && \
                  cp /opt/sweagent-repo/config/default_backticks.yaml /opt/sweagent-configs/default_backticks.yaml 2>/dev/null || true && mkdir -p \"$SITE_PACKAGES/trajectories\"",
-                clone_command(self.version.as_deref())
+                clone_command(pins::SWE_AGENT.or(self.version.as_deref()))
             ),
             &none,
         )
@@ -441,8 +451,8 @@ mod tests {
 
     #[test]
     fn clone_and_usage() {
-        assert_eq!(clone_command(Some("  ")), "git clone --depth 1 https://github.com/SWE-agent/SWE-agent.git /opt/sweagent-repo");
-        let c = clone_command(Some("abc123"));
+        assert_eq!(clone_command("  "), "git clone --depth 1 https://github.com/SWE-agent/SWE-agent.git /opt/sweagent-repo");
+        let c = clone_command("abc123");
         assert!(
             c.contains("revision=abc123")
                 && c.contains("fetch --depth 1 origin -- \"refs/tags/$revision\"")

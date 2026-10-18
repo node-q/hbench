@@ -1,6 +1,7 @@
 //! Qwen Code installed agent.
 
 use super::common::{installed_dir, nvm_node_install_snippet, skills_dir};
+use super::pins;
 use super::trae_agent::{iso_timestamp_ok, opt_str};
 use super::{connection, ensure_system_dependencies, exec_agent};
 use crate::agents::model_connection::Spec;
@@ -214,10 +215,10 @@ impl Agent for QwenCode {
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
         installed_dir(cx).await?;
         ensure_system_dependencies(cx, &["curl"]).await?;
-        let vs = self.version.as_deref().unwrap_or("latest");
+        let spec = pins::QWEN_CODE.npm_spec(self.version.as_deref());
         exec_agent(
             cx,
-            &format!("set -euo pipefail; {} && npm install -g @qwen-code/qwen-code@{vs} && qwen --version", nvm_node_install_snippet(22)),
+            &format!("set -euo pipefail; {} && npm install -g {spec} && qwen --version", nvm_node_install_snippet(22)),
             &BTreeMap::new(),
         )
         .await?;

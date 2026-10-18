@@ -1,6 +1,7 @@
 //! Strands: runs a user factory (`module:symbol`) that returns a `strands.Agent`, via assets/agents/strands/strands_runner.py.
 
 use super::common::{installed_dir, upload_asset};
+use super::pins;
 use super::{connection, ensure_system_dependencies, exec_agent, exec_root, upload_text};
 use crate::agents::model_connection::{Resolved, Spec, with_canonical_provider_envs};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
@@ -22,7 +23,6 @@ const INSTRUCTION_PATH: &str = "/installed-agent/strands/instruction.txt";
 const CONFIG_PATH: &str = "/installed-agent/strands/config.json";
 const RESULT_PATH: &str = "/logs/agent/strands-result.json";
 const EVENTS_PATH: &str = "/logs/agent/strands-events.jsonl";
-const DEFAULT_VERSION: &str = "1.54.0";
 const ANTHROPIC_MODEL_PROVIDER: &str = "strands.models.anthropic.AnthropicModel";
 const IGNORE: [&str; 6] = [".git", ".venv", "__pycache__", ".pytest_cache", ".ruff_cache", ".env"];
 
@@ -187,14 +187,15 @@ impl Strands {
     }
 
     fn install_command(&self, editable_factory: bool) -> String {
-        let mut deps = vec![format!("strands-agents[all]=={}", self.version.as_deref().unwrap_or(DEFAULT_VERSION))];
+        let mut deps = vec![format!("strands-agents[all]{}", pins::STRANDS.pip_constraint(self.version.as_deref()))];
         if editable_factory {
             deps.extend(["-e".into(), FACTORY_DIR.into()]);
         }
         let deps = deps.iter().map(|d| quote(d)).collect::<Vec<_>>().join(" ");
         format!(
-            "set -euo pipefail; curl -LsSf https://astral.sh/uv/install.sh | sh; if [ -f \"$HOME/.local/bin/env\" ]; then . \"$HOME/.local/bin/env\"; fi; \
-             uv python install 3.12; uv venv {VENV_DIR} --clear --python 3.12; uv pip install --python {PYTHON} {deps}"
+            "set -euo pipefail; curl -LsSf {uv_installer} | sh; if [ -f \"$HOME/.local/bin/env\" ]; then . \"$HOME/.local/bin/env\"; fi; \
+             uv python install 3.12; uv venv {VENV_DIR} --clear --python 3.12; uv pip install --python {PYTHON} {deps}",
+            uv_installer = pins::uv_installer()
         )
     }
 }

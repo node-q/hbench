@@ -2,6 +2,7 @@
 
 use super::common::installed_dir;
 use super::common::opts::lax_bool;
+use super::pins;
 use super::{connection, ensure_system_dependencies, exec_agent, exec_root};
 use crate::agents::model_connection::Spec;
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
@@ -176,17 +177,16 @@ impl OpenHands {
     fn install_cmd(&self) -> String {
         let install = if let Some(g) = &self.git_version {
             format!("uv pip install git+https://github.com/All-Hands-AI/OpenHands.git@{g}")
-        } else if let Some(v) = &self.version {
-            format!("uv pip install openhands-ai=={v}")
         } else {
-            "uv pip install openhands-ai".to_string()
+            format!("uv pip install openhands-ai{}", pins::OPENHANDS.pip_constraint(self.version.as_deref()))
         };
         let py = &self.python_version;
         format!(
-            "set -euo pipefail; curl -LsSf https://astral.sh/uv/install.sh | sh && \
+            "set -euo pipefail; curl -LsSf {uv_installer} | sh && \
              if [ -f \"$HOME/.local/bin/env\" ]; then source \"$HOME/.local/bin/env\"; fi && \
              uv python install {py} && uv venv /opt/openhands-venv --python {py} && \
-             source /opt/openhands-venv/bin/activate && export SKIP_VSCODE_BUILD=true && {install} && {VERSION_CMD}"
+             source /opt/openhands-venv/bin/activate && export SKIP_VSCODE_BUILD=true && {install} && {VERSION_CMD}",
+            uv_installer = pins::uv_installer()
         )
     }
 
@@ -460,7 +460,8 @@ pub(super) mod tests {
         assert!(agent(json!({"trajectory_config": {"raw_content": true}}), &[], None).is_err());
         assert!(agent(json!({"trajectory_config": {"raw_content": true}, "disable_tool_calls": true}), &[], None).unwrap().raw_content);
         assert!(
-            d.install_cmd().ends_with("uv pip install openhands-ai && /opt/openhands-venv/bin/python -m openhands.core.main --version")
+            d.install_cmd()
+                .ends_with("uv pip install openhands-ai==1.11.0 && /opt/openhands-venv/bin/python -m openhands.core.main --version")
         );
         assert!(agent(json!({"version": "0.59.0"}), &[], None).unwrap().install_cmd().contains("openhands-ai==0.59.0"));
         assert!(

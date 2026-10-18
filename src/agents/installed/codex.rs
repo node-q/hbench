@@ -1,6 +1,7 @@
 //! Codex CLI, incl. ACP target mode and load_trajectory seeding.
 
 use super::common::{detect_version, installed_dir, opts, parse_bool_env, skills_dir};
+use super::pins;
 use super::{
     connection, ensure_acp_node_command, ensure_system_dependencies, exec_agent, exec_error, exec_root, filter_jsonl_events,
     pinned_bin_wrapper_command, safe_bin_symlink_command, upload_text,
@@ -21,7 +22,6 @@ const AUTH_PATH: &str = "/tmp/codex-secrets/auth.json";
 const CONFIG_PATH: &str = "/installed-agent/codex-home/config.toml";
 const ACP_CODEX_HOME: &str = "/installed-agent/codex-acp-home";
 /// `@agentclientprotocol/codex-acp` adapter version.
-const CODEX_ACP_VERSION: &str = "1.12.0";
 const ROLLOUT_FILENAME_RE: &str = r"^rollout-(\d{4})-(\d{2})-(\d{2})T\S+\.jsonl$";
 const VERSION_CMD: &str = "if [ -s ~/.nvm/nvm.sh ]; then . ~/.nvm/nvm.sh; fi; codex --version";
 
@@ -483,9 +483,10 @@ impl Agent for Codex {
                  if [ -s \"$HOME/.nvm/nvm.sh\" ]; then . \"$HOME/.nvm/nvm.sh\"; fi; \
                  _hb_codex=\"$(command -v codex 2>/dev/null || true)\"; \
                  if [ -z \"$_hb_codex\" ]; then echo \"Could not locate the installed Codex binary for ACP mode\" >&2; exit 1; fi; \
-                 {} && npm install -g @agentclientprotocol/codex-acp@{CODEX_ACP_VERSION} && \
+                 {} && npm install -g {adapter} && \
                  echo \"${{_hb_system_node:-none}}:$(command -v node):$(command -v codex-acp):${{_hb_codex}}\"",
-                ensure_acp_node_command()
+                ensure_acp_node_command(),
+                adapter = pins::CODEX_ACP.npm_spec(None),
             ),
             &BTreeMap::new(),
         )
@@ -548,14 +549,15 @@ impl Agent for Codex {
         };
         if !satisfied {
             ensure_system_dependencies(cx, &["curl", "bash", "nodejs", "npm", "ripgrep"]).await?;
-            let spec = format!("@{}", self.version.as_deref().unwrap_or("latest"));
+            let spec = pins::CODEX.npm_spec(self.version.as_deref());
             exec_agent(
                 cx,
                 &format!(
-                    "set -euo pipefail; if ldd --version 2>&1 | grep -qi musl || [ -f /etc/alpine-release ]; then  npm install -g @openai/codex{spec}; \
-                     else  curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.2/install.sh | bash &&  export NVM_DIR=\"$HOME/.nvm\" &&  \
+                    "set -euo pipefail; if ldd --version 2>&1 | grep -qi musl || [ -f /etc/alpine-release ]; then  npm install -g {spec}; \
+                     else  curl -o- {nvm} | bash &&  export NVM_DIR=\"$HOME/.nvm\" &&  \
                      \\. \"$NVM_DIR/nvm.sh\" || true &&  command -v nvm &>/dev/null || {{ echo 'Error: NVM failed to load' >&2; exit 1; }} &&  \
-                     nvm install 22 && nvm alias default 22 && npm -v &&  npm install -g @openai/codex{spec}; fi && codex --version"
+                     nvm install 22 && nvm alias default 22 && npm -v &&  npm install -g {spec}; fi && codex --version",
+                    nvm = pins::nvm_installer(),
                 ),
                 &BTreeMap::from([("NVM_NODEJS_ORG_MIRROR".to_string(), "https://nodejs.org/dist".to_string())]),
             )

@@ -1,6 +1,7 @@
 //! Mistral Vibe installed agent.
 
 use super::common::{installed_dir, skills_dir};
+use super::pins;
 use super::{ensure_system_dependencies, exec_agent, exec_error};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::{kind_err, quote};
@@ -412,12 +413,13 @@ impl Agent for Vibe {
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
         installed_dir(cx).await?;
         ensure_system_dependencies(cx, &["curl", "bash"]).await?;
-        let spec = self.version.as_ref().map(|v| format!("=={v}")).unwrap_or_default();
+        let spec = pins::VIBE.pip_constraint(self.version.as_deref());
         exec_agent(
             cx,
             &format!(
-                "set -euo pipefail; if ! command -v uv &> /dev/null; then  curl -LsSf https://astral.sh/uv/install.sh | sh; fi && \
-                 export PATH=\"$HOME/.local/bin:$PATH\" && uv tool install mistral-vibe{spec} && vibe --version"
+                "set -euo pipefail; if ! command -v uv &> /dev/null; then  curl -LsSf {uv_installer} | sh; fi && \
+                 export PATH=\"$HOME/.local/bin:$PATH\" && uv tool install mistral-vibe{spec} && vibe --version",
+                uv_installer = pins::uv_installer()
             ),
             &BTreeMap::new(),
         )

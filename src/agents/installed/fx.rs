@@ -1,6 +1,7 @@
 //! fx. `fx-dev` reuses this struct with `dev = true`.
 
 use super::common::{installed_dir, skills_dir};
+use super::pins;
 use super::{connection, ensure_system_dependencies, exec_agent, upload_text};
 use crate::agents::model_connection::Spec;
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
@@ -137,8 +138,10 @@ impl Fx {
     }
 
     fn install_command(&self) -> String {
-        let version = self.version.as_ref().map(|v| if v.starts_with('v') { v.clone() } else { format!("v{v}") });
-        let version_arg = version.map(|v| format!(" -s -- {}", quote(&v))).unwrap_or_default();
+        let version_arg = match pins::FX.or(self.version.as_deref()) {
+            "latest" => String::new(),
+            v => format!(" -s -- {}", quote(&format!("v{}", v.trim_start_matches('v')))),
+        };
         format!("set -euo pipefail; curl -fsSL {INSTALL_SCRIPT_URL} | bash{version_arg} && {PATH_EXPORT} && fx --version")
     }
 
