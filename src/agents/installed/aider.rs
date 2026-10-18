@@ -20,12 +20,6 @@ const SNAPSHOT_UNTRACKED_WORKSPACE: &str = "if command -v git >/dev/null 2>&1 \
     fi; ";
 
 pub fn create(args: AgentArgs) -> Result<AgentBox> {
-    opts::check_known(
-        &args,
-        "aider",
-        &["reasoning_effort", "thinking_tokens", "cache_prompts", "auto_lint", "auto_test", "test_cmd", "stream", "map_tokens"],
-        false,
-    )?;
     let a = Aider { version: args.version_kw(), args };
     a.cli_flags()?;
     Ok(Box::new(a))
@@ -144,12 +138,7 @@ mod tests {
 
     fn agent(kwargs: serde_json::Value, env: &[(&str, &str)], model: Option<&str>) -> Result<Aider> {
         let args = common::test_args(kwargs, env, model);
-        opts::check_known(
-            &args,
-            "aider",
-            &["reasoning_effort", "thinking_tokens", "cache_prompts", "auto_lint", "auto_test", "test_cmd", "stream", "map_tokens"],
-            false,
-        )?;
+        crate::agents::check_kwargs("aider", &args.kwargs)?;
         let a = Aider { version: None, args };
         a.cli_flags()?;
         Ok(a)

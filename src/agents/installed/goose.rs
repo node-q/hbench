@@ -16,7 +16,6 @@ const INSTRUCTIONS: &str = "You are given a task and you need to complete it. Yo
     use your own tools to complete the task without any intervention.";
 
 pub fn create(args: AgentArgs) -> Result<AgentBox> {
-    opts::check_known(&args, "goose", &["max_turns", "reasoning_effort", "temperature", "max_tokens", "context_limit"], false)?;
     let a = Goose { version: args.version_kw(), args };
     a.cli_flags()?;
     a.option_env()?;

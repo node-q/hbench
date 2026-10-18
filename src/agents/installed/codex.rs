@@ -24,7 +24,6 @@ const ACP_CODEX_HOME: &str = "/installed-agent/codex-acp-home";
 const CODEX_ACP_VERSION: &str = "1.12.0";
 const ROLLOUT_FILENAME_RE: &str = r"^rollout-(\d{4})-(\d{2})-(\d{2})T\S+\.jsonl$";
 const VERSION_CMD: &str = "if [ -s ~/.nvm/nvm.sh ]; then . ~/.nvm/nvm.sh; fi; codex --version";
-const KNOWN: &[&str] = &["reasoning_effort", "reasoning_summary", "web_search", "disable_web_search", "dangerously_bypass_hook_trust"];
 
 pub fn create(args: AgentArgs) -> Result<AgentBox> {
     Ok(Box::new(Codex::new(args)?))
@@ -44,7 +43,6 @@ pub struct Codex {
 
 impl Codex {
     fn new(args: AgentArgs) -> Result<Codex> {
-        opts::check_known(&args, "codex", KNOWN, true)?;
         let base_config = load_base_config(args.kwargs.get("config"))?;
         let atif_load = validate_load_trajectory(args.load_trajectory.as_deref())?;
         let a = Codex { version: args.version_kw(), args, base_config, atif_load, loaded: false, acp_codex_executable: None };
@@ -679,7 +677,6 @@ mod tests {
             "-c model_reasoning_effort=high -c model_reasoning_summary=auto -c web_search=disabled --dangerously-bypass-hook-trust"
         );
         assert!(agent(json!({"reasoning_effort": "huge"}), &[], None).is_err());
-        assert!(agent(json!({"nope": 1}), &[], None).is_err());
 
         let mut args = common::test_args(
             json!({"config": {"model_verbosity": "low", "mcp_servers": {"keep": {"url": "http://k"}}}}),

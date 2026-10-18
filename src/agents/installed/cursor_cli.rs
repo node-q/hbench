@@ -108,7 +108,6 @@ pub struct CursorCli {
 
 impl CursorCli {
     fn new(args: AgentArgs) -> Result<CursorCli> {
-        opts::check_known(&args, "cursor-cli", &["mode", "pricing", "reasoning_effort"], false)?;
         let pricing = parse_pricing(args.kwargs.get("pricing"))?;
         let a = CursorCli { version: args.version_kw(), args, pricing };
         a.cli_flags()?;

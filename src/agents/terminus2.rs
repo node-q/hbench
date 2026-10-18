@@ -1105,34 +1105,6 @@ struct Options {
     session_id_headers: Vec<String>,
 }
 
-const KNOWN_OPTIONS: [&str; 24] = [
-    "max_turns",
-    "parser_name",
-    "api_base",
-    "temperature",
-    "reasoning_effort",
-    "collect_rollout_details",
-    "session_id",
-    "enable_summarize",
-    "proactive_summarization_threshold",
-    "max_thinking_tokens",
-    "model_info",
-    "trajectory_config",
-    "tmux_pane_width",
-    "tmux_pane_height",
-    "store_all_messages",
-    "record_terminal_session",
-    "interleaved_thinking",
-    "suppress_max_turns_warning",
-    "use_responses_api",
-    "llm_backend",
-    "llm_kwargs",
-    "llm_call_kwargs",
-    "session_id_headers",
-    // Deprecated aliases dropped before validation.
-    "episodes",
-];
-
 /// Pydantic-style (lax) kwarg coercion, collecting errors.
 pub(crate) struct Kw<'a> {
     m: &'a BTreeMap<String, Value>,
@@ -1140,10 +1112,8 @@ pub(crate) struct Kw<'a> {
 }
 
 impl<'a> Kw<'a> {
-    /// Starts with an "Unknown option" error for every key not in `known`.
-    pub(crate) fn new(m: &'a BTreeMap<String, Value>, known: &[&str]) -> Kw<'a> {
-        let errors = m.keys().filter(|k| !known.contains(&k.as_str())).map(|k| format!("Unknown option '{k}'.")).collect();
-        Kw { m, errors }
+    pub(crate) fn new(m: &'a BTreeMap<String, Value>) -> Kw<'a> {
+        Kw { m, errors: vec![] }
     }
     /// The "Invalid kwargs" error, if any option failed.
     pub(crate) fn finish(self, agent: &str) -> Result<()> {
@@ -1181,22 +1151,8 @@ impl<'a> Kw<'a> {
         r.or_else(|| self.bad(k, "number"))
     }
     pub(crate) fn boolean(&mut self, k: &str, default: bool) -> bool {
-        let r = match self.get(k) {
-            None => return default,
-            Some(Value::Bool(b)) => Some(*b),
-            Some(Value::Number(n)) => match n.as_f64() {
-                Some(0.0) => Some(false),
-                Some(1.0) => Some(true),
-                _ => None,
-            },
-            Some(Value::String(s)) => match s.trim().to_lowercase().as_str() {
-                "true" | "1" | "yes" | "y" | "on" | "t" => Some(true),
-                "false" | "0" | "no" | "n" | "off" | "f" => Some(false),
-                _ => None,
-            },
-            _ => None,
-        };
-        r.or_else(|| self.bad(k, "boolean")).unwrap_or(default)
+        let Some(v) = self.get(k) else { return default };
+        crate::agents::installed::common::opts::lax_bool(v).or_else(|| self.bad(k, "boolean")).unwrap_or(default)
     }
     pub(crate) fn string(&mut self, k: &str) -> Option<String> {
         match self.get(k)? {
@@ -1215,9 +1171,7 @@ impl<'a> Kw<'a> {
 
 impl Options {
     fn parse(kwargs: &BTreeMap<String, Value>) -> Result<Options> {
-        let mut known = KNOWN_OPTIONS.to_vec();
-        known.push("max_episodes");
-        let mut kw = Kw::new(kwargs, &known);
+        let mut kw = Kw::new(kwargs);
         // Precedence: max_turns > max_episodes > episodes (deprecated).
         let max_episodes = kw.int("max_turns").or_else(|| kw.int("max_episodes")).or_else(|| kw.int("episodes"));
         let parser_name = kw.string("parser_name").unwrap_or_else(|| "json".into());
@@ -2555,7 +2509,6 @@ mod tests {
         let o = Options::parse(&serde_json::from_value(json!({"max_turns": 3, "max_episodes": 9, "episodes": 7})).unwrap()).unwrap();
         assert_eq!(o.max_episodes, Some(3));
         let err = |v: Value| Options::parse(&serde_json::from_value(v).unwrap()).unwrap_err().to_string();
-        assert!(err(json!({"bogus": 1})).contains("Unknown option 'bogus'."));
         assert!(err(json!({"max_turns": "lots"})).contains("max_turns: Input should be a valid integer"));
         assert!(err(json!({"parser_name": "yaml"})).contains("Unknown parser_name: yaml"));
         assert!(err(json!({"reasoning_effort": "huge"})).contains("reasoning_effort"));

@@ -477,8 +477,7 @@ mod tests {
         let mut seen = std::collections::BTreeSet::new();
         for name in names() {
             assert!(seen.insert(name), "{name} registered twice");
-            assert!(crate::agents::allowed_kwargs::allowed(name).is_some(), "{name} missing from allowed_kwargs");
-            assert!(crate::schemas::agent(name).is_some(), "{name} has no options schema");
+            assert!(crate::schemas::options(name).is_some(), "{name} has no options schema");
             let created = create(name, common::test_args(serde_json::json!({}), &[], None));
             assert!(!matches!(created, Ok(None)), "{name} not constructed by create");
         }

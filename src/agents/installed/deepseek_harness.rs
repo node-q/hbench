@@ -45,7 +45,6 @@ fs.writeFileSync(p.join(out,p.basename(d)+".jsonl"),e.name.endsWith(".zstd")?unz
 try{walk(p.join(home,"sessions"))}catch(e){}"#;
 
 pub fn create(args: AgentArgs) -> Result<AgentBox> {
-    opts::check_known(&args, NAME, &["reasoning_effort"], false)?;
     let a = DeepSeekHarness { version: args.version_kw(), args, session_id: None };
     a.route()?;
     a.effort()?;

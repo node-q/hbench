@@ -1090,43 +1090,9 @@ struct Options {
     gemini_auto_ack_safety: bool,
 }
 
-const KNOWN_OPTIONS: [&str; 30] = [
-    "max_turns",
-    "temperature",
-    "api_base",
-    "reasoning_effort",
-    "max_thinking_tokens",
-    "model_info",
-    "collect_rollout_details",
-    "session_id",
-    "use_responses_api",
-    "llm_kwargs",
-    "llm_call_kwargs",
-    "desktop_width",
-    "desktop_height",
-    "window_width",
-    "window_height",
-    "window_x",
-    "window_y",
-    "runtime_readiness_timeout_sec",
-    "runtime_request_timeout_sec",
-    "runtime_action_timeout_sec",
-    "enable_episode_logging",
-    "start_url",
-    "env_io_dir",
-    "extra_tools",
-    "enable_images",
-    "provider",
-    "aws_region_name",
-    "gemini_auto_ack_safety",
-    // Common agent kwargs, also accepted.
-    "skills_dir",
-    "mcp_servers",
-];
-
 impl Options {
     fn parse(kwargs: &BTreeMap<String, Value>) -> Result<Options> {
-        let mut kw = Kw::new(kwargs, &KNOWN_OPTIONS);
+        let mut kw = Kw::new(kwargs);
         let extra_tools = match kwargs.get("extra_tools") {
             None | Some(Value::Null) => vec![],
             Some(Value::Array(a)) if a.iter().all(Value::is_string) => a.iter().map(|v| v.as_str().unwrap().to_string()).collect(),
@@ -2171,7 +2137,6 @@ mod tests {
         )
         .unwrap();
         assert_eq!((o.geo.desktop_width, o.extra_tools.clone(), o.enable_images), (1280, vec!["bash".to_string()], Some(false)));
-        assert!(Options::parse(&serde_json::from_value(json!({"nope": 1})).unwrap()).is_err());
     }
 
     #[test]

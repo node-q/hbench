@@ -105,5 +105,6 @@
     }
   },
   "title": "JunieOptions",
-  "type": "object"
+  "type": "object",
+  "x-native-config": true
 }

@@ -39,7 +39,11 @@
       ],
       "default": null,
       "description": "Maximum agent turns. Omit for no practical limit.",
-      "title": "Max Turns"
+      "title": "Max Turns",
+      "x-aliases": [
+        "max_episodes",
+        "episodes"
+      ]
     },
     "parser_name": {
       "default": "json",

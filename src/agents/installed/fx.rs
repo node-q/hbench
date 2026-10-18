@@ -1,6 +1,5 @@
 //! fx. `fx-dev` reuses this struct with `dev = true`.
 
-use super::common::opts::check_options;
 use super::common::{installed_dir, skills_dir};
 use super::{connection, ensure_system_dependencies, exec_agent, upload_text};
 use crate::agents::model_connection::Spec;
@@ -40,11 +39,6 @@ pub struct Fx {
 impl Fx {
     pub fn new(args: AgentArgs, dev: bool) -> Result<Fx> {
         let name = if dev { "fx-dev" } else { "fx" };
-        let mut fields = vec!["max_agent_steps", "reasoning_effort", "permission_mode"];
-        if dev {
-            fields.extend(["trace_log", "trace_scopes"]);
-        }
-        check_options(&args, name, &fields)?;
         let reasoning_effort = args.kw("reasoning_effort");
         if let Some(r) = &reasoning_effort
             && !REASONING_EFFORTS.contains(&r.as_str())
@@ -259,12 +253,7 @@ pub(crate) mod tests {
                 .to_string()
                 .contains("permission_mode")
         );
-        assert!(Fx::new(args(json!({"bogus": 1}), &[], None, vec![]), false).err().unwrap().to_string().contains("Unknown option 'bogus'"));
-        assert!(Fx::new(args(json!({"trace_log": "x"}), &[], None, vec![]), false).is_err());
         assert!(Fx::new(args(json!({"max_agent_steps": "abc"}), &[], None, vec![]), false).is_err());
-        assert!(
-            Fx::new(args(json!({"config": {}}), &[], None, vec![]), false).err().unwrap().to_string().contains("does not support config")
-        );
     }
 
     #[test]

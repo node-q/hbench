@@ -1,7 +1,7 @@
 //! SWE-agent installed agent. Runs as root only.
 
 use super::common::installed_dir;
-use super::mini_swe_agent::{opt_str, reject_unknown};
+use super::mini_swe_agent::opt_str;
 use super::{connection, ensure_system_dependencies, exec_agent, exec_error, exec_root};
 use crate::agents::model_connection::Spec;
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
@@ -22,18 +22,6 @@ const CLI: &[(&str, &str)] = &[
     ("max_input_tokens", "--agent.model.max_input_tokens"),
     ("temperature", "--agent.model.temperature"),
     ("top_p", "--agent.model.top_p"),
-];
-const OPTIONS: &[&str] = &[
-    "version",
-    "prompt_template_path",
-    "config",
-    "per_instance_cost_limit",
-    "total_cost_limit",
-    "max_input_tokens",
-    "temperature",
-    "top_p",
-    "completion_kwargs",
-    "reasoning_effort",
 ];
 
 pub struct SweAgent {
@@ -86,10 +74,6 @@ fn clone_command(version: Option<&str>) -> String {
 
 impl SweAgent {
     fn new(args: AgentArgs) -> Result<Self> {
-        reject_unknown(&args, N, OPTIONS)?;
-        if args.kwargs.get("config").is_some_and(|v| !v.is_null()) {
-            bail!("Agent '{N}' does not support config. You can implement it.");
-        }
         let mut opts = BTreeMap::new();
         for (k, _) in CLI {
             if let Some(v) = opt_str(&args, N, k)? {
@@ -389,8 +373,6 @@ mod tests {
         let a = agent(json!({}), &[("SWEAGENT_COMPLETION_KWARGS", r#"{"a": 1}"#)], "openai/gpt-5").unwrap();
         assert_eq!(a.completion_kwargs.as_deref(), Some(r#"{"a": 1}"#));
         assert!(agent(json!({"completion_kwargs": ""}), &[], "openai/gpt-5").unwrap().completion_kwargs.is_none());
-        assert!(agent(json!({"bogus": 1}), &[], "openai/gpt-5").is_err());
-        assert!(agent(json!({"config": {}}), &[], "openai/gpt-5").err().unwrap().to_string().contains("does not support config"));
     }
 
     #[test]

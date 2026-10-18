@@ -1,7 +1,7 @@
 //! Kimi Code installed agent, with usage totals from its wire log.
 
 use super::common::{installed_dir, nvm_node_install_snippet, skills_dir};
-use super::kimi_cli::{loads_lenient, validate_kwargs};
+use super::kimi_cli::loads_lenient;
 use super::{exec_agent, exec_root};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx, pricing};
 use crate::env::quote;
@@ -38,7 +38,6 @@ pub struct KimiCode {
 }
 
 pub fn create(args: AgentArgs) -> Result<AgentBox> {
-    validate_kwargs("kimi-code", &args, &[])?;
     Ok(Box::new(KimiCode { version: args.version_kw(), args }))
 }
 
@@ -520,7 +519,6 @@ mod tests {
         assert!(a.run_command("x", true).0.contains("kimi --continue --prompt"));
         assert_eq!(parse_version("kimi 0.28.1\n"), "0.28.1");
         assert_eq!(parse_version("\n"), "");
-        assert!(create(args(json!({"bogus": 1}), &[], None)).is_err());
         assert!(create(args(json!({"version": "0.28.1"}), &[], None)).is_ok());
     }
 

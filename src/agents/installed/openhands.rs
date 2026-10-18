@@ -19,49 +19,11 @@ const SPEC: Spec = Spec {
 };
 const VERSION_CMD: &str = "/opt/openhands-venv/bin/python -m openhands.core.main --version";
 const CONFIG_PATH: &str = "$HOME/.openhands/config.toml";
-const KNOWN: &[&str] = &[
-    "version",
-    "prompt_template_path",
-    "config",
-    "disable_tool_calls",
-    "reasoning_effort",
-    "temperature",
-    "max_iterations",
-    "caching_prompt",
-    "top_p",
-    "num_retries",
-    "max_budget_per_task",
-    "drop_params",
-    "disable_vision",
-    "trajectory_config",
-    "api_base",
-    "model_info",
-    "python_version",
-    "git_version",
-];
 
 // ---- Pydantic-style option coercion shared with openhands_sdk ----
 
 fn invalid(agent: &str, k: &str, msg: &str) -> anyhow::Error {
     anyhow::anyhow!("Invalid kwargs for agent '{agent}':\n  {k}: {msg}\nSee `hbench agents schema {agent}` for available options.")
-}
-
-/// `extra="forbid"` + `config` only for agents with native_config (none here).
-pub(super) fn check_known(args: &AgentArgs, agent: &str, known: &[&str]) -> Result<()> {
-    for k in args.kwargs.keys() {
-        if k == "override_setup_timeout_sec" {
-            continue; // removed before validation
-        }
-        if !known.contains(&k.as_str()) {
-            return Err(anyhow::anyhow!(
-                "Invalid kwargs for agent '{agent}':\n  Unknown option '{k}'.\nSee `hbench agents schema {agent}` for available options."
-            ));
-        }
-    }
-    if args.kwargs.get("config").is_some_and(|v| !v.is_null()) {
-        bail!("Agent '{agent}' does not support config. You can implement it.");
-    }
-    Ok(())
 }
 
 fn get<'a>(args: &'a AgentArgs, k: &str) -> Option<&'a Value> {
@@ -159,7 +121,6 @@ pub fn create(args: AgentArgs) -> Result<AgentBox> {
 impl OpenHands {
     pub fn new(args: AgentArgs) -> Result<OpenHands> {
         const N: &str = "openhands";
-        check_known(&args, N, KNOWN)?;
         let disable_tool_calls = opt_bool(&args, N, "disable_tool_calls")?.unwrap_or(false);
         let mut option_env = BTreeMap::new();
         option_env.insert("LLM_NATIVE_TOOL_CALLING".to_string(), (if disable_tool_calls { "false" } else { "true" }).to_string());
@@ -495,9 +456,7 @@ pub(super) mod tests {
         let d = agent(json!({}), &[], None).unwrap();
         assert_eq!(d.option_env.len(), 1);
         assert_eq!(d.option_env["LLM_NATIVE_TOOL_CALLING"], "true");
-        assert!(agent(json!({"bogus": 1}), &[], None).is_err());
         assert!(agent(json!({"max_iterations": "x"}), &[], None).is_err());
-        assert!(agent(json!({"config": {"a": 1}}), &[], None).is_err());
         assert!(agent(json!({"trajectory_config": {"raw_content": true}}), &[], None).is_err());
         assert!(agent(json!({"trajectory_config": {"raw_content": true}, "disable_tool_calls": true}), &[], None).unwrap().raw_content);
         assert!(

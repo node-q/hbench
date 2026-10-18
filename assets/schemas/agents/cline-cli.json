@@ -43,7 +43,10 @@
       ],
       "default": null,
       "description": "Pre-built CLI tarball URL.",
-      "title": "Tarball Url"
+      "title": "Tarball Url",
+      "x-aliases": [
+        "tarball-url"
+      ]
     },
     "tarball_path": {
       "anyOf": [
@@ -56,7 +59,11 @@
       ],
       "default": null,
       "description": "Local CLI tarball path.",
-      "title": "Tarball Path"
+      "title": "Tarball Path",
+      "x-aliases": [
+        "tarball-path",
+        "local-tarball-path"
+      ]
     },
     "github_user": {
       "anyOf": [
@@ -69,7 +76,10 @@
       ],
       "default": null,
       "description": "GitHub user or org for the Cline fork.",
-      "title": "Github User"
+      "title": "Github User",
+      "x-aliases": [
+        "github-user"
+      ]
     },
     "commit_hash": {
       "anyOf": [
@@ -82,7 +92,10 @@
       ],
       "default": null,
       "description": "Branch, tag, or commit hash.",
-      "title": "Commit Hash"
+      "title": "Commit Hash",
+      "x-aliases": [
+        "commit-hash"
+      ]
     },
     "cline_version": {
       "anyOf": [
@@ -95,7 +108,10 @@
       ],
       "default": null,
       "description": "npm version to install.",
-      "title": "Cline Version"
+      "title": "Cline Version",
+      "x-aliases": [
+        "cline-version"
+      ]
     },
     "thinking": {
       "anyOf": [
@@ -134,7 +150,10 @@
       ],
       "default": null,
       "description": "Cline CLI timeout seconds.",
-      "title": "Timeout"
+      "title": "Timeout",
+      "x-aliases": [
+        "timeout-seconds"
+      ]
     },
     "timeout_sec": {
       "anyOf": [
@@ -153,7 +172,10 @@
       ],
       "default": null,
       "description": "Alias of timeout.",
-      "title": "Timeout Sec"
+      "title": "Timeout Sec",
+      "x-aliases": [
+        "timeout-sec"
+      ]
     },
     "cline_timeout_sec": {
       "anyOf": [
@@ -172,7 +194,11 @@
       ],
       "default": null,
       "description": "Alias of timeout.",
-      "title": "Cline Timeout Sec"
+      "title": "Cline Timeout Sec",
+      "x-aliases": [
+        "cline-timeout-sec",
+        "cline-timeout"
+      ]
     },
     "agent_timeout_sec": {
       "anyOf": [
@@ -204,7 +230,10 @@
       ],
       "default": null,
       "description": "Alias of thinking.",
-      "title": "Reasoning Effort"
+      "title": "Reasoning Effort",
+      "x-aliases": [
+        "reasoning-effort"
+      ]
     },
     "max_consecutive_mistakes": {
       "anyOf": [
@@ -217,7 +246,10 @@
       ],
       "default": null,
       "description": "Max consecutive mistakes before Cline stops.",
-      "title": "Max Consecutive Mistakes"
+      "title": "Max Consecutive Mistakes",
+      "x-aliases": [
+        "max-consecutive-mistakes"
+      ]
     },
     "setup_retries": {
       "anyOf": [
@@ -236,7 +268,10 @@
       ],
       "default": null,
       "description": "Retries per setup command.",
-      "title": "Setup Retries"
+      "title": "Setup Retries",
+      "x-aliases": [
+        "setup-retries"
+      ]
     },
     "setup_retry_delay_sec": {
       "anyOf": [
@@ -255,7 +290,11 @@
       ],
       "default": null,
       "description": "Base retry delay seconds.",
-      "title": "Setup Retry Delay Sec"
+      "title": "Setup Retry Delay Sec",
+      "x-aliases": [
+        "setup-retry-delay-sec",
+        "setup-retry-delay-seconds"
+      ]
     },
     "setup_command_timeout_sec": {
       "anyOf": [
@@ -274,7 +313,11 @@
       ],
       "default": null,
       "description": "Per-attempt setup command timeout.",
-      "title": "Setup Command Timeout Sec"
+      "title": "Setup Command Timeout Sec",
+      "x-aliases": [
+        "setup-command-timeout-sec",
+        "setup-command-timeout-seconds"
+      ]
     },
     "plugin_source": {
       "anyOf": [
@@ -287,7 +330,10 @@
       ],
       "default": null,
       "description": "Git source for a Cline plugin.",
-      "title": "Plugin Source"
+      "title": "Plugin Source",
+      "x-aliases": [
+        "plugin-source"
+      ]
     },
     "plugin_tarball_url": {
       "anyOf": [
@@ -300,7 +346,10 @@
       ],
       "default": null,
       "description": "Cline plugin tarball URL.",
-      "title": "Plugin Tarball Url"
+      "title": "Plugin Tarball Url",
+      "x-aliases": [
+        "plugin-tarball-url"
+      ]
     },
     "plugin_tarball_path": {
       "anyOf": [
@@ -313,9 +362,14 @@
       ],
       "default": null,
       "description": "Local Cline plugin tarball path.",
-      "title": "Plugin Tarball Path"
+      "title": "Plugin Tarball Path",
+      "x-aliases": [
+        "plugin-tarball-path",
+        "local-plugin-tarball-path"
+      ]
     }
   },
   "title": "ClineOptions",
-  "type": "object"
+  "type": "object",
+  "x-native-config": true
 }

@@ -86,39 +86,6 @@ pub fn choice(a: &AgentArgs, k: &str, fallback: Option<&str>, choices: &[&str]) 
     }
 }
 
-/// Options forbid unknown kwargs (reported one at a time); `config` needs `native_config`.
-pub fn check_known(a: &AgentArgs, agent: &str, known: &[&str], native_config: bool) -> Result<()> {
-    for k in a.kwargs.keys() {
-        if !known.contains(&k.as_str()) && !["version", "prompt_template_path", "config"].contains(&k.as_str()) {
-            bail!(
-                "Invalid kwargs for agent '{agent}':\n  Unknown option '{k}'.\nSee `hbench agents schema {agent}` for available options."
-            );
-        }
-    }
-    if !native_config && a.kw("config").is_some() {
-        bail!("Agent '{agent}' does not support config. You can implement it.");
-    }
-    Ok(())
-}
-
-/// Pydantic `extra="forbid"` + unsupported native config: every unknown
-/// kwarg is listed, then `config` is rejected.
-pub fn check_options(args: &AgentArgs, name: &str, fields: &[&str]) -> Result<()> {
-    let unknown: Vec<String> = args
-        .kwargs
-        .keys()
-        .filter(|k| !["version", "prompt_template_path", "config"].contains(&k.as_str()) && !fields.contains(&k.as_str()))
-        .map(|k| format!("  Unknown option '{k}'."))
-        .collect();
-    if !unknown.is_empty() {
-        bail!("Invalid kwargs for agent '{name}':\n{}\nSee `hbench agents schema {name}` for available options.", unknown.join("\n"));
-    }
-    if args.kwargs.get("config").is_some_and(|v| !v.is_null()) {
-        bail!("Agent '{name}' does not support config. You can implement it.");
-    }
-    Ok(())
-}
-
 /// Optional int kwarg (pydantic lax int: ints or numeric strings, not bools or floats).
 pub fn kw_int(args: &AgentArgs, k: &str) -> Result<Option<i64>> {
     match args.kwargs.get(k) {

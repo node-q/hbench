@@ -34,18 +34,7 @@ struct Options {
 
 impl Options {
     fn parse(kwargs: &BTreeMap<String, Value>) -> Result<Options> {
-        let known = [
-            "signature",
-            "max_iterations",
-            "max_llm_calls",
-            "max_output_chars",
-            "verbose",
-            "tool_timeout_sec",
-            "working_dir",
-            "extra_tools",
-            "sub_model_name",
-        ];
-        let mut kw = Kw::new(kwargs, &known);
+        let mut kw = Kw::new(kwargs);
         let o = Options {
             signature: kw.string("signature").unwrap_or_else(|| "instruction, file_tree -> solution".into()),
             max_iterations: kw.int("max_iterations").unwrap_or(20),
@@ -228,12 +217,6 @@ mod tests {
         )
         .unwrap();
         assert_eq!((o.max_iterations, o.max_llm_calls, o.working_dir.as_str()), (10, 50, "/workspace"));
-        assert!(
-            Options::parse(&serde_json::from_value(json!({"nope": 1})).unwrap())
-                .unwrap_err()
-                .to_string()
-                .contains("Unknown option 'nope'.")
-        );
         assert!(Options::parse(&serde_json::from_value(json!({"extra_tools": ["x"]})).unwrap()).is_err());
     }
 

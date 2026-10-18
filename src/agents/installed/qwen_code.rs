@@ -1,7 +1,7 @@
 //! Qwen Code installed agent.
 
 use super::common::{installed_dir, nvm_node_install_snippet, skills_dir};
-use super::trae_agent::{check_kwargs, iso_timestamp_ok, opt_str};
+use super::trae_agent::{iso_timestamp_ok, opt_str};
 use super::{connection, ensure_system_dependencies, exec_agent};
 use crate::agents::model_connection::Spec;
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
@@ -25,7 +25,6 @@ pub fn create(args: AgentArgs) -> Result<AgentBox> {
 
 impl QwenCode {
     fn new(mut args: AgentArgs) -> Result<QwenCode> {
-        check_kwargs("qwen-coder", &args, &["api_key", "base_url"])?;
         for (kw, env) in [("api_key", "OPENAI_API_KEY"), ("base_url", "OPENAI_BASE_URL")] {
             // Explicit kwarg (None = opt-out) > Env fallback (agent env > host env).
             let v = match args.kwargs.get(kw) {
@@ -291,7 +290,6 @@ mod tests {
         let b = QwenCode::new(args(json!({"base_url": "http://kw"}), &[("OPENAI_API_BASE", "http://b")], Some("m"))).unwrap();
         assert_eq!(b.run_env()["OPENAI_BASE_URL"], "http://kw");
         assert!(!b.run_env().contains_key("OPENAI_API_BASE"));
-        assert!(QwenCode::new(args(json!({"bogus": 1}), &[], None)).is_err());
         assert!(QwenCode::new(args(json!({"api_key": true}), &[], None)).is_err());
         let cmd = QwenCode::run_command("fix it's bug", true);
         assert!(cmd.contains("--chat-recording --continue --prompt='fix it'\\''s bug' 2>&1 | stdbuf -oL tee /logs/agent/qwen-code.txt"));

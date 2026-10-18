@@ -1,63 +1,103 @@
 //! Vendored JSON schemas (task.toml, trial config, each agent's options model) under assets/schemas.
 
 use serde_json::Value;
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::OnceLock;
 
 pub const TASK: &str = include_str!("../assets/schemas/task.json");
 pub const TRIAL: &str = include_str!("../assets/schemas/trial.json");
 
-pub fn agent(name: &str) -> Option<&'static str> {
-    let name = match name {
+const AGENTS: &[(&str, &str)] = &[
+    ("acp", include_str!("../assets/schemas/agents/acp.json")),
+    ("aider", include_str!("../assets/schemas/agents/aider.json")),
+    ("antigravity-cli", include_str!("../assets/schemas/agents/antigravity-cli.json")),
+    ("antigravity-sdk", include_str!("../assets/schemas/agents/antigravity-sdk.json")),
+    ("claude-code", include_str!("../assets/schemas/agents/claude-code.json")),
+    ("cline-cli", include_str!("../assets/schemas/agents/cline-cli.json")),
+    ("code-puppy", include_str!("../assets/schemas/agents/code-puppy.json")),
+    ("codex", include_str!("../assets/schemas/agents/codex.json")),
+    ("computer-1", include_str!("../assets/schemas/agents/computer-1.json")),
+    ("copilot-cli", include_str!("../assets/schemas/agents/copilot-cli.json")),
+    ("cortex-code", include_str!("../assets/schemas/agents/cortex-code.json")),
+    ("cursor-cli", include_str!("../assets/schemas/agents/cursor-cli.json")),
+    ("deepseek-harness", include_str!("../assets/schemas/agents/deepseek-harness.json")),
+    ("deerflow", include_str!("../assets/schemas/agents/deerflow.json")),
+    ("devin", include_str!("../assets/schemas/agents/devin.json")),
+    ("dspy-rlm", include_str!("../assets/schemas/agents/dspy-rlm.json")),
+    ("eve", include_str!("../assets/schemas/agents/eve.json")),
+    ("fx", include_str!("../assets/schemas/agents/fx.json")),
+    ("fx-dev", include_str!("../assets/schemas/agents/fx-dev.json")),
+    ("gemini-cli", include_str!("../assets/schemas/agents/gemini-cli.json")),
+    ("goose", include_str!("../assets/schemas/agents/goose.json")),
+    ("grok-build", include_str!("../assets/schemas/agents/grok-build.json")),
+    ("hermes", include_str!("../assets/schemas/agents/hermes.json")),
+    ("junie", include_str!("../assets/schemas/agents/junie.json")),
+    ("kimi-cli", include_str!("../assets/schemas/agents/kimi-cli.json")),
+    ("kimi-code", include_str!("../assets/schemas/agents/kimi-code.json")),
+    ("langgraph", include_str!("../assets/schemas/agents/langgraph.json")),
+    ("mcode", include_str!("../assets/schemas/agents/mcode.json")),
+    ("mimo", include_str!("../assets/schemas/agents/mimo.json")),
+    ("mini-swe-agent", include_str!("../assets/schemas/agents/mini-swe-agent.json")),
+    ("muse-code", include_str!("../assets/schemas/agents/muse-code.json")),
+    ("nemo-agent", include_str!("../assets/schemas/agents/nemo-agent.json")),
+    ("openclaw", include_str!("../assets/schemas/agents/openclaw.json")),
+    ("opencode", include_str!("../assets/schemas/agents/opencode.json")),
+    ("openhands", include_str!("../assets/schemas/agents/openhands.json")),
+    ("openhands-sdk", include_str!("../assets/schemas/agents/openhands-sdk.json")),
+    ("pi", include_str!("../assets/schemas/agents/pi.json")),
+    ("qwen-coder", include_str!("../assets/schemas/agents/qwen-coder.json")),
+    ("rovodev-cli", include_str!("../assets/schemas/agents/rovodev-cli.json")),
+    ("strands", include_str!("../assets/schemas/agents/strands.json")),
+    ("swe-agent", include_str!("../assets/schemas/agents/swe-agent.json")),
+    ("terminus-2", include_str!("../assets/schemas/agents/terminus-2.json")),
+    ("trae-agent", include_str!("../assets/schemas/agents/trae-agent.json")),
+    ("vibe", include_str!("../assets/schemas/agents/vibe.json")),
+];
+
+fn canonical(name: &str) -> &str {
+    match name {
         "terminus" | "terminus-1" => "terminus-2",
         n if n.starts_with("acp:") => "acp",
         n => n,
-    };
-    Some(match name {
-        "acp" => include_str!("../assets/schemas/agents/acp.json"),
-        "aider" => include_str!("../assets/schemas/agents/aider.json"),
-        "antigravity-cli" => include_str!("../assets/schemas/agents/antigravity-cli.json"),
-        "antigravity-sdk" => include_str!("../assets/schemas/agents/antigravity-sdk.json"),
-        "claude-code" => include_str!("../assets/schemas/agents/claude-code.json"),
-        "cline-cli" => include_str!("../assets/schemas/agents/cline-cli.json"),
-        "code-puppy" => include_str!("../assets/schemas/agents/code-puppy.json"),
-        "codex" => include_str!("../assets/schemas/agents/codex.json"),
-        "computer-1" => include_str!("../assets/schemas/agents/computer-1.json"),
-        "copilot-cli" => include_str!("../assets/schemas/agents/copilot-cli.json"),
-        "cortex-code" => include_str!("../assets/schemas/agents/cortex-code.json"),
-        "cursor-cli" => include_str!("../assets/schemas/agents/cursor-cli.json"),
-        "deepseek-harness" => include_str!("../assets/schemas/agents/deepseek-harness.json"),
-        "deerflow" => include_str!("../assets/schemas/agents/deerflow.json"),
-        "devin" => include_str!("../assets/schemas/agents/devin.json"),
-        "dspy-rlm" => include_str!("../assets/schemas/agents/dspy-rlm.json"),
-        "eve" => include_str!("../assets/schemas/agents/eve.json"),
-        "fx" => include_str!("../assets/schemas/agents/fx.json"),
-        "fx-dev" => include_str!("../assets/schemas/agents/fx-dev.json"),
-        "gemini-cli" => include_str!("../assets/schemas/agents/gemini-cli.json"),
-        "goose" => include_str!("../assets/schemas/agents/goose.json"),
-        "grok-build" => include_str!("../assets/schemas/agents/grok-build.json"),
-        "hermes" => include_str!("../assets/schemas/agents/hermes.json"),
-        "junie" => include_str!("../assets/schemas/agents/junie.json"),
-        "kimi-cli" => include_str!("../assets/schemas/agents/kimi-cli.json"),
-        "kimi-code" => include_str!("../assets/schemas/agents/kimi-code.json"),
-        "langgraph" => include_str!("../assets/schemas/agents/langgraph.json"),
-        "mcode" => include_str!("../assets/schemas/agents/mcode.json"),
-        "mimo" => include_str!("../assets/schemas/agents/mimo.json"),
-        "mini-swe-agent" => include_str!("../assets/schemas/agents/mini-swe-agent.json"),
-        "muse-code" => include_str!("../assets/schemas/agents/muse-code.json"),
-        "nemo-agent" => include_str!("../assets/schemas/agents/nemo-agent.json"),
-        "openclaw" => include_str!("../assets/schemas/agents/openclaw.json"),
-        "opencode" => include_str!("../assets/schemas/agents/opencode.json"),
-        "openhands" => include_str!("../assets/schemas/agents/openhands.json"),
-        "openhands-sdk" => include_str!("../assets/schemas/agents/openhands-sdk.json"),
-        "pi" => include_str!("../assets/schemas/agents/pi.json"),
-        "qwen-coder" => include_str!("../assets/schemas/agents/qwen-coder.json"),
-        "rovodev-cli" => include_str!("../assets/schemas/agents/rovodev-cli.json"),
-        "strands" => include_str!("../assets/schemas/agents/strands.json"),
-        "swe-agent" => include_str!("../assets/schemas/agents/swe-agent.json"),
-        "terminus-2" => include_str!("../assets/schemas/agents/terminus-2.json"),
-        "trae-agent" => include_str!("../assets/schemas/agents/trae-agent.json"),
-        "vibe" => include_str!("../assets/schemas/agents/vibe.json"),
-        _ => return None,
-    })
+    }
+}
+
+/// An agent's options schema (`terminus`/`terminus-1` share terminus-2's, every `acp:<id>` shares acp's).
+pub fn agent(name: &str) -> Option<&'static str> {
+    let name = canonical(name);
+    AGENTS.iter().find(|(n, _)| *n == name).map(|(_, schema)| *schema)
+}
+
+/// What an agent's options schema accepts as `kwargs`.
+pub struct Options {
+    /// Property names and their `x-aliases`.
+    pub keys: BTreeSet<String>,
+    /// `x-native-config`: the agent passes `config` on to its own configuration.
+    pub native_config: bool,
+}
+
+pub fn options(name: &str) -> Option<&'static Options> {
+    static ALL: OnceLock<BTreeMap<&str, Options>> = OnceLock::new();
+    let all = ALL.get_or_init(|| {
+        AGENTS
+            .iter()
+            .map(|(name, text)| {
+                let s: Value = serde_json::from_str(text).expect("vendored agent schema");
+                let keys = s["properties"]
+                    .as_object()
+                    .into_iter()
+                    .flatten()
+                    .flat_map(|(k, p)| std::iter::once(k.clone()).chain(aliases(p).map(String::from)))
+                    .collect();
+                (*name, Options { keys, native_config: s["x-native-config"] == true })
+            })
+            .collect()
+    });
+    all.get(canonical(name))
+}
+
+fn aliases(property: &Value) -> impl Iterator<Item = &str> {
+    property["x-aliases"].as_array().into_iter().flatten().filter_map(Value::as_str)
 }
 
 fn schema_type(p: &Value) -> String {
@@ -86,7 +126,9 @@ pub fn options_table(agent: &str, schema: &Value) -> String {
             None if required.contains(&name.as_str()) => "required".into(),
             None => "—".into(),
         };
-        rows.push((name.clone(), schema_type(p), default, p["description"].as_str().unwrap_or("").to_string()));
+        let aliases: Vec<&str> = aliases(p).collect();
+        let name = if aliases.is_empty() { name.clone() } else { format!("{name} ({})", aliases.join(", ")) };
+        rows.push((name, schema_type(p), default, p["description"].as_str().unwrap_or("").to_string()));
     }
     let w = |f: fn(&(String, String, String, String)) -> &String| rows.iter().map(|r| f(r).chars().count()).max().unwrap_or(0);
     let (a, b, c) = (w(|r| &r.0), w(|r| &r.1).min(48), w(|r| &r.2).min(24));
@@ -101,20 +143,21 @@ pub fn options_table(agent: &str, schema: &Value) -> String {
 mod tests {
     use super::*;
     #[test]
-    fn schemas_parse_and_match_allowed_kwargs() {
+    fn every_agent_has_options() {
         for n in crate::agents::agent_names() {
             if matches!(n, "oracle" | "nop") {
                 continue;
             }
-            let s: Value = serde_json::from_str(agent(n).unwrap_or_else(|| panic!("no schema for {n}"))).unwrap();
-            let allowed = crate::agents::allowed_kwargs::allowed(n).unwrap();
-            for k in s["properties"].as_object().unwrap().keys() {
-                assert!(allowed.contains(&k.as_str()), "{n}: {k} missing from allowed kwargs");
-            }
+            let o = options(n).unwrap_or_else(|| panic!("no schema for {n}"));
+            assert!(o.keys.contains("config") || !o.native_config, "{n}");
         }
         let _: Value = serde_json::from_str(TASK).unwrap();
         let _: Value = serde_json::from_str(TRIAL).unwrap();
         let t = options_table("claude-code", &serde_json::from_str(agent("claude-code").unwrap()).unwrap());
         assert!(t.contains("max_turns") && t.contains("bypassPermissions"));
+        let t = options_table("terminus-2", &serde_json::from_str(agent("terminus").unwrap()).unwrap());
+        assert!(t.contains("max_turns (max_episodes, episodes)"), "{t}");
+        assert!(options("acp:goose").is_some_and(|o| !o.native_config) && options("codex").is_some_and(|o| o.native_config));
+        assert!(options("cline-cli").unwrap().keys.contains("cline-timeout"));
     }
 }

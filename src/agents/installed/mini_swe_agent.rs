@@ -25,18 +25,6 @@ const PINNED_DEPS: &[&str] = &["litellm==1.105.1", "orjson==3.13.0", "fastapi==0
 const TRAJECTORY_PATH: &str = "/logs/agent/mini-swe-agent.trajectory.json";
 const ENV_PRELUDE: &str =
     "if [ -f \"$HOME/.local/bin/env\" ]; then . \"$HOME/.local/bin/env\"; else export PATH=\"$HOME/.local/bin:$PATH\"; fi; ";
-const OPTIONS: &[&str] = &[
-    "version",
-    "prompt_template_path",
-    "config",
-    "cost_limit",
-    "reasoning_effort",
-    "max_tokens",
-    "config_file",
-    "litellm_model_registry_file",
-    "litellm_model_registry",
-    "session_id_headers",
-];
 
 /// Python type name, for Python-style error messages.
 pub(crate) fn py_type(v: &Value) -> &'static str {
@@ -59,14 +47,6 @@ pub(crate) fn opt_str(args: &AgentArgs, agent: &str, k: &str) -> Result<Option<S
         Some(Value::Number(n)) => Ok(Some(n.to_string())),
         Some(_) => bail!("Invalid kwargs for agent '{agent}':\n  {k}: Input should be a valid string"),
     }
-}
-
-/// `extra="forbid"` on the options model.
-pub(crate) fn reject_unknown(args: &AgentArgs, agent: &str, known: &[&str]) -> Result<()> {
-    if let Some(k) = args.kwargs.keys().find(|k| !known.contains(&k.as_str()) && *k != "override_setup_timeout_sec") {
-        bail!("Invalid kwargs for agent '{agent}':\n  Unknown option '{k}'.\nSee `hbench agents schema {agent}` for available options.");
-    }
-    Ok(())
 }
 
 /// Trial session id (`{trial_name}__agent`); logs_dir is `<trial>/agent`.
@@ -150,7 +130,6 @@ impl MiniSweAgent {
                 Some(serde_json::to_string_pretty(&v)?)
             }
         };
-        reject_unknown(&args, N, OPTIONS)?;
         let cost_limit = if args.kwargs.contains_key("cost_limit") { opt_str(&args, N, "cost_limit")? } else { Some("0".into()) };
         let reasoning_effort = opt_str(&args, N, "reasoning_effort")?;
         let session_id_headers = validate_session_id_headers(args.kwargs.get("session_id_headers"))?;
@@ -430,7 +409,6 @@ pub(crate) mod tests {
         assert!(err(json!({"litellm_model_registry": "{}"})).contains("expected a mapping, got str"));
         assert!(err(json!({"litellm_model_registry": {}, "litellm_model_registry_file": "/r.json"})).contains("mutually exclusive"));
         assert!(err(json!({"session_id_headers": ["bad header"]})).contains("Invalid HTTP header name"));
-        assert!(err(json!({"bogus": 1})).contains("Unknown option 'bogus'"));
         let f = std::env::temp_dir().join(format!("reg-{}.json", uuid::Uuid::new_v4()));
         std::fs::write(&f, "[1, 2, 3]").unwrap();
         assert!(

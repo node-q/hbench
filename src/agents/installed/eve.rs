@@ -17,8 +17,6 @@ const PROJECT_DIR: &str = "/installed-agent/eve-project";
 const RUNNER_PATH: &str = "/installed-agent/eve_runner.mjs";
 const INSTRUCTION_PATH: &str = "/installed-agent/eve-instruction.txt";
 const NODE_PREFIX: &str = "export NVM_DIR=\"$HOME/.nvm\"; [ -s \"$NVM_DIR/nvm.sh\" ] && . \"$NVM_DIR/nvm.sh\"; ";
-const OPTIONS: &[&str] =
-    &["version", "prompt_template_path", "config", "path", "install_command", "auto_env", "port", "startup_timeout_ms"];
 const IGNORE_NAMES: &[&str] = &[
     ".DS_Store",
     ".cache",
@@ -225,14 +223,6 @@ fn auto_env_texts(dir: &Path, out: &mut Vec<String>) {
 
 impl Eve {
     pub fn new(args: AgentArgs) -> Result<Eve> {
-        let unknown: Vec<&String> = args.kwargs.keys().filter(|k| !OPTIONS.contains(&k.as_str())).collect();
-        if !unknown.is_empty() {
-            let lines: Vec<String> = unknown.iter().map(|k| format!("  Unknown option '{k}'.")).collect();
-            bail!("Invalid kwargs for agent 'eve':\n{}\nSee `hbench agents schema eve` for available options.", lines.join("\n"));
-        }
-        if args.kwargs.get("config").is_some_and(|v| !v.is_null()) {
-            bail!("Agent 'eve' does not support config. You can implement it.");
-        }
         let raw = args.kw("path").map(PathBuf::from).unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
         let raw = match raw.to_str().and_then(|s| s.strip_prefix("~/")) {
             Some(rest) => PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(rest),
@@ -756,8 +746,6 @@ mod tests {
         let ps = p.display().to_string();
         assert!(agent(json!({"path": ps, "port": "x"}), &[], vec![]).is_err());
         assert!(agent(json!({"path": ps, "auto_env": "maybe"}), &[], vec![]).is_err());
-        assert!(agent(json!({"path": ps, "bogus": 1}), &[], vec![]).is_err());
-        assert!(agent(json!({"path": ps, "config": {}}), &[], vec![]).is_err());
         let empty = std::env::temp_dir().join(format!("hbench-eve-empty-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&empty).unwrap();
         assert!(agent(json!({"path": empty.display().to_string()}), &[], vec![]).err().unwrap().to_string().contains("package.json"));

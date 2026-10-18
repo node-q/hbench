@@ -30,7 +30,6 @@ pub struct GeminiCli {
 
 impl GeminiCli {
     fn new(args: AgentArgs) -> Result<GeminiCli> {
-        opts::check_known(&args, "gemini-cli", &["disable_web_search", "sandbox", "reasoning_effort"], false)?;
         let a = GeminiCli { version: args.version_kw(), args };
         a.cli_flags()?;
         a.disable_web_search()?;

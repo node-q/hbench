@@ -82,5 +82,6 @@
     }
   },
   "title": "MuseCodeOptions",
-  "type": "object"
+  "type": "object",
+  "x-native-config": true
 }

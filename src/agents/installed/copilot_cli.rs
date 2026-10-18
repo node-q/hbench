@@ -13,7 +13,6 @@ const TRAJECTORY_PATH: &str = "/logs/agent/copilot-cli.jsonl";
 const OUTPUT_PATH: &str = "/logs/agent/copilot-cli.txt";
 
 pub fn create(args: AgentArgs) -> Result<AgentBox> {
-    opts::check_known(&args, "copilot-cli", &["reasoning_effort", "disable_web_search"], false)?;
     let a = CopilotCli { version: args.version_kw(), args };
     a.cli_flags()?;
     a.disable_web_search()?;

@@ -1,7 +1,6 @@
 //! antigravity-sdk: Google's Antigravity SDK driven by an uploaded uv script (assets/agents/antigravity-sdk).
 
 use super::antigravity_cli::validate_base_url;
-use super::common::opts::check_options;
 use super::common::{installed_dir, skills_dir};
 use super::{ensure_system_dependencies, exec_agent, exec_root};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
@@ -76,7 +75,6 @@ pub fn parse_trajectory(text: &str, model_name: Option<&str>) -> Option<AgentCon
 
 impl AntigravitySdk {
     pub fn new(args: AgentArgs) -> Result<AntigravitySdk> {
-        check_options(&args, "antigravity-sdk", &["reasoning_effort", "load_skills", "skill_paths"])?;
         let load_skills = match args.kwargs.get("load_skills") {
             None => true,
             Some(_) => args.kw_bool("load_skills").ok_or_else(|| anyhow!("Invalid value for 'load_skills': expected bool"))?,
@@ -298,7 +296,6 @@ mod tests {
         assert_eq!(custom.run_env().unwrap()["SKILLS_PATHS_JSON"], r#"["/a","/b"]"#);
         let off = agent(json!({"load_skills": false}), &[("GEMINI_API_KEY", "k")]);
         assert_eq!(off.run_env().unwrap()["SKILLS_PATHS_JSON"], "[]");
-        assert!(AntigravitySdk::new(args(json!({"nope": 1}), &[], None, vec![])).is_err());
         assert!(AntigravitySdk::new(args(json!({"skill_paths": "x"}), &[], None, vec![])).is_err());
     }
 

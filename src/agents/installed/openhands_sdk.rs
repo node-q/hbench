@@ -1,7 +1,7 @@
 //! openhands-sdk: the OpenHands SDK in its own venv, driven by assets/agents/openhands-sdk/openhands_sdk_runner.py.
 
 use super::common::{installed_dir, skills_dir};
-use super::openhands::{check_known, opt_bool, opt_f64, opt_int, opt_str, py_float, raw_env};
+use super::openhands::{opt_bool, opt_f64, opt_int, opt_str, py_float, raw_env};
 use super::{ensure_system_dependencies, exec_agent, exec_root};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::quote;
@@ -12,18 +12,6 @@ use std::path::Path;
 
 const RUNNER: &str = include_str!("../../../assets/agents/openhands-sdk/openhands_sdk_runner.py");
 const N: &str = "openhands-sdk";
-const KNOWN: &[&str] = &[
-    "version",
-    "prompt_template_path",
-    "config",
-    "reasoning_effort",
-    "load_skills",
-    "skill_paths",
-    "collect_token_ids",
-    "max_iterations",
-    "temperature",
-    "python_version",
-];
 const INSTRUCTION_PATH: &str = "/installed-agent/instruction.txt";
 const VERSION_CMD: &str = "/opt/openhands-sdk-venv/bin/python -c 'import openhands.sdk; print(openhands.sdk.__version__)' 2>/dev/null";
 const DEFAULT_SKILL_PATHS: &[&str] = &[
@@ -58,7 +46,6 @@ pub fn create(args: AgentArgs) -> Result<AgentBox> {
 
 impl OpenHandsSdk {
     pub fn new(args: AgentArgs) -> Result<OpenHandsSdk> {
-        check_known(&args, N, KNOWN)?;
         let skill_paths = match args.kwargs.get("skill_paths") {
             None | Some(Value::Null) => None,
             Some(Value::Array(a)) => Some(
@@ -272,7 +259,6 @@ mod tests {
         );
         assert!(agent(json!({"max_iterations": "x"}), &[], None).is_err());
         assert!(agent(json!({"skill_paths": "/a"}), &[], None).is_err());
-        assert!(agent(json!({"unknown": 1}), &[], None).is_err());
         assert!(RUNNER.contains("--instruction-file"));
         assert!(!RUN_CMD.contains('\n') && RUN_CMD.contains("--instruction-file=/installed-agent/instruction.txt"));
     }

@@ -29,23 +29,6 @@ fn provider_config(provider: &str) -> Option<(&'static str, &'static str, &'stat
 }
 const PROVIDERS: &str = "['anthropic', 'gemini', 'google', 'kimi', 'moonshot', 'openai', 'openrouter']";
 
-/// Strict options: reject unknown kwargs and native config.
-pub(super) fn validate_kwargs(name: &str, args: &AgentArgs, extra: &[&str]) -> Result<()> {
-    if args.kwargs.get("config").is_some_and(|v| !v.is_null()) {
-        bail!("Agent '{name}' does not support config. You can implement it.");
-    }
-    let unknown: Vec<String> = args
-        .kwargs
-        .keys()
-        .filter(|k| !["version", "prompt_template_path", "config"].contains(&k.as_str()) && !extra.contains(&k.as_str()))
-        .map(|k| format!("  Unknown option '{k}'."))
-        .collect();
-    if !unknown.is_empty() {
-        bail!("Invalid kwargs for agent '{name}':\n{}\nSee `hbench agents schema {name}` for available options.", unknown.join("\n"));
-    }
-    Ok(())
-}
-
 /// `json.loads(s, strict=False)`: raw control characters are allowed inside strings.
 pub(super) fn loads_lenient(s: &str) -> Option<Value> {
     if let Ok(v) = serde_json::from_str(s) {
@@ -82,7 +65,6 @@ pub fn create(args: AgentArgs) -> Result<AgentBox> {
 
 impl KimiCli {
     fn new(args: AgentArgs) -> Result<KimiCli> {
-        validate_kwargs("kimi-cli", &args, &["api_key", "base_url", "model_info"])?;
         for k in ["api_key", "base_url"] {
             if args.kwargs.get(k).is_some_and(|v| !(v.is_null() || v.is_string() || v.is_number())) {
                 bail!("Invalid kwargs for agent 'kimi-cli':\n  {k}: Input should be a valid string");
@@ -404,8 +386,6 @@ mod tests {
 
     #[test]
     fn validation() {
-        assert!(agent(json!({"bogus": 1}), &[], None).is_err());
-        assert!(agent(json!({"config": {}}), &[], None).is_err());
         assert!(agent(json!({"model_info": "x"}), &[], None).is_err());
         let a = agent(json!({}), &[], Some("nomodel")).unwrap();
         assert!(a.commands("x", false).unwrap_err().to_string().contains("provider/model_name"));

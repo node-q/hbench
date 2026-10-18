@@ -14,8 +14,6 @@ use std::time::Duration;
 
 const EFFORTS: &[&str] = &["high", "low", "medium", "minimal"]; // sorted, as printed in errors
 const FLASH_ONLY_EFFORTS: &[&str] = &["minimal", "medium"];
-const KNOWN_OPTIONS: &[&str] =
-    &["version", "prompt_template_path", "config", "sandbox", "reasoning_effort", "binary_path", "override_setup_timeout_sec"];
 const PRINT_TIMEOUT: &str = "24h";
 const MODEL_LIST_TIMEOUT: Duration = Duration::from_secs(15);
 const STDERR_REPLAY_BYTES: usize = 256 * 1024;
@@ -118,17 +116,6 @@ pub struct AntigravityCli {
 
 impl AntigravityCli {
     pub fn new(mut args: AgentArgs) -> Result<AntigravityCli> {
-        let unknown: Vec<String> =
-            args.kwargs.keys().filter(|k| !KNOWN_OPTIONS.contains(&k.as_str())).map(|k| format!("  Unknown option '{k}'.")).collect();
-        if !unknown.is_empty() {
-            bail!(
-                "Invalid kwargs for agent 'antigravity-cli':\n{}\nSee `hbench agents schema antigravity-cli` for available options.",
-                unknown.join("\n")
-            );
-        }
-        if args.kwargs.get("config").is_some_and(|v| !v.is_null()) {
-            bail!("Agent 'antigravity-cli' does not support config. You can implement it.");
-        }
         let sandbox = match args.kwargs.get("sandbox") {
             None | Some(Value::Null) => None,
             Some(_) => Some(
@@ -639,8 +626,6 @@ mod tests {
         assert!(agent(json!({"reasoning_effort": "high"}), &[], Some("google/gemini-2.5-pro")).is_err());
         assert!(agent(json!({"reasoning_effort": "medium"}), &[], Some("google/gemini-3-pro")).is_err());
         assert!(agent(json!({"reasoning_effort": "medium"}), &[], Some("google/gemini-3-flash")).is_ok());
-        assert!(agent(json!({"bogus": 1}), &[], None).is_err());
-        assert!(agent(json!({"config": {"a": 1}}), &[], None).is_err());
         assert!(agent(json!({"sandbox": "maybe"}), &[], None).is_err());
         assert!(agent(json!({}), &[("AGY_ADC_AUTH", "perhaps")], None).is_err());
     }

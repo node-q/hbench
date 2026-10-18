@@ -640,9 +640,6 @@ fn parse_distribution_preference(v: Option<&Value>) -> Result<Vec<String>> {
 impl Acp {
     pub fn new(args: AgentArgs) -> Result<Acp> {
         let kw = |k: &str| args.kwargs.get(k).filter(|v| !v.is_null());
-        if kw("config").is_some() {
-            bail!("Agent 'acp' does not support config. You can implement it.");
-        }
         let permission_mode = args.kw("permission_mode").unwrap_or_else(|| "allow".into());
         if !["allow", "deny"].contains(&permission_mode.as_str()) {
             bail!("Invalid kwargs for agent 'acp':\n  permission_mode: Input should be 'allow' or 'deny'");
@@ -1183,7 +1180,6 @@ mod tests {
         assert!(err(json!({"registry_entry": entry(), "auth_policy": "sometimes"})).contains("Unsupported ACP auth policy"));
         assert!(err(json!({"registry_entry": entry(), "distribution_preference": "npx,bogus"})).contains("preference(s): bogus"));
         assert!(err(json!({"registry_entry": entry(), "permission_mode": "maybe"})).contains("permission_mode"));
-        assert!(err(json!({"registry_entry": entry(), "config": {}})).contains("does not support config"));
         assert!(
             err(json!({"source": {"repo_url": "https://github.com/o/r", "ref": "main"}, "registry_spec": "x"}))
                 .contains("cannot be combined")

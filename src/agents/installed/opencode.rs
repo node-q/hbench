@@ -13,7 +13,6 @@ const SPEC: Spec = Spec { default_provider: None, api_key_envs: &[], base_url_en
 const WEB_TOOLS: [&str; 2] = ["websearch", "webfetch"];
 
 pub fn create(args: AgentArgs) -> Result<AgentBox> {
-    opts::check_known(&args, "opencode", &["variant", "opencode_config", "disable_web_search"], false)?;
     let overlay = match args.kwargs.get("opencode_config") {
         None | Some(Value::Null) => serde_json::Map::new(),
         Some(Value::Object(o)) => o.clone(),
