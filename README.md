@@ -5,11 +5,16 @@ A fast, single-binary benchmark runner for coding-agent harnesses, written in Ru
 configs use the [upstream](https://github.com/node-q/hbench) task format, so registry datasets such as
 terminal-bench run as-is.
 
-Install the latest release (Linux/macOS, x86_64/arm64; `HBENCH_VERSION=vX.Y.Z` pins, `HBENCH_INSTALL_DIR` overrides `~/.local/bin`):
+Install the latest release (Linux/macOS, x86_64/arm64):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/sapphirestd/harness-benchmark/master/scripts/install.sh | sh
+curl -fsSL https://nodeq.tech/install.sh | sh
 ```
+
+The binaries are public in [node-q/hbench-releases](https://github.com/node-q/hbench-releases); the script downloads
+from there and checks `SHA256SUMS`. `HBENCH_VERSION=vX.Y.Z` pins a release (nodeq.tech defaults to the version the
+arenas pin; [`scripts/install.sh`](scripts/install.sh) on its own defaults to the latest), and `HBENCH_INSTALL_DIR`
+overrides `~/.local/bin`. If the public download fails and `gh` is signed in, it falls back to this repo's releases.
 
 Or build from source:
 
