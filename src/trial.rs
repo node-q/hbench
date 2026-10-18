@@ -188,6 +188,14 @@ fn merge_hosts(p: NetworkPolicy, extra: &[String]) -> NetworkPolicy {
     NetworkPolicy { mode: NetworkMode::Allowlist, allowed_hosts: hosts }
 }
 
+/// upstream ignores run-level hosts on a public phase; `enforce` makes them the whole allowlist instead.
+fn agent_phase_policy(p: NetworkPolicy, extra: &[String], enforce: bool) -> NetworkPolicy {
+    if enforce && p.mode == NetworkMode::Public {
+        return NetworkPolicy { mode: NetworkMode::Allowlist, allowed_hosts: extra.to_vec() };
+    }
+    merge_hosts(p, extra)
+}
+
 pub struct Trial {
     pub cfg: TrialConfig,
     task: Arc<Task>,
@@ -291,9 +299,10 @@ impl Trial {
         let env_hosts = normalize_hosts(&self.cfg.environment.extra_allowed_hosts)?;
         let agent_env_baseline = merge_hosts(tc.environment.baseline(), &env_hosts);
         let explicit_agent = step.and_then(|s| s.agent.explicit_policy()).or_else(|| tc.agent.explicit_policy());
-        let agent_phase = merge_hosts(
+        let agent_phase = agent_phase_policy(
             explicit_agent.unwrap_or_else(|| agent_env_baseline.clone()),
             &normalize_hosts(&self.cfg.agent.extra_allowed_hosts)?,
+            self.cfg.agent.enforce_allowlist,
         );
         let verifier_env_baseline = match self.task.verifier_env_definition(step) {
             None => None,
@@ -1432,6 +1441,23 @@ mod tests {
         assert_eq!(lock["prompt_template"]["path"], tpl.to_string_lossy().as_ref());
         assert_eq!(lock["prompt_template"]["digest"], sha256_prefixed(b"Fix it: {{ instruction }}"));
         assert!(trial_lock(&cfg(serde_json::json!({}))).get("prompt_template").is_none());
+    }
+
+    #[test]
+    fn enforce_allowlist_restricts_a_public_agent_phase() {
+        let hosts = vec!["api.example.com".to_string()];
+        let policy = |mode, h: &[&str]| NetworkPolicy { mode, allowed_hosts: h.iter().map(|s| s.to_string()).collect() };
+        let public = NetworkPolicy::public();
+        assert_eq!(agent_phase_policy(public.clone(), &hosts, false), public);
+        assert_eq!(agent_phase_policy(public.clone(), &hosts, true), policy(NetworkMode::Allowlist, &["api.example.com"]));
+        assert_eq!(agent_phase_policy(public, &[], true), policy(NetworkMode::Allowlist, &[]));
+        for enforce in [false, true] {
+            let none = policy(NetworkMode::NoNetwork, &[]);
+            assert_eq!(agent_phase_policy(none.clone(), &[], enforce), none);
+            assert_eq!(agent_phase_policy(none, &hosts, enforce), policy(NetworkMode::Allowlist, &["api.example.com"]));
+            let own = policy(NetworkMode::Allowlist, &["task.example.com"]);
+            assert_eq!(agent_phase_policy(own, &hosts, enforce), policy(NetworkMode::Allowlist, &["task.example.com", "api.example.com"]));
+        }
     }
 
     #[test]

@@ -53,6 +53,31 @@ assert got == {"hidden-tests": {"reward": 1.0}, "encrypted-solution": {"reward":
 print("integrity assertions OK")
 EOF
 
+# A public task under a run-level allowlist: upstream ignores the hosts, enforce_allowlist applies them.
+# Allowlists need nftables fib support in the daemon's kernel (Docker Desktop's lacks it).
+nft='[ ! -f /proc/config.gz ] || zcat /proc/config.gz | grep -qE "^CONFIG_NFT_FIB_INET=[ym]"'
+if docker container run --rm alpine:3.23 sh -c "$nft"; then
+  for enforce in false true; do
+    cat > "$JOBS/egress-$enforce.yaml" <<EOF
+jobs_dir: $JOBS
+job_name: egress-$enforce
+tasks: [{path: tests/egress/public-task}]
+agents: [{name: oracle, extra_allowed_hosts: [pypi.org], enforce_allowlist: $enforce}]
+EOF
+    $BIN run -c "$JOBS/egress-$enforce.yaml" >/dev/null
+  done
+  python3 - "$JOBS" <<'EOF'
+import json, sys, pathlib
+for enforce, want in [("false", 0.0), ("true", 1.0)]:
+    (r,) = pathlib.Path(sys.argv[1], f"egress-{enforce}").glob("*/result.json")
+    got = json.loads(r.read_text())["verifier_result"]["rewards"]["reward"]
+    assert got == want, f"enforce_allowlist={enforce}: reward {got}, want {want}"
+print("egress assertions OK")
+EOF
+else
+  echo "egress assertions skipped: no nftables fib support on this docker host"
+fi
+
 left=$(docker ps -a --filter label=com.docker.compose.service=main --format '{{.Names}}' | grep -E '__[0-9a-f]{7}-main' || true)
 [ -z "$left" ] || { echo "leaked containers: $left"; exit 1; }
 echo "E2E OK ($JOBS)"

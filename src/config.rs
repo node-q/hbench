@@ -83,6 +83,10 @@ pub struct AgentConfig {
     /// Seed the agent's session from a native (.jsonl) or ATIF (.json) trajectory.
     pub load_trajectory: Option<String>,
     pub extra_allowed_hosts: Vec<String>,
+    /// Beyond upstream: `extra_allowed_hosts` also restrict a task whose agent phase is public, instead of
+    /// being ignored there. The agent phase then reaches only those hosts (none, if the list is empty).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub enforce_allowlist: bool,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub include_logs: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]

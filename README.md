@@ -80,7 +80,9 @@ Supported task features:
 - Shared and separate verifier environments, including bundled verifier images.
 - Artifacts: sidecar sources, destinations, excludes, `manifest.json`, and `[[verifier.collect]]` hooks.
 - Network policies: `public`, `no-network`, and `allowlist`, phase-scoped per agent/verifier/step. An egress
-  sidecar enforces them, and run-level `extra_allowed_hosts` are supported.
+  sidecar enforces them, and run-level `extra_allowed_hosts` are supported. As in upstream, those hosts only
+  widen a restricted task and are ignored on a public one (most registry tasks declare no policy, so they are
+  public); set `agent.enforce_allowlist: true` to make them the agent phase's whole allowlist there too.
 - Healthchecks, `workdir`, task env, agent/verifier users, resource limits, and GPUs.
 - MCP servers and skills.
 - `trajectory.json` / `load_trajectory` (native + ATIF), the simulated-user ACP bridge (`user_agent`), regrades, and
