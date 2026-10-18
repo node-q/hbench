@@ -145,6 +145,18 @@ jobs/<job>/<task>__<id>/{config.json, lock.json, result.json, trial.log, excepti
 `result.json` has JobStats: per-eval metrics (mean/sum/min/max/uv-script), pass@k, reward/exception stats, tokens, and
 cost. Failed trials are retried by error type (`--max-retries`, include/exclude).
 
+Secrets stay out of the output and off command lines:
+
+- hbench treats as secret the value of every environment variable whose name looks like one (`*_KEY`, `*TOKEN`,
+  `*SECRET*`, `*PASSWORD*`, `*CREDENTIAL*`, `*AUTH*`), from the host, the agent's `env`, agent kwargs and a task's
+  `env` tables. Values shorter than 8 characters are not treated as secrets.
+- When a trial ends, these values are replaced with `[REDACTED]` in every file of the trial directory: trajectories,
+  agent and verifier logs, artifacts and `result.json`. The job directory gets the same treatment when the job ends,
+  and `trial.log` is scrubbed as it is written. Each value is matched raw, JSON-escaped, URL-encoded and in base64,
+  including inside a longer base64 string such as an `Authorization: Basic` header.
+- Commands and their environment reach the container on `docker compose exec`'s stdin, so `ps` and `/proc` show neither,
+  on the host or in the container.
+
 Agent setup is hardened so environment problems aren't charged to the agent:
 
 - A failed agent install is retried (3 tries within the setup timeout).
@@ -178,7 +190,8 @@ are in the registry.
 
 - `cargo test`: unit tests for every module and agent.
 - `scripts/e2e.sh`: a fixture suite against a real docker daemon. It covers timeouts, missing rewards, reward.json,
-  users/env, no-network, compose sidecars, and prebuilt images, and checks for leaked containers.
+  users/env, no-network, compose sidecars, prebuilt images, egress allowlists, and secrets (kept off command lines
+  and scrubbed from the job), and checks for leaked containers.
 - `scripts/conformance.sh`: runs the task-format reference `examples/tasks` (`REF=<checkout>`) and checks the expected
   outcomes, including the network-policy matrix, verifier-mode matrix, multi-step, sidecar artifacts, and extra allowed hosts.
 - `scripts/parity.py <reference_job> <hbench_job>`: diffs a reference job with an hbench job on the same tasks. It

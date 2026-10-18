@@ -456,7 +456,13 @@ impl Trial {
             cleanup_empty(&self.dir);
         }
         self.result.finished_at = Some(Utc::now());
+        self.result = crate::redact::value(self.result);
         let _ = std::fs::write(self.dir.join("result.json"), serde_json::to_string_pretty(&self.result).unwrap());
+        // Trajectories, agent logs and artifacts are uploaded as they are, so no known secret stays in them.
+        let n = crate::redact::scrub_dir(&self.dir);
+        if n > 0 {
+            self.log.line(&format!("redacted secrets in {n} file(s)"));
+        }
         self.result
     }
 

@@ -12,6 +12,7 @@ mod integrity;
 mod job;
 mod metrics;
 mod migrate;
+mod redact;
 mod registry;
 mod regrade;
 mod schemas;
@@ -812,6 +813,7 @@ fn run_init(a: InitArgs) -> Result<()> {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    redact::register_host_env();
     match Cli::parse().cmd {
         Cmd::Exec(a) => exec::run(*a).await,
         Cmd::Run(a) | Cmd::Jobs { cmd: JobsCmd::Start(a) } => {
