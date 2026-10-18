@@ -426,7 +426,7 @@ impl Trial {
 
     /// Run to completion. Never fails: errors land in exception_info.
     pub async fn run(mut self, cancel: watch::Receiver<bool>) -> TrialResult {
-        let outcome = cancellable(cancel, self.run_inner()).await;
+        let outcome = cancellable(cancel, Box::pin(self.run_inner())).await;
         if let Err(e) = outcome {
             self.record(&e);
             // Recover what we can for debugging, then tear down.

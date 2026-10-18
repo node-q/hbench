@@ -56,8 +56,6 @@ const CHECK: Template = Template {
     model_hint: "-m sonnet or -m opus",
 };
 
-// ---------------------------------------------------------------- rubric / schema
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RubricCriterion {
     pub name: String,
@@ -145,8 +143,6 @@ pub fn analyze_schema(r: &Rubric) -> Value {
     );
     with_defs(vec![("AnalyzeResultChecks", Value::Object(checks))], root, !r.criteria.is_empty())
 }
-
-// ---------------------------------------------------------------- results
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -273,8 +269,6 @@ fn write_analysis_json(trial_dir: &Path, r: &AnalyzeReportResult) -> Result<()> 
     Ok(())
 }
 
-// ---------------------------------------------------------------- dir resolution
-
 fn dir_name(p: &Path) -> String {
     p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
 }
@@ -342,7 +336,7 @@ fn extract_task_dir(trial_dir: &Path) -> Option<PathBuf> {
 }
 
 /// Whether `dir` is a valid task: task.toml + environment/, loadable config, a test script.
-// ponytail: hbench's Task::load also wants instruction.md and an environment definition.
+// Hbench's Task::load also wants instruction.md and an environment definition.
 pub fn is_valid_task_dir(p: &Path) -> bool {
     p.join("task.toml").is_file() && p.join("environment").is_dir() && Task::load(p).and_then(|t| t.validate_tests()).is_ok()
 }
@@ -374,8 +368,6 @@ pub fn resolve_task_dirs(path: &Path, include: &[String], exclude: &[String], n_
     }
     Ok(dirs)
 }
-
-// ---------------------------------------------------------------- wrapper tasks
 
 /// shutil.copytree(src, dst, ignore=ignore_patterns(*ignore)): names ignored at every level.
 fn copy_tree(src: &Path, dst: &Path, ignore: &[&str]) -> Result<()> {
@@ -529,8 +521,6 @@ pub fn assemble_check_task(task_dir: &Path, rubric: &Rubric, template: &str, sch
     write_instruction(dest, &rendered, &CHECK, schema)?;
     Ok(dest.to_path_buf())
 }
-
-// ---------------------------------------------------------------- CLI
 
 #[derive(Args, Debug)]
 pub struct CommonArgs {
@@ -760,8 +750,6 @@ async fn run_checks(a: &CheckArgs) -> Result<(Vec<QualityCheckResult>, PathBuf)>
     let _ = std::fs::remove_dir_all(&tmp);
     out
 }
-
-// ---------------------------------------------------------------- report rendering
 
 fn outcome_str(o: Outcome) -> &'static str {
     match o {

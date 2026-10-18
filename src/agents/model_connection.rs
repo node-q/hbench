@@ -24,7 +24,7 @@ pub fn provider(name: &str) -> Option<ProviderAccess> {
     Some(match name {
         "ai21" => p(&["AI21_API_KEY"], None, &[], &[]),
         "aleph_alpha" => p(&["ALEPH_ALPHA_API_KEY"], None, &[], &[]),
-        "amazon-bedrock" => p(&["AWS_ACCESS_KEY_ID"], None, &[], AWS),
+        "amazon-bedrock" | "sagemaker" => p(&["AWS_ACCESS_KEY_ID"], None, &[], AWS),
         "anthropic" => p(&["ANTHROPIC_API_KEY"], Some("https://api.anthropic.com/v1"), &["ANTHROPIC_BASE_URL"], &[]),
         "azure" => p(&["AZURE_API_KEY"], None, &["AZURE_BASE_URL", "AZURE_API_BASE"], &["AZURE_API_VERSION", "AZURE_RESOURCE_NAME"]),
         "anyscale" => p(&["ANYSCALE_API_KEY"], None, &[], &[]),
@@ -71,7 +71,6 @@ pub fn provider(name: &str) -> Option<ProviderAccess> {
         "palm" => p(&["PALM_API_KEY"], None, &[], &[]),
         "perplexity" => p(&["PERPLEXITYAI_API_KEY"], None, &[], &[]),
         "replicate" => p(&["REPLICATE_API_KEY"], None, &[], &[]),
-        "sagemaker" => p(&["AWS_ACCESS_KEY_ID"], None, &[], AWS),
         "tetrate" => p(&["TETRATE_API_KEY"], None, &["TETRATE_HOST"], &[]),
         "together" => p(&["TOGETHER_API_KEY", "TOGETHERAI_API_KEY"], Some("https://api.together.xyz/v1"), &[], &[]),
         "vercel_ai_gateway" => p(&["VERCEL_AI_GATEWAY_API_KEY"], None, &[], &[]),

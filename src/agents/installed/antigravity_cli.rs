@@ -1,5 +1,6 @@
 //! antigravity-cli, plus the custom Gemini base URL policy shared with antigravity-sdk.
 
+use super::common::parse_jsonl;
 use super::common::{installed_dir, parse_bool_env_value, skills_dir};
 use super::{ensure_system_dependencies, exec_error};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
@@ -405,7 +406,7 @@ pub fn stream_usage_totals(text: &str) -> Option<Totals> {
 
 /// agy 1.1.x step transcript: any record with an int step_index of type USER_INPUT / PLANNER_RESPONSE.
 fn is_step_transcript(text: &str) -> bool {
-    text.lines().filter_map(|l| serde_json::from_str::<Value>(l).ok()).any(|r| {
+    parse_jsonl(text).iter().any(|r| {
         (r["step_index"].is_i64() || r["step_index"].is_u64())
             && r["type"].as_str().is_some_and(|t| ["USER_INPUT", "PLANNER_RESPONSE"].contains(&t.to_uppercase().as_str()))
     })
@@ -461,7 +462,7 @@ pub fn load_gemini_messages(text: &str) -> Option<Vec<Value>> {
         } else if obj.get("$set").is_some_and(Value::is_object) {
             has_metadata |= !obj["$set"].as_object().unwrap().is_empty();
         } else if matches!(rec["type"].as_str(), Some("user" | "gemini")) {
-            let Some(mid) = mid else { continue }; // ponytail: id-less messages are dropped
+            let Some(mid) = mid else { continue }; // Id-less messages are dropped
             match msgs.get_mut(&mid) {
                 Some(m) => m.as_object_mut().unwrap().extend(obj.clone()),
                 None => {

@@ -314,9 +314,11 @@ fn instruction(agent_dir: &Path) -> Option<String> {
         .flatten()
         .map(|e| e.path())
         .filter(|p| {
-            p.file_name()
-                .and_then(|n| n.to_str())
-                .is_some_and(|n| n.starts_with("trajectory") && n.ends_with(".json") && !n.contains(".summarization"))
+            p.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
+                n.starts_with("trajectory")
+                    && Path::new(n).extension().is_some_and(|e| e.eq_ignore_ascii_case("json"))
+                    && !n.contains(".summarization")
+            })
         })
         .collect();
     paths.sort();

@@ -1,5 +1,6 @@
 //! Cursor CLI.
 
+use super::common::parse_jsonl;
 use super::common::{detect_version, installed_dir, opts, skills_dir};
 use super::{ensure_system_dependencies, exec_agent};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
@@ -165,7 +166,7 @@ impl CursorCli {
 
     /// Usage totals from stream-json `result` events (one per session turn).
     fn parse_usage(&self, text: &str) -> Option<AgentContext> {
-        let events: Vec<Value> = text.lines().filter_map(|l| serde_json::from_str(l.trim()).ok()).collect();
+        let events = parse_jsonl(text);
         if events.is_empty() {
             return None;
         }

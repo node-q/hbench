@@ -1,12 +1,13 @@
 //! GitHub Copilot CLI.
 
+use super::common::parse_jsonl;
 use super::common::{detect_version, installed_dir, opts, skills_dir};
 use super::pins;
 use super::{ensure_system_dependencies, exec_agent, exec_error, parse_version};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::quote;
 use anyhow::Result;
-use serde_json::{Value, json};
+use serde_json::json;
 use std::collections::BTreeMap;
 use std::time::Duration;
 
@@ -84,7 +85,7 @@ pub fn parse_copilot_usage(text: &str) -> Option<AgentContext> {
         return None;
     }
     let (mut input, mut output, mut steps) = (0i64, 0i64, 0usize);
-    for e in text.lines().filter_map(|l| serde_json::from_str::<Value>(l.trim()).ok()) {
+    for e in parse_jsonl(text) {
         if !e.is_object() {
             continue;
         }

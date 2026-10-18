@@ -65,7 +65,7 @@ impl App {
         if self.list_jobs().iter().any(|j| j == job) { Ok(()) } else { Err(err(404, format!("Job '{job}' not found"))) }
     }
 
-    fn step_root(&self, trial_dir: &Path, step: Option<&str>) -> std::result::Result<PathBuf, Err> {
+    fn step_root(trial_dir: &Path, step: Option<&str>) -> std::result::Result<PathBuf, Err> {
         let Some(step) = step else { return Ok(trial_dir.to_path_buf()) };
         let d = resolve(&trial_dir.join("steps"), step);
         if step.contains('/') || !strictly_under(&d, trial_dir) {
@@ -290,7 +290,7 @@ impl App {
             }
             ["jobs", job, "trials", trial, "trajectory"] => {
                 let dir = self.existing_trial(job, trial)?;
-                let agent = self.step_root(&dir, step)?.join("agent");
+                let agent = Self::step_root(&dir, step)?.join("agent");
                 let p = agent.join("trajectory.json");
                 if !p.exists() {
                     // hbench extra: older claude-code runs only kept the native session; convert it like `hbench traces`.
@@ -300,11 +300,11 @@ impl App {
             }
             ["jobs", job, "trials", trial, "interaction"] => {
                 let dir = self.existing_trial(job, trial)?;
-                ok_json(interaction(&self.step_root(&dir, step)?)?)
+                ok_json(interaction(&Self::step_root(&dir, step)?)?)
             }
             ["jobs", job, "trials", trial, "verifier-output"] => {
                 let dir = self.existing_trial(job, trial)?;
-                let v = self.step_root(&dir, step)?.join("verifier");
+                let v = Self::step_root(&dir, step)?.join("verifier");
                 let text = |n: &str| match read_text(&v.join(n)) {
                     Ok(t) => str_or_null(t.as_deref()),
                     Err(_) => json!("[Error reading file]"),
@@ -317,7 +317,7 @@ impl App {
             ["jobs", job, "trials", trial, "files"] => {
                 let dir = self.existing_trial(job, trial)?;
                 let mut out = vec![];
-                scan_dir(&self.step_root(&dir, step)?, "", true, false, &mut out);
+                scan_dir(&Self::step_root(&dir, step)?, "", true, false, &mut out);
                 ok_json(Value::Array(out))
             }
             ["jobs", job, "trials", trial, "recording"] => {
@@ -345,7 +345,7 @@ impl App {
             }
             ["jobs", job, "trials", trial, "files", rest @ ..] => {
                 let dir = self.existing_trial(job, trial)?;
-                let root = self.step_root(&dir, step)?;
+                let root = Self::step_root(&dir, step)?;
                 let full = resolve(&root, &rest.join("/"));
                 if !strictly_under(&full, &dir) {
                     return Err(err(403, "Access denied"));
@@ -354,7 +354,7 @@ impl App {
             }
             ["jobs", job, "trials", trial, "artifacts"] => {
                 let dir = self.existing_trial(job, trial)?;
-                let a = self.step_root(&dir, step)?.join("artifacts");
+                let a = Self::step_root(&dir, step)?.join("artifacts");
                 if !a.exists() {
                     return ok_json(json!({"files": [], "manifest": null}));
                 }
@@ -364,7 +364,7 @@ impl App {
             }
             ["jobs", job, "trials", trial, "agent-logs"] => {
                 let dir = self.existing_trial(job, trial)?;
-                let agent = self.step_root(&dir, step)?.join("agent");
+                let agent = Self::step_root(&dir, step)?.join("agent");
                 let text = |p: &Path| match read_text(p) {
                     Ok(t) => str_or_null(t.as_deref()),
                     Err(_) => json!("[Error reading file]"),

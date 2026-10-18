@@ -116,7 +116,7 @@ impl OpenHandsSdk {
         }
         env.insert("SKILL_PATHS".into(), paths.join(":"));
         if !self.args.mcp_servers.is_empty() {
-            // ponytail: compact JSON; the runner only json.loads it.
+            // Compact JSON; the runner only json.loads it.
             let list: Vec<Value> = self
                 .args
                 .mcp_servers

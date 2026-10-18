@@ -614,7 +614,7 @@ impl Agent for Eve {
 
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
         installed_dir(cx).await?;
-        // ponytail: staged in a temp dir, not logs_dir/eve_project, so the project isn't synced back into /logs/agent.
+        // Staged in a temp dir, not logs_dir/eve_project, so the project isn't synced back into /logs/agent.
         let staged = temp_path("project");
         self.stage_project(&staged)?;
         let runner = temp_path("eve_runner.mjs");

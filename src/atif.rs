@@ -133,7 +133,6 @@ pub struct FinalMetrics {
 }
 
 /// Python json.dumps(v, ensure_ascii=False) formatting (", " / ": " separators).
-/// ponytail: object keys come out sorted (serde_json without preserve_order), Python keeps insertion order.
 pub fn py_dumps(v: &Value) -> String {
     match v {
         Value::Array(a) => format!("[{}]", a.iter().map(py_dumps).collect::<Vec<_>>().join(", ")),
@@ -725,7 +724,7 @@ pub fn convert_session(session_dir: &Path, logs_dir: &Path) -> Option<Trajectory
         total_prompt_tokens: total(|m| m.prompt_tokens),
         total_completion_tokens: total(|m| m.completion_tokens),
         total_cached_tokens: total(|m| m.cached_tokens),
-        // ponytail: no LiteLLM price-estimate fallback here, so cost is only the reported one.
+        // No LiteLLM price-estimate fallback here, so cost is only the reported one.
         total_cost_usd: stream_total_cost(logs_dir),
         total_steps: Some(steps.len()),
         extra: (!final_extra.is_empty()).then_some(final_extra),

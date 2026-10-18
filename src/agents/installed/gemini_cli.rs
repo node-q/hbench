@@ -1,5 +1,6 @@
 //! Gemini CLI, incl. ACP target mode.
 
+use super::common::parse_jsonl;
 use super::common::{detect_version, installed_dir, nvm_node_install_snippet, opts, parse_bool_env, skills_dir};
 use super::pins;
 use super::{connection, ensure_system_dependencies, exec_agent, exec_root, pinned_bin_wrapper_command, safe_bin_symlink_command};
@@ -211,7 +212,7 @@ pub fn load_gemini_session(text: &str) -> Option<Value> {
     let mut ids: Vec<String> = vec![];
     let mut msgs: BTreeMap<String, Value> = BTreeMap::new();
     let mut pending: BTreeMap<String, Vec<Value>> = BTreeMap::new();
-    for rec in text.lines().filter_map(|l| serde_json::from_str::<Value>(l.trim()).ok()) {
+    for rec in parse_jsonl(text) {
         let Some(o) = rec.as_object() else { continue };
         let mid = rec["id"].as_str().map(String::from);
         if let Some(r) = o.get("$rewindTo") {

@@ -100,7 +100,7 @@ impl KimiCli {
         if ["kimi-k2.7", "kimi-k2.6", "kimi-k2.5", "kimi-k2-thinking"].iter().any(|t| lowered.contains(t)) {
             return 262144;
         }
-        // ponytail: no litellm model table; we only honor `model_info` registered via kwargs.
+        // No litellm model table; we only honor `model_info` registered via kwargs.
         self.args
             .kwargs
             .get("model_info")

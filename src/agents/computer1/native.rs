@@ -19,10 +19,6 @@ use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use std::time::Duration;
 
-// ---------------------------------------------------------------------------------------------
-// Python-semantics helpers (int()/float()/bool()/str()/json.dumps)
-// ---------------------------------------------------------------------------------------------
-
 fn py_type(v: &Value) -> &'static str {
     match v {
         Value::Null => "NoneType",
@@ -122,10 +118,6 @@ fn media_type_for_data_url(r: &str) -> &str {
     }
 }
 
-// ---------------------------------------------------------------------------------------------
-// Coordinates (runtime.py)
-// ---------------------------------------------------------------------------------------------
-
 pub(super) const ANTHROPIC_SCALED: &str = "anthropic_scaled";
 pub(super) const NORMALIZED: &str = "normalized_completion";
 
@@ -166,10 +158,6 @@ pub(super) fn normalize_action(a: &Action, w: i64, h: i64) -> Action {
     }
     a
 }
-
-// ---------------------------------------------------------------------------------------------
-// Action translation
-// ---------------------------------------------------------------------------------------------
 
 /// `translate_anthropic_action`: Ok(None) = unknown action.
 pub(super) fn translate_anthropic(d: &Map<String, Value>, w: i64, h: i64) -> Result<Option<Action>, String> {
@@ -441,10 +429,6 @@ pub(super) fn translate_gemini(name: &str, d: &Map<String, Value>) -> Result<Opt
     Ok(Some(a))
 }
 
-// ---------------------------------------------------------------------------------------------
-// Steps, calls and results (providers/base.py)
-// ---------------------------------------------------------------------------------------------
-
 /// `NativeToolCall`.
 #[derive(Debug, Clone)]
 pub(super) struct NativeCall {
@@ -544,9 +528,7 @@ pub(super) fn native_metrics(u: Option<&Usage>) -> Value {
     Value::Object(m)
 }
 
-// ---------------------------------------------------------------------------------------------
 // Transport (SDK-equivalent HTTP: retries, error class names, Bedrock SigV4)
-// ---------------------------------------------------------------------------------------------
 
 #[async_trait::async_trait]
 pub(super) trait Transport: Send + Sync {
@@ -697,10 +679,6 @@ fn sigv4(method: &str, c: &AwsCreds, service: &str, url: &str, body: &[u8], amz_
     ));
     out
 }
-
-// ---------------------------------------------------------------------------------------------
-// Providers
-// ---------------------------------------------------------------------------------------------
 
 const ANTHROPIC_SYSTEM_PROMPT: &str = "You are a computer use agent with access to a browser desktop environment. Interact with the computer using the provided tool. Be efficient and precise. When the task is complete, respond with the final answer without using tools.";
 
@@ -856,8 +834,6 @@ impl Native {
         self.kind == Kind::Gemini
     }
 
-    // ----- Anthropic / Bedrock -----
-
     fn anthropic_tools(&self) -> Value {
         let mut t = json!({"type": self.tool_type, "name": "computer", "display_width_px": self.w, "display_height_px": self.h, "display_number": 1});
         if self.tool_type == "computer_20251124" {
@@ -955,8 +931,6 @@ impl Native {
         self.anthropic_step(&resp)
     }
 
-    // ----- Gemini -----
-
     fn gemini_image(r: &str) -> Value {
         let b64 = base64::engine::general_purpose::STANDARD;
         let data = b64.decode(strip_data_url(r).trim()).map(|b| b64.encode(b)).unwrap_or_else(|_| strip_data_url(r).to_string());
@@ -1042,8 +1016,6 @@ impl Native {
         self.gemini_step(&resp)
     }
 
-    // ----- OpenAI (Responses API) -----
-
     pub fn openai_request(&self, input: Value, previous_response_id: Option<&str>, cache_key: &str) -> Value {
         let mut r = json!({"model": self.model, "tools": [{"type": "computer"}], "input": input, "truncation": "auto", "prompt_cache_key": cache_key});
         if let Some(id) = previous_response_id {
@@ -1051,8 +1023,6 @@ impl Native {
         }
         r
     }
-
-    // ----- StepProvider surface -----
 
     pub async fn initial(&mut self, instruction: &str, shot: &str) -> Result<NativeStep> {
         match self.kind {
@@ -1132,10 +1102,6 @@ impl Transport for NoTransport {
         bail!("computer-1 native provider has no transport")
     }
 }
-
-// ---------------------------------------------------------------------------------------------
-// Loops (computer_1.py `_run_step_loop` / `_execute_native_calls`, openai.py `run_episodes`)
-// ---------------------------------------------------------------------------------------------
 
 impl Computer1 {
     fn native(&mut self) -> Result<&mut Native> {
@@ -1226,7 +1192,7 @@ impl Computer1 {
             };
             results.push(r);
         }
-        // ponytail: Python's CancelledError bookkeeping has no analogue; a dropped future records nothing.
+        // Python's CancelledError bookkeeping has no analogue; a dropped future records nothing.
         results
     }
 

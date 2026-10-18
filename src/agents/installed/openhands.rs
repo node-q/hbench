@@ -21,8 +21,6 @@ const SPEC: Spec = Spec {
 const VERSION_CMD: &str = "/opt/openhands-venv/bin/python -m openhands.core.main --version";
 const CONFIG_PATH: &str = "$HOME/.openhands/config.toml";
 
-// ---- Pydantic-style option coercion shared with openhands_sdk ----
-
 fn invalid(agent: &str, k: &str, msg: &str) -> anyhow::Error {
     anyhow::anyhow!("Invalid kwargs for agent '{agent}':\n  {k}: {msg}\nSee `hbench agents schema {agent}` for available options.")
 }
@@ -291,7 +289,7 @@ impl OpenHands {
         Some(lines.join("\n") + "\n")
     }
 
-    fn run_cmd(&self, instruction: &str, with_config: bool) -> String {
+    fn run_cmd(instruction: &str, with_config: bool) -> String {
         let mut c = vec![
             "SANDBOX_VOLUMES=${PWD}:/workspace:rw".to_string(),
             "USER=`id -un`".into(),
@@ -323,7 +321,7 @@ fn events_totals(events_dir: &Path) -> Option<Totals> {
         .flatten()
         .map(|e| e.path())
         .filter(|p| p.extension().is_some_and(|x| x == "json"))
-        .filter_map(|p| Some((p.file_stem()?.to_str()?.parse().ok()?, p))) // ponytail: non-int stems are skipped
+        .filter_map(|p| Some((p.file_stem()?.to_str()?.parse().ok()?, p))) // Non-int stems are skipped
         .collect();
     files.sort();
     let events: Vec<Value> = files.iter().filter_map(|(_, p)| read_json(p)).collect();
@@ -406,7 +404,7 @@ impl Agent for OpenHands {
         if let Some(c) = &mcp {
             exec_agent(cx, &format!("mkdir -p $HOME/.openhands && echo {} > {CONFIG_PATH}", quote(c)), &env).await?;
         }
-        exec_agent(cx, &self.run_cmd(&instruction, mcp.is_some()), &env).await?;
+        exec_agent(cx, &Self::run_cmd(&instruction, mcp.is_some()), &env).await?;
         Ok(())
     }
 
@@ -540,7 +538,7 @@ pub(super) mod tests {
         );
         assert!(agent(json!({}), &[], None).unwrap().mcp_config_toml().is_none());
         assert_eq!(
-            a.run_cmd("it's", true),
+            OpenHands::run_cmd("it's", true),
             "SANDBOX_VOLUMES=${PWD}:/workspace:rw USER=`id -un` /opt/openhands-venv/bin/python -m openhands.core.main --task='it'\\''s' \
              --config-file=$HOME/.openhands/config.toml 2>&1 </dev/null | stdbuf -oL tee /logs/agent/openhands.txt"
         );

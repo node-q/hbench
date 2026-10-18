@@ -135,7 +135,7 @@ impl DspyRlm {
         self.args.extra_env.clone()
     }
 
-    fn apply(&self, ctx: &mut AgentContext, done: &Value) {
+    fn apply(ctx: &mut AgentContext, done: &Value) {
         if let Some(n) = done["n_input_tokens"].as_i64() {
             ctx.n_input_tokens = Some(n);
         }
@@ -164,10 +164,10 @@ impl DspyRlm {
             "input_kwargs": input_kwargs(&o.signature, &instruction, &file_tree)?, "logs_dir": self.args.logs_dir,
         });
         let done = run_runner(&cfg, &self.host_env(), &self.args.logs_dir.join("rlm").join("runner.log"), ex).await?;
-        self.apply(ctx, &done);
+        Self::apply(ctx, &done);
         match done["error"].as_str() {
             // The Python exception class becomes the trial's exception type.
-            // ponytail: leaks the (short) class name once per failed run; kind_err wants &'static str.
+            // Leaks the (short) class name once per failed run; kind_err wants &'static str.
             Some(e) => {
                 Err(kind_err(Box::leak(done["kind"].as_str().unwrap_or("RuntimeError").to_string().into_boxed_str()), e.to_string()))
             }

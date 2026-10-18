@@ -118,21 +118,24 @@ struct PackageSpec {
 }
 
 fn package_spec(name: &str) -> Option<PackageSpec> {
-    let std_ = |n: &'static str, cmd: &'static [&'static str], pkg: &'static [&'static str]| {
-        let _ = n;
-        PackageSpec { commands: cmd, apt: pkg, dnf: pkg, apk: pkg, always: false }
+    let std_ = |cmd: &'static [&'static str], pkg: &'static [&'static str]| PackageSpec {
+        commands: cmd,
+        apt: pkg,
+        dnf: pkg,
+        apk: pkg,
+        always: false,
     };
     Some(match name {
-        "curl" => std_("curl", &["curl"], &["curl"]),
-        "bash" => std_("bash", &["bash"], &["bash"]),
-        "git" => std_("git", &["git"], &["git"]),
-        "tmux" => std_("tmux", &["tmux"], &["tmux"]),
-        "bzip2" => std_("bzip2", &["bzip2"], &["bzip2"]),
-        "tar" => std_("tar", &["tar"], &["tar"]),
-        "unzip" => std_("unzip", &["unzip"], &["unzip"]),
-        "wget" => std_("wget", &["wget"], &["wget"]),
-        "python3" => std_("python3", &["python3"], &["python3"]),
-        "npm" => std_("npm", &["npm"], &["npm"]),
+        "curl" => std_(&["curl"], &["curl"]),
+        "bash" => std_(&["bash"], &["bash"]),
+        "git" => std_(&["git"], &["git"]),
+        "tmux" => std_(&["tmux"], &["tmux"]),
+        "bzip2" => std_(&["bzip2"], &["bzip2"]),
+        "tar" => std_(&["tar"], &["tar"]),
+        "unzip" => std_(&["unzip"], &["unzip"]),
+        "wget" => std_(&["wget"], &["wget"]),
+        "python3" => std_(&["python3"], &["python3"]),
+        "npm" => std_(&["npm"], &["npm"]),
         "build_tools" => PackageSpec {
             commands: &["gcc", "make"],
             apt: &["build-essential"],
@@ -157,12 +160,10 @@ fn package_spec(name: &str) -> Option<PackageSpec> {
     })
 }
 
-/// Shell function `hb_apt_install PKG...`: `apt-get update && apt-get install -y PKG...`, retried against archived
-/// mirrors if that fails. When a release reaches EOL its packages move to archive.debian.org /
-/// old-releases.ubuntu.com while deb.debian.org keeps serving the index, so installs 404 (debian:bullseye-security,
-/// Oct 2026) and every agent install on that image would fail. Stage 1 points only the security suites at the
-/// archive, stage 2 every Debian/Ubuntu source. Sources are rewritten into a temp dir used via `-o Dir::Etc::*`,
-/// so the image's apt config is left as is.
+/// Shell function `hb_apt_install PKG...`: `apt-get update && apt-get install -y PKG...`, retried against the archive
+/// mirrors an EOL release moves to while its index stays up. Stage 1 points only the security suites at the archive,
+/// stage 2 every Debian/Ubuntu source. The rewritten sources go in a temp dir used via `-o Dir::Etc::*`, so the image's
+/// apt config is left as is.
 pub const APT_INSTALL_FN: &str = r#"hb_apt_install() {
   if apt-get update && apt-get install -y "$@"; then return 0; fi
   _hb_rc=1
@@ -413,11 +414,7 @@ pub fn connection(args: &AgentArgs, spec: Spec) -> Resolved {
 
 /// Write `content` to `path` in the container with mode 600, owned by the agent user.
 pub async fn upload_text(cx: &AgentCtx<'_>, path: &str, content: &str) -> Result<()> {
-    let local = std::env::temp_dir().join(format!("hbench-cfg-{}", uuid::Uuid::new_v4().simple()));
-    std::fs::write(&local, content)?;
-    let r = cx.env.upload_file(&local, path).await;
-    let _ = std::fs::remove_file(&local);
-    r?;
+    common::upload_asset(cx, content, path).await?;
     let q = quote(path);
     let chown = cx.user.as_ref().map(|u| format!("chown {} {q} && ", quote(u))).unwrap_or_default();
     exec_root(cx, &format!("{chown}chmod 600 {q}"), &BTreeMap::new()).await.map(|_| ())

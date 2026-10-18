@@ -161,7 +161,7 @@ pub async fn run(a: ExecArgs) -> Result<()> {
 
 pub(super) fn resolve_config(a: &ExecArgs) -> Result<ExecConfig> {
     if !a.job_plugin.is_empty() || !a.plugin_kwargs.is_empty() {
-        // ponytail: job plugins are Python classes; add a Rust hook if one is ever needed.
+        // Job plugins are Python classes; add a Rust hook if one is ever needed.
         bail!("--plugin/--pk load Python job plugins, which hbench does not support.");
     }
     match &a.config {

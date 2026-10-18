@@ -94,10 +94,11 @@ fn templatize<S: serde::Serializer>(env: &BTreeMap<String, String>, s: S) -> Res
                 v.clone()
             } else if std::env::var(k).ok().as_deref() == Some(v.as_str()) {
                 format!("${{{k}}}")
-            } else if v.len() <= 8 {
+            } else if v.chars().count() <= 8 {
                 "****".into()
             } else {
-                format!("{}****{}", &v[..4], &v[v.len() - 3..])
+                let chars: Vec<char> = v.chars().collect();
+                format!("{}****{}", chars[..4].iter().collect::<String>(), chars[chars.len() - 3..].iter().collect::<String>())
             };
             (k, v)
         })

@@ -138,7 +138,7 @@ fn py_repr(s: &str) -> String {
     out
 }
 
-/// ponytail: approximates Python's `str.isprintable` (control, line/para separators, common
+/// Approximates Python's `str.isprintable` (control, line/para separators, common
 /// format chars, non-ASCII spaces); exact needs Unicode category tables.
 fn is_printable(c: char) -> bool {
     !(c.is_control()

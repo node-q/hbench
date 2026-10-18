@@ -340,7 +340,7 @@ impl Agent for SweAgent {
     fn populate_context_post_run(&self, logs_dir: &Path, ctx: &mut AgentContext) {
         let mut found = vec![];
         find_traj(&logs_dir.join("swe-agent-output"), &mut found);
-        // ponytail: expect at most one .traj; with several we skip usage rather than panic.
+        // Expect at most one .traj; with several we skip usage rather than panic.
         let path = match found.len() {
             0 => logs_dir.join("swe-agent.trajectory.json"),
             1 => found.remove(0),
