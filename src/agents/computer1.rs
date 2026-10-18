@@ -9,8 +9,8 @@
 //! image-aware context compaction, the ATIF recorder, per-episode logs and final_answer.txt.
 //!
 
-use super::llm::{LiteLlm, Llm, LlmConfig, LlmError, LlmResponse, add_anthropic_caching, lookup_model_info};
-use super::terminus2::{Kw, Shell, limit_output_length, now, py_format, pyf, pyrepr};
+use super::llm::{ChatClient, Llm, LlmConfig, LlmError, LlmResponse, add_anthropic_caching, api_err, lookup_model_info};
+use super::terminus2::{Kw, Shell, fill_template, limit_output_length, now, pyf, quote_repr};
 use super::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx, ModelUsage};
 use crate::env::{error_kind, quote};
 use anyhow::{Result, anyhow, bail};
@@ -48,10 +48,10 @@ fn py_repr(v: &Value) -> String {
         Value::Null => "None".into(),
         Value::Bool(b) => if *b { "True" } else { "False" }.into(),
         Value::Number(n) => n.to_string(),
-        Value::String(s) => pyrepr(s),
+        Value::String(s) => quote_repr(s),
         Value::Array(a) => format!("[{}]", a.iter().map(py_repr).collect::<Vec<_>>().join(", ")),
         Value::Object(o) => {
-            format!("{{{}}}", o.iter().map(|(k, v)| format!("{}: {}", pyrepr(k), py_repr(v))).collect::<Vec<_>>().join(", "))
+            format!("{{{}}}", o.iter().map(|(k, v)| format!("{}: {}", quote_repr(k), py_repr(v))).collect::<Vec<_>>().join(", "))
         }
     }
 }
@@ -231,7 +231,7 @@ fn parse_action_dict(d: &Value, w: &mut Vec<String>) -> Result<Action, String> {
         return Err("Action 'type' is missing or not a string".into());
     };
     if !ALLOWED_ACTION_TYPES.contains(&kind) {
-        w.push(format!("Unknown action type: {}", pyrepr(kind)));
+        w.push(format!("Unknown action type: {}", quote_repr(kind)));
     }
     let mut keys = None;
     match o.get("keys") {
@@ -295,9 +295,9 @@ fn parse_response(response: &str) -> ParsedAction {
         Err(e) => {
             let mut msg = format!("Invalid JSON: {e}");
             if json_str.chars().count() < 200 {
-                msg += &format!(" | Content: {}", pyrepr(json_str));
+                msg += &format!(" | Content: {}", quote_repr(json_str));
             } else {
-                msg += &format!(" | Content preview: {}...", pyrepr(&json_str.chars().take(100).collect::<String>()));
+                msg += &format!(" | Content preview: {}...", quote_repr(&json_str.chars().take(100).collect::<String>()));
             }
             return fail(msg, &w, String::new(), String::new());
         }
@@ -398,7 +398,7 @@ struct RuntimeErr {
 }
 impl std::fmt::Display for RuntimeErr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Runtime action {} failed ({}): {}", pyrepr(&self.label), self.code, self.detail)
+        write!(f, "Runtime action {} failed ({}): {}", quote_repr(&self.label), self.code, self.detail)
     }
 }
 impl std::error::Error for RuntimeErr {}
@@ -1153,7 +1153,7 @@ fn resolve_provider_name(model: &str, override_: Option<&str>) -> Result<String>
             if !["anthropic", "bedrock", "gemini", "litellm", "openai"].contains(&n) {
                 bail!(
                     "Unknown computer-1 provider {}. Available providers: ['anthropic', 'bedrock', 'gemini', 'litellm', 'openai']",
-                    pyrepr(n)
+                    quote_repr(n)
                 );
             }
             n.to_string()
@@ -1175,8 +1175,8 @@ fn resolve_provider_name(model: &str, override_: Option<&str>) -> Result<String>
     if name != "litellm" && !is_computer_use_model(model) {
         bail!(
             "Model {} is not a computer-use model for the {} harness. Use a computer-use-capable model, or pass provider='litellm' to run it through the generic JSON harness.",
-            pyrepr(model),
-            pyrepr(&name)
+            quote_repr(model),
+            quote_repr(&name)
         );
     }
     Ok(name)
@@ -1250,7 +1250,7 @@ impl Computer1 {
         {
             bail!(
                 "Model {} does not support vision input, but computer-1's generic harness is screenshot-driven. Use a vision-capable model, or pass enable_images explicitly to override litellm's metadata.",
-                pyrepr(&model)
+                quote_repr(&model)
             );
         }
         let unknown: BTreeSet<String> =
@@ -1278,7 +1278,7 @@ impl Computer1 {
         // Native providers talk to their vendor APIs directly; the litellm client is never used
         // (no JSON loop, compaction or fallback query), so its endpoint isn't resolved.
         let llm: Box<dyn Llm> =
-            if provider == "litellm" { Box::new(LiteLlm::new(cfg, &|k: &str| args.get_env(k))?) } else { Box::new(NoLlm) };
+            if provider == "litellm" { Box::new(ChatClient::new(cfg, &|k: &str| args.get_env(k))?) } else { Box::new(NoLlm) };
         let mut c = Self::with_llm(args, opts, model, llm, enable_images, enable_bash, session_id);
         c.provider = provider;
         Ok(c)
@@ -1353,7 +1353,7 @@ impl Computer1 {
             ("", "", "")
         };
         let (w, h) = (self.opts.geo.desktop_width.to_string(), self.opts.geo.desktop_height.to_string());
-        py_format(
+        fill_template(
             JSON_TEMPLATE,
             &[
                 ("instruction", instruction),
@@ -1564,10 +1564,10 @@ impl Computer1 {
         let r = match self.desktop()?.execute(sh, a).await {
             Ok(r) => r,
             Err(e) if e.downcast_ref::<ReadinessTimeout>().is_some() => {
-                let msg = py_format(TIMEOUT_TEMPLATE, &[("timeout_sec", &pyf(self.opts.action_timeout)), ("action", &a.kind)]);
+                let msg = fill_template(TIMEOUT_TEMPLATE, &[("timeout_sec", &pyf(self.opts.action_timeout)), ("action", &a.kind)]);
                 return Ok((msg, vec![], true));
             }
-            Err(e) => return Ok((format!("Action {} failed: {e}", pyrepr(&a.kind)), vec![self.capture(sh, &shot).await?], true)),
+            Err(e) => return Ok((format!("Action {} failed: {e}", quote_repr(&a.kind)), vec![self.capture(sh, &shot).await?], true)),
         };
         let is_error =
             !matches!(r["status"].as_str(), None | Some("ok" | "done")) || r.get("return_code").is_some_and(|c| c.as_i64() != Some(0));
@@ -1724,7 +1724,7 @@ impl Computer1 {
         self.llm.call(&p, &self.chat.messages, &Map::new(), None).await.ok().map(|r| r.content)
     }
 
-    /// 3 attempts (not on context overflow / bad request); overflow compacts and recurses (depth <= 2).
+    /// The client retries transient errors; overflow compacts and recurses (depth <= 2).
     fn query<'a>(
         &'a mut self,
         sh: &'a dyn Shell,
@@ -1733,24 +1733,7 @@ impl Computer1 {
         orig: &'a str,
         depth: usize,
     ) -> BoxFut<'a, Result<LlmResponse>> {
-        Box::pin(async move {
-            let mut attempt = 0;
-            loop {
-                attempt += 1;
-                match self.query_once(sh, &prompt, log_dir.clone(), orig, depth).await {
-                    Err(e)
-                        if attempt < 3
-                            && !matches!(
-                                e.downcast_ref::<LlmError>(),
-                                Some(LlmError::ContextLength(_) | LlmError::Api { kind: "BadRequestError", .. })
-                            ) =>
-                    {
-                        continue;
-                    }
-                    r => return r,
-                }
-            }
-        })
+        Box::pin(async move { self.query_once(sh, &prompt, log_dir, orig, depth).await })
     }
 
     async fn query_once(
@@ -1965,7 +1948,7 @@ struct NoLlm;
 #[async_trait::async_trait]
 impl Llm for NoLlm {
     async fn call(&self, _: &str, _: &[Value], _: &Map<String, Value>, _: Option<&str>) -> Result<LlmResponse, LlmError> {
-        Err(LlmError::Api { kind: "APIError", msg: "computer-1 native providers don't use the litellm client".into() })
+        Err(api_err("APIError", "computer-1 native providers don't use the litellm client"))
     }
     fn context_limit(&self) -> i64 {
         1_000_000

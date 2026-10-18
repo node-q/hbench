@@ -10,8 +10,8 @@
 
 use super::{Action, Computer1, SCREENSHOT_DIR, py_repr, quote};
 use crate::agents::AgentContext;
-use crate::agents::llm::{LlmResponse, Request, Usage, send_raw};
-use crate::agents::terminus2::{Shell, pyrepr};
+use crate::agents::llm::{LlmResponse, Request, Usage, backoff, send_raw};
+use crate::agents::terminus2::{Shell, quote_repr};
 use crate::env::{kind_err, tail};
 use anyhow::{Result, anyhow, bail};
 use base64::Engine;
@@ -40,7 +40,7 @@ fn py_int(v: &Value) -> Result<i64, String> {
             .or_else(|| n.as_f64().filter(|f| f.is_finite()).map(|f| f.trunc() as i64))
             .ok_or_else(|| "cannot convert float infinity to integer".into()),
         Value::String(s) => {
-            s.trim().replace('_', "").parse::<i64>().map_err(|_| format!("invalid literal for int() with base 10: {}", pyrepr(s)))
+            s.trim().replace('_', "").parse::<i64>().map_err(|_| format!("invalid literal for int() with base 10: {}", quote_repr(s)))
         }
         other => Err(format!("int() argument must be a string, a bytes-like object or a real number, not '{}'", py_type(other))),
     }
@@ -51,7 +51,7 @@ fn py_float(v: &Value) -> Result<f64, String> {
     match v {
         Value::Bool(b) => Ok(*b as i64 as f64),
         Value::Number(n) => Ok(n.as_f64().unwrap_or(0.0)),
-        Value::String(s) => s.trim().parse::<f64>().map_err(|_| format!("could not convert string to float: {}", pyrepr(s))),
+        Value::String(s) => s.trim().parse::<f64>().map_err(|_| format!("could not convert string to float: {}", quote_repr(s))),
         other => Err(format!("float() argument must be a string or a real number, not '{}'", py_type(other))),
     }
 }
@@ -595,14 +595,18 @@ impl Transport for Http {
                 ));
             }
             let req = Request { headers, body: body.clone(), timeout: Duration::from_secs(600) };
+            let mut hint = Duration::ZERO;
             let (retry, err) = match send_raw(&self.url, &req).await {
-                Ok((s, text)) if (200..300).contains(&s) => {
+                Ok((s, text, _)) if (200..300).contains(&s) => {
                     return serde_json::from_str(&text).map_err(|e| anyhow!("invalid JSON from {}: {e}: {}", self.url, tail(&text, 1000)));
                 }
-                Ok((s, text)) => (
-                    match self.sdk {
-                        Sdk::Stainless => matches!(s, 408 | 409 | 429) || s >= 500,
-                        Sdk::Gemini => matches!(s, 429 | 500 | 503 | 504),
+                Ok((s, text, retry_after)) => (
+                    {
+                        hint = retry_after.unwrap_or_default();
+                        match self.sdk {
+                            Sdk::Stainless => matches!(s, 408 | 409 | 429) || s >= 500,
+                            Sdk::Gemini => matches!(s, 429 | 500 | 503 | 504),
+                        }
                     },
                     status_error(self.sdk, s, &text),
                 ),
@@ -616,14 +620,14 @@ impl Transport for Http {
                     (self.sdk == Sdk::Stainless, err)
                 }
             };
-            let (max, wait) = match self.sdk {
-                Sdk::Stainless => (3, 0.5 * 2f64.powi(attempt - 1)),
-                Sdk::Gemini => (4, (2.0 * 2f64.powi(attempt - 1)).clamp(2.0, 30.0)),
+            let (max, base, cap) = match self.sdk {
+                Sdk::Stainless => (3, 0.5, 8.0),
+                Sdk::Gemini => (4, 2.0, 30.0),
             };
             if !retry || attempt >= max {
                 return Err(err);
             }
-            tokio::time::sleep(Duration::from_secs_f64(wait)).await;
+            tokio::time::sleep(backoff(attempt, base, cap, hint)).await;
         }
     }
 }
@@ -754,7 +758,7 @@ impl Native {
             "bedrock" => Kind::Bedrock,
             "gemini" => Kind::Gemini,
             "openai" => Kind::OpenAi,
-            other => bail!("Unknown computer-1 provider {}", pyrepr(other)),
+            other => bail!("Unknown computer-1 provider {}", quote_repr(other)),
         };
         let mut n = Native::with_transport(kind, model, w, h, auto_ack_safety, Box::new(NoTransport));
         n.transport = Box::new(n.http(aws_region, get)?);
