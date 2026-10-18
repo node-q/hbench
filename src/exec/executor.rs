@@ -50,16 +50,9 @@ async fn execute(cfg: &ExecConfig) -> Result<(Phase, Option<Phase>)> {
     let map_dirs = compile(&cfg.map.compile)?;
     let map_job = job_config(&cfg.map.job, &map_dirs)?;
     crate::env::preflight().await?;
-    let (tx, rx) = tokio::sync::watch::channel(false);
-    tokio::spawn(async move {
-        if tokio::signal::ctrl_c().await.is_ok() {
-            eprintln!("\ncancelling: tearing down containers (Ctrl-C again to force quit)...");
-            let _ = tx.send(true);
-            if tokio::signal::ctrl_c().await.is_ok() {
-                std::process::exit(130);
-            }
-        }
-    });
+    // ponytail: force-quit cleanup covers the map job's trials; the reduce job is one trial.
+    let map_dir = std::path::absolute(map_job.job_dir())?;
+    let rx = crate::cancel_on_signal(move || crate::trial_names(std::slice::from_ref(&map_dir)));
     let map = run_phase(map_job, map_dirs, &rx).await?;
     let Some(r) = &cfg.reduce else { return Ok((map, None)) };
     if *rx.borrow() {

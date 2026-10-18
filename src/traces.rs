@@ -1,7 +1,7 @@
 //! `hbench traces export`: HF-style trace export,
 //! written as JSONL rows (one row per episode) instead of a `datasets.Dataset`.
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use serde_json::{Map, Value, json};
 use std::path::{Path, PathBuf};
 
@@ -358,10 +358,16 @@ pub fn run(root: &Path, output: Option<&Path>, o: &ExportOpts) -> Result<()> {
     if !matches!(o.episodes.as_str(), "all" | "last") {
         bail!("--episodes must be one of: all, last");
     }
+    if !root.exists() {
+        bail!("path not found: {}", root.display());
+    }
     let rows = export(root, o)?;
+    if rows.is_empty() {
+        bail!("no exportable trials under {} (trial dirs need result.json and an agent trajectory; check --filter)", root.display());
+    }
     let body: String = rows.iter().map(|r| serde_json::to_string(r).unwrap() + "\n").collect();
     match output {
-        Some(p) => std::fs::write(p, body)?,
+        Some(p) => std::fs::write(p, body).with_context(|| format!("writing {}", p.display()))?,
         None => print!("{body}"),
     }
     eprintln!("Exported {} rows from {}", rows.len(), root.display());
