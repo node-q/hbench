@@ -11,7 +11,9 @@
 //! anything a task's compose file or a prebuilt image adds is not seen.
 
 use crate::env::quote;
+use std::io::Read;
 use std::path::{Component, Path, PathBuf};
+use std::process::Command;
 
 /// What to remove from the agent's container, as found in the task's Dockerfile.
 #[derive(Debug, PartialEq)]
@@ -28,17 +30,19 @@ pub fn leaks(task_dir: &Path) -> Vec<Leak> {
     let solve = std::fs::read_to_string(task_dir.join("solution/solve.sh")).unwrap_or_default();
     let mut out = vec![];
     let mut workdir = PathBuf::from("/");
-    for line in dockerfile.lines() {
-        let words: Vec<&str> = line.split_whitespace().collect();
-        let Some((op, args)) = words.split_first() else { continue };
-        match op.to_ascii_uppercase().as_str() {
-            "WORKDIR" if !args.is_empty() => workdir = workdir.join(args[0]),
+    for (op, args) in instructions(&dockerfile) {
+        match op.as_str() {
+            "WORKDIR" => {
+                if let Some(dir) = args.split_whitespace().next() {
+                    workdir = workdir.join(dir);
+                }
+            }
             "COPY" | "ADD" => {
+                let (flags, paths) = copy_args(&args);
                 // `--from` copies from another image, not from this task's files.
-                if args.iter().any(|a| a.starts_with("--from")) {
+                if flags.iter().any(|f| f.starts_with("--from")) {
                     continue;
                 }
-                let paths: Vec<&str> = args.iter().copied().filter(|a| !a.starts_with("--")).collect();
                 let Some((dest, sources)) = paths.split_last() else { continue };
                 let into_dir = dest.ends_with('/') || sources.len() > 1;
                 let dest = workdir.join(dest);
@@ -47,17 +51,13 @@ pub fn leaks(task_dir: &Path) -> Vec<Leak> {
                     if !inside(&env, &host) {
                         continue;
                     }
-                    let target = |rel: &Path| -> String {
-                        let p = if host.is_dir() || into_dir { dest.join(rel) } else { dest.clone() };
-                        normalize(&p)
-                    };
-                    for (file, rel) in files(&host) {
-                        let name = file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                        let rel = if host.is_dir() { rel } else { PathBuf::from(&name) };
-                        if is_hidden_tests(&env, &file) {
-                            out.push(Leak::HiddenTests(target(&rel)));
-                        } else if name.ends_with(".enc") && solve.contains(&name) {
-                            out.push(Leak::EncryptedSolution(target(&rel)));
+                    for f in copied(&env, &host, op == "ADD") {
+                        let target = normalize(&if f.unpacked || into_dir { dest.join(&f.rel) } else { dest.clone() });
+                        let name = f.rel.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                        if f.hidden_tests {
+                            out.push(Leak::HiddenTests(target));
+                        } else if has_extension(&name, "enc") && solve.contains(&name) {
+                            out.push(Leak::EncryptedSolution(target));
                         }
                     }
                 }
@@ -66,6 +66,96 @@ pub fn leaks(task_dir: &Path) -> Vec<Leak> {
         }
     }
     out
+}
+
+/// The Dockerfile's instructions as (upper-case op, arguments), with `\` continuations joined and
+/// comment lines dropped.
+fn instructions(dockerfile: &str) -> Vec<(String, String)> {
+    let mut out = vec![];
+    let mut cur = String::new();
+    for line in dockerfile.lines().map(str::trim).filter(|l| !l.starts_with('#')) {
+        if let Some(head) = line.strip_suffix('\\') {
+            cur.push_str(head);
+            cur.push(' ');
+            continue;
+        }
+        cur.push_str(line);
+        let inst = std::mem::take(&mut cur);
+        let (op, args) = inst.trim().split_once(char::is_whitespace).unwrap_or((inst.trim(), ""));
+        if !op.is_empty() {
+            out.push((op.to_ascii_uppercase(), args.trim().to_string()));
+        }
+    }
+    out
+}
+
+/// A COPY/ADD's leading `--flags` and its paths, in shell or JSON (`["src", "dest"]`) form.
+fn copy_args(args: &str) -> (Vec<&str>, Vec<String>) {
+    let mut flags = vec![];
+    let mut rest = args.trim_start();
+    while rest.starts_with("--") {
+        let (flag, tail) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
+        flags.push(flag);
+        rest = tail.trim_start();
+    }
+    let paths = if rest.starts_with('[') {
+        serde_json::from_str(rest).unwrap_or_default()
+    } else {
+        rest.split_whitespace().map(String::from).collect()
+    };
+    (flags, paths)
+}
+
+/// A file the image receives from one COPY/ADD source.
+struct Copied {
+    /// Path below the destination when the source is a directory or an unpacked archive; else the file name.
+    rel: PathBuf,
+    unpacked: bool,
+    hidden_tests: bool,
+}
+
+fn copied(env: &Path, host: &Path, add: bool) -> Vec<Copied> {
+    if add
+        && host.is_file()
+        && let Some(members) = tar_members(host)
+    {
+        return members
+            .into_iter()
+            .map(|rel| {
+                let hidden_tests = rel.starts_with("tests")
+                    && is_json(&rel)
+                    && Command::new("tar").arg("-xOf").arg(host).arg(&rel).output().is_ok_and(|o| holds_hidden_tests(&o.stdout));
+                Copied { rel, unpacked: true, hidden_tests }
+            })
+            .collect();
+    }
+    let unpacked = host.is_dir();
+    files(host)
+        .into_iter()
+        .map(|(file, rel)| Copied {
+            rel: if unpacked { rel } else { PathBuf::from(file.file_name().unwrap_or_default()) },
+            unpacked,
+            hidden_tests: is_hidden_tests(env, &file),
+        })
+        .collect()
+}
+
+/// The files in a tar archive ADD would unpack (plain or compressed; Docker goes by content, not name).
+fn tar_members(p: &Path) -> Option<Vec<PathBuf>> {
+    let mut head = vec![];
+    std::fs::File::open(p).and_then(|f| f.take(262).read_to_end(&mut head)).ok()?;
+    let compressed = [&[0x1f, 0x8b][..], b"BZh", &[0xfd, b'7', b'z', b'X', b'Z', 0], &[0x28, 0xb5, 0x2f, 0xfd]];
+    if !compressed.iter().any(|m| head.starts_with(m)) && head.get(257..262) != Some(b"ustar") {
+        return None;
+    }
+    let out = Command::new("tar").arg("-tf").arg(p).output().ok().filter(|o| o.status.success())?;
+    Some(
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter(|l| !l.ends_with('/'))
+            .map(|l| PathBuf::from(l.trim_start_matches("./")))
+            .collect(),
+    )
 }
 
 /// One root shell command that removes every leak, or None when there are none.
@@ -95,13 +185,21 @@ json.dump(c, open(p, 'w'))";
 
 /// A JSON file from the task's `tests/` (copied into the build context) that holds hidden tests.
 fn is_hidden_tests(env: &Path, file: &Path) -> bool {
-    let in_tests = file.strip_prefix(env).is_ok_and(|r| r.starts_with("tests"));
-    in_tests
-        && file.extension().is_some_and(|e| e == "json")
-        && std::fs::read_to_string(file)
-            .ok()
-            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
-            .is_some_and(|v| v.get("private_test_cases").is_some())
+    file.strip_prefix(env).is_ok_and(|r| r.starts_with("tests"))
+        && is_json(file)
+        && std::fs::read(file).is_ok_and(|b| holds_hidden_tests(&b))
+}
+
+fn holds_hidden_tests(json: &[u8]) -> bool {
+    serde_json::from_slice::<serde_json::Value>(json).is_ok_and(|v| v.get("private_test_cases").is_some())
+}
+
+fn is_json(p: &Path) -> bool {
+    p.extension().is_some_and(|e| e.eq_ignore_ascii_case("json"))
+}
+
+fn has_extension(name: &str, ext: &str) -> bool {
+    Path::new(name).extension().is_some_and(|e| e.eq_ignore_ascii_case(ext))
 }
 
 fn files(root: &Path) -> Vec<(PathBuf, PathBuf)> {
@@ -145,22 +243,38 @@ fn normalize(p: &Path) -> String {
 mod tests {
     use super::*;
 
-    fn task(dockerfile: &str, files: &[(&str, &str)]) -> PathBuf {
+    struct TaskDir(PathBuf);
+
+    impl Drop for TaskDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    impl std::ops::Deref for TaskDir {
+        type Target = Path;
+        fn deref(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    fn task(dockerfile: &str, files: &[(&str, &str)]) -> TaskDir {
         let d = std::env::temp_dir().join(format!("hbench-integrity-{}", uuid::Uuid::new_v4()));
         for (p, body) in files.iter().chain(&[("environment/Dockerfile", dockerfile)]) {
             let p = d.join(p);
             std::fs::create_dir_all(p.parent().unwrap()).unwrap();
             std::fs::write(p, body).unwrap();
         }
-        d
+        TaskDir(d)
     }
+
+    const CONFIG: &str = r#"{"public_test_cases": "[]", "private_test_cases": "eJy..."}"#;
 
     #[test]
     fn livecodebench_hidden_tests() {
-        let config = r#"{"public_test_cases": "[]", "private_test_cases": "eJy..."}"#;
         let d = task(
             "FROM python:3.11-slim\nWORKDIR /app\nCOPY check_solution.py /app/check_solution.py\nCOPY tests/config.json /app/config.json\n",
-            &[("environment/check_solution.py", ""), ("environment/tests/config.json", config), ("tests/config.json", config)],
+            &[("environment/check_solution.py", ""), ("environment/tests/config.json", CONFIG), ("tests/config.json", CONFIG)],
         );
         assert_eq!(leaks(&d), vec![Leak::HiddenTests("/app/config.json".into())]);
         let cmd = scrub_command(&leaks(&d)).unwrap();
@@ -196,5 +310,44 @@ mod tests {
         );
         assert_eq!(leaks(&d), vec![]);
         assert_eq!(scrub_command(&[]), None);
+    }
+
+    #[test]
+    fn continuation_and_json_form_copies() {
+        let d = task(
+            "FROM python:3.11-slim\n# copy the checker's config\nCOPY --chown=1000:1000 \\\n    tests/config.json \\\n    /app/config.json\nCOPY [\"tests/config.json\", \"/srv/\"]\n",
+            &[("environment/tests/config.json", CONFIG)],
+        );
+        assert_eq!(leaks(&d), vec![Leak::HiddenTests("/app/config.json".into()), Leak::HiddenTests("/srv/config.json".into())]);
+    }
+
+    #[test]
+    fn upper_case_encrypted_solution() {
+        let d = task(
+            "FROM ubuntu:24.04\nCOPY SOLUTION.ENC /opt/\n",
+            &[("environment/SOLUTION.ENC", "x"), ("solution/solve.sh", "openssl -in /opt/SOLUTION.ENC")],
+        );
+        assert_eq!(leaks(&d), vec![Leak::EncryptedSolution("/opt/SOLUTION.ENC".into())]);
+    }
+
+    #[test]
+    fn add_unpacks_archives() {
+        let d = task(
+            "FROM ubuntu:24.04\nWORKDIR /app\nADD bundle.tgz ./\nCOPY bundle.tgz /keep/\n",
+            &[("bundle/tests/config.json", CONFIG), ("bundle/.oracle/solution.enc", "x"), ("solution/solve.sh", "solution.enc")],
+        );
+        let tar = Command::new("tar")
+            .arg("-czf")
+            .arg(d.join("environment/bundle.tgz"))
+            .args(["-C", d.join("bundle").to_str().unwrap(), "tests", ".oracle"])
+            .status()
+            .unwrap();
+        assert!(tar.success());
+        let mut got = leaks(&d);
+        got.sort_by_key(|l| format!("{l:?}"));
+        assert_eq!(
+            got,
+            vec![Leak::EncryptedSolution("/app/.oracle/solution.enc".into()), Leak::HiddenTests("/app/tests/config.json".into())]
+        );
     }
 }
