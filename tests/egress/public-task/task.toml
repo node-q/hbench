@@ -1,0 +1,3 @@
+# No [environment] network_mode: public, like every TB2, SWE-bench and LCB task.
+[agent]
+timeout_sec = 60.0
