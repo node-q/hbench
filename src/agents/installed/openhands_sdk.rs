@@ -92,7 +92,7 @@ impl OpenHandsSdk {
             "set -euo pipefail; curl -LsSf https://astral.sh/uv/install.sh | sh && \
              if [ -f \"$HOME/.local/bin/env\" ]; then source \"$HOME/.local/bin/env\"; fi && \
              uv python install {py} && uv venv /opt/openhands-sdk-venv --python {py} --clear && \
-             source /opt/openhands-sdk-venv/bin/activate && uv pip install openhands-sdk{v} openhands-tools{v} fastapi"
+             source /opt/openhands-sdk-venv/bin/activate && uv pip install openhands-sdk{v} openhands-tools{v} fastapi==0.143.2"
         )
     }
 
@@ -264,7 +264,7 @@ mod tests {
         assert!(a.load_skills && !a.collect_token_ids && a.python_version == "3.12");
         assert!(
             a.install_cmd().contains("--python 3.12 --clear")
-                && a.install_cmd().ends_with("uv pip install openhands-sdk openhands-tools fastapi")
+                && a.install_cmd().ends_with("uv pip install openhands-sdk openhands-tools fastapi==0.143.2")
         );
         let v = agent(json!({"version": "1.2.3", "python_version": "3.13"}), &[], None).unwrap();
         assert!(

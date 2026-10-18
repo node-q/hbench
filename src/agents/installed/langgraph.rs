@@ -368,7 +368,7 @@ impl LangGraph {
         let pv = quote(&self.python_version);
         format!(
             "set -euo pipefail; curl -LsSf https://astral.sh/uv/install.sh | sh; if [ -f \"$HOME/.local/bin/env\" ]; then . \"$HOME/.local/bin/env\"; fi; \
-             uv python install {pv}; uv venv {VENV_DIR} --python {pv} --clear; . {VENV_DIR}/bin/activate; uv pip install langgraph python-dotenv; python - <<'PY'\n\
+             uv python install {pv}; uv venv {VENV_DIR} --python {pv} --clear; . {VENV_DIR}/bin/activate; uv pip install langgraph==1.2.15 python-dotenv==1.2.4; python - <<'PY'\n\
              import json, os, subprocess, sys\n\
              project_dir = {}\n\
              config_name = {}\n\

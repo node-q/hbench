@@ -18,6 +18,10 @@ const SPEC: Spec = Spec {
 };
 const DEFAULT_LITELLM_TIMEOUT_SEC: u32 = 3600;
 const PYTHON_VERSION: &str = "3.12";
+/// Exact versions, so a new upstream release cannot break the install (litellm 1.106.0 imports `mcp`, which
+/// it does not depend on, and every model call fails). The `version` kwarg still picks mini-swe-agent.
+const DEFAULT_VERSION: &str = "2.4.6";
+const PINNED_DEPS: &[&str] = &["litellm==1.105.1", "orjson==3.13.0", "fastapi==0.143.2"];
 const TRAJECTORY_PATH: &str = "/logs/agent/mini-swe-agent.trajectory.json";
 const ENV_PRELUDE: &str =
     "if [ -f \"$HOME/.local/bin/env\" ]; then . \"$HOME/.local/bin/env\"; else export PATH=\"$HOME/.local/bin:$PATH\"; fi; ";
@@ -87,6 +91,19 @@ pub fn create(args: AgentArgs) -> Result<AgentBox> {
 }
 
 impl MiniSweAgent {
+    fn install_command(&self) -> String {
+        let version = self.version.as_deref().unwrap_or(DEFAULT_VERSION);
+        let py = quote(PYTHON_VERSION);
+        let pkg = quote(&format!("mini-swe-agent=={version}"));
+        let deps: String = PINNED_DEPS.iter().map(|d| format!(" --with {}", quote(d))).collect();
+        format!(
+            "set -euo pipefail; if ! command -v uv >/dev/null 2>&1; then  curl -LsSf https://astral.sh/uv/install.sh | sh; fi && \
+             if ! grep -q 'export PATH=\"$HOME/.local/bin:$PATH\"' \"$HOME/.bashrc\" 2>/dev/null; then  echo 'export PATH=\"$HOME/.local/bin:$PATH\"' >> \"$HOME/.bashrc\"; fi && \
+             if [ -f \"$HOME/.local/bin/env\" ]; then source \"$HOME/.local/bin/env\"; fi && export PATH=\"$HOME/.local/bin:$PATH\" && \
+             uv python install {py} && uv tool install --python {py} {pkg}{deps} && mini-swe-agent --help"
+        )
+    }
+
     fn new(args: AgentArgs) -> Result<Self> {
         const N: &str = "mini-swe-agent";
         let max_tokens = match args.kwargs.get("max_tokens") {
@@ -295,25 +312,9 @@ impl Agent for MiniSweAgent {
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
         installed_dir(cx).await?;
         ensure_system_dependencies(cx, &["curl", "bash", "build_tools", "git"]).await?;
-        let spec = self.version.as_ref().map(|v| format!("=={v}")).unwrap_or_default();
-        let py = quote(PYTHON_VERSION);
-        exec_agent(
-            cx,
-            &format!(
-                "set -euo pipefail; if ! command -v uv >/dev/null 2>&1; then  curl -LsSf https://astral.sh/uv/install.sh | sh; fi && \
-                 if ! grep -q 'export PATH=\"$HOME/.local/bin:$PATH\"' \"$HOME/.bashrc\" 2>/dev/null; then  echo 'export PATH=\"$HOME/.local/bin:$PATH\"' >> \"$HOME/.bashrc\"; fi && \
-                 if [ -f \"$HOME/.local/bin/env\" ]; then source \"$HOME/.local/bin/env\"; fi && export PATH=\"$HOME/.local/bin:$PATH\" && \
-                 uv python install {py} && uv tool install --python {py} mini-swe-agent{spec} --with litellm --with orjson --with fastapi && mini-swe-agent --help"
-            ),
-            &BTreeMap::new(),
-        )
-        .await?;
-        if self.version.is_none()
-            && let Ok(r) = cx.exec(&format!("{ENV_PRELUDE}uv tool list 2>/dev/null | grep mini-swe-agent"), &BTreeMap::new(), None).await
-            && r.code == 0
-            && !r.stdout.is_empty()
-        {
-            self.version = Some(parse_version(&r.stdout));
+        exec_agent(cx, &self.install_command(), &BTreeMap::new()).await?;
+        if self.version.is_none() {
+            self.version = Some(DEFAULT_VERSION.into());
         }
         Ok(())
     }
@@ -332,11 +333,6 @@ impl Agent for MiniSweAgent {
             *ctx = c;
         }
     }
-}
-
-/// "mini-swe-agent v0.1.2" -> "0.1.2".
-fn parse_version(stdout: &str) -> String {
-    Regex::new(r"(\d+\.\d+\S*)").unwrap().captures(stdout).map(|c| c[1].to_string()).unwrap_or_else(|| stdout.trim().to_string())
 }
 
 #[cfg(test)]
@@ -441,7 +437,16 @@ pub(crate) mod tests {
             err(json!({"litellm_model_registry_file": f.to_str().unwrap()}))
                 .contains("'litellm_model_registry_file': expected a mapping, got list")
         );
-        assert_eq!(parse_version("mini-swe-agent v2.1.0\n"), "2.1.0");
+    }
+
+    #[test]
+    fn install_pins_every_package() {
+        let cmd = agent(json!({}), &[], None).unwrap().install_command();
+        assert!(cmd.contains(
+            "uv tool install --python 3.12 mini-swe-agent==2.4.6 --with litellm==1.105.1 --with orjson==3.13.0 --with fastapi==0.143.2 &&"
+        ));
+        let cmd = agent(json!({"version": "2.1.0"}), &[], None).unwrap().install_command();
+        assert!(cmd.contains("mini-swe-agent==2.1.0 --with litellm==1.105.1"));
     }
 
     #[test]

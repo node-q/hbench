@@ -967,13 +967,13 @@ fn dependencies_command(kind: &str) -> String {
               mkdir -p {PYTHON_INSTALL_DIR}
               {uv} python install {RUNNER_PYTHON_VERSION}
               {uv} venv --python {RUNNER_PYTHON_VERSION} {RUNNER_VENV_PATH}
-              {uv} pip install --python {py} agent-client-protocol
+              {uv} pip install --python {py} agent-client-protocol==0.12.1
             fi
 
             chmod -R a+rX {PYTHON_INSTALL_DIR} {RUNNER_VENV_PATH}
 
             if [ \"{install_uv}\" = \"1\" ] && [ ! -x {RUNNER_VENV_PATH}/bin/uvx ]; then
-              {uv} pip install --python {py} uv
+              {uv} pip install --python {py} uv==0.13.1
             fi"
     )
 }
