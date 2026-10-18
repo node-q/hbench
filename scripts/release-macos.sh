@@ -11,6 +11,8 @@ git fetch -q origin tag "$TAG"
 [ -z "$(git status --porcelain --untracked-files=no)" ] || { echo "working tree has changes"; exit 1; }
 
 DIST=$(mktemp -d)
+# Keep the home directory (checkout, cargo registry, toolchain) out of panic and debug paths.
+export RUSTFLAGS="--remap-path-prefix=$HOME=/build --remap-path-prefix=$PWD=/build/hbench"
 for target in aarch64-apple-darwin x86_64-apple-darwin; do
   rustup target add "$target" >/dev/null
   cargo build --release --locked --target "$target"
