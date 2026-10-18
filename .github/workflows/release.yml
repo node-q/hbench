@@ -48,7 +48,7 @@ jobs:
           for target in $TARGETS; do
             name="hbench-$GITHUB_REF_NAME-$target"
             mkdir "dist/$name"
-            cp "target/$target/release/hbench" README.md "dist/$name/"
+            cp "target/$target/release/hbench" README.md LICENSE NOTICE "dist/$name/"
             tar -C dist -czf "dist/$name.tar.gz" "$name"
           done
       - name: Generate checksums

@@ -71,8 +71,8 @@ async fn execute(cfg: &ExecConfig) -> Result<(Phase, Option<Phase>)> {
     Ok((map, Some(reduce)))
 }
 
-/// Trial results of a finished job, ordered by trial name. ponytail: upstream uses its JobResult's
-/// completion order; hbench's JobResult has no trial list, so read the trial dirs.
+/// Trial results of a finished job, ordered by trial name. ponytail: not completion
+/// order, since JobResult has no trial list; read the trial dirs instead.
 fn trial_results(job_dir: &Path) -> Result<Vec<crate::trial::TrialResult>> {
     let mut out: Vec<crate::trial::TrialResult> = vec![];
     for e in std::fs::read_dir(job_dir)?.flatten() {

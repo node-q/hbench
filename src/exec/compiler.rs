@@ -244,7 +244,7 @@ fn write_task_config(cfg: &CompileConfig, dir: &Path, environment: Option<&Compi
     } else {
         Map::new()
     };
-    let mut tc = hbench_task_config(&raw);
+    let mut tc = normalized_task_config(&raw);
     if !cfg.artifacts.is_empty() {
         tc.insert("artifacts".into(), cfg.artifacts.iter().map(artifact_value).collect());
     }
@@ -276,14 +276,14 @@ fn write_task_config(cfg: &CompileConfig, dir: &Path, environment: Option<&Compi
 }
 
 /// `Task.is_valid_dir`. ponytail: separate-verifier detection is "tests/ ships a Dockerfile or
-/// compose file"; upstream also resolves [verifier.environment] definitions.
+/// compose file"; [verifier.environment] definitions aren't resolved.
 fn is_valid_dir(dir: &Path, disable_verification: bool) -> bool {
     let Ok(text) = std::fs::read_to_string(dir.join("task.toml")) else { return false };
     if !dir.join("environment").exists() {
         return false;
     }
     let Ok(raw) = parse_toml(&text) else { return false };
-    let tc = Value::Object(hbench_task_config(&raw));
+    let tc = Value::Object(normalized_task_config(&raw));
     let steps: Vec<String> = tc
         .get("steps")
         .and_then(Value::as_array)

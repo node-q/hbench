@@ -29,7 +29,7 @@ fn write_fixture(spec: &Value, root: &Path) {
 }
 
 #[test]
-fn artifact_inference_matches_hbench() {
+fn artifact_inference_matches_reference() {
     let p = "Write result.json, reports/summary.txt, /tmp/output.PNG, ../out/data.csv, docs/README.md, and .env.local.";
     assert_eq!(
         infer_artifacts_from_prompt(p, "/app"),
@@ -66,9 +66,9 @@ fn print_output(a: &ExecArgs) -> String {
     }
 }
 
-/// `hbench exec ... --print-config` goldens (tests/fixtures/exec, produced by upstream 0.24.0).
+/// `exec ... --print-config` goldens (tests/fixtures/exec).
 #[test]
-fn print_config_matches_hbench_golden() {
+fn print_config_matches_golden() {
     let spec: Value = serde_json::from_str(include_str!("../../tests/fixtures/exec/print_config_cases.json")).unwrap();
     let golden = include_str!("../../tests/fixtures/exec/print_config_golden.txt");
     let root = tmp("print");
@@ -137,9 +137,9 @@ fn dump_tree(dir: &Path, out: &mut Vec<String>) {
     }
 }
 
-/// Compiled task trees match upstream's Compiler byte for byte (tests/fixtures/exec goldens).
+/// Compiled task trees match the tests/fixtures/exec goldens byte for byte.
 #[test]
-fn compile_matches_hbench_golden() {
+fn compile_matches_golden() {
     let spec: Value = serde_json::from_str(include_str!("../../tests/fixtures/exec/compile_cases.json")).unwrap();
     let golden = include_str!("../../tests/fixtures/exec/compile_golden.txt");
     let root = tmp("compile");
@@ -204,7 +204,7 @@ fn write_trial(job: &Path, name: &str, artifacts: &[(&str, &str)]) {
     std::fs::write(dir.join("result.json"), r.to_string()).unwrap();
 }
 
-/// Mirrors upstream's test_executor_stages_map_artifacts_into_reduce_task_environment.
+/// Map artifacts are staged into the reduce task's environment.
 #[test]
 fn reduce_task_stages_map_artifacts() {
     let root = tmp("reduce");

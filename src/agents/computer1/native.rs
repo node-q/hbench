@@ -1,5 +1,4 @@
-//! computer-1's native computer-use providers (upstream's `providers/anthropic.py`, `gemini.py`,
-//! `openai.py`, and the step / self-driving loops in `computer_1.py`).
+//! computer-1's native computer-use providers and their step / self-driving loops.
 //!
 //! - `anthropic` / `bedrock`: Claude's `computer_2025xxxx` tool over the Messages API (beta).
 //!   Bedrock is the same body re-shaped like `AnthropicBedrock` and signed with AWS SigV4.
@@ -7,8 +6,7 @@
 //! - `openai`: the GA `computer` tool through the Responses API; drives its own loop.
 //!
 //! Requests go through `llm::send_raw` (host curl). Retries mirror the vendor SDKs' defaults.
-//! Usage is recorded like upstream's `usage_from_any`, which never prices native turns (cost stays
-//! unset, exactly as in upstream).
+//! Usage is recorded without pricing native turns (cost stays unset).
 
 use super::{Action, Computer1, SCREENSHOT_DIR, py_repr, quote};
 use crate::agents::AgentContext;
@@ -559,7 +557,7 @@ pub(super) trait Transport: Send + Sync {
 enum Sdk {
     /// anthropic / openai Python SDKs: 2 retries on 408/409/429/5xx and connection errors.
     Stainless,
-    /// upstream's tenacity wrapper on google-genai: 4 attempts on 429/500/503/504.
+    /// google-genai with a retry wrapper: 4 attempts on 429/500/503/504.
     Gemini,
 }
 
@@ -1401,7 +1399,7 @@ mod tests {
         Native::with_transport(kind, model, 1024, 900, false, Box::new(a.clone()))
     }
 
-    /// upstream's test_native_batches `response()`.
+    /// A canned Anthropic response with one tool_use per action.
     fn response(actions: Vec<Value>, stop: &str) -> Value {
         let content: Vec<Value> = actions
             .into_iter()
@@ -1411,7 +1409,7 @@ mod tests {
         json!({"id": "response-1", "stop_reason": stop, "content": content, "usage": {"input_tokens": 100, "output_tokens": 20, "cache_read_input_tokens": 0}})
     }
 
-    /// upstream's test_gemini_batches `response()`.
+    /// A canned Gemini response with one function call per entry.
     fn gemini_response(calls: Vec<(&str, Value)>) -> Value {
         let steps: Vec<Value> = calls
             .into_iter()
@@ -1633,7 +1631,7 @@ mod tests {
         let h = b.http(Some("eu-west-1"), &env(creds)).unwrap();
         assert_eq!(h.url, "https://bedrock-runtime.eu-west-1.amazonaws.com/model/us.anthropic.claude-sonnet-4-5-v1:0/invoke");
         let h = b.http(None, &env(creds)).unwrap();
-        assert_eq!(h.aws.unwrap().region, "us-east-1"); // upstream passes `aws_region_name or "us-east-1"`
+        assert_eq!(h.aws.unwrap().region, "us-east-1"); // `aws_region_name` defaults to us-east-1
         assert!(b.http(None, &env(&[])).err().unwrap().to_string().contains("SigV4"));
         let g = provider(Kind::Gemini, "gemini/gemini-3.8-flash", &MockApi::default());
         let h = g.http(None, &env(&[("GEMINI_API_KEY", "g")])).unwrap();
@@ -1893,7 +1891,7 @@ mod tests {
         let t = trajectory(&logs);
         assert_eq!(t["steps"][1]["observation"]["results"][0]["extra"]["execution_status"], "not_executed");
 
-        // No usage at all: the context stays unset, like upstream's accumulate_usage.
+        // No usage at all: the context stays unset.
         let a = api(vec![json!({"content": [{"type": "text", "text": "done"}], "stop_reason": "end_turn"})]);
         let (mut c, _) = native_agent(Kind::Anthropic, "claude-opus-4-7", &a, json!({}));
         let mut ctx = AgentContext::default();

@@ -1,4 +1,4 @@
-//! grok-build (port of upstream's agents/installed/grok_build.py).
+//! grok-build.
 
 use super::common::{deep_merge, installed_dir, parse_bool_env_value, skills_dir};
 use super::{ensure_system_dependencies, exec_agent, exec_error};
@@ -46,7 +46,7 @@ pub fn create(args: AgentArgs) -> Result<AgentBox> {
     Ok(Box::new(GrokBuild::new(args)?))
 }
 
-/// upstream's parse_bool_env_value.
+/// Parse a boolean env value.
 fn parse_bool(v: &Value, name: &str) -> Result<bool> {
     match v {
         Value::Bool(b) => Ok(*b),
@@ -311,7 +311,7 @@ fn cli_flags(args: &AgentArgs) -> Result<String> {
     Ok(f.join(" "))
 }
 
-/// upstream prepends `resource-exhausted|currently at capacity` (ApiOverloadedError) to ERROR_PATTERNS.
+/// Prepends `resource-exhausted|currently at capacity` (ApiOverloadedError) to ERROR_PATTERNS.
 fn classify_grok(output: &str) -> &'static str {
     static P: OnceLock<Vec<(Regex, &'static str)>> = OnceLock::new();
     let p = P.get_or_init(|| vec![(Regex::new(r"(?i)resource-exhausted|currently at capacity").unwrap(), "ApiOverloadedError")]);
@@ -338,7 +338,7 @@ fn parse_usage(v: &Value) -> Option<Usage> {
     Some(u)
 }
 
-/// upstream's `_total_cost_usd`: LiteLLM price per call (so each is tiered by its own prompt size),
+/// Total cost: LiteLLM price per call (so each is tiered by its own prompt size),
 /// with xAI's at-boundary tiering and cache-write-at-input-rate adjustments. None if unpriced.
 fn total_cost_usd(model: &str, calls: &[Usage]) -> Option<f64> {
     let key = pricing::pricing_key(model)?;
@@ -372,7 +372,7 @@ fn total_cost_usd(model: &str, calls: &[Usage]) -> Option<f64> {
     Some(total)
 }
 
-/// upstream's `_parse_usage_report` + `populate_context_post_run`, incl. the LiteLLM estimate when grok reports no cost.
+/// Usage report parsing, incl. the LiteLLM estimate when grok reports no cost.
 pub fn usage_from_output(text: &str, model: Option<&str>) -> Option<AgentContext> {
     let mut calls: Vec<Usage> = vec![];
     let mut total: Option<Usage> = None;

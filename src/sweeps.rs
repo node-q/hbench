@@ -1,5 +1,5 @@
-//! `sweeps run`: successive jobs, dropping tasks that already succeeded (upstream's cli/sweeps.py).
-//! Fix vs upstream: success reads `verifier_result.rewards.reward > 0` (upstream reads a key that never exists).
+//! `sweeps run`: successive jobs, dropping tasks that already succeeded.
+//! Success means `verifier_result.rewards.reward > 0`.
 
 use crate::config::{JobConfig, TaskRef};
 use anyhow::Result;

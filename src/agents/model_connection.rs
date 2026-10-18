@@ -1,4 +1,4 @@
-//! Declarative model credentials and endpoint resolution (port of upstream's model_connection.py).
+//! Declarative model credentials and endpoint resolution.
 
 use std::collections::BTreeMap;
 
@@ -237,7 +237,7 @@ mod tests {
     }
 
     #[test]
-    fn resolves_like_hbench() {
+    fn resolves_providers() {
         let claude = Spec {
             default_provider: Some("anthropic"),
             api_key_envs: &["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"],

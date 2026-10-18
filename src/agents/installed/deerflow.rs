@@ -212,7 +212,7 @@ impl DeerFlow {
             config["tools"] = tools;
         }
         // Our model entry is authoritative; other user models (and extra keys on ours) survive.
-        // A legacy `hbench-model` entry is adopted as ours.
+        // An entry under the older `hbench-model` name is adopted as ours.
         let models = match &config["models"] {
             Value::Null => vec![],
             Value::Array(a) if a.iter().all(Value::is_object) => a.clone(),

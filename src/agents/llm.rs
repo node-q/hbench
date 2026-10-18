@@ -1,9 +1,8 @@
-//! Async LLM chat client: the part of upstream's LiteLLM wrapper (`llms/lite_llm.py`, `chat.py`,
-//! `utils.py`) that host-side agents use.
+//! Async LLM chat client (a LiteLLM-style wrapper) used by host-side agents.
 //!
 //! `anthropic/` models go to the Anthropic Messages API; everything else to an OpenAI-compatible
 //! chat-completions endpoint (or the OpenAI Responses API when asked). Keys and base URLs come from
-//! `model_connection`. Calls are retried like upstream's `@retry` on `LiteLLM.call`, context overflow
+//! `model_connection`. Failed calls are retried, context overflow
 //! is a distinct error, and usage/cost are reported like LiteLLM's `ModelResponse.usage`.
 //!
 //! ponytail: HTTP goes through the host `curl` (no HTTP client crate in Cargo.toml), like
@@ -41,11 +40,11 @@ pub struct LlmResponse {
 
 #[derive(Debug, Clone)]
 pub enum LlmError {
-    /// upstream's `ContextLengthExceededError`.
+    /// The prompt exceeds the model's context window.
     ContextLength(String),
-    /// upstream's `OutputLengthExceededError` (finish_reason == "length").
+    /// The response hit the output token limit (finish_reason == "length").
     OutputLength { msg: String, truncated: String },
-    /// Anything else; `kind` is the LiteLLM exception class name upstream would report.
+    /// Anything else; `kind` is the LiteLLM exception class name.
     Api { kind: &'static str, msg: String },
 }
 
@@ -66,7 +65,7 @@ impl LlmError {
             LlmError::Api { kind, .. } => kind,
         }
     }
-    /// upstream retries everything but these.
+    /// Everything but these is retried.
     fn retryable(&self) -> bool {
         !matches!(self, LlmError::ContextLength(_) | LlmError::OutputLength { .. } | LlmError::Api { kind: "AuthenticationError", .. })
     }
@@ -80,7 +79,7 @@ fn api_err(kind: &'static str, msg: impl Into<String>) -> LlmError {
     LlmError::Api { kind, msg: msg.into() }
 }
 
-/// LiteLLM model-map fields upstream reads (limits + per-token pricing).
+/// LiteLLM model-map fields used here (limits + per-token pricing).
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct ModelInfo {
     pub max_input_tokens: Option<i64>,
@@ -94,8 +93,8 @@ pub struct ModelInfo {
     pub adaptive_thinking: bool,
 }
 
-/// LiteLLM's `model_cost` entry (the table pinned to upstream's LiteLLM version).
-/// ponytail: unknown models get no pricing (cost 0/None) and the 1M fallback context limit, as in upstream.
+/// LiteLLM's `model_cost` entry (from the pinned LiteLLM version's table).
+/// ponytail: unknown models get no pricing (cost 0/None) and the 1M fallback context limit.
 fn builtin_info(name: &str) -> Option<ModelInfo> {
     let m = crate::agents::pricing::model_cost(name)?;
     let f = |k: &str| m.get(k).and_then(|v| v.as_f64().or_else(|| v.as_str()?.parse().ok()));
@@ -121,7 +120,7 @@ pub fn lookup_model_info(model: &str) -> Option<ModelInfo> {
     }
 }
 
-/// upstream's `model_info` kwarg (litellm.register_model): overrides the known entry.
+/// The `model_info` kwarg (litellm.register_model): overrides the known entry.
 fn merge_model_info(mut info: ModelInfo, v: &Value) -> ModelInfo {
     let i = |k: &str| v.get(k).and_then(|x| x.as_f64().or_else(|| x.as_str()?.parse().ok()));
     if let Some(x) = i("max_input_tokens").or_else(|| i("max_tokens")) {
@@ -271,7 +270,7 @@ pub fn resolve_endpoint(model: &str, api_base: Option<&str>, responses: bool, ge
     Ok(Endpoint { api, url, headers, model: sent, provider })
 }
 
-/// upstream's LiteLLM constructor arguments.
+/// LLM client constructor arguments.
 #[derive(Debug, Clone, Default)]
 pub struct LlmConfig {
     pub model_name: String,
@@ -283,13 +282,13 @@ pub struct LlmConfig {
     pub collect_rollout_details: bool,
     pub model_info: Option<Value>,
     pub use_responses_api: bool,
-    /// Extra constructor kwargs (upstream `llm_kwargs`), sent with every request.
+    /// Extra constructor kwargs (`llm_kwargs`), sent with every request.
     pub llm_kwargs: Map<String, Value>,
 }
 
 #[async_trait::async_trait]
 pub trait Llm: Send + Sync {
-    /// `kw`: per-call kwargs (upstream `llm_call_kwargs`: extra_body, extra_headers, sampling params).
+    /// `kw`: per-call kwargs (`llm_call_kwargs`: extra_body, extra_headers, sampling params).
     async fn call(
         &self,
         prompt: &str,
@@ -411,7 +410,7 @@ fn is_claude(model: &str) -> bool {
     l.contains("anthropic") || l.contains("claude")
 }
 
-/// upstream's `_is_context_length_error` phrases (plus LiteLLM's own mapping).
+/// Error phrases that mean context overflow (plus LiteLLM's own mapping).
 pub fn is_context_length_error(text: &str) -> bool {
     let t = text.to_lowercase();
     [
@@ -673,7 +672,7 @@ pub fn parse_responses(v: &Value, info: Option<&ModelInfo>, model: &str) -> Resu
     })
 }
 
-/// upstream's `LiteLLM` backend.
+/// The LiteLLM-compatible backend.
 pub struct LiteLlm {
     cfg: LlmConfig,
     ep: Endpoint,
@@ -857,7 +856,7 @@ impl LiteLlm {
 
 #[async_trait::async_trait]
 impl Llm for LiteLlm {
-    /// upstream: `@retry(stop_after_attempt(3), wait_exponential(min=4, max=15))`, except context/output/auth errors.
+    /// 3 attempts with exponential backoff (4-15s), except on context/output/auth errors.
     async fn call(
         &self,
         prompt: &str,
@@ -952,7 +951,7 @@ pub async fn send_raw(url: &str, req: &Request) -> Result<(u16, String), LlmErro
     Ok((status.trim().parse().unwrap_or(0), body.to_string()))
 }
 
-/// Port of upstream's `Chat`: message history plus cumulative usage.
+/// A chat: message history plus cumulative usage.
 #[derive(Debug, Default)]
 pub struct Chat {
     pub messages: Vec<Value>,
@@ -1006,7 +1005,7 @@ impl Chat {
         self.last_response_id = None;
     }
 
-    /// upstream's `Chat.rollout_details`: one entry for the linear history, or none.
+    /// Rollout details: one entry for the linear history, or none.
     pub fn rollout_details(&self) -> Vec<Value> {
         if self.prompt_token_ids.is_empty() && self.completion_token_ids.is_empty() && self.logprobs.is_empty() {
             return vec![];

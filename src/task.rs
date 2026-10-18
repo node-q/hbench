@@ -1,4 +1,4 @@
-//! upstream-compatible task format: task.toml + instruction.md + environment/ + tests/ (+ solution/, steps/).
+//! Task format: task.toml + instruction.md + environment/ + tests/ (+ solution/, steps/).
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
@@ -518,7 +518,7 @@ impl Task {
         Ok(strip_canary(&std::fs::read_to_string(&p).with_context(|| format!("reading {}", p.display()))?))
     }
 
-    /// Host-side test scripts the verifier will need (upstream's `_validate_tests`).
+    /// Host-side test scripts the verifier will need.
     pub fn validate_tests(&self) -> Result<()> {
         if !self.has_steps() {
             if self.verifier_env_definition(None).is_some_and(|(_, _, bundled)| bundled) {
@@ -617,7 +617,7 @@ pub fn strip_canary(text: &str) -> String {
     lines[i..].join("\n")
 }
 
-/// upstream's task digest (`Packager.compute_content_hash`, gitignore-filtered), `sha256:`-prefixed.
+/// Task digest (`Packager.compute_content_hash`, gitignore-filtered), `sha256:`-prefixed.
 pub fn content_digest(dir: &Path) -> String {
     crate::authoring::content_hash(dir).map(|h| format!("sha256:{h}")).unwrap_or_default()
 }
@@ -656,7 +656,7 @@ fn walk(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
     Ok(())
 }
 
-/// Resolve `${VAR}` / `${VAR:-default}` templates against the host env (upstream semantics).
+/// Resolve `${VAR}` / `${VAR:-default}` templates against the host env.
 pub fn resolve_env_vars(env: &BTreeMap<String, String>) -> Result<BTreeMap<String, String>> {
     let mut out = BTreeMap::new();
     for (k, v) in env {

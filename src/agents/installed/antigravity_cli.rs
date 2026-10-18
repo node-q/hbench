@@ -1,4 +1,4 @@
-//! antigravity-cli (port of upstream's agents/installed/antigravity_cli.py + antigravity_base_url.py).
+//! antigravity-cli, plus the custom Gemini base URL policy shared with antigravity-sdk.
 
 use super::common::{installed_dir, parse_bool_env_value, skills_dir};
 use super::{ensure_system_dependencies, exec_error};
@@ -12,7 +12,7 @@ use std::path::Path;
 use std::sync::OnceLock;
 use std::time::Duration;
 
-const EFFORTS: &[&str] = &["high", "low", "medium", "minimal"]; // sorted, as upstream prints them
+const EFFORTS: &[&str] = &["high", "low", "medium", "minimal"]; // sorted, as printed in errors
 const FLASH_ONLY_EFFORTS: &[&str] = &["minimal", "medium"];
 const KNOWN_OPTIONS: &[&str] =
     &["version", "prompt_template_path", "config", "sandbox", "reasoning_effort", "binary_path", "override_setup_timeout_sec"];
@@ -28,8 +28,8 @@ pub fn create(args: AgentArgs) -> Result<AgentBox> {
     Ok(Box::new(AntigravityCli::new(args)?))
 }
 
-/// Transport policy for a custom Gemini endpoint (antigravity_base_url.validate_base_url).
-/// `get_env` is upstream's `_get_env` (empty values are returned, not skipped). Errors never echo the URL.
+/// Transport policy for a custom Gemini endpoint.
+/// `get_env` is agent env > host env (empty values are returned, not skipped). Errors never echo the URL.
 pub fn validate_base_url(url: &str, get_env: &dyn Fn(&str) -> Option<String>) -> Result<()> {
     if url.chars().any(char::is_whitespace) {
         bail!("GOOGLE_GEMINI_BASE_URL contains whitespace; set a single absolute http(s) URL");
@@ -61,10 +61,11 @@ pub fn validate_base_url(url: &str, get_env: &dyn Fn(&str) -> Option<String>) ->
         }
     }
     if scheme == "http" {
-        let allow = get_env("HBENCH_ALLOW_INSECURE_MODEL_BASE_URL");
-        let ok = match allow.as_deref() {
-            Some(a) if !a.trim().is_empty() => parse_bool_env_value(a, "HBENCH_ALLOW_INSECURE_MODEL_BASE_URL")?,
-            _ => false,
+        // The HBENCH_ name is the older spelling, still honoured.
+        let set = |k: &str| get_env(k).filter(|a| !a.trim().is_empty()).map(|a| (k.to_string(), a));
+        let ok = match set("HBENCH_ALLOW_INSECURE_MODEL_BASE_URL").or_else(|| set("HBENCH_ALLOW_INSECURE_MODEL_BASE_URL")) {
+            Some((k, a)) => parse_bool_env_value(&a, &k)?,
+            None => false,
         };
         if !ok {
             bail!(
@@ -187,7 +188,7 @@ impl AntigravityCli {
         Ok(a)
     }
 
-    /// upstream's `_get_env`: agent env > host env, empty values returned as-is.
+    /// Agent env > host env, empty values returned as-is.
     fn raw_env(&self, k: &str) -> Option<String> {
         self.args.extra_env.get(k).cloned().or_else(|| std::env::var(k).ok())
     }
@@ -220,7 +221,7 @@ impl AntigravityCli {
         out
     }
 
-    /// Auth/run env built by upstream's run() before any exec.
+    /// Auth/run env built before any exec.
     fn run_env(&self, model: &str) -> Result<BTreeMap<String, String>> {
         let mut env = BTreeMap::from([("GEMINI_CLI_TRUST_WORKSPACE".to_string(), "true".to_string())]);
         if self.use_adc_auth()? {
@@ -438,7 +439,7 @@ fn merge_update(msg: &mut Value, update: &Value) {
 }
 
 /// Gemini-style session (legacy JSON with `messages`, or v0.40+ JSONL records) -> messages.
-/// None when nothing parseable (upstream's `_load_gemini_session`).
+/// None when nothing parseable.
 pub fn load_gemini_messages(text: &str) -> Option<Vec<Value>> {
     if text.trim().is_empty() {
         return None;
@@ -473,7 +474,7 @@ pub fn load_gemini_messages(text: &str) -> Option<Vec<Value>> {
         } else if obj.get("$set").is_some_and(Value::is_object) {
             has_metadata |= !obj["$set"].as_object().unwrap().is_empty();
         } else if matches!(rec["type"].as_str(), Some("user" | "gemini")) {
-            let Some(mid) = mid else { continue }; // ponytail: id-less messages are dropped, as in upstream
+            let Some(mid) = mid else { continue }; // ponytail: id-less messages are dropped
             match msgs.get_mut(&mid) {
                 Some(m) => m.as_object_mut().unwrap().extend(obj.clone()),
                 None => {
@@ -501,7 +502,7 @@ pub fn load_gemini_messages(text: &str) -> Option<Vec<Value>> {
     Some(ids.iter().map(|i| msgs[i].clone()).collect())
 }
 
-/// upstream's populate_context_post_run token totals (cost needs LiteLLM pricing, unavailable here).
+/// Post-run token totals (cost needs LiteLLM pricing, unavailable here).
 pub fn usage_from_logs(logs_dir: &Path) -> Option<Totals> {
     let stream = || std::fs::read_to_string(logs_dir.join(STREAM_LOG)).ok().and_then(|t| stream_usage_totals(&t));
     let Some(text) = ["antigravity-cli.trajectory.jsonl", "antigravity-cli.trajectory.json"]
@@ -526,7 +527,7 @@ pub fn usage_from_logs(logs_dir: &Path) -> Option<Totals> {
 
 #[async_trait::async_trait]
 impl Agent for AntigravityCli {
-    /// upstream's sanitized `_extra_env` (empty auth values dropped, alias renamed, keys stripped under ADC).
+    /// Sanitized extra env (empty auth values dropped, alias renamed, keys stripped under ADC).
     fn extra_env(&self) -> Option<BTreeMap<String, String>> {
         Some(self.args.extra_env.clone())
     }
@@ -612,7 +613,7 @@ impl Agent for AntigravityCli {
     }
 }
 
-/// upstream's `_compute_cost_from_pricing`: LiteLLM rates for the model (then provider-stripped),
+/// Cost from LiteLLM rates for the model (then provider-stripped),
 /// cache reads at `cache_read_input_token_cost or input rate`. None when the model isn't priced.
 pub fn cost_from_pricing(model: &str, prompt: i64, completion: i64, cached: i64) -> Option<f64> {
     let p = crate::agents::pricing::model_cost(model)

@@ -1,8 +1,8 @@
-//! Docker Compose environment, mirroring upstream's docker environment.
+//! Docker Compose environment.
 //!
 //! Files move with `docker compose cp` (never bind mounts for /logs), so the same
 //! code works against remote daemons (ssh contexts). Network allowlists use
-//! upstream's egress-control sidecar (vendored under assets/egress-sidecar).
+//! an egress-control sidecar (vendored under assets/egress-sidecar).
 
 use crate::task::{EnvironmentConfig, Healthcheck, MAIN, NetworkMode, NetworkPolicy};
 use anyhow::{Context, Result, anyhow, bail};
@@ -16,7 +16,7 @@ use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
-/// Error carrying a upstream exception type name (used for result.json + retry policy).
+/// Error carrying an exception type name (used for result.json + retry policy).
 #[derive(Debug)]
 pub struct KindError {
     pub kind: &'static str,
@@ -57,8 +57,8 @@ pub struct ExecResult {
     pub stderr: String,
 }
 
-const EGRESS_SERVICE: &str = "hbench-docker-egress-control-sidecar";
-const EGRESS_READY: &str = "/tmp/hbench-docker-egress-control-sidecar.ready";
+const EGRESS_SERVICE: &str = "hbench-egress-sidecar";
+const EGRESS_READY: &str = "/tmp/hbench-egress-sidecar.ready";
 pub const LOG_DIRS: [&str; 3] = ["/logs/agent", "/logs/verifier", "/logs/artifacts"];
 
 /// Everything needed to start one compose project.
@@ -294,7 +294,7 @@ impl DockerEnv {
         if !startup_env.is_empty() {
             files.push(write("docker-compose-env.json", json!({"services": {"main": {"environment": startup_env}}}))?);
         }
-        // /logs dirs are named volumes (upstream bind-mounts host dirs): services that mount
+        // /logs dirs are named volumes, not host bind mounts: services that mount
         // ${HOST_*_PATH} share them with main, and it works on remote daemons too.
         let log_volume = |dir: &str| format!("hb-logs-{}", dir.trim_start_matches("/logs/"));
         let mut volumes: Vec<Value> =
@@ -327,7 +327,7 @@ impl DockerEnv {
             files.push(write("docker-compose-egress.json", json!({"services": services}))?);
         }
 
-        // Variables task-authored compose files may interpolate (upstream's infra env).
+        // Variables task-authored compose files may interpolate.
         let mut compose_env = startup_env.clone();
         let trial_dir = spec.compose_dir.parent().unwrap_or(&spec.compose_dir);
         compose_env.insert("CONTEXT_DIR".into(), env_dir.display().to_string());

@@ -1,5 +1,5 @@
 //! LiteLLM-compatible token pricing (the `model_cost` table pinned to LiteLLM 1.93.0,
-//! the version in upstream's uv.lock, + a port of `cost_per_token`'s text-token path).
+//! + a port of `cost_per_token`'s text-token path).
 
 use serde_json::{Map, Value};
 use std::sync::OnceLock;

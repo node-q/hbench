@@ -1,4 +1,4 @@
-//! Cline CLI (port of upstream's agents/installed/cline/cline.py).
+//! Cline CLI.
 
 use super::common::{installed_dir, skills_dir};
 use super::{exec_agent, exec_root};
@@ -43,7 +43,7 @@ fn pystr(v: &Value) -> String {
     }
 }
 
-/// upstream's `_parse_timeout_seconds`: positive integer from int/integral float/str.
+/// Timeout seconds: positive integer from int/integral float/str.
 fn parse_positive_int(v: &Value, field: &str) -> Result<i64> {
     let err = || anyhow!("Invalid {field} value: '{}'. Must be a positive integer.", pystr(v));
     let n = match v {
@@ -278,7 +278,7 @@ impl ClineCli {
         Some(format!("mkdir -p ~/.cline/data/settings && echo {} > ~/.cline/data/settings/cline_mcp_settings.json", quote(&cfg)))
     }
 
-    /// (setup command, run command, env) — upstream's create_run_agent_commands.
+    /// (setup command, run command, env) for the run.
     fn run_commands(&self, instruction: &str) -> Result<(String, String, BTreeMap<String, String>)> {
         let raw = instruction.trim();
         if raw.is_empty() {
@@ -442,7 +442,7 @@ impl Agent for ClineCli {
             cx.env.upload_file(p, "/tmp/hbench-cline-plugin.tgz").await?;
             self.remote_plugin_tarball = Some("/tmp/hbench-cline-plugin.tgz");
         }
-        // Host-only GitHub tokens (upstream reads os.environ, not --ae).
+        // Host-only GitHub tokens (read from the host environment, not --ae).
         let install_env: BTreeMap<String, String> = ["GITHUB_TOKEN", "GH_TOKEN"]
             .iter()
             .filter_map(|k| std::env::var(k).ok().filter(|v| !v.is_empty()).map(|v| (k.to_string(), v)))

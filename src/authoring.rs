@@ -1,8 +1,8 @@
-//! Local authoring commands ported from upstream with byte-exact file output:
+//! Local authoring commands with byte-exact file output:
 //! `init` (task + dataset), `tasks init`, `datasets init`, `add`, `remove`, `sync`.
 //!
-//! Generated TOML goes through a port of the uiri `toml` 0.10.2 encoder upstream uses
-//! (quirks included), and task digests follow upstream's `Packager.compute_content_hash`.
+//! Generated TOML goes through a port of the uiri `toml` 0.10.2 encoder
+//! (quirks included), and task digests follow `Packager.compute_content_hash`.
 
 use anyhow::{Result, anyhow, bail};
 use serde_json::{Map, Value, json};
@@ -376,7 +376,7 @@ fn mcp_model(src: &Map<String, Value>) -> Result<Map<String, Value>> {
     Ok(o)
 }
 
-/// upstream's `_parse_size_to_mb` for legacy `memory` / `storage` strings.
+/// Size string to MB for legacy `memory` / `storage` strings.
 fn size_to_mb(s: &str) -> Result<i64> {
     let s = s.trim().to_uppercase();
     let num = |t: &str| t.parse::<f64>().map_err(|_| anyhow!("Invalid size format: {s}. Expected format like '1G', '512M', etc."));
@@ -454,7 +454,7 @@ fn authors_json(authors: &[Author]) -> Value {
     )
 }
 
-/// Inputs of upstream's `TaskConfig.model_validate({...}).model_dump_toml()` in `_init_task`.
+/// Inputs of `TaskConfig.model_validate({...}).model_dump_toml()` in `_init_task`.
 pub struct TaskToml<'a> {
     /// `[task]` package: (name, description, authors).
     pub package: Option<(&'a str, &'a str, &'a [Author])>,
@@ -784,10 +784,7 @@ fn task_name_of(task_dir: &Path) -> Result<String> {
     let config: crate::task::TaskConfig = toml::from_str(&std::fs::read_to_string(&cfg)?)?;
     match config.task.and_then(|t| t.name) {
         Some(n) => Ok(n),
-        None => bail!(
-            "task.toml in {d} must contain a [task] section with a name. Run 'hbench task update {d} --org <org>' to add one, or 'hbench task update <parent-dir> --org <org> --scan' to update a directory of tasks.",
-            d = task_dir.display()
-        ),
+        None => bail!("task.toml in {d} must contain a [task] section with a name (name = \"<org>/<name>\").", d = task_dir.display()),
     }
 }
 
@@ -897,7 +894,7 @@ pub fn init_task(name: &str, output_dir: &Path, o: &TaskOpts) -> Result<PathBuf>
     let task_dir = if output_dir == Path::new(".") { PathBuf::from(short) } else { output_dir.join(short) };
     let step_names: Vec<String> = (1..=o.steps).map(|i| format!("step-{i}")).collect();
     let multi = o.steps >= 1;
-    // Same side effects as upstream before validation can fail.
+    // These side effects happen before validation can fail.
     std::fs::create_dir_all(&task_dir)?;
     if !multi {
         std::fs::write(task_dir.join("instruction.md"), T_INSTRUCTION)?;
@@ -1029,9 +1026,7 @@ pub fn init_dataset(name: &str, output_dir: &Path, description: &str, with_metri
         if !valid_name(name) {
             bail!("Invalid dataset name: {name}. Must be in 'org/name' format.");
         }
-        let header = format!(
-            "# Dataset manifest for {name}\n# Add tasks using: hbench dataset add <org>/<name>\n# Publish using: hbench publish\n\n"
-        );
+        let header = format!("# Dataset manifest for {name}\n# Add tasks using: hbench add <task-dir>\n\n");
         let mut m = Manifest::new(name, description, authors, header);
         m.save(&manifest_path)?;
         println!("✓ Dataset initialized at {}", manifest_path.display());
@@ -1300,7 +1295,7 @@ pub fn sync(path: &Path, upgrade: bool) -> Result<()> {
     }
     let changes = sync_dataset(&dataset_dir)?;
     if upgrade {
-        // ponytail: no upstream Hub client; registry-only tasks keep their digests, like a failed lookup in upstream.
+        // ponytail: no hosted-registry client; registry-only tasks keep their digests, as on a failed lookup.
         for c in changes.iter().filter(|c| c.source == "skipped") {
             println!("Warning: registry lookup failed for {}: hosted package registries are not supported by hbench", c.name);
         }

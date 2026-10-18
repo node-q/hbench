@@ -1,5 +1,4 @@
-//! Simulated-user trials: a user agent talks to the target agent over ACP via `acpx`
-//! (port of upstream's bridges/acp.py + trial/simulated_user.py).
+//! Simulated-user trials: a user agent talks to the target agent over ACP via `acpx`.
 
 use crate::agents::installed::{ensure_acp_node_command, pinned_bin_wrapper_command, safe_bin_symlink_command};
 use crate::agents::{AgentBox, AgentCtx};
@@ -79,7 +78,7 @@ pub fn extract_target_usage(v: &Value) -> Option<Value> {
     last
 }
 
-/// Render the simulated user's prompt (validates template variables like upstream).
+/// Render the simulated user's prompt (validates template variables).
 pub fn render_user_prompt(instruction: &str, bridge_instructions: &str, template: Option<&Path>, persona: Option<&Path>) -> Result<String> {
     let (tpl, source) = match template {
         Some(p) => (

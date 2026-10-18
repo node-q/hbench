@@ -1,4 +1,4 @@
-//! NVIDIA NeMo Agent Toolkit (port of upstream's agents/installed/nemo_agent.py).
+//! NVIDIA NeMo Agent Toolkit installed agent.
 
 use super::common::{installed_dir, upload_asset};
 use super::{ensure_system_dependencies, exec_agent, exec_error, exec_root};
@@ -17,7 +17,7 @@ const PATH_SETUP: &str = "export PATH=\"$HOME/.local/bin:$PATH\"";
 const LLM_TYPES: [&str; 7] = ["nim", "openai", "azure_openai", "aws_bedrock", "litellm", "huggingface_inference", "dynamo"];
 const LOG_LEVELS: [&str; 4] = ["debug", "info", "warning", "error"];
 
-/// upstream's `_ProviderSpec`.
+/// Per-provider settings.
 struct ProviderSpec {
     api_key_env: Option<&'static str>,
     base_url_env: Option<&'static str>,
@@ -92,7 +92,7 @@ pub fn create(args: AgentArgs) -> Result<AgentBox> {
 
 impl NemoAgent {
     fn new(args: AgentArgs) -> Result<NemoAgent> {
-        // Options with upstream's env fallbacks (Cli/Env `fallback=`).
+        // Options with env fallbacks.
         let opt = |k: &str, env: &str| if args.kwargs.contains_key(k) { args.kw(k) } else { args.get_env(env) };
         let llm_type = opt("llm_type", "NVIDIA_NAT_LLM_TYPE").unwrap_or_else(|| "nim".into());
         if !LLM_TYPES.contains(&llm_type.as_str()) {

@@ -1,5 +1,5 @@
-//! kwargs parsing for the installed-agent ports (pydantic lax-mode coercion of upstream's
-//! `options_model` fields).
+//! kwargs parsing for the installed agents (pydantic lax-mode style coercion of option
+//! fields).
 
 use crate::agents::AgentArgs;
 use anyhow::{Result, anyhow, bail};
@@ -86,7 +86,7 @@ pub fn choice(a: &AgentArgs, k: &str, fallback: Option<&str>, choices: &[&str]) 
     }
 }
 
-/// upstream's options models forbid unknown kwargs (reported one at a time); `config` needs `native_config`.
+/// Options forbid unknown kwargs (reported one at a time); `config` needs `native_config`.
 pub fn check_known(a: &AgentArgs, agent: &str, known: &[&str], native_config: bool) -> Result<()> {
     for k in a.kwargs.keys() {
         if !known.contains(&k.as_str()) && !["version", "prompt_template_path", "config"].contains(&k.as_str()) {
@@ -101,7 +101,7 @@ pub fn check_known(a: &AgentArgs, agent: &str, known: &[&str], native_config: bo
     Ok(())
 }
 
-/// Pydantic `extra="forbid"` + unsupported native config, as in upstream's BaseAgent: every unknown
+/// Pydantic `extra="forbid"` + unsupported native config: every unknown
 /// kwarg is listed, then `config` is rejected.
 pub fn check_options(args: &AgentArgs, name: &str, fields: &[&str]) -> Result<()> {
     let unknown: Vec<String> = args

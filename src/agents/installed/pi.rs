@@ -1,4 +1,4 @@
-//! pi (port of upstream's agents/installed/pi.py).
+//! pi installed agent.
 
 use super::common::opts::kw_int;
 use super::common::{installed_setup, nvm_node_install_snippet, skills_dir};
@@ -74,7 +74,7 @@ impl Pi {
         }
     }
 
-    /// Install command (with upstream's MCP adapter / max_turns version gates).
+    /// Install command (with MCP adapter / max_turns version gates).
     fn install_command(&self) -> Result<String> {
         let mut install_version = self.version.clone();
         if !self.args.mcp_servers.is_empty() {
@@ -114,7 +114,7 @@ impl Pi {
             return Ok(None);
         };
         let Some(model_api) = model_api else { bail!("Pi custom endpoints require the model_api agent argument") };
-        // BTreeMap iterates sorted, like upstream's sorted(env.items()).
+        // BTreeMap iterates sorted.
         let Some(key_env) = access.api_key.as_ref().and_then(|k| access.env.iter().find(|(_, v)| *v == k).map(|(n, _)| n.clone())) else {
             bail!("Pi custom endpoints require an API-key environment-variable reference")
         };

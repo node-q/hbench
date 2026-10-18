@@ -1,4 +1,4 @@
-//! mini-swe-agent (port of upstream's agents/installed/mini_swe_agent.py).
+//! mini-swe-agent installed agent.
 
 use super::common::installed_dir;
 use super::{connection, ensure_system_dependencies, exec_agent};
@@ -34,7 +34,7 @@ const OPTIONS: &[&str] = &[
     "session_id_headers",
 ];
 
-/// Python type name, for upstream-identical error messages.
+/// Python type name, for Python-style error messages.
 pub(crate) fn py_type(v: &Value) -> &'static str {
     match v {
         Value::Null => "NoneType",
@@ -65,7 +65,7 @@ pub(crate) fn reject_unknown(args: &AgentArgs, agent: &str, known: &[&str]) -> R
     Ok(())
 }
 
-/// upstream's trial session id (`{trial_name}__agent`); logs_dir is `<trial>/agent`.
+/// Trial session id (`{trial_name}__agent`); logs_dir is `<trial>/agent`.
 pub(crate) fn session_id(args: &AgentArgs) -> Option<String> {
     args.logs_dir.parent()?.file_name().map(|n| format!("{}__agent", n.to_string_lossy()))
 }
@@ -252,7 +252,7 @@ pub(crate) fn validate_session_id_headers(v: Option<&Value>) -> Result<Option<Ve
     }
 }
 
-/// upstream's `_message_usage`: chat-completions or Responses-API usage, normalized.
+/// Per-message usage: chat-completions or Responses-API usage, normalized.
 fn message_usage(m: &Value) -> (i64, i64, i64) {
     let mut usage = &m["extra"]["response"]["usage"];
     if !truthy(usage) && m["object"] == "response" {
@@ -267,7 +267,7 @@ fn truthy(v: &Value) -> bool {
     v.as_object().is_some_and(|o| !o.is_empty())
 }
 
-/// Totals from mini-swe-agent's native trajectory (upstream's populate_context_post_run).
+/// Totals from mini-swe-agent's native trajectory.
 pub fn parse_trajectory(text: &str) -> Option<AgentContext> {
     let t: Value = serde_json::from_str(text).ok()?;
     let mut ctx = AgentContext::default();

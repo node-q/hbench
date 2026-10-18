@@ -1,4 +1,4 @@
-//! RovoDev CLI (port of upstream's agents/installed/rovodev_cli.py).
+//! RovoDev CLI installed agent.
 
 use super::common::installed_dir;
 use super::{ensure_system_dependencies, exec_agent, exec_root};
@@ -14,7 +14,7 @@ pub struct RovodevCli {
 }
 
 pub fn create(args: AgentArgs) -> Result<AgentBox> {
-    // max_thinking_tokens is accepted (and validated) but unused, as in upstream.
+    // max_thinking_tokens is accepted (and validated) but unused.
     if let Some(v) = args.kw("max_thinking_tokens") {
         v.trim()
             .parse::<i64>()
@@ -39,7 +39,7 @@ impl RovodevCli {
     }
 }
 
-/// Usage from `rovodev_session_context.json` (session-level `usage`), as upstream's ATIF final metrics.
+/// Usage from `rovodev_session_context.json` (session-level `usage`), as ATIF final metrics.
 pub fn usage_from_session(text: &str) -> Option<AgentContext> {
     let s: Value = serde_json::from_str(text).ok()?;
     if ["id", "message_history", "usage"].iter().any(|k| s.get(*k).is_none()) {
@@ -70,7 +70,7 @@ pub fn usage_from_session(text: &str) -> Option<AgentContext> {
     })
 }
 
-/// upstream's SYSTEM_MESSAGE_PATTERNS (internal prompts filtered from user steps).
+/// System message patterns (internal prompts filtered from user steps).
 fn is_system_message(c: &str) -> bool {
     use regex::Regex;
     use std::sync::OnceLock;

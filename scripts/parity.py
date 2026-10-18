@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Compare a upstream job dir with an hbench job dir trial-by-trial (matched by task name).
+"""Compare a reference job dir with an hbench job dir trial-by-trial (matched by task name).
 
-usage: scripts/parity.py <hbench_job_dir> <hbench_job_dir>
+usage: scripts/parity.py <reference_job_dir> <hbench_job_dir>
 """
 import json, sys, pathlib
 
@@ -42,28 +42,28 @@ h, b = load(sys.argv[1]), load(sys.argv[2])
 problems = 0
 for task in sorted(set(h) | set(b)):
     if task not in h or task not in b:
-        print(f"[{task}] only in {'hbench' if task in h else 'hbench'}"); problems += 1; continue
+        print(f"[{task}] only in {'ref' if task in h else 'hbench'}"); problems += 1; continue
     (ht, hd), (bt, bd) = h[task][0], b[task][0]
     issues = []
     hr, br = (hd.get("verifier_result") or {}).get("rewards"), (bd.get("verifier_result") or {}).get("rewards")
-    if hr != br: issues.append(f"rewards hbench={hr} hbench={br}")
+    if hr != br: issues.append(f"rewards ref={hr} hbench={br}")
     he, be = (hd.get("exception_info") or {}).get("exception_type"), (bd.get("exception_info") or {}).get("exception_type")
-    if he != be: issues.append(f"exception hbench={he} hbench={be}")
+    if he != be: issues.append(f"exception ref={he} hbench={be}")
     for f in ("verifier_environment_mode",):
-        if hd.get(f) != bd.get(f): issues.append(f"{f} hbench={hd.get(f)} hbench={bd.get(f)}")
+        if hd.get(f) != bd.get(f): issues.append(f"{f} ref={hd.get(f)} hbench={bd.get(f)}")
     hs = [s["step_name"] for s in hd.get("step_results") or []]; bs = [s["step_name"] for s in bd.get("step_results") or []]
-    if hs != bs: issues.append(f"steps hbench={hs} hbench={bs}")
+    if hs != bs: issues.append(f"steps ref={hs} hbench={bs}")
     for i, (x, y) in enumerate(zip(hd.get("step_results") or [], bd.get("step_results") or [])):
         if (x.get("verifier_result") or {}).get("rewards") != (y.get("verifier_result") or {}).get("rewards"):
-            issues.append(f"step {i} rewards hbench={x.get('verifier_result')} hbench={y.get('verifier_result')}")
+            issues.append(f"step {i} rewards ref={x.get('verifier_result')} hbench={y.get('verifier_result')}")
     kh, kb = keys(hd), keys(bd)
-    if kh - kb: issues.append(f"result keys only in hbench: {sorted(kh - kb)}")
+    if kh - kb: issues.append(f"result keys only in ref: {sorted(kh - kb)}")
     if kb - kh: issues.append(f"result keys only in hbench: {sorted(kb - kh)}")
     fh, fb = files(ht), files(bt)
-    if fh - fb: issues.append(f"files only in hbench: {sorted(fh - fb)}")
+    if fh - fb: issues.append(f"files only in ref: {sorted(fh - fb)}")
     if fb - fh: issues.append(f"files only in hbench: {sorted(fb - fh)}")
     mh, mb = manifest(ht), manifest(bt)
-    if mh != mb: issues.append(f"manifest hbench={mh}\n      hbench={mb}")
+    if mh != mb: issues.append(f"manifest ref={mh}\n      hbench={mb}")
     print(f"[{task}] {'OK' if not issues else 'DIFF'}")
     for i in issues: print("    " + i)
     problems += bool(issues)

@@ -1,4 +1,4 @@
-# Derive each upstream agent's accepted kwargs (options_model fields incl. inherited) via AST.
+# Derive each agent's accepted kwargs (options_model fields incl. inherited) from the Python agent sources via AST.
 import ast, pathlib, json, sys
 root = pathlib.Path(sys.argv[1])
 classes = {}  # name -> (bases, fields, options_model, agent_name)

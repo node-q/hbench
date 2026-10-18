@@ -5,7 +5,7 @@ use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-/// `TaskConfig.model_validate_toml(...).model_dump(mode="json")`, driven by upstream's exported TaskConfig schema:
+/// `TaskConfig.model_validate_toml(...).model_dump(mode="json")`, driven by the exported TaskConfig schema:
 /// properties in field order, defaults (incl. default factories) filled, legacy fields migrated.
 pub(super) fn task_config_dump(toml_text: &str) -> Option<Value> {
     let mut data: Value = serde_json::to_value(toml::from_str::<toml::Table>(toml_text).ok()?).ok()?;

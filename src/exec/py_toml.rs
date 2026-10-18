@@ -3,7 +3,7 @@
 use anyhow::{Result, bail};
 use serde_json::{Map, Value};
 
-/// `toml.dumps(o)` from the Python `toml` package, quirks included (upstream writes task.toml with it).
+/// `toml.dumps(o)` from the Python `toml` package, quirks included (task.toml is written with it).
 pub(super) fn toml_dumps(o: &Map<String, Value>) -> Result<String> {
     let (mut retval, mut sections) = dump_sections(o, "")?;
     while !sections.is_empty() {

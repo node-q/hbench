@@ -1,4 +1,4 @@
-//! Muse Code (port of upstream's agents/installed/muse_code.py).
+//! Muse Code installed agent.
 
 use super::common::{installed_dir, skills_dir};
 use super::{connection, ensure_system_dependencies, exec_agent, exec_root, upload_text};
@@ -19,7 +19,7 @@ const LOGS: &str = "/logs/agent";
 const OUTPUT_FILENAME: &str = "muse-code.jsonl";
 const STDERR_FILENAME: &str = "muse-code.stderr.log";
 pub const MANIFEST: &str = "muse-session.json";
-// upstream: /tmp/hbench-muse/{environment_logs_dir.name}
+// /tmp/hbench-muse/{environment_logs_dir.name}
 const RUNTIME_DIR: &str = "/tmp/hbench-muse/agent";
 const EFFORTS: &[&str] = &["minimal", "low", "medium", "high", "xhigh", "ultra"];
 
@@ -52,7 +52,7 @@ impl MuseCode {
             bail!("Muse settings require schema_version 1");
         }
         let a = MuseCode { version: args.version_kw(), args, base_config, loaded: false };
-        a.cli_flags()?; // validate options eagerly, like upstream
+        a.cli_flags()?; // validate options eagerly
         a.effective_config()?; // validate transport/config conflicts
         if let Some(p) = &a.args.load_trajectory {
             validate_load_trajectory(p)?;
@@ -94,7 +94,7 @@ impl MuseCode {
         Ok(f.join(" "))
     }
 
-    /// upstream's overridden `model_connection`: explicit base_url option wins.
+    /// Overridden `model_connection`: explicit base_url option wins.
     fn model_connection(&self) -> Resolved {
         let mut c = connection(&self.args, SPEC);
         let base = self.base_url_opt().or(c.configured_base_url.clone());
@@ -159,7 +159,7 @@ impl MuseCode {
     }
 }
 
-/// upstream's `_validate_load_trajectory` at construction: ATIF must parse; native must be a valid session.jsonl.
+/// Validate the load trajectory at construction: ATIF must parse; native must be a valid session.jsonl.
 fn validate_load_trajectory(p: &Path) -> Result<()> {
     if p.extension().is_some_and(|e| e == "json") {
         let raw = std::fs::read_to_string(p).map_err(|e| anyhow!("load_trajectory file not found: {}: {e}", p.display()))?;
@@ -228,7 +228,7 @@ fn py_json(v: &Value) -> String {
     }
 }
 
-/// upstream's `_session_text`: text content only.
+/// Session message text: text content only.
 fn session_text(m: &Value) -> Result<String> {
     Ok(match m {
         Value::Null => String::new(),
@@ -243,7 +243,7 @@ fn session_text(m: &Value) -> Result<String> {
     })
 }
 
-/// upstream's `_to_native` (`atif_to_native_trajectory`): conversation history as durable
+/// ATIF to native trajectory: conversation history as durable
 /// session envelopes, without replaying historical usage or effects.
 pub fn atif_to_native(traj: &Value, sid: &str) -> Result<String> {
     let mut rows: Vec<Value> = vec![];
@@ -379,7 +379,7 @@ pub fn atif_to_native(traj: &Value, sid: &str) -> Result<String> {
     Ok(rows.iter().map(|r| py_json(r) + "\n").collect())
 }
 
-/// upstream's `_relocate_session`: change only the copied workspace metadata.
+/// Relocate a session: change only the copied workspace metadata.
 pub fn relocate_session(text: &str, workspace: &str) -> String {
     text.split_inclusive('\n')
         .map(|line| match serde_json::from_str::<Value>(line) {
@@ -392,7 +392,7 @@ pub fn relocate_session(text: &str, workspace: &str) -> String {
         .collect()
 }
 
-/// upstream's `_upload_agent_owned_file`: upload as root, then chown to the agent user.
+/// Upload as root, then chown to the agent user.
 async fn upload_owned(cx: &AgentCtx<'_>, local: &Path, target: &str) -> Result<()> {
     cx.env.upload_file(local, target).await?;
     if let Some(u) = &cx.user {
@@ -402,7 +402,7 @@ async fn upload_owned(cx: &AgentCtx<'_>, local: &Path, target: &str) -> Result<(
 }
 
 impl MuseCode {
-    /// upstream's `_seed_load_trajectory` + `_upload_load_trajectory`; returns the seeded session id.
+    /// Seed and upload the load trajectory; returns the seeded session id.
     async fn seed_load_trajectory(&self, cx: &AgentCtx<'_>, src: &Path) -> Result<String> {
         let (sid, content, native_dir) = if src.extension().is_some_and(|e| e == "json") {
             let traj: Value = serde_json::from_str(&std::fs::read_to_string(src)?)?;
@@ -506,7 +506,7 @@ fn native_session_id(records: &Records) -> Option<String> {
     records.first().and_then(|(_, r)| r["stream"]["id"].as_str()).and_then(|s| uuid::Uuid::parse_str(s).ok()).map(|u| u.to_string())
 }
 
-/// Whether upstream's ATIF converter would produce any step (else the session yields no trajectory).
+/// Whether the ATIF converter would produce any step (else the session yields no trajectory).
 fn has_steps(records: &Records) -> bool {
     run_events(records, 0).iter().any(|e| match e["kind"].as_str().unwrap_or("") {
         "started"
@@ -532,7 +532,7 @@ struct Usage {
     cost: Option<f64>,
 }
 
-/// upstream's `_sum_usage`: sum known token counts; cost only when every value is priced.
+/// Sum known token counts; cost only when every value is priced.
 fn sum_usage(values: &[Usage]) -> Usage {
     let s = |f: fn(&Usage) -> Option<i64>| {
         let known: Vec<i64> = values.iter().filter_map(f).collect();
@@ -603,7 +603,7 @@ fn usage_from_logs(logs_dir: &Path) -> Option<Usage> {
         let records = read_session(&text);
         let steps = has_steps(&records);
         if steps && native_session_id(&records).is_none() {
-            // upstream's converter raises here and the session is skipped.
+            // The converter fails here and the session is skipped.
             if i == 0 {
                 return None;
             }
@@ -741,7 +741,7 @@ mod tests {
         agent_with(kwargs, env, model, vec![])
     }
 
-    /// upstream test fixture's `_write_session` (durable envelope v1).
+    /// Write a test session (durable envelope v1).
     fn write_session(path: &Path, sid: &str) {
         let events = vec![
             json!({"kind": "started", "prompt": "Read the answer"}),
@@ -894,7 +894,7 @@ mod tests {
         assert_eq!(ev[6]["results"][0], json!({"tool_call_index": 0, "tool_call_id": "c1", "text": "42"}));
         assert!(out.lines().next().unwrap().contains("\"payload_type\": \"runtime.session.metadata\""));
         assert!(!has_steps(&read_session("")) && has_steps(&recs));
-        // upstream's guard rails.
+        // Guard rails.
         assert!(atif_to_native(&json!({"steps": [{"source": "agent", "message": "x"}]}), SID).is_err());
         assert!(atif_to_native(&json!({"steps": [{"source": "user", "message": "a"}, {"source": "agent", "message": "b"}, {"source": "system", "message": "late"}]}), SID).is_err());
         assert!(atif_to_native(&json!({"steps": [{"source": "user", "message": "a"}, {"source": "agent", "tool_calls": [{"tool_call_id": "c1", "function_name": "f", "arguments": {}}]}]}), SID).is_err());

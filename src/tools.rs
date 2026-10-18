@@ -1,4 +1,4 @@
-//! Local utilities: `tasks start-env`, `cache clean`, `trials handoff` (upstream parity).
+//! Local utilities: `tasks start-env`, `cache clean`, `trials handoff`.
 
 use crate::agents::{self, AgentCtx};
 use crate::config::AgentConfig;

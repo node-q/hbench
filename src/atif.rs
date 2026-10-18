@@ -1,5 +1,5 @@
 //! ATIF (Agent Trajectory Interchange Format) models + Claude Code session-jsonl -> ATIF
-//! converter (port of upstream's `ClaudeCode._convert_events_to_trajectory`).
+//! converter.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -725,7 +725,7 @@ pub fn convert_session(session_dir: &Path, logs_dir: &Path) -> Option<Trajectory
         total_prompt_tokens: total(|m| m.prompt_tokens),
         total_completion_tokens: total(|m| m.completion_tokens),
         total_cached_tokens: total(|m| m.cached_tokens),
-        // ponytail: upstream falls back to a LiteLLM price estimate; no pricing table here, so cost is only the reported one.
+        // ponytail: no LiteLLM price-estimate fallback here, so cost is only the reported one.
         total_cost_usd: stream_total_cost(logs_dir),
         total_steps: Some(steps.len()),
         extra: (!final_extra.is_empty()).then_some(final_extra),
@@ -882,7 +882,7 @@ mod tests {
         );
         assert_eq!(f.total_cost_usd, Some(0.0421));
         assert_eq!(f.extra.unwrap()["service_tiers"], json!(["standard"]));
-        // upstream's to_json_dict(exclude_none=True): no nulls on model fields
+        // to_json_dict(exclude_none=True): no nulls on model fields
         assert!(v["steps"][0].get("tool_calls").is_none() && v.get("notes").is_none());
     }
 

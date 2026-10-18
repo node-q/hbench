@@ -1,6 +1,6 @@
 //! DeepSeek Harness (`dsh`, npm `@deepseek-ai/dsh`): DeepSeek's own coding-agent harness, run in its
-//! one-shot `headless` profile with the `--json` event stream. Not a upstream agent (upstream has none);
-//! follows the installed-agent conventions of the other ports.
+//! one-shot `headless` profile with the `--json` event stream.
+//! Follows the installed-agent conventions of the other agents.
 
 use super::common::{detect_version, installed_dir, nvm_node_install_snippet, opts};
 use super::{classify, connection, ensure_system_dependencies, exec_agent, upload_text};
@@ -115,7 +115,7 @@ fn events(text: &str) -> Vec<Value> {
     text.lines().filter_map(|l| serde_json::from_str::<Value>(l.trim()).ok()).filter(Value::is_object).collect()
 }
 
-/// upstream error type for a failed run: the provider status on the last errored `turn_end`, else output patterns.
+/// Error type for a failed run: the provider status on the last errored `turn_end`, else output patterns.
 pub fn failure_kind(output: &str) -> &'static str {
     let reason = events(output).into_iter().rev().find(|e| e["type"] == "status" && e["phase"] == "turn_end").map(|e| e["reason"].clone());
     if let Some(r) = reason.filter(|r| r["kind"] == "error") {

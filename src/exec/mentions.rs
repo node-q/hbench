@@ -7,7 +7,7 @@ const KNOWN_EXTS: &[&str] = &[
 ];
 const KNOWN_DOTFILES: &[&str] = &["gitignore", "gitattributes", "env", "envrc", "bashrc", "zshrc", "editorconfig", "npmrc", "prettierrc"];
 
-/// Tiny backtracking matcher: upstream's FILE_MENTION_PATTERN uses lookbehind/lookahead, which
+/// Tiny backtracking matcher: the file-mention pattern uses lookbehind/lookahead, which
 /// the `regex` crate lacks, so the pattern is hand-built from these nodes with Python `re`'s
 /// exploration order (greedy, alternatives left to right).
 enum Node {
@@ -126,8 +126,7 @@ pub fn file_mentions(text: &str) -> Vec<String> {
 mod tests {
     use super::*;
 
-    /// upstream's FILE_MENTION_PATTERN_SUITE (tests/unit/cli/test_exec.py) plus extra edge cases
-    /// checked against Python `re`.
+    /// The reference file-mention test suite plus extra edge cases, checked against Python `re`.
     #[test]
     fn file_mention_pattern_suite() {
         let suite: &[(&str, &[&str])] = &[

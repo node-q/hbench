@@ -1,5 +1,4 @@
-//! Job / trial configuration, shaped like upstream's JobConfig / TrialConfig so the
-//! same YAML/JSON job files work with both.
+//! Job / trial configuration (JobConfig / TrialConfig), loaded from YAML/JSON job files.
 
 use crate::task::{Artifact, McpServer, normalize_hosts};
 use anyhow::{Context, Result, bail};
@@ -12,7 +11,7 @@ fn one() -> f64 {
     1.0
 }
 
-/// `env` accepts a mapping or upstream's legacy list of `KEY=VALUE` strings.
+/// `env` accepts a mapping or a legacy list of `KEY=VALUE` strings.
 fn env_map<'de, D: Deserializer<'de>>(d: D) -> Result<BTreeMap<String, String>, D::Error> {
     #[derive(Deserialize)]
     #[serde(untagged)]
@@ -38,7 +37,7 @@ fn env_map<'de, D: Deserializer<'de>>(d: D) -> Result<BTreeMap<String, String>, 
 
 pub fn is_sensitive_key(k: &str) -> bool {
     static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    // KEY|SECRET|TOKEN (not TOKENS)|PASSWORD|CREDENTIAL|AUTH, as in upstream.
+    // KEY|SECRET|TOKEN (not TOKENS)|PASSWORD|CREDENTIAL|AUTH.
     RE.get_or_init(|| regex::Regex::new(r"(?i)(KEY|SECRET|PASSWORD|CREDENTIAL|AUTH|TOKEN$|TOKEN[^S])").unwrap()).is_match(k)
 }
 
@@ -69,7 +68,7 @@ fn templatize<S: serde::Serializer>(env: &BTreeMap<String, String>, s: S) -> Res
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct AgentConfig {
-    /// None means oracle (upstream's validator), serialized as "oracle".
+    /// None means oracle (filled by the validator), serialized as "oracle".
     #[serde(serialize_with = "ser_agent_name")]
     pub name: Option<String>,
     pub import_path: Option<String>,
@@ -139,7 +138,7 @@ pub struct BridgeConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct EnvConfig {
-    /// None means docker (upstream's validator), serialized as "docker".
+    /// None means docker (filled by the validator), serialized as "docker".
     #[serde(rename = "type", serialize_with = "ser_env_type")]
     pub kind: Option<String>,
     pub import_path: Option<String>,
@@ -214,7 +213,7 @@ pub struct VerifierRunConfig {
     pub disable: bool,
 }
 
-/// upstream's trial-level TaskConfig: a local path, or a git-hosted task.
+/// Trial-level task reference: a local path, or a git-hosted task.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct TaskRef {
@@ -467,7 +466,7 @@ impl JobConfig {
         self.jobs_dir.join(&self.job_name)
     }
 
-    /// Load a YAML or JSON job config (upstream format, incl. legacy `orchestrator:`).
+    /// Load a YAML or JSON job config (incl. legacy `orchestrator:`).
     pub fn load(path: &Path) -> Result<JobConfig> {
         let raw = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
         let mut v: Value = if path.extension().is_some_and(|e| e == "json") {
@@ -548,7 +547,7 @@ impl JobConfig {
 }
 
 /// Pydantic's `exclude_defaults`: drop fields equal to their defaults, recursing into nested
-/// models and into list elements whose element type has a default (upstream writes config.json so).
+/// models and into list elements whose element type has a default (how config.json is written).
 fn prune_defaults(v: &mut Value, d: &Value) {
     let (Value::Object(m), Value::Object(dm)) = (v, d) else { return };
     let elem_default = |k: &str| -> Option<Value> {
@@ -586,7 +585,7 @@ fn prune_defaults(v: &mut Value, d: &Value) {
 }
 
 impl TrialConfig {
-    /// config.json as upstream writes it (`exclude_defaults=True`).
+    /// config.json as written by the job runner (`exclude_defaults=True`).
     pub fn config_json(&self) -> Value {
         let mut v = serde_json::to_value(self).unwrap_or_default();
         let d: TrialConfig = serde_json::from_value(serde_json::json!({"task": {}, "trial_name": "", "trials_dir": "trials"}))
@@ -597,7 +596,7 @@ impl TrialConfig {
 }
 
 impl JobConfig {
-    /// config.json as upstream writes it (`exclude_defaults=True`; job_name is always kept).
+    /// config.json as written by the job runner (`exclude_defaults=True`; job_name is always kept).
     pub fn config_json(&self) -> Value {
         let mut v = serde_json::to_value(self).unwrap_or_default();
         let mut d = serde_json::to_value(JobConfig::default()).unwrap_or_default();
@@ -607,7 +606,7 @@ impl JobConfig {
     }
 }
 
-/// upstream moved `orchestrator.{n_concurrent_trials,quiet,retry}` to the top level.
+/// Move legacy `orchestrator.{n_concurrent_trials,quiet,retry}` to the top level.
 pub fn migrate_legacy(v: &mut Value) {
     let Some(obj) = v.as_object_mut() else { return };
     if let Some(Value::Object(orch)) = obj.remove("orchestrator") {
@@ -624,7 +623,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn loads_hbench_yaml_job() {
+    fn loads_yaml_job() {
         let dir = std::env::temp_dir().join(format!("hbench-cfg-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let p = dir.join("job.yaml");
@@ -674,7 +673,7 @@ mod tests {
     }
 
     #[test]
-    fn config_json_excludes_defaults_like_hbench() {
+    fn config_json_excludes_defaults() {
         let t: TrialConfig = serde_json::from_value(serde_json::json!({"task": {"path": "/t/hello-world"}, "trial_name": "hello-world__x", "trials_dir": "/j", "job_id": "04eeb23d-d3b1-4af2-8b96-5fd962b43b6e"})).unwrap();
         assert_eq!(
             t.config_json(),

@@ -1,4 +1,4 @@
-//! GitHub Copilot CLI (port of upstream's agents/installed/copilot_cli.py).
+//! GitHub Copilot CLI.
 
 use super::common::{detect_version, installed_dir, opts, skills_dir};
 use super::{ensure_system_dependencies, exec_agent, exec_error, parse_version};
@@ -77,7 +77,7 @@ async fn exec_agent_10s(cx: &AgentCtx<'_>, cmd: &str, env: &BTreeMap<String, Str
     Ok(())
 }
 
-/// Token totals as upstream's JSONL -> ATIF conversion computes them, for both
+/// Token totals as the JSONL -> ATIF conversion computes them, for both
 /// the flat (Anthropic) and session-event (GPT) stream shapes.
 pub fn parse_copilot_usage(text: &str) -> Option<AgentContext> {
     if text.starts_with("Error: No authentication information found") {

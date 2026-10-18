@@ -1,4 +1,4 @@
-//! MiMo (port of upstream's agents/installed/mimo.py).
+//! MiMo installed agent.
 
 use super::common::{deep_merge, installed_setup, parse_jsonl, skills_dir};
 use super::{connection, ensure_system_dependencies, exec_agent};

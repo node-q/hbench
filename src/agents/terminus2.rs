@@ -1,4 +1,4 @@
-//! Terminus-2 (port of upstream's agents/terminus_2): upstream's reference LLM agent. It runs
+//! Terminus-2: the reference LLM agent. It runs
 //! host-side, drives a tmux session inside the container through `docker compose exec`, and talks
 //! to the model through `llm.rs`. Writes an ATIF `trajectory.json` (plus summarization subagent
 //! trajectories) to the agent logs dir; the pane log and asciinema recording land in /logs/agent.
@@ -111,7 +111,7 @@ pub(crate) fn now() -> Option<String> {
     Some(chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.6f+00:00").to_string())
 }
 
-/// Keep the first and last `max_bytes/2` bytes (upstream's `_limit_output_length`).
+/// Keep the first and last `max_bytes/2` bytes.
 pub(crate) fn limit_output_length(output: &str, max_bytes: usize) -> String {
     if output.len() <= max_bytes {
         return output.to_string();
@@ -366,7 +366,7 @@ pub mod xml_parser {
 
     const SECTIONS: [&str; 4] = ["analysis", "plan", "commands", "task_complete"];
 
-    // ponytail: upstream's only auto-fix (append `</response>`) keys on an error `_try_parse` never
+    // ponytail: an auto-fix appending `</response>` would key on an error `_try_parse` never
     // emits ("Missing </response> closing tag"), so it can't fire and is omitted.
     pub fn parse_response(response: &str) -> ParseResult {
         let mut w = vec![];
@@ -856,7 +856,7 @@ impl Tmux {
         Ok(())
     }
 
-    /// Returns false when a blocking command timed out (upstream raises TimeoutError).
+    /// Returns false when a blocking command timed out.
     pub async fn send_keys(
         &self,
         sh: &dyn Shell,
@@ -889,7 +889,7 @@ impl Tmux {
         Ok(true)
     }
 
-    /// New output since the last call (upstream's quirky prefix matching kept as is), else the screen.
+    /// New output since the last call (quirky prefix matching kept as is), else the screen.
     pub async fn get_incremental_output(&mut self, sh: &dyn Shell) -> Result<String> {
         let current = self.capture_pane(sh, true).await?;
         let Some(prev) = self.previous_buffer.replace(current.clone()) else {
@@ -898,7 +898,7 @@ impl Tmux {
         let pb = prev.trim();
         if let Some(mut idx) = current.find(pb) {
             if let Some(nl) = pb.rfind('\n') {
-                // upstream indexes `current` with an offset into `pb` (character-based).
+                // Indexes `current` with an offset into `pb` (character-based).
                 let chars = pb[..nl].chars().count();
                 idx = current.char_indices().nth(chars).map(|(i, _)| i).unwrap_or(current.len());
             }
@@ -1048,7 +1048,7 @@ struct Trajectory<'a> {
 }
 
 fn write_trajectory(path: &std::path::Path, t: &Trajectory) {
-    // upstream logs and continues when the dump fails.
+    // A failed dump is logged and ignored.
     let _ = std::fs::write(path, serde_json::to_string_pretty(t).unwrap_or_default());
 }
 
@@ -1129,7 +1129,7 @@ const KNOWN_OPTIONS: [&str; 24] = [
     "llm_kwargs",
     "llm_call_kwargs",
     "session_id_headers",
-    // Deprecated aliases upstream pops before validation.
+    // Deprecated aliases dropped before validation.
     "episodes",
 ];
 
@@ -1145,7 +1145,7 @@ impl<'a> Kw<'a> {
         let errors = m.keys().filter(|k| !known.contains(&k.as_str())).map(|k| format!("Unknown option '{k}'.")).collect();
         Kw { m, errors }
     }
-    /// upstream's "Invalid kwargs" error, if any option failed.
+    /// The "Invalid kwargs" error, if any option failed.
     pub(crate) fn finish(self, agent: &str) -> Result<()> {
         if self.errors.is_empty() {
             return Ok(());
@@ -1398,7 +1398,7 @@ impl Terminus2 {
         self.pending_completion = false;
         self.pending_subagent_refs = None;
         self.pending_handoff_prompt = None;
-        // upstream's orchestration session id is `{trial_name}__agent`; logs_dir is <trial>/agent.
+        // The orchestrated session id is `{trial_name}__agent`; logs_dir is <trial>/agent.
         let orchestrated = self.args.logs_dir.parent().and_then(|p| p.file_name()).map(|n| format!("{}__agent", n.to_string_lossy()));
         self.session_id = self.opts.session_id.clone().or(orchestrated).unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         if !self.opts.session_id_headers.is_empty() {
@@ -1428,7 +1428,7 @@ impl Terminus2 {
         ctx.model_usage = self.model_usage();
     }
 
-    /// upstream's `compute_model_usage` over the main trajectory.
+    /// Per-model usage summed over the main trajectory.
     fn model_usage(&self) -> Option<BTreeMap<String, ModelUsage>> {
         let mut usage: BTreeMap<String, ModelUsage> = BTreeMap::new();
         let mut unpriced = BTreeSet::new();
@@ -1690,7 +1690,7 @@ impl Terminus2 {
         Ok((false, limit_output_length(&t.get_incremental_output(sh).await?, 10_000)))
     }
 
-    /// upstream's `_query_llm` with its `@retry(stop_after_attempt(3))` (no retry on context overflow).
+    /// Query the LLM, 3 attempts (no retry on context overflow).
     fn query_llm<'a>(&'a mut self, sh: &'a dyn Shell, prompt: String, orig: &'a str) -> BoxFut<'a, Result<LlmResponse>> {
         Box::pin(async move {
             let mut attempt = 0;
@@ -1759,7 +1759,7 @@ impl Terminus2 {
                 if self.opts.parser == ParserKind::Xml
                     && let (Some(salvaged), _) = xml_parser::salvage_truncated_response(&truncated)
                 {
-                    // upstream returns the bare string here (and then crashes on `.content`); wrap it.
+                    // Wrap the salvaged string in a response.
                     return Ok(LlmResponse { content: salvaged, ..Default::default() });
                 }
                 let warnings = self.opts.parser.parse(&truncated).warning;
@@ -2123,7 +2123,7 @@ mod tests {
         );
         assert_eq!((r.analysis.as_str(), r.plan.as_str()), ("Need to list files.", "Run ls."));
 
-        // upstream test_terminus_json_plain_parser: trailing-newline validation.
+        // Trailing-newline validation.
         let mk = |cmds: Value| json!({"analysis": "test", "plan": "test", "commands": cmds}).to_string();
         let r = json_parser::parse_response(&mk(json!([{"keystrokes": "", "duration": 10.0}, {"keystrokes": "ls\n", "duration": 1.0}])));
         assert!(r.error.is_empty() && !r.warning.contains("should end with newline"));
@@ -2189,7 +2189,7 @@ mod tests {
             "pre <response><plan>p</plan><analysis>a</analysis><commands><keystrokes duration=2 extra='x'>echo &amp; hi</keystrokes><keystrokes>pwd\n</keystrokes></commands><foo/></response> post",
         );
         assert!(r.error.is_empty() && !r.is_task_complete);
-        assert_eq!(r.commands[0].duration, 1.0); // unquoted: upstream ignores it too
+        assert_eq!(r.commands[0].duration, 1.0); // unquoted: ignored
         assert_eq!(r.commands[1].duration, 1.0);
         for w in [
             "Extra text detected before <response> tag",

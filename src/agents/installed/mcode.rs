@@ -1,4 +1,4 @@
-//! MiniMax Code CLI (port of upstream's agents/installed/mcode.py).
+//! MiniMax Code CLI installed agent.
 
 use super::common::opts::kw_int;
 use super::common::{installed_setup, nvm_node_install_snippet, parse_jsonl, skills_dir};

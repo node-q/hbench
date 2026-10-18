@@ -1,4 +1,4 @@
-//! Junie (port of upstream's agents/installed/junie.py).
+//! Junie.
 
 use super::common::{installed_dir, skills_dir};
 use super::{ensure_system_dependencies, exec_agent};
@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 const PATH_EXPORT: &str = "export PATH=\"$HOME/.local/bin:$PATH\"; ";
 const ARTIFACTS: &str = "/logs/agent/junie";
 
-/// upstream model prefix -> Junie BYOK provider.
+/// Model provider prefix -> Junie BYOK provider.
 fn provider_alias(p: &str) -> Option<&'static str> {
     Some(match p {
         "anthropic" | "claude" => "anthropic",

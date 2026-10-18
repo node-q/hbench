@@ -1,4 +1,4 @@
-//! Agent abstraction (upstream's BaseAgent) and the factory mapping names to agents.
+//! Agent abstraction and the factory mapping names to agents.
 
 pub mod allowed_kwargs;
 pub mod computer1;
@@ -30,7 +30,7 @@ pub struct ModelUsage {
     pub cost_usd: Option<f64>,
 }
 
-/// upstream's AgentContext (token counts include cached tokens in n_input_tokens).
+/// Agent context (token counts include cached tokens in n_input_tokens).
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AgentContext {
     pub n_input_tokens: Option<i64>,
@@ -59,7 +59,7 @@ impl AgentContext {
 }
 
 /// What an agent sees of the environment during setup/run: execs run as the
-/// phase's default user with upstream's env layering (per-exec env < agent `env` overlay).
+/// phase's default user with env layering (per-exec env < agent `env` overlay).
 pub struct AgentCtx<'a> {
     pub env: &'a DockerEnv,
     pub user: Option<String>,
@@ -109,7 +109,7 @@ pub trait Agent: Send + Sync {
     /// `resume`: continue the previous step's session (multi-step + resume_trajectory).
     async fn run(&mut self, instruction: &str, cx: &AgentCtx<'_>, ctx: &mut AgentContext, resume: bool) -> Result<()>;
     /// The agent's (possibly normalized) env overlay applied to its setup/run execs;
-    /// None = the configured `agent.env` as-is (upstream's `extra_env` property).
+    /// None = the configured `agent.env` as-is.
     fn extra_env(&self) -> Option<BTreeMap<String, String>> {
         None
     }
@@ -131,7 +131,7 @@ pub trait Agent: Send + Sync {
     fn populate_context_post_run(&self, _logs_dir: &std::path::Path, _ctx: &mut AgentContext) {}
 }
 
-/// Common per-agent inputs (upstream's BaseAgent.__init__ kwargs).
+/// Common per-agent inputs.
 #[derive(Clone)]
 pub struct AgentArgs {
     pub model_name: Option<String>,
@@ -166,7 +166,7 @@ impl AgentArgs {
             _ => None,
         }
     }
-    /// upstream's `_get_env`: agent `env` (--ae) > host environment.
+    /// Env lookup: agent `env` (--ae) > host environment.
     pub fn get_env(&self, k: &str) -> Option<String> {
         self.extra_env.get(k).cloned().or_else(|| std::env::var(k).ok()).filter(|v| !v.is_empty())
     }
@@ -197,14 +197,14 @@ impl AgentArgs {
 
 pub type AgentBox = Box<dyn Agent>;
 
-/// Every agent name the factory knows (upstream's AgentName values).
+/// Every agent name the factory knows.
 pub fn agent_names() -> Vec<&'static str> {
     let mut v = vec!["oracle", "nop", "terminus", "terminus-1", "terminus-2", "computer-1", "dspy-rlm"];
     v.extend(installed::names());
     v
 }
 
-/// upstream's options validation: kwargs outside the agent's options model are rejected.
+/// Options validation: kwargs outside the agent's options model are rejected.
 pub fn check_kwargs(name: &str, kwargs: &BTreeMap<String, Value>) -> Result<()> {
     let key = if name.starts_with("acp:") { "acp" } else { name };
     let Some(allowed) = allowed_kwargs::allowed(key) else { return Ok(()) };

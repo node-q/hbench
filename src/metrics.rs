@@ -1,4 +1,4 @@
-//! Job metrics: mean/sum/min/max/uv-script (upstream's metrics/) and unbiased pass@k.
+//! Job metrics: mean/sum/min/max/uv-script and unbiased pass@k.
 
 use crate::config::MetricConfig;
 use crate::trial::{Rewards, TrialResult};
@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 pub type MetricOut = BTreeMap<String, serde_json::Value>;
 
-/// upstream's aggregate_reward_dicts: missing rewards count as 0; one key => {name: x}, else per key.
+/// Aggregate reward dicts: missing rewards count as 0; one key => {name: x}, else per key.
 fn aggregate(rewards: &[Option<&Rewards>], name: &str, f: fn(&[f64]) -> f64) -> MetricOut {
     let keys: BTreeSet<&String> = rewards.iter().flatten().flat_map(|r| r.keys()).collect();
     let val = |r: &Option<&Rewards>, k: Option<&str>| -> f64 {
@@ -65,7 +65,7 @@ fn uv_script(m: &MetricConfig, rewards: &[Option<&Rewards>]) -> Result<MetricOut
     Ok(v)
 }
 
-/// upstream's unbiased pass@k over binary single-key rewards; empty if rewards aren't binary.
+/// Unbiased pass@k over binary single-key rewards; empty if rewards aren't binary.
 pub fn pass_at_k(results: &[&TrialResult]) -> BTreeMap<usize, f64> {
     let mut per_task: BTreeMap<&str, Vec<u32>> = BTreeMap::new();
     for r in results {
@@ -118,7 +118,7 @@ mod tests {
     }
 
     #[test]
-    fn metrics_match_hbench() {
+    fn metrics_match_reference() {
         let (a, b) = (rw(r#"{"reward":1}"#), rw(r#"{"reward":0.5}"#));
         let rs = [Some(&a), Some(&b), None];
         let m = |k: &str| compute(&MetricConfig { kind: k.into(), kwargs: Default::default() }, &rs).unwrap();

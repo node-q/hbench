@@ -1,4 +1,4 @@
-//! `run --diff <source job>`: plan reuse / regrade / rerun against earlier jobs (upstream's job_diff).
+//! `run --diff <source job>`: plan reuse / regrade / rerun against earlier jobs.
 
 use crate::config::{SourceTrial, TrialConfig};
 use crate::trial::{TrialResult, trial_lock};

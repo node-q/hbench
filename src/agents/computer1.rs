@@ -1,9 +1,9 @@
-//! computer-1 (port of upstream's agents/computer_1): desktop computer-use agent.
+//! computer-1: desktop computer-use agent.
 //!
-//! Ported: the generic strict-JSON harness (upstream's `litellm` provider flavor, the default for
+//! Ported: the generic strict-JSON harness (the `litellm` provider flavor, the default for
 //! models outside the anthropic/bedrock/gemini/vertex_ai routes), the native computer-use
 //! providers (`native`: Anthropic/Bedrock computer tool, Gemini Computer Use, OpenAI Responses
-//! `computer` tool) with upstream's provider selection, and the shared pieces: the desktop runtime
+//! `computer` tool) with model-based provider selection, and the shared pieces: the desktop runtime
 //! (Xvfb + XFCE + VNC + Chromium in the container, driven by xdotool over `docker compose exec`),
 //! the JSON action parser and prompts, the episode loop with double-confirmed completion,
 //! image-aware context compaction, the ATIF recorder, per-episode logs and final_answer.txt.
@@ -60,7 +60,7 @@ fn py_repr(v: &Value) -> String {
 // ComputerAction + JSON dialect (runtime.py / providers/generic.py)
 // ---------------------------------------------------------------------------------------------
 
-/// upstream's `ComputerAction` (serialized in full, None included, as ATIF tool-call arguments).
+/// A computer action (serialized in full, None included, as ATIF tool-call arguments).
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct Action {
     #[serde(rename = "type")]
@@ -397,7 +397,7 @@ const BLOCKED_KEY_COMBOS: [&str; 9] =
     ["ctrl+u", "ctrl+shift+i", "ctrl+shift+j", "ctrl+shift+c", "f12", "control+u", "control+shift+i", "control+shift+j", "control+shift+c"];
 const BLOCKED_URL_SCHEMES: [&str; 3] = ["view-source:", "devtools://", "chrome-devtools://"];
 
-/// upstream's `RuntimeRequestError`.
+/// A failed request to the desktop runtime.
 #[derive(Debug)]
 struct RuntimeErr {
     label: String,
@@ -1119,7 +1119,7 @@ const KNOWN_OPTIONS: [&str; 30] = [
     "provider",
     "aws_region_name",
     "gemini_auto_ack_safety",
-    // BaseAgent kwargs upstream also accepts.
+    // Common agent kwargs, also accepted.
     "skills_dir",
     "mcp_servers",
 ];
@@ -1176,7 +1176,7 @@ impl Options {
     }
 }
 
-/// Whether the model has a native computer-use tool (litellm flag, else upstream's name patterns).
+/// Whether the model has a native computer-use tool (litellm flag, else model-name patterns).
 fn is_computer_use_model(model: &str) -> bool {
     let l = model.to_lowercase();
     if ["gemini-3.7-flash", "gemini-3.8-flash"].contains(&l.rsplit('/').next().unwrap_or("")) {
@@ -1196,7 +1196,7 @@ fn re_gpt_version(l: &str) -> Option<(u32, u32)> {
     Some((c[1].parse().ok()?, c.get(2).map_or(Some(0), |m| m.as_str().parse().ok())?))
 }
 
-/// upstream's `resolve_provider_name`.
+/// Provider for `model`: the explicit override, else inferred from the model name.
 fn resolve_provider_name(model: &str, override_: Option<&str>) -> Result<String> {
     let name = match override_ {
         Some(n) => {
@@ -1242,7 +1242,7 @@ fn supports_vision(model: &str) -> Option<bool> {
     ["claude", "gpt-4o", "gpt-4.1", "gpt-5", "/o3", "gemini"].iter().any(|p| l.contains(p) || l == "o3").then_some(true)
 }
 
-/// upstream's `_resolve_litellm_temperature`: omit it where models reject a non-default value.
+/// The temperature to send: omit it where models reject a non-default value.
 fn resolve_temperature(model: &str, t: f64) -> Option<f64> {
     let n = model.to_lowercase();
     if regex::Regex::new(r"opus-4-(\d+)").unwrap().captures(&n).is_some_and(|c| c[1].parse::<u32>().is_ok_and(|v| v >= 7)) {
@@ -1279,7 +1279,7 @@ pub struct Computer1 {
     /// Resolved provider flavor ("litellm" or a native one).
     provider: String,
     native: Option<native::Native>,
-    /// Native providers: whether any turn reported usage (upstream leaves the context unset otherwise).
+    /// Native providers: whether any turn reported usage (the context stays unset otherwise).
     usage_seen: bool,
 }
 
@@ -1542,7 +1542,7 @@ impl Computer1 {
         ctx.model_usage = self.model_usage();
     }
 
-    /// upstream's `compute_model_usage` over the trajectory.
+    /// Per-model usage summed over the trajectory.
     fn model_usage(&self) -> Option<BTreeMap<String, ModelUsage>> {
         let mut usage: BTreeMap<String, ModelUsage> = BTreeMap::new();
         let mut unpriced = BTreeSet::new();
@@ -1644,7 +1644,7 @@ impl Computer1 {
         let dir = target.rsplit_once('/').map(|(d, _)| if d.is_empty() { "/" } else { d }).unwrap_or(".");
         let enc = base64::engine::general_purpose::STANDARD.encode(answer.as_bytes());
         let cmd = format!("mkdir -p {} && printf '%s' {} | base64 -d > {}", quote(dir), quote(&enc), quote(&target));
-        sh.sh(&cmd, false, Some(Duration::from_secs(30))).await.map(|_| ()) // upstream only logs a non-zero exit
+        sh.sh(&cmd, false, Some(Duration::from_secs(30))).await.map(|_| ()) // a non-zero exit is only logged
     }
 
     /// Ensure final_answer.txt exists when the loop ended without a confirmed answer.
@@ -1655,7 +1655,7 @@ impl Computer1 {
         if sh.sh(&format!("test -f {}", quote(&self.io_path(FINAL_ANSWER))), false, Some(Duration::from_secs(10))).await?.code == 0 {
             return Ok(());
         }
-        // Native providers have no chat history to ask: upstream writes an empty answer.
+        // Native providers have no chat history to ask: write an empty answer.
         let text =
             if self.native.is_some() { String::new() } else { self.extract_text_fallback(sh, instruction).await.unwrap_or_default() };
         self.write_final_answer(sh, &text).await
@@ -1990,7 +1990,7 @@ impl Computer1 {
             Some(_) => self.run_step_loop(sh, ctx, instruction, &initial).await,
             None => self.run_loop(sh, ctx, instruction, &initial).await,
         };
-        let _ = self.final_answer_fallback(sh, instruction).await; // upstream logs and continues
+        let _ = self.final_answer_fallback(sh, instruction).await; // best effort: failures are ignored
         ctx.rollout_details = Some(vec![]);
         self.sync_context(ctx);
         self.dump_trajectory();

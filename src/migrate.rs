@@ -1,6 +1,5 @@
-//! Terminal-Bench (v1) -> upstream task migration.
-//! Port of hbench/mappers/terminal_bench.py (+ the `tasks migrate` CLI dispatch).
-//! Byte-for-byte output parity: the TOML writer mimics upstream's
+//! Terminal-Bench (v1) -> task migration (`tasks migrate`).
+//! Byte-for-byte output parity: the TOML writer mimics
 //! `TaskConfig.model_dump_toml()` (python `toml` lib quirks included), and the
 //! docker-compose writer mimics PyYAML's `safe_dump(sort_keys=False)`.
 
@@ -37,12 +36,11 @@ const IGNORED_FIELDS: &[&str] = &["build", "image", "container_name", "command",
 const TBENCH_DEFAULT_VOLUMES: &[&str] =
     &["${T_BENCH_TASK_LOGS_PATH}:${T_BENCH_CONTAINER_LOGS_PATH}", "${T_BENCH_TASK_AGENT_LOGS_PATH}:${T_BENCH_CONTAINER_AGENT_LOGS_PATH}"];
 const TBENCH_DEFAULT_ENV: &str = "TEST_DIR=${T_BENCH_TEST_DIR}";
-const HBENCH_REPLACES: &[&str] = &["build", "image", "container_name", "command", "environment", "volumes", "deploy"];
+const MAIN_REPLACES: &[&str] = &["build", "image", "container_name", "command", "environment", "volumes", "deploy"];
 
 /// Migrate a single Terminal-Bench task dir (has task.yaml) into `output/<name>`,
 /// or every task dir under a parent dir. Returns the created task dirs.
-/// Single-task errors propagate; in parent mode failures are printed and skipped
-/// (like upstream's `TerminalBenchMapper.map`).
+/// Single-task errors propagate; in parent mode failures are printed and skipped.
 pub fn migrate(input: &Path, output: &Path, overrides: Overrides) -> Result<Vec<PathBuf>> {
     let input = fs::canonicalize(input).with_context(|| format!("Input path does not exist: {}", input.display()))?;
     let output = fs::canonicalize(output).or_else(|_| std::path::absolute(output))?;
@@ -188,7 +186,7 @@ impl TbConfig {
         })
     }
 
-    /// Exactly what upstream's `to_hbench_config().model_dump_toml()` emits for this config.
+    /// The exact task.toml (`model_dump_toml()` output) for this config.
     fn to_toml(&self, ov: &Overrides) -> Result<String> {
         let mut o = String::from("schema_version = \"1.4\"\nartifacts = []\n\n[metadata]\n");
         o += &format!("author_name = {}\n", toml_str(&self.author_name)?);
@@ -276,7 +274,7 @@ fn process_docker_compose(src: &Path, env_dir: &Path, task: &str) -> Result<Hash
                 handled.insert(ctx);
             }
         }
-        write_hbench_compose(root, services, &main_name, main, &env_dir.join("docker-compose.yaml"), task)?;
+        write_compose(root, services, &main_name, main, &env_dir.join("docker-compose.yaml"), task)?;
     }
     Ok(handled)
 }
@@ -471,7 +469,7 @@ fn add_platform(content: &str, platform: &str) -> (String, usize) {
     (out, count)
 }
 
-fn write_hbench_compose(root: &Mapping, services: &Mapping, main_name: &Value, main: &Mapping, target: &Path, task: &str) -> Result<()> {
+fn write_compose(root: &Mapping, services: &Mapping, main_name: &Value, main: &Mapping, target: &Path, task: &str) -> Result<()> {
     println!("[{task}] Cannot collapse to Dockerfile, writing docker-compose.yaml");
     let mut converted = Mapping::new();
     converted.insert("services".into(), Value::Mapping(Mapping::new()));
@@ -480,17 +478,17 @@ fn write_hbench_compose(root: &Mapping, services: &Mapping, main_name: &Value, m
             converted.insert(k.clone(), v.clone());
         }
     }
-    let mut hbench_main: Mapping = serde_yaml_ng::from_str(
+    let mut new_main: Mapping = serde_yaml_ng::from_str(
         "build:\n  context: ${CONTEXT_DIR}\nimage: ${MAIN_IMAGE_NAME}\ncommand: [sh, -c, sleep infinity]\n\
          environment:\n- TEST_DIR=${TEST_DIR}\ndeploy:\n  resources:\n    limits:\n      cpus: ${CPUS}\n      memory: ${MEMORY}\n",
     )?;
     for (k, v) in main {
-        if !k.as_str().is_some_and(|k| HBENCH_REPLACES.contains(&k)) {
-            hbench_main.insert(k.clone(), v.clone());
+        if !k.as_str().is_some_and(|k| MAIN_REPLACES.contains(&k)) {
+            new_main.insert(k.clone(), v.clone());
         }
     }
     let mut out_services = Mapping::new();
-    out_services.insert("main".into(), Value::Mapping(hbench_main));
+    out_services.insert("main".into(), Value::Mapping(new_main));
     for (name, svc) in services {
         if name != main_name {
             out_services.insert(name.clone(), svc.clone());
@@ -1102,8 +1100,7 @@ fn check_simple_key(k: &Value) -> bool {
     }
 }
 
-// Expected outputs below were produced by running upstream's Python mapper
-// (hbench.mappers.terminal_bench) on identical fixtures.
+// Expected outputs below come from the reference Python mapper run on identical fixtures.
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -123,7 +123,7 @@ fn html_escape(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
 }
 
-/// `hbench view`'s folder-type auto-detection.
+/// Folder-type auto-detection (jobs or tasks).
 pub fn detect_mode(folder: &Path) -> Result<Mode> {
     let subdirs: Vec<PathBuf> = sorted_entries(folder).into_iter().filter(|d| d.is_dir() && !name_of(d).starts_with('.')).collect();
     if subdirs.is_empty() {

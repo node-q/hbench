@@ -163,7 +163,7 @@ impl App {
                 if !dir.join("result.json").exists() {
                     return ok_json(json!({"status": "in_progress", "job_id": null, "view_url": null}));
                 }
-                // upstream Hub isn't reachable from hbench: report what upstream reports when signed out.
+                // No hosted hub is reachable: report the signed-out status.
                 ok_json(match job_result(&dir) {
                     Some(r) => json!({"status": "unauthenticated", "job_id": r["id"], "view_url": null}),
                     None => json!({"status": "unknown", "job_id": null, "view_url": null}),

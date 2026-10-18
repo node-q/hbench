@@ -7,7 +7,7 @@ set -eu
 GOST_CONFIG=/opt/egress-sidecar/gost.yaml
 ALLOWLIST=/opt/egress-sidecar/allowlist.txt
 NFTABLES_RULESET_NAME=gost_egress
-READY_FILE=/tmp/hbench-docker-egress-control-sidecar.ready
+READY_FILE=/tmp/hbench-egress-sidecar.ready
 
 INITIAL_NETWORK_MODE="${EGRESS_CONTROL_INITIAL_NETWORK_MODE:-public}"
 INITIAL_ALLOWED_HOSTS="${EGRESS_CONTROL_INITIAL_ALLOWED_HOSTS:-}"
@@ -46,6 +46,6 @@ case "$INITIAL_NETWORK_MODE" in
 esac
 
 touch "$READY_FILE"
-echo "hbench-docker-egress-control-sidecar ready: initial egress policy is $INITIAL_NETWORK_MODE"
+echo "hbench-egress-sidecar ready: initial egress policy is $INITIAL_NETWORK_MODE"
 
 wait "$gost_pid"

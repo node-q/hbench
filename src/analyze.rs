@@ -1,4 +1,4 @@
-//! `hbench analyze` / `hbench check` (upstream's `hbench analyze` / `hbench check`).
+//! `hbench analyze` / `hbench check`: LLM review of trials and of task quality.
 //!
 //! Each trial (analyze) or task (check) becomes an ephemeral wrapper task built from
 //! a template: a prebuilt-image task that uploads a copy of the trial/task to the
@@ -128,12 +128,12 @@ fn with_defs(mut defs: Vec<(&str, Value)>, root: Map<String, Value>, uses_check_
     Value::Object(o)
 }
 
-/// JSON schema of upstream's `QualityCheckResponse` (check output).
+/// JSON schema of the `QualityCheckResponse` (check output).
 pub fn check_schema(r: &Rubric) -> Value {
     with_defs(vec![], object_schema("QualityCheckResponse", criteria_props(r)), !r.criteria.is_empty())
 }
 
-/// JSON schema of upstream's `AnalyzeResultResponse` (summary + checks).
+/// JSON schema of the `AnalyzeResultResponse` (summary + checks).
 pub fn analyze_schema(r: &Rubric) -> Value {
     let checks = object_schema("AnalyzeResultChecks", criteria_props(r));
     let root = object_schema(
@@ -156,7 +156,7 @@ pub enum Outcome {
     NotApplicable,
 }
 
-/// upstream's QualityCheckModel.
+/// One criterion's outcome and explanation (QualityCheckModel).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Check {
     pub explanation: String,
@@ -175,7 +175,7 @@ fn ser_checks<S: serde::Serializer>(c: &Checks, s: S) -> Result<S::Ok, S::Error>
     m.end()
 }
 
-/// One trial's analysis in a report (upstream's AnalyzeReportResult).
+/// One trial's analysis in a report (AnalyzeReportResult).
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct AnalyzeReportResult {
     pub trial_name: Option<String>,
@@ -186,7 +186,7 @@ pub struct AnalyzeReportResult {
     pub error: Option<String>,
 }
 
-/// One task's check in a report (upstream's QualityCheckResult).
+/// One task's check in a report (QualityCheckResult).
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct QualityCheckResult {
     #[serde(serialize_with = "ser_checks")]
@@ -253,7 +253,7 @@ fn extract_check_result(r: &TrialResult, trial_dir: &Path, rubric: &Rubric) -> R
     Ok(QualityCheckResult { checks: parse_checks(&v, rubric)?, cost_usd, ..Default::default() })
 }
 
-/// Write analysis.json (upstream's AnalyzeResult) into the analyzed trial dir.
+/// Write analysis.json (AnalyzeResult) into the analyzed trial dir.
 fn write_analysis_json(trial_dir: &Path, r: &AnalyzeReportResult) -> Result<()> {
     #[derive(Serialize)]
     struct AnalyzeResult<'a> {
@@ -341,7 +341,7 @@ fn extract_task_dir(trial_dir: &Path) -> Option<PathBuf> {
     Some(crate::registry::local_path(&t))
 }
 
-/// upstream's `Task.is_valid_dir`: task.toml + environment/, loadable config, a test script.
+/// Whether `dir` is a valid task: task.toml + environment/, loadable config, a test script.
 // ponytail: hbench's Task::load also wants instruction.md and an environment definition.
 pub fn is_valid_task_dir(p: &Path) -> bool {
     p.join("task.toml").is_file() && p.join("environment").is_dir() && Task::load(p).and_then(|t| t.validate_tests()).is_ok()
@@ -970,7 +970,7 @@ mod tests {
 
     #[test]
     fn schemas_match_pydantic() {
-        // Generated with pydantic 2.14 model_json_schema() on upstream's models.
+        // Generated with pydantic 2.14 model_json_schema() on the reference models.
         let defs = r##""CheckOutcome": {"enum": ["pass", "fail", "not_applicable"], "title": "CheckOutcome", "type": "string"},
             "QualityCheckModel": {"properties": {"explanation": {"title": "Explanation", "type": "string"}, "outcome": {"$ref": "#/$defs/CheckOutcome"}},
                 "required": ["explanation", "outcome"], "title": "QualityCheckModel", "type": "object"}"##;

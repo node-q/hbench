@@ -1,4 +1,4 @@
-//! fx (port of upstream's agents/installed/fx.py). `fx-dev` reuses this struct with `dev = true`.
+//! fx. `fx-dev` reuses this struct with `dev = true`.
 
 use super::common::opts::check_options;
 use super::common::{installed_dir, skills_dir};
@@ -148,7 +148,7 @@ impl Fx {
         format!("set -euo pipefail; curl -fsSL {INSTALL_SCRIPT_URL} | bash{version_arg} && {PATH_EXPORT} && fx --version")
     }
 
-    /// Upload a private profile file the way upstream does: /tmp staging, then mv into ~/.fx.
+    /// Upload a private profile file: /tmp staging, then mv into ~/.fx.
     async fn install_profile_file(cx: &AgentCtx<'_>, staging: &str, name: &str, content: &str) -> Result<()> {
         upload_text(cx, staging, content).await?;
         exec_agent(

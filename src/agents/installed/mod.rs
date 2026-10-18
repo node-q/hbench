@@ -1,4 +1,4 @@
-//! Installed (CLI) agents: shared machinery from upstream's BaseInstalledAgent —
+//! Installed (CLI) agents: shared machinery —
 //! system-package installs, `set -o pipefail` execs, and error classification.
 
 pub mod acp;
@@ -54,7 +54,7 @@ use std::sync::OnceLock;
 
 type Constructor = fn(AgentArgs) -> Result<AgentBox>;
 
-/// Every installed agent (upstream's AgentName values) and its constructor, in listing order.
+/// Every installed agent name and its constructor, in listing order.
 const REGISTRY: &[(&str, Constructor)] = &[
     ("claude-code", |args| Ok(Box::new(claude_code::ClaudeCode::new(args)?))),
     ("acp", acp::create),
@@ -157,7 +157,7 @@ fn package_spec(name: &str) -> Option<PackageSpec> {
 }
 
 /// Shell function `hb_apt_install PKG...`: `apt-get update && apt-get install -y PKG...`, retried against archived
-/// mirrors if that fails. Beyond upstream: when a release reaches EOL its packages move to archive.debian.org /
+/// mirrors if that fails. When a release reaches EOL its packages move to archive.debian.org /
 /// old-releases.ubuntu.com while deb.debian.org keeps serving the index, so installs 404 (debian:bullseye-security,
 /// Oct 2026) and every agent install on that image would fail. Stage 1 points only the security suites at the
 /// archive, stage 2 every Debian/Ubuntu source. Sources are rewritten into a temp dir used via `-o Dir::Etc::*`,
@@ -190,7 +190,7 @@ pub const APT_INSTALL_FN: &str = r#"hb_apt_install() {
 }
 "#;
 
-/// Install missing system packages with the image's package manager (upstream semantics).
+/// Install missing system packages with the image's package manager.
 pub async fn ensure_system_dependencies(cx: &AgentCtx<'_>, deps: &[&str]) -> Result<()> {
     let mut specs = vec![];
     for d in deps {
@@ -219,7 +219,7 @@ pub async fn ensure_system_dependencies(cx: &AgentCtx<'_>, deps: &[&str]) -> Res
             "apt-get" => s.apt,
             "dnf" | "yum" => s.dnf,
             "apk" => s.apk,
-            _ => return Ok(()), // no supported package manager: upstream only warns
+            _ => return Ok(()), // no supported package manager: skip
         };
         for p in list {
             if !pkgs.contains(p) {
@@ -248,7 +248,7 @@ pub async fn ensure_system_dependencies(cx: &AgentCtx<'_>, deps: &[&str]) -> Res
     exec_root(cx, &cmd, &env).await.map(|_| ())
 }
 
-/// upstream's ERROR_PATTERNS: the match furthest toward the end of the output wins.
+/// Error patterns: the match furthest toward the end of the output wins.
 fn error_patterns() -> &'static [(Regex, &'static str)] {
     static P: OnceLock<Vec<(Regex, &'static str)>> = OnceLock::new();
     P.get_or_init(|| {
@@ -310,13 +310,13 @@ fn error_patterns() -> &'static [(Regex, &'static str)] {
     })
 }
 
-/// Classify failed command output into a upstream error type name.
+/// Classify failed command output into an error type name.
 pub fn classify(output: &str) -> &'static str {
     classify_with(output, &[])
 }
 
-/// `classify` with agent-specific patterns appended after the base list (upstream's
-/// `ERROR_PATTERNS = [*base, ...]`): last match end wins, earlier pattern wins ties.
+/// `classify` with agent-specific patterns appended after the base list:
+/// last match end wins, earlier pattern wins ties.
 pub fn classify_with(output: &str, extra: &[(Regex, &'static str)]) -> &'static str {
     classify_ordered(output, &[], extra)
 }
@@ -448,7 +448,7 @@ pub fn safe_bin_symlink_command(source: &str, dest: &str) -> String {
     format!("_hb_real=\"$(readlink -f {s} 2>/dev/null || echo {s})\" && if [ \"$_hb_real\" != {d} ]; then ln -sf \"$_hb_real\" {d}; fi")
 }
 
-/// First x.y.z in `stdout`, else the trimmed text (upstream's parse_version).
+/// First x.y.z in `stdout`, else the trimmed text.
 pub fn parse_version(stdout: &str) -> String {
     static RE: OnceLock<Regex> = OnceLock::new();
     let re = RE.get_or_init(|| Regex::new(r"(\d+\.\d+\.\d+)").unwrap());

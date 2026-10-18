@@ -1,7 +1,6 @@
-//! `hbench exec` (experimental): compile paths + an instruction into upstream tasks, run a map
+//! `hbench exec` (experimental): compile paths + an instruction into tasks, run a map
 //! job over them, and optionally compile one reducer task over the map artifacts and run it.
-//! Port of upstream's `hbench exec` (cli/exec.py, compile/compiler.py, exec/executor.py,
-//! models/exec, models/compile). `--print-config` output and compiled task dirs match upstream.
+//! `--print-config` output and compiled task dirs match the goldens in tests/fixtures/exec.
 
 mod cli;
 mod compiler;

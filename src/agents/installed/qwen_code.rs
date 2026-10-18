@@ -1,4 +1,4 @@
-//! Qwen Code (port of upstream's agents/installed/qwen_code.py).
+//! Qwen Code installed agent.
 
 use super::common::{installed_dir, nvm_node_install_snippet, skills_dir};
 use super::trae_agent::{check_kwargs, iso_timestamp_ok, opt_str};
@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 const SPEC: Spec = Spec { default_provider: Some("openai"), api_key_envs: &[], base_url_envs: &[], passthrough: true };
 
 pub struct QwenCode {
-    /// Agent args with option env (api_key/base_url) layered on top, upstream's `_resolved_env_vars` source.
+    /// Agent args with option env (api_key/base_url) layered on top.
     args: AgentArgs,
     version: Option<String>,
 }
@@ -90,7 +90,7 @@ fn parse_jsonl(path: &Path) -> Vec<Value> {
 }
 
 /// Token totals (prompt, completion, cached) the ATIF converter would report;
-/// Ok(None) when it yields no steps, Err where upstream's conversion raises.
+/// Ok(None) when it yields no steps, Err where conversion fails.
 pub fn events_usage(events: &[Value]) -> Result<Option<(i64, i64, i64)>> {
     let (mut steps, mut i, mut o, mut c) = (0, 0, 0, 0);
     for e in events {
@@ -146,7 +146,7 @@ fn find_session_jsonl(logs_dir: &Path) -> Option<PathBuf> {
     })
 }
 
-/// Usage summed over subagent transcripts upstream embeds (those whose parent chain reaches a root).
+/// Usage summed over embedded subagent transcripts (those whose parent chain reaches a root).
 fn subagent_usage(session: &Path) -> (i64, i64, i64) {
     let (Some(stem), Some(project)) = (session.file_stem().and_then(|s| s.to_str()), session.parent().and_then(Path::parent)) else {
         return (0, 0, 0);

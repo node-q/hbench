@@ -383,7 +383,7 @@ pub fn load_config(job_dir: &Path) -> Result<JobConfig> {
     Ok(cfg)
 }
 
-/// upstream's `print_job_results_tables` + "Job Info": the same numbers, laid out as a dashboard with bars.
+/// Job results tables + "Job Info", laid out as a dashboard with bars.
 pub fn print_summary(jr: &JobResult, job_dir: &Path) {
     print!("\n{}", render_summary(jr, job_dir, use_color()));
 }
@@ -436,7 +436,7 @@ pub fn render_summary(jr: &JobResult, job_dir: &Path, color: bool) -> String {
         let title = group_title(key);
         out += &format!("{}\n{}\n", paint("1", &title), paint("2", &"─".repeat(title.chars().count().max(w + BAR + 12))));
 
-        // upstream's n_trials counts graded trials only; metrics divide by every finished trial (no reward = 0).
+        // n_trials counts graded trials only; metrics divide by every finished trial (no reward = 0).
         let names: std::collections::HashSet<&String> =
             e.reward_stats.values().flat_map(|v| v.values().flatten()).chain(e.exception_stats.values().flatten()).collect();
         let total = names.len().max(e.n_trials);
@@ -496,7 +496,7 @@ pub fn render_summary(jr: &JobResult, job_dir: &Path, color: bool) -> String {
     }
     let s = &jr.stats;
     let mut info = vec![format!("runtime {}", format_duration(jr.started_at, jr.finished_at))];
-    // hbench extra: upstream only keeps tokens/cost in result.json.
+    // Tokens/cost are shown here too, not only kept in result.json.
     if let Some(c) = s.cost_usd {
         info.push(format!("cost ${c:.2}"));
         info.push(format!("tokens {} in ({} cached) · {} out", human(s.n_input_tokens), human(s.n_cache_tokens), human(s.n_output_tokens)));
@@ -553,7 +553,7 @@ fn py_title(s: &str) -> String {
         .collect()
 }
 
-/// upstream: floats as `{:.3}`, anything else via Python `str()`.
+/// Floats as `{:.3}`, anything else via Python `str()`.
 fn py_str(v: &Value) -> String {
     match v {
         Value::Number(n) if n.is_f64() => format!("{:.3}", n.as_f64().unwrap()),

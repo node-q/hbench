@@ -1,4 +1,4 @@
-//! Cortex Code (port of upstream's agents/installed/cortex_code.py).
+//! Cortex Code.
 
 use super::common::installed_dir;
 use super::{ensure_system_dependencies, exec_agent, parse_version};

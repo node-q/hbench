@@ -1,4 +1,4 @@
-//! Code Puppy (port of upstream's agents/installed/code_puppy.py).
+//! Code Puppy.
 
 use super::common::installed_dir;
 use super::{connection, ensure_system_dependencies, exec_agent};

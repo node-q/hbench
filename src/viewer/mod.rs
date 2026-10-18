@@ -1,7 +1,7 @@
-//! `hbench view`: serves hbench's viewer SPA (viewer/, embedded from viewer/dist by build.rs) and a Rust port
-//! of its API (`hbench/viewer/{server,scanner,task_scanner,trial_utils,models,stream}.py`) over a jobs or tasks folder.
-//! Response shapes, ordering, filters, sorting and error codes follow upstream; upstream Hub (auth/upload) and the
-//! `--stream` editor need upstream's cloud services, so they answer the way upstream does when signed out / unavailable.
+//! `hbench view`: serves hbench's viewer SPA (viewer/, embedded from viewer/dist by build.rs) and its API
+//! over a jobs or tasks folder. Response shapes, ordering, filters, sorting and error codes are kept stable for
+//! the SPA; the hosted hub (auth/upload) and the `--stream` editor need cloud services, so they answer as
+//! when signed out / unavailable.
 
 mod compare;
 mod http;
@@ -30,7 +30,7 @@ pub(crate) use http::{parse_port_range, serve};
 
 const STREAM_HANDLE_NAME: &str = "stream.json";
 const NOT_AUTHENTICATED: &str = "Not authenticated: hub sign-in is not supported by hbench.";
-/// upstream's `EnvironmentType` values.
+/// `EnvironmentType` values.
 const ENVIRONMENTS: &[&str] = &[
     "docker",
     "podman",

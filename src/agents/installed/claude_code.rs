@@ -1,4 +1,4 @@
-//! Claude Code (port of upstream's agents/installed/claude_code.py).
+//! Claude Code.
 
 use super::common::{installed_dir, skills_dir};
 use super::{
@@ -12,7 +12,7 @@ use anyhow::{Result, bail};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
-/// Zed ACP adapter version (bridges ACP <-> the Claude Agent SDK), as pinned by upstream.
+/// Zed ACP adapter version (bridges ACP <-> the Claude Agent SDK).
 const CLAUDE_CODE_ACP_VERSION: &str = "0.16.2";
 const SETTINGS_DIR: &str = "/tmp/claude-code-settings";
 const SETTINGS_PATH: &str = "/tmp/claude-code-settings/settings.json";
@@ -53,7 +53,7 @@ impl ClaudeCode {
             Some(_) => bail!("Invalid value for 'config': expected a local file path or JSON object"),
         };
         let a = ClaudeCode { version: args.version_kw(), args, settings, loaded: false, acp_claude_executable: None };
-        a.cli_flags()?; // validate options eagerly, like upstream
+        a.cli_flags()?; // validate options eagerly
         Ok(a)
     }
 
@@ -120,7 +120,7 @@ impl ClaudeCode {
         Some(m.rsplit('/').next().unwrap().to_string())
     }
 
-    /// upstream's `_resolve_auth_env`: API key (default) or subscription OAuth token, or Bedrock.
+    /// Auth env: API key (default) or subscription OAuth token, or Bedrock.
     fn auth_env(&self) -> Result<BTreeMap<String, String>> {
         let bedrock = self.use_bedrock();
         let force_oauth = truthy(self.args.get_env("CLAUDE_FORCE_OAUTH"));
@@ -198,7 +198,7 @@ fn session_text(m: &Value) -> String {
 }
 
 /// Render an ATIF trajectory as a native Claude Code session (the user/assistant event chain
-/// threaded by uuid/parentUuid so `claude --resume <id>` picks it up), like upstream.
+/// threaded by uuid/parentUuid so `claude --resume <id>` picks it up).
 pub fn atif_to_native(traj: &Value, session_id: &str) -> String {
     let version = traj["agent"]["version"].as_str();
     let default_model = traj["agent"]["model_name"].clone();
@@ -535,7 +535,7 @@ impl Agent for ClaudeCode {
         if let Some(c) = std::fs::read_to_string(logs_dir.join("claude-code.txt")).ok().and_then(|t| parse_stream_result(&t)) {
             *ctx = c;
         }
-        // upstream: write the ATIF trajectory and take totals from its final metrics.
+        // Write the ATIF trajectory and take totals from its final metrics.
         if let Some(t) = crate::atif::claude_code_trajectory(logs_dir) {
             let _ = std::fs::write(logs_dir.join("trajectory.json"), serde_json::to_string_pretty(&t).unwrap_or_default());
             let fm = &t["final_metrics"];

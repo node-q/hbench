@@ -90,7 +90,7 @@ pub(super) fn job_stats(s: &Value) -> Value {
     })
 }
 
-/// A trial result that validates as upstream's `TrialResult` (required fields present); the file is its dump.
+/// A trial result that validates as a `TrialResult` (required fields present); the file is its dump.
 pub(super) fn trial_result(trial_dir: &Path) -> Option<Value> {
     let mut r = read_json_object(&trial_dir.join("result.json"))?;
     norm_dts(&mut r);

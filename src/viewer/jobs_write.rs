@@ -102,7 +102,7 @@ impl App {
                 if run.child.try_wait().ok().flatten().is_some() {
                     return Err(err(404, "No running launch for this job."));
                 }
-                // SIGINT: hbench's graceful cancel (tears down containers), like upstream's SIGTERM.
+                // SIGINT: hbench's graceful cancel (tears down containers).
                 let _ = std::process::Command::new("kill").args(["-INT", &run.child.id().to_string()]).status();
                 ok_json(json!({"stopped": true}))
             }
@@ -110,7 +110,7 @@ impl App {
         }
     }
 
-    /// `hbench analyze <path>` (upstream's `run_analyze`); returns its `analysis.json` report.
+    /// `hbench analyze <path>`; returns its `analysis.json` report.
     fn run_analyze(&self, path: &Path, args: Vec<String>) -> std::result::Result<Option<Value>, Err> {
         let exe = std::env::current_exe().map_err(|e| err(500, e.to_string()))?;
         let out = std::process::Command::new(exe)

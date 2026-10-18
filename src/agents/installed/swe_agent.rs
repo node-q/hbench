@@ -1,4 +1,4 @@
-//! SWE-agent (port of upstream's agents/installed/swe_agent.py). Runs as root only.
+//! SWE-agent installed agent. Runs as root only.
 
 use super::common::installed_dir;
 use super::mini_swe_agent::{opt_str, reject_unknown};
@@ -114,7 +114,7 @@ impl SweAgent {
         f.join(" ")
     }
 
-    /// upstream's `_apply_reasoning_options`: (completion_kwargs, inject_reasoning, active_openai_reasoning).
+    /// Reasoning options: (completion_kwargs, inject_reasoning, active_openai_reasoning).
     fn reasoning_options(&self) -> Result<(Option<String>, bool, bool)> {
         let Some(effort) = &self.reasoning_effort else { return Ok((self.completion_kwargs.clone(), false, false)) };
         let mut kwargs = self.completion_kwargs.clone();
@@ -261,7 +261,7 @@ fn find_traj(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// Totals from SWE-agent's `.traj` info block (upstream's populate_context_post_run).
+/// Totals from SWE-agent's `.traj` info block.
 pub fn parse_trajectory(text: &str) -> Option<AgentContext> {
     let t: Value = serde_json::from_str(text).ok()?;
     let info = &t["info"];
@@ -346,7 +346,7 @@ impl Agent for SweAgent {
     fn populate_context_post_run(&self, logs_dir: &Path, ctx: &mut AgentContext) {
         let mut found = vec![];
         find_traj(&logs_dir.join("swe-agent-output"), &mut found);
-        // ponytail: upstream asserts at most one .traj; with several we skip usage rather than panic.
+        // ponytail: expect at most one .traj; with several we skip usage rather than panic.
         let path = match found.len() {
             0 => logs_dir.join("swe-agent.trajectory.json"),
             1 => found.remove(0),

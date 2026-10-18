@@ -1,4 +1,4 @@
-//! Artifact collection + re-materialization (port of upstream's ArtifactHandler).
+//! Artifact collection + re-materialization.
 //!
 //! Host layout under the trial's `artifacts/` dir: source-derived entries mirror
 //! their absolute path (`/var/log/x` -> `artifacts/var/log/x`, so the agent's
@@ -90,7 +90,7 @@ pub async fn download(
         entry.kind = if is_dir { "directory" } else { "file" }.into();
         entry.exclude = Some(if is_dir { a.exclude.clone() } else { vec![] });
         entry.status = if res.is_ok() { "ok" } else { "failed" }.into();
-        // upstream's mounted convention dir is recorded "empty" when nothing was published.
+        // The convention dir is recorded "empty" when nothing was published.
         if a.is_convention()
             && a.destination.is_none()
             && a.exclude.is_empty()

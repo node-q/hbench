@@ -1,4 +1,4 @@
-//! Hermes (port of upstream's agents/installed/hermes.py).
+//! Hermes.
 
 use super::common::{installed_dir, skills_dir};
 use super::{ensure_system_dependencies, exec_agent, exec_error};
@@ -12,7 +12,7 @@ use std::time::Duration;
 
 const PATH_EXPORT: &str = "export PATH=\"$HOME/.local/bin:$PATH\"";
 
-/// upstream provider prefix -> (hermes --provider flag, key env names). Others route via OpenRouter.
+/// Model provider prefix -> (hermes --provider flag, key env names). Others route via OpenRouter.
 fn native_provider(p: &str) -> Option<(&'static str, &'static [&'static str])> {
     Some(match p {
         "anthropic" => ("anthropic", &["ANTHROPIC_API_KEY", "ANTHROPIC_TOKEN"]),
@@ -72,7 +72,7 @@ impl Hermes {
         let mut flag = None;
         let native = native_provider(provider);
         if let Some((native_flag, keys)) = native {
-            // upstream's _resolve_env: agent env first, then host env, first name wins per source.
+            // Agent env first, then host env, first name wins per source.
             let found = keys
                 .iter()
                 .find_map(|k| self.args.extra_env.get(*k).map(|v| (k, v.clone())))
@@ -172,7 +172,7 @@ fn text_of(c: &Value) -> String {
     }
 }
 
-/// Token totals upstream's ATIF converter yields: Some((prompt, completion)) iff the session has steps.
+/// Token totals the ATIF converter yields: Some((prompt, completion)) iff the session has steps.
 pub fn session_totals(text: &str) -> Option<(i64, i64)> {
     let mut msgs: Vec<Value> = vec![];
     for l in text.trim().split('\n').map(str::trim).filter(|l| !l.is_empty()) {

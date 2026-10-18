@@ -163,7 +163,7 @@ export interface ExceptionInfo {
   occurred_at: string;
 }
 
-/** upstream's TrialResult dump (result.json), or a partial one for in-progress trials. */
+/** A trial's result.json, or a partial one for in-progress trials. */
 export interface TrialResult {
   id: string;
   task_name: string;

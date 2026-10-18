@@ -190,7 +190,7 @@
         }
       ],
       "default": null,
-      "description": "upstream agent timeout seconds.",
+      "description": "Agent timeout seconds.",
       "title": "Agent Timeout Sec"
     },
     "reasoning_effort": {

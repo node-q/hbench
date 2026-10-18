@@ -19,5 +19,5 @@ node_modules/
 # Secrets
 .env
 
-# upstream
+# Build output
 dist.tar.gz

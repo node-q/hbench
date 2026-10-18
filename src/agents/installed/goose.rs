@@ -1,4 +1,4 @@
-//! Goose (port of upstream's agents/installed/goose.py).
+//! Goose.
 
 use super::common::{detect_version, installed_dir, opts, skills_dir};
 use super::{connection, ensure_system_dependencies, exec_agent, exec_error};
@@ -116,7 +116,7 @@ impl Goose {
                 "sse" if self.supports_sse() => json!({"type": "sse", "name": s.name, "uri": s.url}),
                 "sse" => bail!(
                     "Goose 1.19.0 and later do not support MCP transport 'sse' (server '{}'). Set transport = 'streamable-http' or 'stdio' explicitly \
-                     in the MCP server config, or pin Goose below 1.19.0 (upstream defaults to 'sse' when omitted).",
+                     in the MCP server config, or pin Goose below 1.19.0 ('sse' is the default when omitted).",
                     s.name
                 ),
                 _ => json!({"type": "streamable_http", "name": s.name, "uri": s.url}),
@@ -127,7 +127,7 @@ impl Goose {
     }
 }
 
-/// Usage as upstream's goose.txt -> ATIF conversion reports it: the stream-json `complete` event,
+/// Usage as the goose.txt -> ATIF conversion reports it: the stream-json `complete` event,
 /// else (old plain-text goose, no usage) zeros when the log has any content.
 pub fn parse_goose_usage(text: &str) -> Option<AgentContext> {
     #[derive(Default)]

@@ -5,7 +5,7 @@ use anyhow::{Result, anyhow, bail};
 use serde_json::{Map, Value};
 use std::path::{Path, PathBuf};
 
-/// upstream's EnvironmentType values (accepted for config parity; hbench only runs docker).
+/// EnvironmentType values (accepted for config parity; hbench only runs docker).
 const ENVIRONMENT_TYPES: &[&str] = &[
     "docker",
     "podman",
@@ -308,7 +308,7 @@ fn compile_verifiers(artifacts: &[String], verify: bool, reward: Option<&str>) -
     vec![]
 }
 
-/// upstream's `parse_kwargs`: JSON values, Python literals True/False/None, else strings.
+/// `key=value` kwargs: JSON values, Python literals True/False/None, else strings.
 fn parse_kwargs(items: &[String]) -> Result<Map<String, Value>> {
     let mut m = Map::new();
     for kw in items {

@@ -1,4 +1,4 @@
-//! Mistral Vibe (port of upstream's agents/installed/vibe.py).
+//! Mistral Vibe installed agent.
 
 use super::common::{installed_dir, skills_dir};
 use super::{ensure_system_dependencies, exec_agent, exec_error};
@@ -74,7 +74,7 @@ fn toml_str(s: &str) -> String {
 /// One `[[key]]` table: its `(field, pre-rendered value)` pairs.
 type TomlTable<'a> = Vec<(&'a str, String)>;
 
-/// upstream's `_to_toml`: top-level scalars, then `[[key]]` table arrays; values are pre-rendered.
+/// TOML rendering: top-level scalars, then `[[key]]` table arrays; values are pre-rendered.
 fn to_toml(scalars: &[(&str, String)], tables: &[(&str, Vec<TomlTable>)]) -> String {
     let mut lines: Vec<String> = scalars.iter().map(|(k, v)| format!("{k} = {v}")).collect();
     let mut blocks = vec![];
@@ -179,7 +179,7 @@ impl Vibe {
         Ok(m.split_once('/').map(|(_, r)| r).unwrap_or(m).to_string())
     }
 
-    /// upstream's `_get_env` without dropping empty values (an empty key is deliberate keyless auth).
+    /// Agent env > host env without dropping empty values (an empty key is deliberate keyless auth).
     fn raw_env(&self, k: &str) -> Option<String> {
         self.args.extra_env.get(k).cloned().or_else(|| std::env::var(k).ok())
     }
@@ -387,7 +387,7 @@ fn session_chain(logs_dir: &Path) -> Vec<PathBuf> {
     chain.iter().rev().map(|&i| dirs[i].clone()).collect()
 }
 
-/// upstream's trajectory `final_metrics` mapping, computed straight from the session chain.
+/// Trajectory `final_metrics` mapping, computed straight from the session chain.
 fn session_usage(chain: &[PathBuf], has_pricing: bool) -> Option<(Option<i64>, Option<i64>, Option<f64>)> {
     let first = chain.first()?;
     let first_msgs = read_messages(first);

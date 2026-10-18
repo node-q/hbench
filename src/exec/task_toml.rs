@@ -1,4 +1,4 @@
-//! upstream TaskConfig (task.toml).
+//! TaskConfig (task.toml).
 
 use super::*;
 use anyhow::Result;
@@ -109,7 +109,7 @@ fn obj(v: &Value) -> Map<String, Value> {
 }
 
 /// `TaskConfig.model_validate(toml).model_dump(mode="json")` minus None values.
-pub(super) fn hbench_task_config(raw: &Map<String, Value>) -> Map<String, Value> {
+pub(super) fn normalized_task_config(raw: &Map<String, Value>) -> Map<String, Value> {
     let mut raw = raw.clone();
     if let Some(v) = raw.shift_remove("version") {
         raw.entry("schema_version").or_insert(v);

@@ -115,7 +115,7 @@ enum Cmd {
         /// Force jobs mode.
         #[arg(long)]
         jobs: bool,
-        /// Accepted for `hbench view` compatibility; the viewer is prebuilt and embedded.
+        /// Accepted for compatibility; the viewer is prebuilt and embedded.
         #[arg(long, hide = true)]
         build: bool,
         #[arg(long, hide = true)]
@@ -640,7 +640,7 @@ fn build_job_config(a: &RunArgs) -> Result<JobConfig> {
             ..Default::default()
         });
     }
-    // CLI task filters apply to every dataset (upstream semantics).
+    // CLI task filters apply to every dataset.
     for d in cfg.datasets.iter_mut() {
         if !a.include.is_empty() {
             d.task_names = Some(a.include.clone());
@@ -756,7 +756,7 @@ async fn run_with_ctrl_c(cfg: JobConfig, trials: Option<Vec<TrialConfig>>, filte
     Ok(())
 }
 
-/// `hbench init`: task or dataset, with upstream's cross-type flag checks.
+/// `hbench init`: task or dataset, with cross-type flag checks.
 fn run_init(a: InitArgs) -> Result<()> {
     let (mut task, mut dataset) = (a.task, a.dataset);
     if task && dataset {
@@ -1132,7 +1132,7 @@ async fn main() -> Result<()> {
         Cmd::Analyze(a) => analyze::analyze_command(*a).await,
         Cmd::Check(a) => analyze::check_command(*a).await,
         Cmd::View { folder, path, port, host, tasks, jobs, .. } => {
-            // ponytail: `-p` is hbench's folder flag but hbench's port flag; a port-shaped value that isn't a dir is a port.
+            // ponytail: `-p` is the folder flag but is also used as a port flag; a port-shaped value that isn't a dir is a port.
             let is_port = |p: &str| !std::path::Path::new(p).is_dir() && viewer::parse_port_range(p).is_ok();
             let (folder, port) = match path {
                 Some(p) if is_port(&p) => (folder, p),

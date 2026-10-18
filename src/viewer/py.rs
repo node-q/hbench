@@ -131,7 +131,7 @@ pub(super) fn truthy(v: &Value) -> bool {
     }
 }
 
-/// A pydantic datetime: aware timestamps as given, naive ones taken as UTC (upstream's `_started_at_sort_key`).
+/// A pydantic datetime: aware timestamps as given, naive ones taken as UTC.
 pub(super) fn parse_dt(v: &Value) -> Option<DateTime<Utc>> {
     let t = v.as_str()?;
     DateTime::parse_from_rfc3339(t)
@@ -284,7 +284,7 @@ pub(super) fn filter_options(counts: BTreeMap<String, i64>) -> Value {
     Value::Array(counts.into_iter().map(|(v, c)| json!({"value": v, "count": c})).collect())
 }
 
-/// upstream's `metadata_filter_value`: encodes None without colliding with real values.
+/// Metadata filter value: encodes None without colliding with real values.
 pub(super) fn metadata_filter_value(v: Option<&str>) -> String {
     match v {
         None => "__missing__".into(),
@@ -303,7 +303,7 @@ fn format_size(n: u64) -> String {
     }
 }
 
-/// FileResponse (media) or PlainTextResponse with upstream's size caps and errors.
+/// FileResponse (media) or PlainTextResponse with size caps and errors.
 pub(super) fn serve_file(full: &Path) -> Res {
     if !full.exists() {
         return Err(err(404, "File not found"));

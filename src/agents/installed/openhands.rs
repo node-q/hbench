@@ -1,4 +1,4 @@
-//! OpenHands (port of upstream's agents/installed/openhands.py).
+//! OpenHands installed agent.
 
 use super::common::installed_dir;
 use super::common::opts::lax_bool;
@@ -50,7 +50,7 @@ fn invalid(agent: &str, k: &str, msg: &str) -> anyhow::Error {
 pub(super) fn check_known(args: &AgentArgs, agent: &str, known: &[&str]) -> Result<()> {
     for k in args.kwargs.keys() {
         if k == "override_setup_timeout_sec" {
-            continue; // upstream pops this before validation
+            continue; // removed before validation
         }
         if !known.contains(&k.as_str()) {
             return Err(anyhow::anyhow!(
@@ -117,7 +117,7 @@ pub(super) fn py_float(f: f64) -> String {
     if f.fract() == 0.0 && f.abs() < 1e16 { format!("{f:.1}") } else { f.to_string() }
 }
 
-/// upstream's `_get_env`: agent env > host env, empty values kept.
+/// Agent env > host env, empty values kept.
 pub(super) fn raw_env(args: &AgentArgs, k: &str) -> Option<String> {
     args.extra_env.get(k).cloned().or_else(|| std::env::var(k).ok())
 }
@@ -229,7 +229,7 @@ impl OpenHands {
         )
     }
 
-    /// upstream's `run()` env construction (model connection + options + fixed sandbox settings).
+    /// Run env construction (model connection + options + fixed sandbox settings).
     fn run_env(&self) -> Result<BTreeMap<String, String>> {
         let conn = connection(&self.args, SPEC);
         let mut env = conn.env.clone();
@@ -344,7 +344,7 @@ impl OpenHands {
     }
 }
 
-/// (prompt, completion, cached, cost) totals the way upstream's ATIF final_metrics computes them.
+/// (prompt, completion, cached, cost) totals the way ATIF final_metrics computes them.
 type Totals = (i64, i64, i64, f64);
 
 fn read_json(p: &Path) -> Option<Value> {
@@ -362,7 +362,7 @@ fn events_totals(events_dir: &Path) -> Option<Totals> {
         .flatten()
         .map(|e| e.path())
         .filter(|p| p.extension().is_some_and(|x| x == "json"))
-        .filter_map(|p| Some((p.file_stem()?.to_str()?.parse().ok()?, p))) // ponytail: upstream crashes on non-int stems; we skip them
+        .filter_map(|p| Some((p.file_stem()?.to_str()?.parse().ok()?, p))) // ponytail: non-int stems are skipped
         .collect();
     files.sort();
     let events: Vec<Value> = files.iter().filter_map(|(_, p)| read_json(p)).collect();
@@ -385,7 +385,7 @@ fn completions_totals(dir: &Path) -> Option<Totals> {
         std::fs::read_dir(dir).ok()?.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "json")).collect();
     files.sort();
     files.sort_by(|a, b| ts(a).total_cmp(&ts(b)));
-    read_json(files.first()?)?; // upstream gives up if the first completion is unreadable
+    read_json(files.first()?)?; // give up if the first completion is unreadable
     let mut t: Totals = (0, 0, 0, 0.0);
     for c in files.iter().filter_map(|p| read_json(p)) {
         let r = &c["response"];
@@ -405,7 +405,7 @@ fn completions_totals(dir: &Path) -> Option<Totals> {
 pub fn usage_from_logs(logs_dir: &Path, raw_content: bool) -> Option<Totals> {
     let sessions: Vec<_> = std::fs::read_dir(logs_dir.join("sessions")).ok()?.flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect();
     if sessions.len() != 1 {
-        return None; // upstream asserts exactly one session
+        return None; // expect exactly one session
     }
     let events_dir = sessions[0].join("events");
     if !events_dir.is_dir() {

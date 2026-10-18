@@ -1,4 +1,4 @@
-//! Codex CLI (port of upstream's agents/installed/codex.py), incl. ACP target mode and load_trajectory seeding.
+//! Codex CLI, incl. ACP target mode and load_trajectory seeding.
 
 use super::common::{detect_version, installed_dir, opts, parse_bool_env, skills_dir};
 use super::{
@@ -20,7 +20,7 @@ const SECRETS_DIR: &str = "/tmp/codex-secrets";
 const AUTH_PATH: &str = "/tmp/codex-secrets/auth.json";
 const CONFIG_PATH: &str = "/installed-agent/codex-home/config.toml";
 const ACP_CODEX_HOME: &str = "/installed-agent/codex-acp-home";
-/// `@agentclientprotocol/codex-acp` adapter version pinned by upstream.
+/// `@agentclientprotocol/codex-acp` adapter version.
 const CODEX_ACP_VERSION: &str = "1.12.0";
 const ROLLOUT_FILENAME_RE: &str = r"^rollout-(\d{4})-(\d{2})-(\d{2})T\S+\.jsonl$";
 const VERSION_CMD: &str = "if [ -s ~/.nvm/nvm.sh ]; then . ~/.nvm/nvm.sh; fi; codex --version";
@@ -38,7 +38,7 @@ pub struct Codex {
     atif_load: Option<Value>,
     /// load_trajectory is consumed by the first run only.
     loaded: bool,
-    /// upstream's Codex CLI the ACP adapter must use (set by acp_install).
+    /// Codex CLI the ACP adapter must use (set by acp_install).
     acp_codex_executable: Option<String>,
 }
 
@@ -52,7 +52,7 @@ impl Codex {
         Ok(a)
     }
 
-    /// `web_search`, forced to "disabled" by `disable_web_search` (upstream's model validator).
+    /// `web_search`, forced to "disabled" by `disable_web_search`.
     fn web_search(&self) -> Result<Option<String>> {
         let web = opts::choice(&self.args, "web_search", None, &["disabled", "cached", "live"])?;
         Ok(if opts::boolean(&self.args, "disable_web_search", None)?.unwrap_or(false) { Some("disabled".into()) } else { web })
@@ -134,7 +134,7 @@ impl Codex {
         Ok(f.join(" "))
     }
 
-    /// upstream's `_build_effective_config`: base config + runtime base URL + task MCP servers.
+    /// Effective config: base config + runtime base URL + task MCP servers.
     fn effective_config(&self, base_url: Option<&str>) -> Result<serde_json::Map<String, Value>> {
         let mut c = self.base_config.clone();
         if let Some(u) = base_url {
@@ -219,7 +219,7 @@ fn parse_codex_version(stdout: &str) -> String {
         .unwrap_or_else(|| text.to_string())
 }
 
-/// upstream's `_validate_load_trajectory`: `.json` must be an ATIF trajectory (returned parsed);
+/// `load_trajectory` validation: `.json` must be an ATIF trajectory (returned parsed);
 /// anything else must be a native rollout file name.
 fn validate_load_trajectory(path: Option<&Path>) -> Result<Option<Value>> {
     let Some(path) = path else { return Ok(None) };
@@ -344,7 +344,7 @@ pub fn atif_to_native_trajectory(traj: &Value, session_id: &str) -> (String, Str
         let results: Vec<&Value> = step["observation"]["results"].as_array().into_iter().flatten().collect();
         for c in &calls {
             let id = &c["tool_call_id"];
-            // Last result per call id wins, like upstream's dict comprehension.
+            // Last result per call id wins.
             let output = results
                 .iter()
                 .rev()
@@ -375,7 +375,7 @@ fn latest_session_file(logs_dir: &Path) -> Option<PathBuf> {
     std::fs::read_dir(dir).ok()?.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "jsonl")).max()
 }
 
-/// Totals from the last `token_count` event, as upstream's rollout -> ATIF final_metrics.
+/// Totals from the last `token_count` event (the rollout's ATIF final_metrics).
 /// Cost: Codex's own `total_cost`/`cost_usd` when present, else the sum of per-API-call LiteLLM
 /// estimates (None if any call is unpriced). `model` is the fallback when no `turn_context` names one.
 pub fn parse_rollout_usage(text: &str, model: Option<&str>) -> Option<AgentContext> {
@@ -410,7 +410,7 @@ pub fn parse_rollout_usage(text: &str, model: Option<&str>) -> Option<AgentConte
     let estimate: Option<f64> = if costs.is_empty() { None } else { costs.into_iter().sum() };
     let step_types = ["message", "web_search_call", "function_call", "custom_tool_call", "function_call_output", "custom_tool_call_output"];
     if !events.iter().any(|e| e["type"] == "response_item" && e["payload"]["type"].as_str().is_some_and(|t| step_types.contains(&t))) {
-        return None; // no ATIF steps -> upstream writes no trajectory
+        return None; // no ATIF steps -> no trajectory
     }
     let info = events
         .iter()

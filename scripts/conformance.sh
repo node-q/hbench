@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
-# Conformance: run upstream's own example tasks under hbench and assert the same
-# outcomes upstream's runtime tests expect (tests/runtime/test_network_policy_matrix_docker.py,
-# multi-step / separate-verifier / sidecar examples).
-#   HBENCH=/path/to/hbench scripts/conformance.sh [suite...]   suites: core matrix extra env
+# Conformance: run the task-format reference example suite (REF=<checkout>/examples/tasks) under hbench
+# and assert the expected outcomes (network-policy matrix, multi-step, separate-verifier, sidecar examples).
+#   REF=/path/to/reference-repo scripts/conformance.sh [suite...]   suites: core matrix extra env
 set -euo pipefail
 cd "$(dirname "$0")/.."
-HBENCH=${HBENCH:-/tmp/hb-ref/hbench}
-EX=$HBENCH/examples/tasks
+REF=${REF:?set REF to a checkout of the reference repo}
+EX=$REF/examples/tasks
 cargo build --release -q
 BIN=$PWD/target/release/hbench
 OUT=${OUT:-$(mktemp -d)}; mkdir -p "$OUT"

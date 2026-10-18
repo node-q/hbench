@@ -1,4 +1,4 @@
-You are reviewing a upstream task for quality and completeness. Judge whether the task's artifacts meet the criteria below, and provide a short rationale for each.
+You are reviewing a benchmark task for quality and completeness. Judge whether the task's artifacts meet the criteria below, and provide a short rationale for each.
 
 The task to review is at {task_path}. Here is the complete file tree:
 

@@ -1,5 +1,5 @@
 //! Regrade: re-run (separate) verification against a recorded trial's outputs
-//! without re-running the agent (port of upstream's RegradeTrial).
+//! without re-running the agent.
 
 use crate::artifacts::{ManifestEntry, host_path};
 use crate::env::kind_err;

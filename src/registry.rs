@@ -1,4 +1,4 @@
-//! upstream dataset registry (registry.json) + git-backed task download.
+//! Dataset registry (registry.json) + git-backed task download.
 
 use crate::config::{DatasetConfig, TaskRef};
 use crate::task::{Task, hex};
@@ -98,7 +98,7 @@ pub fn dataset_tasks(d: &DatasetConfig, disable_verification: bool) -> Result<Ve
         let source = p.file_name().map(|n| n.to_string_lossy().into_owned());
         let mut dirs: Vec<PathBuf> = std::fs::read_dir(&p)?.filter_map(|e| e.ok().map(|e| e.path())).collect();
         dirs.sort();
-        // upstream's Task.is_valid_dir: silently skip dirs that aren't runnable tasks.
+        // Silently skip dirs that aren't runnable tasks.
         dirs.retain(|t| {
             t.join("environment").is_dir() && Task::load(t).is_ok_and(|task| disable_verification || task.validate_tests().is_ok())
         });

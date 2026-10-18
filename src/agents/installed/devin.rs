@@ -1,7 +1,7 @@
-//! Devin CLI (port of upstream's agents/installed/devin.py).
+//! Devin CLI.
 //!
-//! upstream's populate_context_post_run only writes an ATIF trajectory from sessions.db (it never sets
-//! token/cost on the context), so there is no usage parsing to port; sessions.db is still copied to logs.
+//! Post-run only writes an ATIF trajectory from sessions.db (token/cost are never set on the
+//! context), so there is no usage parsing; sessions.db is still copied to logs.
 
 use super::common::installed_dir;
 use super::{ensure_system_dependencies, exec_agent, upload_text};
@@ -60,7 +60,7 @@ impl Devin {
 
 #[async_trait::async_trait]
 impl Agent for Devin {
-    /// upstream pops DEVIN_API_KEY from the agent env once it's in credentials.toml.
+    /// DEVIN_API_KEY is dropped from the agent env once it's in credentials.toml.
     fn extra_env(&self) -> Option<BTreeMap<String, String>> {
         let mut e = self.args.extra_env.clone();
         e.remove("DEVIN_API_KEY");

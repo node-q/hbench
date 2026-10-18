@@ -1,4 +1,4 @@
-//! One agent attempt on one task (upstream's Trial / SingleStepTrial / MultiStepTrial).
+//! One agent attempt on one task (single- or multi-step).
 
 use crate::agents::{self, AgentBox, AgentContext, AgentCtx};
 use crate::artifacts::{self, Claims};
@@ -138,7 +138,7 @@ pub fn model_info(model: &Option<String>) -> Option<ModelInfo> {
     })
 }
 
-/// upstream's task id: `{path}` (local) or `{git_url, git_commit_id, path}`.
+/// Task id: `{path}` (local) or `{git_url, git_commit_id, path}`.
 pub fn task_id(cfg: &TrialConfig) -> Value {
     let t = &cfg.task;
     let mut m = serde_json::Map::new();
@@ -150,10 +150,10 @@ pub fn task_id(cfg: &TrialConfig) -> Value {
     Value::Object(m)
 }
 
-/// Agent setup tries (Beyond upstream), all within the setup timeout.
+/// Agent setup tries, all within the setup timeout.
 const SETUP_ATTEMPTS: u32 = 3;
 
-/// Agent errors that are recorded while the verifier still runs (upstream's
+/// Agent errors that are recorded while the verifier still runs (the
 /// AgentTimeoutError + NonZeroAgentExitCodeError family).
 pub fn is_agent_run_error(kind: &str) -> bool {
     kind == "AgentTimeoutError"
@@ -556,7 +556,7 @@ impl Trial {
         let mut agent = self.agent.take().unwrap();
         let r = match self.agent_ctx(user.clone(), steps[0]) {
             Err(e) => Err(e),
-            // Beyond upstream: installs fail on transient network/mirror errors, so retry within the setup timeout,
+            // Installs fail on transient network/mirror errors, so retry within the setup timeout,
             // and label what still fails AgentSetupError so it can't be mistaken for the agent failing the task.
             Ok(cx) => {
                 let log = self.log.clone();
@@ -846,8 +846,8 @@ impl Trial {
         Ok(())
     }
 
-    /// upstream bind-mounts /logs/artifacts, so files the shared verifier writes there end up in
-    /// the trial's artifacts too: re-sync the convention dir after shared verification.
+    /// /logs/artifacts behaves like a bind mount: files the shared verifier writes there end up in
+    /// the trial's artifacts too, so re-sync the convention dir after shared verification.
     async fn resync_convention_artifacts(&self, artifacts_dir: &Path) {
         if self.env_stopped || self.env.is_none() {
             return;
@@ -974,7 +974,7 @@ impl Trial {
                 }
             }
             archive_step(&self.dir, &sdir, next_resumes);
-            // Archiving empties upstream's mounted /logs/artifacts; do the same in the container.
+            // Archiving empties the trial's artifacts dir; do the same to /logs/artifacts in the container.
             if !self.env_stopped
                 && let Err(e) = self.env().empty_dirs(&[crate::task::CONVENTION_ARTIFACTS], true).await
             {
@@ -1167,7 +1167,7 @@ fn sha256_prefixed(b: &[u8]) -> String {
     format!("sha256:{}", crate::task::hex(&<sha2::Sha256 as sha2::Digest>::digest(b)))
 }
 
-/// upstream's TrialLock (lock.json), dumped with `exclude_none`.
+/// Trial lock (lock.json), dumped with `exclude_none`.
 pub fn trial_lock(c: &TrialConfig) -> Value {
     let local = crate::registry::local_path(&c.task);
     let task = Task::load(&local).ok();

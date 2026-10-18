@@ -1,5 +1,5 @@
-//! Accepted `kwargs` per agent: the fields (incl. aliases) of each upstream agent's
-//! `options_model` (pydantic `extra="forbid"`). Generated from upstream's source by
+//! Accepted `kwargs` per agent: the fields (incl. aliases) of each agent's
+//! `options_model` (pydantic `extra="forbid"`). Generated from the Python agent sources by
 //! scripts/dev/allowed_kwargs.py; regenerate when porting new options.
 
 pub fn allowed(agent: &str) -> Option<&'static [&'static str]> {

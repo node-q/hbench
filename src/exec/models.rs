@@ -1,4 +1,4 @@
-//! Config models (upstream's `models/exec` and `models/compile`).
+//! Config models for exec and compile.
 
 use super::*;
 use crate::config::{AgentConfig, EnvConfig, MetricConfig, RetryConfig, VerifierRunConfig};

@@ -187,7 +187,7 @@ pub fn parse_claude_result(text: &str) -> Option<AgentContext> {
     let n = |k: &str| u[k].as_i64().unwrap_or(0);
     let cache_read = n("cache_read_input_tokens");
     Some(AgentContext {
-        // upstream semantics: input tokens include cached tokens.
+        // Input tokens include cached tokens.
         n_input_tokens: Some(n("input_tokens") + n("cache_creation_input_tokens") + cache_read),
         n_cache_tokens: Some(cache_read),
         n_output_tokens: Some(n("output_tokens")),

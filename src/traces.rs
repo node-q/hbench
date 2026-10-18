@@ -1,4 +1,4 @@
-//! `hbench traces export`: upstream's HF trace export (`hbench traces export`, utils/traces_utils.py),
+//! `hbench traces export`: HF-style trace export,
 //! written as JSONL rows (one row per episode) instead of a `datasets.Dataset`.
 
 use anyhow::{Result, bail};
@@ -126,7 +126,7 @@ fn trial_is_success(trial_dir: &Path) -> Option<bool> {
         return Some(v.parse::<f64>().is_ok_and(|f| f > 0.0));
     }
     let r = load_result(trial_dir)?;
-    // upstream reads `verifier_result.reward` here (not `.rewards`), so this is effectively always false.
+    // Reads `verifier_result.reward` (not `.rewards`) to keep the export format, so this is effectively always false.
     Some(r["verifier_result"]["reward"].as_f64().is_some_and(|f| f > 0.0))
 }
 
@@ -421,7 +421,7 @@ mod tests {
     }
 
     #[test]
-    fn export_format_matches_hbench() {
+    fn export_format_matches_reference() {
         let job = fixture();
         let rows = export(&job, &opts()).unwrap();
         assert_eq!(rows.len(), 2);

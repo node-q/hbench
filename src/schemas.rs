@@ -1,5 +1,4 @@
-//! JSON schemas exported from upstream (task.toml, trial config, each agent's options model),
-//! regenerate with `hbench task schema`, `hbench trial schema`, `hbench agent schema <name> --json`.
+//! Vendored JSON schemas (task.toml, trial config, each agent's options model) under assets/schemas.
 
 use serde_json::Value;
 
@@ -77,7 +76,7 @@ fn schema_type(p: &Value) -> String {
     p["type"].as_str().map(String::from).unwrap_or_else(|| "any".into())
 }
 
-/// upstream's `agent schema` table: name, type, default, description.
+/// The `agent schema` table: name, type, default, description.
 pub fn options_table(agent: &str, schema: &Value) -> String {
     let required: Vec<&str> = schema["required"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
     let mut rows = vec![("Name".to_string(), "Type".to_string(), "Default".to_string(), "Description".to_string())];

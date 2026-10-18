@@ -1,5 +1,5 @@
-//! Generic ACP agent (port of upstream's agents/installed/acp.py + acp_registry.py).
-//! Installs a registry (or git-source) ACP server plus upstream's `acp_runner.py`, which
+//! Generic ACP agent.
+//! Installs a registry (or git-source) ACP server plus the bundled `acp_runner.py`, which
 //! drives one prompt over the Agent Client Protocol and writes acp-summary.json.
 
 use super::common::{installed_dir, nvm_node_install_snippet};
@@ -56,7 +56,7 @@ pub fn registry_spec_from_agent_name(agent_name: &str) -> Result<String> {
 }
 
 #[allow(dead_code)] // the factory (mod.rs) does not route `acp:<id>` names yet
-/// upstream's factory path for `acp:<spec>` names: the ACP agent with `registry_spec` set.
+/// Factory path for `acp:<spec>` names: the ACP agent with `registry_spec` set.
 pub fn create_from_agent_name(agent_name: &str, mut args: AgentArgs) -> Result<AgentBox> {
     args.kwargs.insert("registry_spec".into(), Value::String(registry_spec_from_agent_name(agent_name)?));
     create(args)
@@ -956,7 +956,7 @@ fn dependencies_command(kind: &str) -> String {
             fi
 
             # Task images may provide a Python too old for agent-client-protocol. Install uv
-            # independently, then use it to provision upstream's runner with a supported Python.
+            # independently, then use it to provision the runner with a supported Python.
             if [ ! -x {uv} ]; then
               mkdir -p {UV_INSTALL_DIR}
               curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR={UV_INSTALL_DIR} sh
@@ -1114,7 +1114,7 @@ impl Agent for Acp {
             self.ensure_registry_entry().await?;
         }
         installed_dir(cx).await?;
-        // upstream wraps non-RuntimeError install failures; exec failures pass through classified.
+        // Non-RuntimeError install failures are wrapped; exec failures pass through classified.
         self.install(cx)
             .await
             .map_err(|e| if crate::env::error_kind(&e) == "RuntimeError" { anyhow!("Agent install failed: {e:#}") } else { e })

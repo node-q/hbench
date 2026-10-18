@@ -1,4 +1,4 @@
-//! Cursor CLI (port of upstream's agents/installed/cursor_cli.py).
+//! Cursor CLI.
 
 use super::common::{detect_version, installed_dir, opts, skills_dir};
 use super::{ensure_system_dependencies, exec_agent};
@@ -173,7 +173,7 @@ impl CursorCli {
         let (mut tot, mut reported, mut any_usage) = ([0i64; 4], None::<f64>, false); // input, output, cache_read, cache_write
         for e in &events {
             let int = |v: &Value, k: &str| v[k].as_i64();
-            // upstream validates result events strictly; malformed ones are skipped.
+            // Result events are validated strictly; malformed ones are skipped.
             let valid = e["type"] == "result"
                 && e["subtype"].is_string()
                 && int(e, "duration_ms").is_some()
@@ -248,7 +248,7 @@ impl Agent for CursorCli {
     async fn run(&mut self, instruction: &str, cx: &AgentCtx<'_>, _ctx: &mut AgentContext, _resume: bool) -> Result<()> {
         let instruction = self.args.render_instruction(instruction)?;
         let model = quote(&self.model_arg()?);
-        // upstream reads the key from the host environment only.
+        // The key is read from the host environment only.
         let Ok(key) = std::env::var("CURSOR_API_KEY") else {
             bail!("CURSOR_API_KEY environment variable is required. Please set your Cursor API key.")
         };

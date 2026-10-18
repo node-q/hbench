@@ -1,4 +1,4 @@
-//! aider (port of upstream's agents/installed/aider.py).
+//! aider.
 
 use super::common::{detect_version, installed_dir, opts};
 use super::{connection, ensure_system_dependencies, exec_agent};
@@ -64,7 +64,7 @@ impl Aider {
         Ok(f.join(" "))
     }
 
-    /// (env, model) for the run; upstream raises these at run time.
+    /// (env, model) for the run; errors are raised at run time.
     fn run_env(&self) -> Result<(BTreeMap<String, String>, String)> {
         let Some((prov, model)) = self.args.model_name.as_deref().and_then(|m| m.split_once('/')) else {
             bail!("Model name must be in the format provider/model_name")

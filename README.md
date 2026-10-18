@@ -1,7 +1,9 @@
 # hbench
 
-A Rust agent-harness benchmark runner with behavior parity with [upstream](https://github.com/node-q/hbench).
-It reads the same task format, registry datasets, and job configs, and writes the same result layout.
+A fast, single-binary benchmark runner for coding-agent harnesses, written in Rust. It runs tasks in Docker, drives
+40+ agents, grades them with task verifiers, and reports rewards, pass@k, tokens and cost. Tasks, datasets and job
+configs use the [upstream](https://github.com/node-q/hbench) task format, so registry datasets such as
+terminal-bench run as-is.
 
 Install the latest release (Linux/macOS, x86_64/arm64; `HBENCH_VERSION=vX.Y.Z` pins, `HBENCH_INSTALL_DIR` overrides `~/.local/bin`):
 
@@ -18,7 +20,7 @@ B=target/release/hbench
 $B run -p examples/tasks/hello-world                          # oracle on one task
 $B run -d terminal-bench@2.0 -a oracle -n 8                    # registry dataset
 $B run -d terminal-bench-sample@2.0 -a claude-code -m anthropic/claude-opus-5-5 -k 3 -i 'regex*'
-$B run -c job.yaml                                             # upstream job config (YAML/JSON)
+$B run -c job.yaml                                             # job config (YAML/JSON)
 $B run -c job.yaml --diff jobs/<old-job>                       # reuse / regrade / rerun vs an earlier job
 $B jobs resume -p jobs/<job>        $B jobs summary -p jobs/<job>
 $B jobs regrade --source jobs/<job> -p <tasks>                 # re-verify recorded outputs
@@ -26,7 +28,7 @@ $B trials start -p <task> -a codex -m openai/gpt-5             # single trial
 $B trials handoff jobs/<job>/<trial>                           # resume the session locally (claude-code, muse-code)
 $B sweeps run -c job.yaml --max-sweeps 3                       # drop solved tasks each sweep
 $B view jobs [--port 8080-8089] [--tasks|--jobs]                # web viewer for jobs or task folders (also `view -p jobs`)
-$B traces export -p jobs/<job> -o traces.jsonl                 # upstream trace rows (ATIF episodes)
+$B traces export -p jobs/<job> -o traces.jsonl                 # trace rows (ATIF episodes)
 $B datasets list | download <name@ver> | init | add | remove
 $B init <org/name> [--steps N]   $B add|remove|sync ...             # task/dataset authoring (dataset.toml)
 $B tasks init|check|digest|start-env|migrate|schema               # digest: task_checksum + lock digest
@@ -40,19 +42,18 @@ files move with `docker compose cp` rather than bind mounts.
 
 ## Agents
 
-All 47 upstream agents: `oracle`, `nop`, `terminus-2` (also `terminus`, `terminus-1`), `claude-code`, `codex`,
+47 agents: `oracle`, `nop`, `terminus-2` (also `terminus`, `terminus-1`), `claude-code`, `codex`,
 `gemini-cli`, `opencode`, `aider`, `goose`, `copilot-cli`, `cursor-cli`, `openhands`, `openhands-sdk`, `mini-swe-agent`,
 `swe-agent`, `trae-agent`, `qwen-coder`, `kimi-cli`, `kimi-code`, `grok-build`, `hermes`, `junie`, `rovodev-cli`,
 `cline-cli`, `cortex-code`, `code-puppy`, `devin`, `langgraph`, `deerflow`, `strands`, `nemo-agent`, `mimo`, `mcode`,
 `pi`, `openclaw`, `antigravity-cli`, `antigravity-sdk`, `eve`, `fx`, `fx-dev`, `vibe`, `muse-code`, `acp` (+ `acp:<id>`),
 `computer-1`, `dspy-rlm`.
 
-Each port keeps upstream's install commands and versions, CLI flags and env (`--ak key=value` / `kwargs`, validated
-against upstream's options models), auth resolution, error classification (`ApiRateLimitError`,
-`AgentAuthenticationError`, ...), and usage/cost parsing. Cost uses LiteLLM's price table pinned to upstream's LiteLLM
-version. Claude Code works with an API key or a subscription token (`CLAUDE_CODE_OAUTH_TOKEN`, from `claude setup-token`).
+Each agent has pinned install commands and versions, validated CLI flags and env (`--ak key=value` / `kwargs`), auth
+resolution, error classification (`ApiRateLimitError`, `AgentAuthenticationError`, ...), and usage/cost parsing. Cost
+uses a pinned LiteLLM price table. Claude Code works with an API key or a subscription token (`CLAUDE_CODE_OAUTH_TOKEN`, from `claude setup-token`).
 
-Beyond upstream: `deepseek-harness` runs DeepSeek's own harness ([`dsh`](https://github.com/deepseek-ai/deepseek-harness),
+`deepseek-harness` runs DeepSeek's own harness ([`dsh`](https://github.com/deepseek-ai/deepseek-harness),
 npm `@deepseek-ai/dsh`) in its headless profile. It needs `DEEPSEEK_API_KEY` (optional `DEEPSEEK_BASE_URL`, an
 Anthropic-Messages root). Pass the model as `-m deepseek/<id>` (default: dsh's `deepseek-flash`) and optionally
 `--ak reasoning_effort=off|low|high|max`. It writes `trajectory.json` (ATIF), token usage and LiteLLM cost from dsh's
@@ -62,7 +63,7 @@ session logs, and supports `resume_trajectory` for multi-step tasks.
 DEEPSEEK_API_KEY=... $B run -d terminal-bench@2.0 -a deepseek-harness -m deepseek/deepseek-v4-flash
 ```
 
-## Task format (same as upstream)
+## Task format
 
 ```
 task/
@@ -73,19 +74,19 @@ task/
 └── solution/solve.sh
 ```
 
-The following upstream task features are supported:
+Supported task features:
 
 - Multi-step tasks: per-step workdir/setup.sh, healthcheck, `min_reward` gates, mean/final reward strategy, and resume.
 - Shared and separate verifier environments, including bundled verifier images.
 - Artifacts: sidecar sources, destinations, excludes, `manifest.json`, and `[[verifier.collect]]` hooks.
-- Network policies: `public`, `no-network`, and `allowlist`, phase-scoped per agent/verifier/step. upstream's egress
-  sidecar is vendored, and run-level `extra_allowed_hosts` are supported.
+- Network policies: `public`, `no-network`, and `allowlist`, phase-scoped per agent/verifier/step. An egress
+  sidecar enforces them, and run-level `extra_allowed_hosts` are supported.
 - Healthchecks, `workdir`, task env, agent/verifier users, resource limits, and GPUs.
 - MCP servers and skills.
 - `trajectory.json` / `load_trajectory` (native + ATIF), the simulated-user ACP bridge (`user_agent`), regrades, and
   diffs.
 
-## Output (same layout as upstream)
+## Output
 
 ```
 jobs/<job>/{config.json, lock.json, result.json}
@@ -94,19 +95,19 @@ jobs/<job>/<task>__<id>/{config.json, lock.json, result.json, trial.log, excepti
 ```
 
 `result.json` has JobStats: per-eval metrics (mean/sum/min/max/uv-script), pass@k, reward/exception stats, tokens, and
-cost. Error types and the retry policy (`--max-retries`, include/exclude) match upstream.
+cost. Failed trials are retried by error type (`--max-retries`, include/exclude).
 
-Beyond upstream, agent setup is hardened so environment problems aren't charged to the agent:
+Agent setup is hardened so environment problems aren't charged to the agent:
 
 - A failed agent install is retried (3 tries within the setup timeout).
-- If it still fails, it's recorded as `AgentSetupError` ("failed before the agent started"), where upstream reports
-  `NonZeroAgentExitCodeError`.
+- If it still fails, it's recorded as `AgentSetupError` ("failed before the agent started") rather than as an agent
+  failure.
 - apt installs fall back to the image's sources minus the `*-security` suites. This matters for EOL releases like
   Debian bullseye, whose security index lists packages that are gone from the mirror.
 
 ## Viewer
 
-`hbench view` serves its own web UI (`viewer/`, React + Vite) over the same API as `hbench view`. The built bundle
+`hbench view` serves its own web UI (`viewer/`, React + Vite) for browsing jobs and tasks. The built bundle
 (`viewer/dist`) is committed and embedded at compile time, so `cargo build` doesn't need Node. After changing the UI:
 
 ```bash
@@ -119,10 +120,10 @@ npm run dev                                    # hot reload; proxies /api to `hb
 These require external services:
 
 - Cloud sandboxes (Daytona, Modal, E2B, ...).
-- upstream Hub (publish/upload/package registry, `org/name@ref` packages).
+- Hosted package registries (publish/upload, `org/name@ref` packages).
 - Windows containers.
 
-Benchmark adapters aren't needed: they produce upstream task dirs, which hbench runs directly, and converted datasets
+Benchmark adapters aren't needed: they produce task dirs, which hbench runs directly, and converted datasets
 are in the registry.
 
 ## Verification
@@ -130,9 +131,9 @@ are in the registry.
 - `cargo test`: unit tests for every module and agent.
 - `scripts/e2e.sh`: a fixture suite against a real docker daemon. It covers timeouts, missing rewards, reward.json,
   users/env, no-network, compose sidecars, and prebuilt images, and checks for leaked containers.
-- `scripts/conformance.sh`: runs upstream's own `examples/tasks` with the outcomes upstream's runtime tests expect. That
-  includes the network-policy matrix, verifier-mode matrix, multi-step, sidecar artifacts, and extra allowed hosts.
-- `scripts/parity.py <hbench_job> <hbench_job>`: diffs a real upstream job with an hbench job on the same tasks. It
+- `scripts/conformance.sh`: runs the task-format reference `examples/tasks` (`REF=<checkout>`) and checks the expected
+  outcomes, including the network-policy matrix, verifier-mode matrix, multi-step, sidecar artifacts, and extra allowed hosts.
+- `scripts/parity.py <reference_job> <hbench_job>`: diffs a reference job with an hbench job on the same tasks. It
   compares rewards, exceptions, the `result.json` key structure, the trial file layout, and artifact manifests.
 - `scripts/install-matrix.sh`: installs every installed agent into a real container (`install_only`).
 
@@ -156,3 +157,7 @@ tag checked out:
 ```bash
 scripts/release-macos.sh v0.2.0
 ```
+
+## License
+
+Apache-2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).

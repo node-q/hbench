@@ -1,4 +1,4 @@
-//! Gemini CLI (port of upstream's agents/installed/gemini_cli.py), incl. ACP target mode.
+//! Gemini CLI, incl. ACP target mode.
 
 use super::common::{detect_version, installed_dir, nvm_node_install_snippet, opts, parse_bool_env, skills_dir};
 use super::{connection, ensure_system_dependencies, exec_agent, exec_root, pinned_bin_wrapper_command, safe_bin_symlink_command};
@@ -173,7 +173,7 @@ impl GeminiCli {
     }
 }
 
-/// upstream's `_compute_cost_from_pricing`: the session has no cost field, so back it out of
+/// Cost: the session has no cost field, so back it out of
 /// LiteLLM's table (cache reads fall back to the input rate). None on a pricing miss.
 pub fn gemini_cost(model: &str, prompt: i64, completion: i64, cached: i64) -> Option<f64> {
     let p = pricing::model_cost(&pricing::pricing_key(model)?)?;

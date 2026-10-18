@@ -1,4 +1,4 @@
-//! Kimi Code (port of upstream's agents/installed/kimi_code.py + kimi_code_trajectory.py usage totals).
+//! Kimi Code installed agent, with usage totals from its wire log.
 
 use super::common::{installed_dir, nvm_node_install_snippet, skills_dir};
 use super::kimi_cli::{loads_lenient, validate_kwargs};
@@ -317,7 +317,7 @@ fn same_invocation(wire: &Parsed, stream: &Parsed) -> bool {
     cur.last().is_some_and(|s| s.text == last_stream.text)
 }
 
-/// upstream's `_pricing_key`: `moonshotai/x` and bare `x` are priced as `moonshot/x`; other prefixes as-is.
+/// Pricing key: `moonshotai/x` and bare `x` are priced as `moonshot/x`; other prefixes as-is.
 fn pricing_key(model: &str) -> Option<String> {
     let (provider, bare) = model.rsplit_once('/').unwrap_or(("", model));
     let mut keys = vec![model.to_string()];
@@ -328,8 +328,8 @@ fn pricing_key(model: &str) -> Option<String> {
 }
 
 /// Token totals of the current turn (earlier `--continue` turns are copied context);
-/// `None` when nothing was parsed or no usage was observed (tokens stay null, as upstream).
-/// Cost is upstream's all-or-nothing LiteLLM estimate (`estimate_cost_usd`).
+/// `None` when nothing was parsed or no usage was observed (tokens stay null).
+/// Cost is an all-or-nothing LiteLLM estimate (`estimate_cost_usd`).
 pub fn usage(logs_dir: &Path, model_name: Option<&str>) -> Option<AgentContext> {
     let stream_path = logs_dir.join("kimi-code.txt");
     let has_stream = stream_path.is_file();
@@ -390,7 +390,7 @@ mod tests {
 
     const SID: &str = "session_8192ee32-068a-47f4-a145-829f33b1b234";
     const CALL: &str = "call_419963a4c28a47d2bb9d7315";
-    // upstream's real kimi-code 2.1.1 fixture (bulky metadata/tool-schema lines dropped).
+    // Real kimi-code 2.1.1 fixture (bulky metadata/tool-schema lines dropped).
     const WIRE: &str = r#"{"type": "metadata", "protocol_version": "1.5", "created_at": 1790890457332}
 {"type": "turn.prompt", "agentId": "main", "input": [{"type": "text", "text": "Create a file called `hello.txt`"}], "origin": {"kind": "user"}, "turnId": 0, "time": 1790890457382}
 {"type": "context.append_message", "agentId": "main", "message": {"role": "user", "content": [{"type": "text", "text": "<system-reminder>date</system-reminder>"}], "toolCalls": [], "origin": {"kind": "injection", "variant": "date_change"}}, "time": 1790890457392}

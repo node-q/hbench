@@ -1,5 +1,5 @@
-//! Helpers shared by the installed-agent ports: upstream's BaseInstalledAgent setup steps,
-//! its node_install snippet, and small parsing utilities.
+//! Helpers shared by the installed agents: common setup steps, the nvm node install
+//! snippet, and small parsing utilities.
 
 pub mod opts;
 
@@ -8,12 +8,12 @@ use anyhow::{Result, bail};
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
 
-/// upstream's `self.skills_dir`: task `skills_dir`, else `/hbench/skills` when `--skill`s were given.
+/// Task `skills_dir`, else `/hbench/skills` when `--skill`s were given.
 pub fn skills_dir(args: &AgentArgs) -> Option<String> {
     args.task.config.environment.skills_dir.clone().or_else(|| (!args.skills.is_empty()).then(|| "/hbench/skills".into()))
 }
 
-/// upstream's `node_install.nvm_node_install_snippet`.
+/// Shell snippet installing Node via nvm.
 pub fn nvm_node_install_snippet(node_major: u32) -> String {
     format!(
         "curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.2/install.sh | env -u NODE_VERSION bash && \
@@ -51,7 +51,7 @@ pub async fn installed_setup(
     Ok(())
 }
 
-/// upstream's `environment.upload_file` of a bundled script (root-owned, mode from the temp file).
+/// Upload a bundled script (root-owned, mode from the temp file).
 pub async fn upload_asset(cx: &AgentCtx<'_>, content: &str, path: &str) -> Result<()> {
     let local = std::env::temp_dir().join(format!("hbench-asset-{}", uuid::Uuid::new_v4().simple()));
     std::fs::write(&local, content)?;
@@ -83,7 +83,7 @@ pub fn parse_jsonl(text: &str) -> Vec<Value> {
     text.lines().filter_map(|l| serde_json::from_str(l.trim()).ok()).collect()
 }
 
-/// upstream's `parse_bool_env_value`.
+/// Parse a boolean env value.
 pub fn parse_bool_env_value(v: &str, name: &str) -> Result<bool> {
     match v.trim().to_lowercase().as_str() {
         "true" | "1" | "yes" => Ok(true),
@@ -92,7 +92,7 @@ pub fn parse_bool_env_value(v: &str, name: &str) -> Result<bool> {
     }
 }
 
-/// upstream's `parse_bool_env_value(..., default=False)`.
+/// `parse_bool_env_value`, defaulting to false.
 pub fn parse_bool_env(v: Option<String>, name: &str) -> Result<bool> {
     v.map_or(Ok(false), |v| parse_bool_env_value(&v, name))
 }

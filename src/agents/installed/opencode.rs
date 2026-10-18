@@ -1,4 +1,4 @@
-//! OpenCode (port of upstream's agents/installed/opencode.py), incl. ACP target mode.
+//! OpenCode installed agent, incl. ACP target mode.
 
 use super::common::{deep_merge_maps, detect_version, installed_dir, nvm_node_install_snippet, opts, skills_dir};
 use super::{connection, ensure_system_dependencies, exec_agent, exec_root, safe_bin_symlink_command};
@@ -103,7 +103,7 @@ pub fn error_messages(text: &str) -> Vec<String> {
         .collect()
 }
 
-/// Totals over `step_start` .. `step_finish` turns (upstream's opencode.txt -> ATIF final_metrics).
+/// Totals over `step_start` .. `step_finish` turns (opencode.txt -> ATIF final_metrics).
 pub fn parse_opencode_usage(text: &str) -> Option<AgentContext> {
     let (mut open, mut turns) = (false, 0);
     let (mut cost, mut input, mut output, mut cache) = (0.0, 0i64, 0i64, 0i64);

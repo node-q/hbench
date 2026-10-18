@@ -1,4 +1,4 @@
-//! trae-agent (port of upstream's agents/installed/trae_agent.py).
+//! trae-agent installed agent.
 
 use super::common::installed_dir;
 use super::{connection, ensure_system_dependencies, exec_agent};
@@ -13,7 +13,7 @@ const SPEC: Spec = Spec { default_provider: None, api_key_envs: &[], base_url_en
 const CONFIG_PATH: &str = "/logs/agent/trae_config.yaml";
 const TRAJECTORY_FILE: &str = "trae-trajectory.json";
 
-/// upstream provider -> trae-agent LLMProvider.
+/// Provider -> trae-agent LLMProvider.
 fn trae_provider(p: &str) -> Option<&'static str> {
     Some(match p {
         "anthropic" => "anthropic",
@@ -98,7 +98,7 @@ impl TraeAgent {
         with_canonical_provider_envs(connection(&self.args, SPEC))
     }
 
-    // ponytail: serde_json map keys serialize alphabetically, upstream's yaml.dump keeps insertion order; same YAML document.
+    // ponytail: serde_json map keys serialize alphabetically rather than in insertion order; same YAML document.
     fn config_yaml(&self, provider: &str, model: &str, api_key: &str, base_url: Option<&str>) -> Result<String> {
         let float = |k: &str, v: &str| v.trim().parse::<f64>().map_err(|_| anyhow!("could not convert string to float: '{v}' ({k})"));
         let mut prov = json!({"api_key": api_key, "provider": provider});
@@ -155,7 +155,7 @@ pub(crate) fn iso_timestamp_ok(v: &Value) -> bool {
         || NaiveDate::parse_from_str(&s, "%Y-%m-%d").is_ok()
 }
 
-/// Totals from trae-agent's trajectory JSON, as upstream's ATIF final_metrics:
+/// Totals from trae-agent's trajectory JSON, as ATIF final_metrics:
 /// (input, output, cache) or None when the converter would produce no steps.
 pub fn trajectory_usage(raw: &Value) -> Option<(i64, i64, i64)> {
     let empty = vec![];
@@ -167,7 +167,7 @@ pub fn trajectory_usage(raw: &Value) -> Option<(i64, i64, i64)> {
     if inter.is_empty() && !steps.iter().any(|s| truthy(&s["error"])) {
         return None;
     }
-    // Step timestamps that fail ATIF validation make upstream's conversion raise (no usage recorded).
+    // Step timestamps that fail ATIF validation make conversion fail (no usage recorded).
     let stepped: Vec<&Value> =
         if inter.is_empty() { steps.iter().filter(|s| truthy(&s["error"])).collect() } else { inter.iter().collect() };
     if !stepped.iter().all(|s| iso_timestamp_ok(&s["timestamp"])) {
@@ -183,7 +183,7 @@ pub fn trajectory_usage(raw: &Value) -> Option<(i64, i64, i64)> {
     Some((i, o, c))
 }
 
-/// upstream's trae-cli version parsing: first non-empty line, strip "trae-cli" / ",", take up to ",".
+/// trae-cli version parsing: first non-empty line, strip "trae-cli" / ",", take up to ",".
 pub fn parse_trae_version(stdout: &str) -> String {
     let text = stdout.trim();
     if let Some(line) = text.lines().map(str::trim).find(|l| !l.is_empty()) {
@@ -313,7 +313,7 @@ mod tests {
         assert!(
             TraeAgent::new(args(json!({"temperature": "hot"}), &[("OPENAI_API_KEY", "k")], Some("openai/x"))).unwrap().prepare().is_err()
         );
-        // Provider alias canonicalized (upstream test_provider_alias_can_be_canonicalized).
+        // Provider alias canonicalized.
         let g = TraeAgent::new(args(json!({}), &[("GEMINI_API_KEY", "gemini-key")], Some("google/gemini-2.5-pro"))).unwrap();
         assert_eq!(g.connection().env, BTreeMap::from([("GOOGLE_API_KEY".to_string(), "gemini-key".to_string())]));
     }

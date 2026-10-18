@@ -1,4 +1,4 @@
-//! Kimi CLI (port of upstream's agents/installed/kimi_cli.py).
+//! Kimi CLI installed agent.
 
 use super::common::{installed_dir, skills_dir};
 use super::{ensure_system_dependencies, exec_agent, exec_error};
@@ -29,7 +29,7 @@ fn provider_config(provider: &str) -> Option<(&'static str, &'static str, &'stat
 }
 const PROVIDERS: &str = "['anthropic', 'gemini', 'google', 'kimi', 'moonshot', 'openai', 'openrouter']";
 
-/// upstream's `options_model` (pydantic, extra="forbid"): reject unknown kwargs and native config.
+/// Strict options: reject unknown kwargs and native config.
 pub(super) fn validate_kwargs(name: &str, args: &AgentArgs, extra: &[&str]) -> Result<()> {
     if args.kwargs.get("config").is_some_and(|v| !v.is_null()) {
         bail!("Agent '{name}' does not support config. You can implement it.");
@@ -96,7 +96,7 @@ impl KimiCli {
         Ok(a)
     }
 
-    /// upstream's `_get_env(*names)`: agent env (all names) before host env (all names).
+    /// Agent env (all names) before host env (all names).
     fn get_env_any(&self, names: &[&str]) -> Option<String> {
         names.iter().find_map(|n| self.args.extra_env.get(*n).cloned()).or_else(|| names.iter().find_map(|n| std::env::var(n).ok()))
     }
@@ -117,7 +117,7 @@ impl KimiCli {
         if ["kimi-k2.7", "kimi-k2.6", "kimi-k2.5", "kimi-k2-thinking"].iter().any(|t| lowered.contains(t)) {
             return 262144;
         }
-        // ponytail: upstream asks litellm's model table; we only honor `model_info` registered via kwargs.
+        // ponytail: no litellm model table; we only honor `model_info` registered via kwargs.
         self.args
             .kwargs
             .get("model_info")
@@ -236,7 +236,7 @@ fn parse_wire_events(text: &str) -> Vec<Value> {
         .collect()
 }
 
-/// upstream's trajectory final_metrics totals: each step's last StatusUpdate token_usage.
+/// Trajectory final_metrics totals: each step's last StatusUpdate token_usage.
 fn usage_from_events(events: &[Value]) -> Option<AgentContext> {
     let (mut steps, mut cur): (Vec<Option<Value>>, Option<Option<Value>>) = (vec![], None);
     for e in events {
