@@ -4,7 +4,7 @@ use super::*;
 use serde_json::{Map, Value, json};
 use std::path::{Path, PathBuf};
 
-/// `JobConfig.model_validate(...)` dumped in full (`model_dump(mode="json")`).
+/// A job config validated and dumped in full (every field, defaults filled).
 pub(super) fn job_config_value(raw: Value) -> Option<Value> {
     let mut raw = raw;
     // scanner._normalize_viewer_job_config: numeric dataset refs -> strings.
@@ -100,7 +100,7 @@ pub(super) fn trial_result(trial_dir: &Path) -> Option<Value> {
         .then_some(r)
 }
 
-/// `TrialConfig.model_validate_json(config.json)`: pruned defaults restored.
+/// The trial's config.json parsed, with pruned defaults restored.
 pub(super) fn trial_config(trial_dir: &Path) -> Option<crate::config::TrialConfig> {
     let mut v = read_json_object(&trial_dir.join("config.json"))?;
     let o = v.as_object_mut()?;

@@ -69,7 +69,7 @@ fn suffix(p: &str) -> &str {
     }
 }
 
-/// `_split_graph_path`: `./file.py:attr.path` with dialect-specific identifiers.
+/// Splits a graph spec `./file.py:attr.path` (identifier rules per runtime) into file and attribute path.
 fn split_graph_path(spec: &str) -> Result<(String, String)> {
     let bad = || anyhow::anyhow!("Invalid graph path '{spec}'. Expected './path/to/file.py:attribute'");
     if spec.matches(':').count() != 1 {

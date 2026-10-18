@@ -5,7 +5,7 @@ use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-/// `TaskConfig.model_validate_toml(...).model_dump(mode="json")`, driven by the exported TaskConfig schema:
+/// task.toml validated and dumped as JSON, driven by the exported TaskConfig schema:
 /// properties in field order, defaults (incl. default factories) filled, legacy fields migrated.
 pub(super) fn task_config_dump(toml_text: &str) -> Option<Value> {
     let mut data: Value = serde_json::to_value(toml::from_str::<toml::Table>(toml_text).ok()?).ok()?;
@@ -128,7 +128,7 @@ fn dump_value(v: &Value, prop: &Value, root: &Value) -> Option<Value> {
     })
 }
 
-/// `EnvironmentConfig._parse_size_to_mb`.
+/// A size with a `K`/`M`/`G` suffix (`512M`, `1.5G`) in megabytes; None otherwise.
 fn parse_size_mb(size: &str) -> Option<i64> {
     let s = size.trim().to_uppercase();
     let (n, unit) = s.split_at(s.len().checked_sub(1)?);
@@ -171,7 +171,7 @@ fn task_info(dir: &Path) -> TaskInfo {
     }
 }
 
-/// `TaskDefinitionScanner.get_instruction`.
+/// The task's instruction text: instruction.md, else the steps' instructions joined by section.
 fn task_instruction(dir: &Path, config: Option<&Value>) -> Value {
     let p = dir.join("instruction.md");
     if p.exists() {

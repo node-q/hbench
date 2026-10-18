@@ -8,8 +8,8 @@ const KNOWN_EXTS: &[&str] = &[
 const KNOWN_DOTFILES: &[&str] = &["gitignore", "gitattributes", "env", "envrc", "bashrc", "zshrc", "editorconfig", "npmrc", "prettierrc"];
 
 /// Tiny backtracking matcher: the file-mention pattern uses lookbehind/lookahead, which
-/// the `regex` crate lacks, so the pattern is hand-built from these nodes with Python `re`'s
-/// exploration order (greedy, alternatives left to right).
+/// the `regex` crate lacks, so the pattern is hand-built from these nodes with backtracking
+/// regex exploration order (greedy, alternatives left to right).
 enum Node {
     Class(fn(char) -> bool),
     Lit(&'static str),
@@ -20,7 +20,7 @@ enum Node {
     Star(Box<Node>),
     Opt(Box<Node>),
     NotAhead(Box<Node>),
-    /// Python `$` (no MULTILINE): end, or before a final newline.
+    /// `$` without multiline mode: end, or before a final newline.
     End,
 }
 
@@ -126,7 +126,7 @@ pub fn file_mentions(text: &str) -> Vec<String> {
 mod tests {
     use super::*;
 
-    /// The reference file-mention test suite plus extra edge cases, checked against Python `re`.
+    /// The file-mention test suite plus extra edge cases.
     #[test]
     fn file_mention_pattern_suite() {
         let suite: &[(&str, &[&str])] = &[

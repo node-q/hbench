@@ -1,7 +1,7 @@
 //! Terminal-Bench (v1) -> task migration (`tasks migrate`).
-//! Byte-for-byte output parity: the TOML writer mimics
-//! `TaskConfig.model_dump_toml()` (python `toml` lib quirks included), and the
-//! docker-compose writer mimics PyYAML's `safe_dump(sort_keys=False)`.
+//! Output is deterministic and byte-stable: task.toml is written in the layout of the `toml` 0.10
+//! encoder, and docker-compose files in block-style YAML (indent 2, width 80, ASCII-only, keys in
+//! source order).
 
 use anyhow::{Context, Result, anyhow, bail};
 use regex::Regex;
@@ -56,7 +56,7 @@ pub fn migrate(input: &Path, output: &Path, overrides: Overrides) -> Result<Vec<
     }
     fs::create_dir_all(&output)?;
     let mut mapped = Vec::new();
-    // Sorted for determinism; Python iterates in iterdir() (fs) order.
+    // Sorted for determinism (not filesystem order).
     for task_dir in sorted_entries(&input)? {
         if !task_dir.is_dir() || !task_dir.join("task.yaml").exists() {
             continue;
@@ -134,7 +134,7 @@ struct TbConfig {
 }
 
 impl TbConfig {
-    /// Mirrors the pydantic model (extra keys ignored). Error texts differ from pydantic's.
+    /// Parses and validates task.yaml (unknown keys ignored).
     fn parse(text: &str) -> Result<Self> {
         let v: Value = serde_yaml_ng::from_str(text).context("task.yaml")?;
         let m = v.as_mapping().ok_or_else(|| anyhow!("task.yaml: expected a mapping"))?;
@@ -187,7 +187,7 @@ impl TbConfig {
         })
     }
 
-    /// The exact task.toml (`model_dump_toml()` output) for this config.
+    /// The task.toml text for this config.
     fn to_toml(&self, ov: &Overrides) -> Result<String> {
         let mut o = String::from("schema_version = \"1.4\"\nartifacts = []\n\n[metadata]\n");
         o += &format!("author_name = {}\n", toml_str(&self.author_name)?);
@@ -311,7 +311,7 @@ fn can_collapse_to_dockerfile(root: &Mapping, services: &Mapping) -> Result<bool
         if !DOCKERFILE_FIELDS.contains(&k.as_str()) && !IGNORED_FIELDS.contains(&k.as_str()) {
             return Ok(false);
         }
-        // Python: set(volumes).issubset(TBENCH_DEFAULT_VOLUMES)
+        // Only the default volumes: every entry is in TBENCH_DEFAULT_VOLUMES.
         if k == "volumes" {
             let default = |x: &Value| x.as_str().is_some_and(|s| TBENCH_DEFAULT_VOLUMES.contains(&s));
             let ok = match v {
@@ -427,7 +427,8 @@ fn append_to_dockerfile(path: &Path, svc: &Mapping, task: &str) -> Result<()> {
     Ok(())
 }
 
-/// Python: re.subn(r"^FROM\s+(?!--platform)(.+)$", "FROM --platform=P \1", flags=M).
+/// Prefixes `--platform=P` to every `FROM` line that lacks one (multiline `^FROM\s+(?!--platform)(.+)$`),
+/// returning the new text and the number of lines changed.
 /// The regex crate has no lookahead, so the backtracking is done by hand.
 fn add_platform(content: &str, platform: &str) -> (String, usize) {
     let c: Vec<char> = content.chars().collect();
@@ -514,7 +515,7 @@ fn copy_remaining_files(src: &Path, env_dir: &Path, handled: &HashSet<String>) -
     Ok(())
 }
 
-/// Python `read_text()`: UTF-8 with universal newlines.
+/// A file as UTF-8 text with `\r\n` and `\r` line endings normalized to `\n`.
 fn read_text(p: &Path) -> Result<String> {
     let s = fs::read_to_string(p).with_context(|| format!("[Errno 2] No such file or directory: '{}'", p.display()))?;
     Ok(s.replace("\r\n", "\n").replace('\r', "\n"))
@@ -889,7 +890,7 @@ junior_time_estimate_min: 7.5
                 "tests/test.sh"
             ]
         );
-        // `\s+` spans the newline, exactly as Python's re does.
+        // `\s+` spans the newline, so the next line is taken as the image.
         assert_eq!(
             read(t.join("environment/Dockerfile")),
             "FROM ubuntu:22.04 AS build\nRUN echo hi\nFROM --platform=linux/amd64 FROM   alpine\nCOPY tests /tests\n\

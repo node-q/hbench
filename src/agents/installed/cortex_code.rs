@@ -180,7 +180,7 @@ impl CortexCode {
     }
 }
 
-/// Python-style `a or b or ... or 0` over usage keys.
+/// The first non-zero integer among the usage keys, else 0.
 fn first_truthy(u: &Value, keys: &[&str]) -> i64 {
     keys.iter().map(|k| u[*k].as_i64().unwrap_or(0)).find(|n| *n != 0).unwrap_or(0)
 }

@@ -1,4 +1,4 @@
-//! Beyond upstream: verifier-only data that some registry datasets build into the agent's image.
+//! Verifier-only data that some registry datasets build into the agent's image.
 //!
 //! - LiveCodeBench copies `tests/config.json` to `/app/config.json` for its public-test checker, and that file
 //!   also holds the hidden tests (`private_test_cases`, base64 + zlib + pickle).

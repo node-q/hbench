@@ -1,5 +1,5 @@
-//! LiteLLM-compatible token pricing (the `model_cost` table pinned to LiteLLM 1.93.0,
-//! + a port of `cost_per_token`'s text-token path).
+//! Token pricing from the bundled model price table (assets/litellm, pinned to 1.93.0): per-token
+//! input/output/cache rates, with tiered rates above a prompt-size threshold; text tokens only.
 
 use serde_json::{Map, Value};
 use std::sync::OnceLock;
@@ -9,7 +9,7 @@ fn table() -> &'static Map<String, Value> {
     T.get_or_init(|| serde_json::from_str(include_str!("../../assets/litellm/model_prices_and_context_window.json")).unwrap_or_default())
 }
 
-/// `litellm.model_cost.get(key)` (non-empty entries only).
+/// The price-table entry for `key` (non-empty entries only).
 pub fn model_cost(key: &str) -> Option<&'static Map<String, Value>> {
     table().get(key).and_then(Value::as_object).filter(|m| !m.is_empty() && key != "sample_spec")
 }
@@ -89,7 +89,7 @@ pub fn cost_per_token(model: &str, prompt: i64, completion: i64, cache_creation:
     Some(rates(model_cost(model)?, prompt).cost(prompt, completion, cache_creation, cache_read))
 }
 
-/// Total cost for a (possibly provider-prefixed) model, or None if LiteLLM has no entry.
+/// Total cost for a (possibly provider-prefixed) model, or None if the price table has no entry.
 pub fn total_cost(model: &str, prompt: i64, completion: i64, cache_creation: i64, cache_read: i64) -> Option<f64> {
     let key = pricing_key(model)?;
     cost_per_token(&key, prompt, completion, cache_creation, cache_read).map(|(a, b)| a + b)
@@ -99,7 +99,7 @@ pub fn total_cost(model: &str, prompt: i64, completion: i64, cache_creation: i64
 mod tests {
     use super::*;
     #[test]
-    fn litellm_parity() {
+    fn price_table_costs() {
         // claude-opus-4-1: in 1.5e-5, out 7.5e-5, cache read 1.5e-6, cache write 1.875e-5.
         let (p, c) = cost_per_token("claude-opus-4-1", 1_000_000, 100_000, 100_000, 400_000).unwrap();
         assert!((p - (500_000.0 * 1.5e-5 + 400_000.0 * 1.5e-6 + 100_000.0 * 1.875e-5)).abs() < 1e-9);

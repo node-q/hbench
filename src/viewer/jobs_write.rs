@@ -179,7 +179,7 @@ fn analyze_args(b: &Value) -> Vec<String> {
     vec!["-a".into(), g("agent", "codex"), "-m".into(), g("model", "openai/gpt-6-luna"), "-e".into(), g("environment", "docker")]
 }
 
-/// `_normalize_local_paths`: a bare dataset path that is a valid task dir becomes a `tasks` entry.
+/// Local-path normalization: a bare dataset path that is a valid task dir becomes a `tasks` entry.
 fn normalize_local_paths(mut data: Value) -> Value {
     let Some(datasets) = data.get("datasets").and_then(Value::as_array).cloned() else { return data };
     let mut remaining = vec![];

@@ -230,7 +230,7 @@ fn normalize_checksum(c: &str) -> Result<String> {
 }
 
 impl RegistryEntry {
-    /// Parse + apply the pydantic validators (normalizes checksum and local cmd).
+    /// Parse and validate an entry (normalizes checksum and local cmd).
     pub fn from_value(v: Value) -> Result<RegistryEntry> {
         let mut e: RegistryEntry = serde_json::from_value(v).map_err(|e| anyhow!("Invalid ACP registry entry: {e}"))?;
         let d = &mut e.distribution;

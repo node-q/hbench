@@ -28,7 +28,7 @@ fn trae_provider(p: &str) -> Option<&'static str> {
     })
 }
 
-/// Pydantic lax `int` coercion.
+/// Integer kwarg: ints, bools, integral floats or numeric strings.
 pub(crate) fn opt_int(k: &str, v: &Value) -> Result<i64> {
     let bad = || anyhow!("Invalid kwargs for agent: {k}: Input should be a valid integer");
     match v {
@@ -39,7 +39,7 @@ pub(crate) fn opt_int(k: &str, v: &Value) -> Result<i64> {
     }
 }
 
-/// Pydantic `str` with coerce_numbers_to_str.
+/// String kwarg; numbers are accepted as their text.
 pub(crate) fn opt_str(k: &str, v: &Value) -> Result<String> {
     match v {
         Value::String(s) => Ok(s.clone()),
@@ -128,8 +128,8 @@ impl TraeAgent {
     }
 }
 
-/// ATIF Step timestamp check: Python's `datetime.fromisoformat(v.replace("Z", "+00:00"))`.
-// Covers the RFC 3339 / naive date-time / date forms agents emit, not every fromisoformat variant.
+/// ATIF Step timestamp check: an ISO-8601 date or date-time (`Z` or offset suffix, or naive).
+// Covers the RFC 3339 / naive date-time / date forms agents emit, not every ISO-8601 variant.
 pub(crate) fn iso_timestamp_ok(v: &Value) -> bool {
     use chrono::{DateTime, NaiveDate, NaiveDateTime};
     let Some(s) = v.as_str() else { return v.is_null() };

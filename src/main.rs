@@ -698,7 +698,7 @@ fn parse_kv(s: &str) -> Result<(String, String), String> {
     s.split_once('=').map(|(k, v)| (k.to_string(), v.to_string())).ok_or_else(|| format!("expected KEY=VALUE, got {s:?}"))
 }
 
-/// fnmatch-style glob: `*`, `?`, `[seq]`, `[!seq]` (case-sensitive like Python on POSIX).
+/// fnmatch-style glob: `*`, `?`, `[seq]`, `[!seq]` (case-sensitive).
 pub fn glob_match(pat: &str, s: &str) -> bool {
     let mut re = String::from("^");
     let mut chars = pat.chars().peekable();

@@ -326,7 +326,7 @@ fn pricing_key(model: &str) -> Option<String> {
 
 /// Token totals of the current turn (earlier `--continue` turns are copied context);
 /// `None` when nothing was parsed or no usage was observed (tokens stay null).
-/// Cost is an all-or-nothing LiteLLM estimate (`estimate_cost_usd`).
+/// Cost is an all-or-nothing price-table estimate (None if any part is unpriced).
 pub fn usage(logs_dir: &Path, model_name: Option<&str>) -> Option<AgentContext> {
     let stream_path = logs_dir.join("kimi-code.txt");
     let has_stream = stream_path.is_file();
@@ -447,7 +447,7 @@ mod tests {
 
     #[test]
     fn litellm_cost_estimate() {
-        // moonshotai/kimi-k3 has no LiteLLM entry: cost stays None.
+        // moonshotai/kimi-k3 has no price-table entry: cost stays None.
         assert_eq!(usage(&logs(Some(WIRE), Some(STREAM)), Some("moonshot/kimi-k2.6")).unwrap().cost_usd, None);
         // moonshotai/x is priced as moonshot/x: in 6e-7, out 2.5e-6, cache read 1.5e-7.
         let wire = WIRE.replace("moonshotai/kimi-k3", "moonshotai/kimi-k2-0905-preview");

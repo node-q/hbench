@@ -86,7 +86,7 @@ pub fn criteria_guidance(r: &Rubric) -> String {
     r.criteria.iter().map(|c| format!("- {}: {}", c.name, c.guidance)).collect::<Vec<_>>().join("\n")
 }
 
-/// Pydantic-style object schema (omits `required` when empty, like `model_json_schema`).
+/// JSON Schema object with titled properties (`required` omitted when empty).
 fn object_schema(title: &str, props: Vec<(String, Value)>) -> Map<String, Value> {
     let required: Vec<Value> = props.iter().map(|(k, _)| Value::String(k.clone())).collect();
     let mut o = Map::new();
@@ -103,7 +103,7 @@ fn criteria_props(r: &Rubric) -> Vec<(String, Value)> {
     r.criteria.iter().map(|c| (c.name.clone(), json!({"$ref": "#/$defs/QualityCheckModel"}))).collect()
 }
 
-/// `$defs` first, then the root object, matching pydantic's key order.
+/// `$defs` first, then the root object's keys.
 fn with_defs(mut defs: Vec<(&str, Value)>, root: Map<String, Value>, uses_check_model: bool) -> Value {
     if uses_check_model {
         defs.push(("CheckOutcome", json!({"enum": ["pass", "fail", "not_applicable"], "title": "CheckOutcome", "type": "string"})));
@@ -388,7 +388,7 @@ fn copy_tree(src: &Path, dst: &Path, ignore: &[&str]) -> Result<()> {
     Ok(())
 }
 
-/// Sorted relative paths of all files under `dir` (Python's sorted(rglob) order).
+/// Sorted relative paths of all files under `dir` (sorted by full path).
 pub fn build_file_tree(dir: &Path) -> String {
     fn walk(d: &Path, out: &mut Vec<PathBuf>) {
         for e in std::fs::read_dir(d).into_iter().flatten().flatten() {
@@ -762,7 +762,7 @@ fn outcome_str(o: Outcome) -> &'static str {
     }
 }
 
-/// Python's `str.title()` after replacing underscores with spaces.
+/// Underscores to spaces, then each alphabetic run capitalized (`not_applicable` -> `Not Applicable`).
 fn title_case(name: &str) -> String {
     let mut out = String::new();
     let mut prev_alpha = false;
@@ -961,7 +961,7 @@ mod tests {
 
     #[test]
     fn schemas_match_golden() {
-        // Generated with pydantic 2.14 model_json_schema() on the reference models.
+        // Golden schemas for the analysis output models.
         let defs = r##""CheckOutcome": {"enum": ["pass", "fail", "not_applicable"], "title": "CheckOutcome", "type": "string"},
             "QualityCheckModel": {"properties": {"explanation": {"title": "Explanation", "type": "string"}, "outcome": {"$ref": "#/$defs/CheckOutcome"}},
                 "required": ["explanation", "outcome"], "title": "QualityCheckModel", "type": "object"}"##;

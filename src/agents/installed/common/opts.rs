@@ -1,5 +1,5 @@
-//! kwargs parsing for the installed agents (pydantic lax-mode style coercion of option
-//! fields).
+//! kwargs parsing for the installed agents (lenient coercion of option values: numeric strings,
+//! yes/no strings, numbers as text).
 
 use crate::agents::AgentArgs;
 use anyhow::{Result, anyhow, bail};
@@ -51,7 +51,7 @@ pub fn boolean(a: &AgentArgs, k: &str, fallback: Option<&str>) -> Result<Option<
     lax_bool(&v).map(Some).ok_or_else(|| anyhow!("Invalid value for '{k}': {v} is not a valid boolean"))
 }
 
-/// Pydantic lax `bool`: true/false, 0/1, and the usual yes/no strings.
+/// Lenient bool: true/false, 0/1, and the usual yes/no strings.
 pub fn lax_bool(v: &Value) -> Option<bool> {
     match v {
         Value::Bool(b) => Some(*b),
@@ -86,7 +86,7 @@ pub fn choice(a: &AgentArgs, k: &str, fallback: Option<&str>, choices: &[&str]) 
     }
 }
 
-/// Optional int kwarg (pydantic lax int: ints or numeric strings, not bools or floats).
+/// Optional int kwarg (ints or numeric strings, not bools or floats).
 pub fn kw_int(args: &AgentArgs, k: &str) -> Result<Option<i64>> {
     match args.kwargs.get(k) {
         None | Some(Value::Null) => Ok(None),

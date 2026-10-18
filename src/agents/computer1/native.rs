@@ -87,7 +87,7 @@ pub(super) fn anthropic_scale(x: i64, y: i64, w: i64, h: i64) -> (i64, i64) {
     if scale >= 1.0 { (x, y) } else { ((x as f64 / scale) as i64, (y as f64 / scale) as i64) }
 }
 
-/// `scale_normalized_coordinate`: 0..999 grid -> desktop pixels (Python banker's rounding).
+/// `scale_normalized_coordinate`: 0..999 grid -> desktop pixels (round half to even).
 fn scale_normalized(x: i64, y: i64, w: i64, h: i64) -> (i64, i64) {
     let s = |v: i64, d: i64| ((v as f64 * (d - 1) as f64 / 999.0).round_ties_even() as i64).clamp(0, d - 1);
     (s(x, w), s(y, h))
@@ -494,7 +494,7 @@ pub(super) trait Transport: Send + Sync {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Sdk {
-    /// anthropic / openai Python SDKs: 2 retries on 408/409/429/5xx and connection errors.
+    /// As the anthropic / openai SDKs do: 2 retries on 408/409/429/5xx and connection errors.
     Stainless,
     /// google-genai with a retry wrapper: 4 attempts on 429/500/503/504.
     Gemini,
@@ -672,7 +672,7 @@ pub(super) enum Kind {
 /// One native provider instance (conversation state + transport).
 pub(super) struct Native {
     pub kind: Kind,
-    /// Model name with the provider's litellm prefixes stripped (what the SDK receives).
+    /// Model name with the provider's routing prefixes stripped (what the SDK receives).
     pub model: String,
     w: i64,
     h: i64,
@@ -818,7 +818,7 @@ impl Native {
         m
     }
 
-    /// The `beta.messages.create` body (Bedrock: reshaped like `AnthropicBedrock._prepare_options`).
+    /// The Messages API body with the computer-use beta (Bedrock: reshaped for the invoke endpoint).
     pub fn anthropic_body(&self) -> Value {
         let mut b = json!({
             "model": self.model,
@@ -1155,11 +1155,11 @@ impl Computer1 {
             };
             results.push(r);
         }
-        // Python's CancelledError bookkeeping has no analogue; a dropped future records nothing.
+        // Cancellation drops the future, so nothing is recorded for the interrupted turn.
         results
     }
 
-    /// `_run_step_loop` (Anthropic / Bedrock / Gemini).
+    /// The step loop (Anthropic / Bedrock / Gemini).
     pub(super) async fn run_step_loop(
         &mut self,
         sh: &dyn Shell,
@@ -1211,7 +1211,7 @@ impl Computer1 {
         Ok(())
     }
 
-    /// `OpenAIComputerUseProvider.run_episodes`: Responses API with `previous_response_id`.
+    /// The OpenAI episode loop: Responses API chained with `previous_response_id`.
     pub(super) async fn run_openai_loop(&mut self, sh: &dyn Shell, ctx: &mut AgentContext, instruction: &str) -> Result<()> {
         self.push_step(Map::from_iter([("source".into(), json!("user")), ("message".into(), json!(instruction))]));
         self.dump_trajectory();
@@ -1527,7 +1527,7 @@ mod tests {
             h.last().unwrap().1,
             "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20150830/us-east-1/service/aws4_request, SignedHeaders=host;x-amz-date, Signature=5fa00fa31553b73ebf1942676e86291e8372ff2a2260956d9b8aae1d763fbf31"
         );
-        // Bedrock invoke: ':' is %3A in the canonical path; session token is signed (cross-checked with Python hmac/hashlib).
+        // Bedrock invoke: ':' is %3A in the canonical path; session token is signed (signature cross-checked against an independent HMAC-SHA256).
         let c = AwsCreds { key_id: "AKID".into(), secret: "SECRET".into(), token: Some("TOK".into()), region: "us-west-2".into() };
         let h = sigv4_headers(
             &c,
@@ -1784,7 +1784,7 @@ mod tests {
 
     #[tokio::test]
     async fn step_loop_limits_dead_session_and_fallback() {
-        // max_turns: no unconsumed request; the fallback writes an empty answer (no litellm query).
+        // max_turns: no unconsumed request; the fallback writes an empty answer (no chat-client query).
         let a = api(vec![response(vec![json!({"action": "screenshot"})], "tool_use")]);
         let (mut c, logs) = native_agent(Kind::Bedrock, "bedrock/us.anthropic.claude-opus-4-7-v1:0", &a, json!({"max_turns": 1}));
         let sh = MockShell::default();

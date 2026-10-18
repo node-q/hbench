@@ -49,7 +49,7 @@ const WEB_FETCH_BACKENDS: [(&str, &str); 2] = [
     ("EXA_API_KEY", "deerflow.community.exa.tools:web_fetch_tool"),
 ];
 
-/// DeerFlow's `_coerce_bool` over pydantic-validated bools.
+/// Boolean kwarg: `on`/`off` plus the usual bool forms (bools, 0/1, yes/no strings).
 fn kw_flag(args: &AgentArgs, k: &str, default: bool) -> Result<bool> {
     match args.kwargs.get(k) {
         None | Some(Value::Null) => Ok(default),

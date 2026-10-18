@@ -119,7 +119,7 @@ pub fn create(args: AgentArgs) -> Result<AgentBox> {
     Ok(Box::new(Eve::new(args)?))
 }
 
-/// Pydantic lax int: ints, integral floats, numeric strings.
+/// Integer kwarg: ints, integral floats, numeric strings.
 fn int_opt(args: &AgentArgs, k: &str, default: i64) -> Result<i64> {
     let bad = || anyhow!("Invalid kwargs for agent 'eve':\n  {k}: Input should be a valid integer");
     match args.kwargs.get(k) {
@@ -428,7 +428,7 @@ struct Metrics {
 
 fn usage_metrics(data: &Map<String, Value>) -> Option<Metrics> {
     let src = data.get("usage").and_then(Value::as_object).unwrap_or(data);
-    // Python isinstance(v, int) accepts bools too.
+    // Bools count as integers (0/1) here.
     let int = |ks: &[&str]| {
         ks.iter().find_map(|k| match src.get(*k)? {
             Value::Bool(b) => Some(*b as i64),

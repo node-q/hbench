@@ -1,6 +1,6 @@
 //! computer-1: desktop computer-use agent.
 //!
-//! Ported: the generic strict-JSON harness (the `litellm` provider flavor, the default for
+//! Includes: the generic strict-JSON harness (the `litellm` provider flavor, the default for
 //! models outside the anthropic/bedrock/gemini/vertex_ai routes), the native computer-use
 //! providers (`native`: Anthropic/Bedrock computer tool, Gemini Computer Use, OpenAI Responses
 //! `computer` tool) with model-based provider selection, and the shared pieces: the desktop runtime
@@ -276,7 +276,7 @@ fn parse_action_dict(d: &Value, w: &mut Vec<String>) -> Result<Action, String> {
     Ok(a)
 }
 
-/// Port of `parse_computer_1_response`.
+/// Parses the model's JSON action reply, collecting warnings for recoverable issues.
 fn parse_response(response: &str) -> ParsedAction {
     let mut w = vec![];
     let (json_str, extra) = extract_json_object(response);
@@ -408,7 +408,7 @@ fn rt_err(label: &str, code: i64, detail: impl Into<String>) -> anyhow::Error {
     RuntimeErr { label: label.into(), code, detail: detail.into() }.into()
 }
 
-/// Python's `TimeoutError` from the readiness waits (the agent maps it to the timeout template).
+/// A readiness wait timed out (the agent maps it to the timeout template).
 #[derive(Debug)]
 struct ReadinessTimeout(String);
 impl std::fmt::Display for ReadinessTimeout {
@@ -486,7 +486,7 @@ struct Geometry {
     window_height: i64,
 }
 
-/// Port of `build_xdotool_argv`: None for actions xdotool doesn't handle.
+/// xdotool argv lists for an action; None for actions xdotool doesn't handle.
 fn build_xdotool_argv(a: &Action, g: &Geometry) -> Option<Vec<Vec<String>>> {
     let s = |v: &str| v.to_string();
     let modifier = resolve_modifier(a.modifier.as_deref());
@@ -1127,7 +1127,7 @@ impl Options {
     }
 }
 
-/// Whether the model has a native computer-use tool (litellm flag, else model-name patterns).
+/// Whether the model has a native computer-use tool (model-table flag, else model-name patterns).
 fn is_computer_use_model(model: &str) -> bool {
     let l = model.to_lowercase();
     if ["gemini-3.7-flash", "gemini-3.8-flash"].contains(&l.rsplit('/').next().unwrap_or("")) {
@@ -1183,7 +1183,7 @@ fn resolve_provider_name(model: &str, override_: Option<&str>) -> Result<String>
     Ok(name)
 }
 
-/// LiteLLM `supports_vision` for known models (None = model unknown or flag unset).
+/// The model table's `supports_vision` for known models (None = model unknown or flag unset).
 fn supports_vision(model: &str) -> Option<bool> {
     lookup_model_info(model)?;
     let l = model.to_lowercase();
@@ -1243,7 +1243,7 @@ impl Computer1 {
         let opts = Options::parse(&args.kwargs)?;
         let model = args.model_name.clone().ok_or_else(|| anyhow!("model_name is required for computer-1"))?;
         let provider = resolve_provider_name(&model, opts.provider.as_deref())?;
-        // Known to LiteLLM without vision support -> fail fast (unknown models pass).
+        // Known to the model table without vision support -> fail fast (unknown models pass).
         if provider == "litellm"
             && opts.enable_images.is_none()
             && lookup_model_info(&model).is_some()
@@ -1276,7 +1276,7 @@ impl Computer1 {
             use_responses_api: false,
             llm_kwargs,
         };
-        // Native providers talk to their vendor APIs directly; the litellm client is never used
+        // Native providers talk to their vendor APIs directly; the chat client is never used
         // (no JSON loop, compaction or fallback query), so its endpoint isn't resolved.
         let llm: Box<dyn Llm> =
             if provider == "litellm" { Box::new(ChatClient::new(cfg, &|k: &str| args.get_env(k))?) } else { Box::new(NoLlm) };
@@ -1924,7 +1924,7 @@ impl Computer1 {
     }
 }
 
-/// `_aggregate_step_metrics`: native providers' final metrics are the per-step sums.
+/// Native providers' final metrics: the per-step sums.
 fn aggregate_step_metrics(steps: &[Value]) -> Value {
     let mut fm = Map::new();
     for (key, total) in [
@@ -1944,7 +1944,7 @@ fn aggregate_step_metrics(steps: &[Value]) -> Value {
     Value::Object(fm)
 }
 
-/// Stand-in client for native providers, which never query litellm.
+/// Stand-in client for native providers, which never use the chat client.
 struct NoLlm;
 
 #[async_trait::async_trait]

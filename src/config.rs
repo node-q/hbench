@@ -124,8 +124,8 @@ pub struct AgentConfig {
     /// Seed the agent's session from a native (.jsonl) or ATIF (.json) trajectory.
     pub load_trajectory: Option<String>,
     pub extra_allowed_hosts: Vec<String>,
-    /// Beyond upstream: `extra_allowed_hosts` also restrict a task whose agent phase is public, instead of
-    /// being ignored there. The agent phase then reaches only those hosts (none, if the list is empty).
+    /// Make `extra_allowed_hosts` also restrict a task whose agent phase is public, instead of being
+    /// ignored there. The agent phase then reaches only those hosts (none, if the list is empty).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub enforce_allowlist: bool,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -661,7 +661,7 @@ impl JobConfig {
     }
 }
 
-/// Rewrite the legacy keys upstream still accepts to their current form, so the strict parse sees only
+/// Rewrite legacy config keys to their current form, so the strict parse sees only
 /// current keys: `orchestrator.{n_concurrent_trials,quiet,retry}` move to the top level, `plugins` and
 /// `environment.suppress_override_warnings` (both no-ops) go, `environment.mounts_json` becomes `mounts`,
 /// and a dataset's `registry: {url, path}` becomes `registry_url` / `registry_path`.

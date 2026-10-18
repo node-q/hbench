@@ -309,7 +309,7 @@ fn compile_verifiers(artifacts: &[String], verify: bool, reward: Option<&str>) -
     vec![]
 }
 
-/// `key=value` kwargs: JSON values, Python literals True/False/None, else strings.
+/// `key=value` kwargs: JSON values, the literals True/False/None, else strings.
 fn parse_kwargs(items: &[String]) -> Result<Map<String, Value>> {
     let mut m = Map::new();
     for kw in items {

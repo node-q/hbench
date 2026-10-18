@@ -59,7 +59,7 @@ impl Codex {
         Ok(if opts::boolean(&self.args, "disable_web_search", None)?.unwrap_or(false) { Some("disabled".into()) } else { web })
     }
 
-    /// `_seed_load_trajectory` + `_upload_load_trajectory`: place the rollout under
+    /// Place the rollout to resume from under
     /// /logs/agent/sessions/<YYYY>/<MM>/<DD>/ (the resume path copies it into CODEX_HOME).
     async fn seed_load_trajectory(&self, cx: &AgentCtx<'_>) -> Result<()> {
         let Some(src) = self.args.load_trajectory.clone() else { bail!("load_trajectory is not set") };
@@ -92,7 +92,7 @@ impl Codex {
         r
     }
 
-    /// `acp_command`'s per-session `CODEX_CONFIG` (Python `json.dumps` formatting).
+    /// The ACP command's per-session `CODEX_CONFIG` (JSON with `, ` / `: ` separators).
     fn acp_session_config(&self) -> Option<String> {
         let mut items: Vec<(&str, Value)> = vec![];
         if let Some(m) = &self.args.model_name {
@@ -172,7 +172,7 @@ impl Codex {
         Ok(None)
     }
 
-    /// `_ensure_agent_owned_dir`: private dir under root-owned /installed-agent.
+    /// A private, agent-owned dir under root-owned /installed-agent.
     async fn ensure_agent_owned_dir(cx: &AgentCtx<'_>, path: &str) -> Result<()> {
         let r = exec_agent(cx, "printf \"\\nHBENCH_CODEX_ID %s %s\\n\" \"$(id -u)\" \"$(id -g)\"", &BTreeMap::new()).await?;
         let re = regex::Regex::new(r"(?m)^HBENCH_CODEX_ID ([0-9]+) ([0-9]+)$").unwrap();
@@ -286,7 +286,7 @@ fn rollout_timestamp(traj: &Value) -> chrono::DateTime<chrono::FixedOffset> {
         return now();
     };
     chrono::DateTime::parse_from_rfc3339(ts)
-        // Naive timestamps taken as UTC (Python would use local time).
+        // Naive timestamps taken as UTC.
         .or_else(|_| chrono::NaiveDateTime::parse_from_str(ts, "%Y-%m-%dT%H:%M:%S%.f").map(|n| n.and_utc().fixed_offset()))
         .unwrap_or_else(|_| now())
 }
@@ -377,7 +377,7 @@ fn latest_session_file(logs_dir: &Path) -> Option<PathBuf> {
 }
 
 /// Totals from the last `token_count` event (the rollout's ATIF final_metrics).
-/// Cost: Codex's own `total_cost`/`cost_usd` when present, else the sum of per-API-call LiteLLM
+/// Cost: Codex's own `total_cost`/`cost_usd` when present, else the sum of per-API-call price-table
 /// estimates (None if any call is unpriced). `model` is the fallback when no `turn_context` names one.
 pub fn parse_rollout_usage(text: &str, model: Option<&str>) -> Option<AgentContext> {
     let events = parse_jsonl(text);
@@ -726,7 +726,7 @@ not json
 
     #[test]
     fn litellm_cost_estimate() {
-        // gpt-5: in 1.25e-6, cache read 1.25e-7, out 1e-5 (pinned LiteLLM table).
+        // gpt-5: in 1.25e-6, cache read 1.25e-7, out 1e-5 (bundled price table).
         let text = r#"{"type":"turn_context","payload":{"model":"gpt-5"}}
 {"type":"response_item","payload":{"type":"message","role":"user","content":[]}}
 {"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":999999,"output_tokens":999}}}}

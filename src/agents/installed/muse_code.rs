@@ -198,7 +198,7 @@ fn session_metadata(records: &Records) -> Value {
         .unwrap_or_else(|| json!({}))
 }
 
-/// Base `_atif_session_id`: reuse the trajectory's session id when it is a UUID; else mint one.
+/// ATIF session id: reuse the trajectory's session id when it is a UUID; else mint one.
 fn atif_session_id(traj: &Value) -> String {
     traj["session_id"]
         .as_str()

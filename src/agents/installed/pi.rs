@@ -186,7 +186,7 @@ fn int(v: &Value) -> i64 {
     v.as_i64().unwrap_or(0)
 }
 
-/// `_metrics_from_usage` -> (prompt, completion, cached, cost).
+/// Usage record -> (prompt, completion, cached, cost).
 fn metrics(usage: &Value) -> Option<(i64, i64, i64, Option<f64>)> {
     let u = usage.as_object()?;
     if !["input", "output", "cacheRead", "cacheWrite", "reasoning", "totalTokens", "cost"].iter().any(|k| u.contains_key(*k)) {

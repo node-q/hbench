@@ -1,6 +1,7 @@
 //! Job = attempts x tasks x agents: concurrency, per-agent pools, retries, resume, stats, locks.
 
 use crate::config::{JobConfig, TaskRef, TrialConfig};
+use crate::fmt::title_case;
 use crate::metrics;
 use crate::registry;
 use crate::task::Task;
@@ -604,18 +605,6 @@ fn format_duration(start: DateTime<Utc>, end: Option<DateTime<Utc>>) -> String {
     } else {
         format!("{s}s")
     }
-}
-
-/// Capitalizes the first letter of each alphabetic run and lowercases the rest (`pass_rate` -> `Pass_Rate`).
-fn title_case(s: &str) -> String {
-    let mut prev_alpha = false;
-    s.chars()
-        .map(|c| {
-            let r = if prev_alpha { c.to_lowercase().to_string() } else { c.to_uppercase().to_string() };
-            prev_alpha = c.is_alphabetic();
-            r
-        })
-        .collect()
 }
 
 /// Metric value for the summary table: floats as `{:.3}`, `-` for none, strings as-is, anything else as JSON.

@@ -154,7 +154,7 @@ impl Agent for OpenCode {
         .map(String::from)
         .to_vec();
         if let Some(m) = &self.args.model_name {
-            // Inline config outranks opencode.json, like --model in run(). Python json.dumps spacing.
+            // Inline config outranks opencode.json, like --model in run(). JSON with `: ` spacing.
             c.push(format!("OPENCODE_CONFIG_CONTENT={{\"model\": {}}}", json!(m)));
         }
         c.extend(["opencode".into(), "acp".into()]);

@@ -53,7 +53,7 @@ fn is_default_workdir(v: &Option<String>) -> bool {
     v.as_deref().is_none_or(|s| s == DEFAULT_WORKDIR)
 }
 
-/// `docker_image`/`workdir` are Options so "explicitly set" (pydantic `model_fields_set`) is known.
+/// `docker_image`/`workdir` are Options so "explicitly set" is known.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct CompileEnvironment {
     #[serde(default, skip_serializing_if = "Option::is_none")]

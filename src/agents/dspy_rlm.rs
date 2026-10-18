@@ -133,7 +133,7 @@ pub fn create(args: AgentArgs) -> Result<AgentBox> {
 }
 
 impl DspyRlm {
-    /// Host env for the runner: dspy/LiteLLM read API keys from it (agent env overrides).
+    /// Host env for the runner: dspy reads API keys from it (agent env overrides).
     fn host_env(&self) -> BTreeMap<String, String> {
         self.args.extra_env.clone()
     }
@@ -169,7 +169,7 @@ impl DspyRlm {
         let done = run_runner(&cfg, &self.host_env(), &self.args.logs_dir.join("rlm").join("runner.log"), ex).await?;
         Self::apply(ctx, &done);
         match done["error"].as_str() {
-            // The Python exception class becomes the trial's exception type.
+            // The runner's exception type name becomes the trial's exception type.
             // Leaks the (short) class name once per failed run; kind_err wants &'static str.
             Some(e) => Err(kind_err(done["kind"].as_str().unwrap_or("RuntimeError"), e.to_string())),
             None => Ok(()),

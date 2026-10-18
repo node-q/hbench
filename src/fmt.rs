@@ -96,3 +96,15 @@ pub fn truthy(v: &Value) -> bool {
         Value::Object(o) => !o.is_empty(),
     }
 }
+
+/// Capitalizes the first letter of each alphabetic run and lowercases the rest (`pass_rate` -> `Pass_Rate`).
+pub fn title_case(s: &str) -> String {
+    let mut prev_alpha = false;
+    s.chars()
+        .map(|c| {
+            let r = if prev_alpha { c.to_lowercase().to_string() } else { c.to_uppercase().to_string() };
+            prev_alpha = c.is_alphabetic();
+            r
+        })
+        .collect()
+}

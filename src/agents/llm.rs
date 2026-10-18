@@ -3,7 +3,7 @@
 //! `anthropic/` models go to the Anthropic Messages API; everything else to an OpenAI-compatible
 //! chat-completions endpoint (or the OpenAI Responses API when asked). Keys and base URLs come from
 //! `model_connection`. Transient failures are retried with exponential backoff, context overflow
-//! is a distinct error, and usage/cost are reported like LiteLLM's `ModelResponse.usage`.
+//! is a distinct error, and usage/cost are reported in the chat-completions `usage` shape.
 //!
 //! HTTP goes through the host `curl` (no HTTP client crate in Cargo.toml), like
 //! `registry.rs`. Secrets travel on curl's stdin config, never argv.
@@ -20,7 +20,7 @@ use tokio::io::AsyncWriteExt;
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Usage {
-    /// Includes cached and cache-creation tokens (LiteLLM's `prompt_tokens`).
+    /// Includes cached and cache-creation tokens.
     pub prompt_tokens: i64,
     pub completion_tokens: i64,
     /// Cache reads (`prompt_tokens_details.cached_tokens`).
@@ -118,7 +118,7 @@ async fn with_retries<T, Fut: std::future::Future<Output = Result<T, LlmError>>>
     }
 }
 
-/// LiteLLM model-map fields used here (limits + per-token pricing).
+/// Model-table fields used here (limits + per-token pricing).
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct ModelInfo {
     pub max_input_tokens: Option<i64>,
@@ -128,13 +128,13 @@ pub struct ModelInfo {
     /// 0 = billed like input.
     pub cache_read_cost: f64,
     pub cache_write_cost: f64,
-    /// Claude models where LiteLLM maps reasoning_effort to `thinking: {type: adaptive}`.
+    /// Claude models whose reasoning_effort maps to `thinking: {type: adaptive}`.
     pub adaptive_thinking: bool,
     /// The pricing-table entry (tiered rates); `None` once `model_info` overrides a cost.
     pub pricing: Option<&'static Map<String, Value>>,
 }
 
-/// LiteLLM's `model_cost` entry (from the pinned LiteLLM version's table).
+/// The bundled model price table's entry for `name`.
 /// Unknown models get no pricing (cost 0/None) and the `DEFAULT_CONTEXT_LIMIT` fallback.
 fn builtin_info(name: &str) -> Option<ModelInfo> {
     let m = crate::agents::pricing::model_cost(name)?;
@@ -162,7 +162,7 @@ pub fn lookup_model_info(model: &str) -> Option<ModelInfo> {
     }
 }
 
-/// The `model_info` kwarg (litellm.register_model): overrides the known entry.
+/// The `model_info` kwarg: overrides fields of the known entry.
 fn merge_model_info(mut info: ModelInfo, v: &Value) -> ModelInfo {
     let i = |k: &str| v.get(k).and_then(|x| x.as_f64().or_else(|| x.as_str()?.parse().ok()));
     if let Some(x) = i("max_input_tokens").or_else(|| i("max_tokens")) {
@@ -185,7 +185,8 @@ fn merge_model_info(mut info: ModelInfo, v: &Value) -> ModelInfo {
     info
 }
 
-/// Port of `validate_hosted_vllm_model_config`.
+/// Checks a `hosted_vllm/` model: one safe-character name segment, and a `model_info` with numeric
+/// token limits and costs.
 fn validate_hosted_vllm(model: &str, info: Option<&Value>) -> Result<()> {
     if !model.starts_with("hosted_vllm/") {
         bail!("hosted_vllm models must start with 'hosted_vllm/'. Got '{model}'.");
@@ -228,12 +229,12 @@ pub struct Endpoint {
     pub api: Api,
     pub url: String,
     pub headers: Vec<(String, String)>,
-    /// Model name sent to the provider (provider prefix stripped, like LiteLLM).
+    /// Model name sent to the provider (provider prefix stripped).
     pub model: String,
     pub provider: String,
 }
 
-/// Base URLs LiteLLM knows that `model_connection` doesn't list.
+/// Default base URLs for providers `model_connection` doesn't list.
 fn default_base(provider: &str) -> Option<&'static str> {
     model_connection::provider(provider).and_then(|p| p.base_url).or(match provider {
         "ollama" | "ollama_chat" => Some("http://localhost:11434"),
@@ -357,10 +358,8 @@ pub fn approx_tokens(messages: &[Value]) -> i64 {
     3 + messages.iter().map(|m| 4 + (content_text(&m["content"]).chars().count() as i64 + 3) / 4).sum::<i64>()
 }
 
-/// LiteLLM 1.93 `token_counter(model, messages)` (tiktoken path). Provider-prefixed / non-OpenAI
-/// names fall back to gpt-3.5-turbo's cl100k_base, as `_fix_model_name` does; bare OpenAI chat
-/// models use their own encoding. Bare pre-claude-3 names use LiteLLM's bundled Claude
-/// HF tokenizer there; cl100k_base here.
+/// Prompt token count for `messages` (tiktoken). Provider-prefixed / non-OpenAI names use
+/// cl100k_base; bare OpenAI chat models use their own encoding (o200k_base for newer ones).
 pub fn token_counter(model: &str, messages: &[Value]) -> i64 {
     let bare_openai = !model.contains('/') && ["gpt-", "o1", "o3", "o4", "chatgpt"].iter().any(|p| model.starts_with(p));
     let o200k = bare_openai
@@ -418,7 +417,7 @@ pub fn content_text(c: &Value) -> String {
     }
 }
 
-/// Port of `add_anthropic_caching`: ephemeral cache_control on the newest content blocks, max 4.
+/// Ephemeral cache_control on the newest content blocks, max 4.
 pub fn add_anthropic_caching(mut messages: Vec<Value>, model: &str) -> Vec<Value> {
     let l = model.to_lowercase();
     if !(l.contains("anthropic") || l.contains("claude")) {
@@ -453,7 +452,7 @@ fn is_claude(model: &str) -> bool {
     l.contains("anthropic") || l.contains("claude")
 }
 
-/// Error phrases that mean context overflow (plus LiteLLM's own mapping).
+/// Error phrases that mean context overflow.
 pub fn is_context_length_error(text: &str) -> bool {
     let t = text.to_lowercase();
     [
@@ -469,7 +468,7 @@ pub fn is_context_length_error(text: &str) -> bool {
     .any(|p| t.contains(p))
 }
 
-/// LiteLLM's exception class for an HTTP error status. Transient statuses (408/409/429/5xx)
+/// The provider exception type for an HTTP error status. Transient statuses (408/409/429/5xx)
 /// are retryable and carry the server's Retry-After (`retry_after`, zero if none).
 pub fn classify_http(status: u16, body: &str, retry_after: Duration) -> LlmError {
     let msg = format!("HTTP {status}: {}", tail(body, 4000));
@@ -502,9 +501,9 @@ pub struct Request {
 /// Context window assumed for models with no known limit.
 const DEFAULT_CONTEXT_LIMIT: i64 = 128_000;
 
-/// LiteLLM's default request timeout.
+/// Default request timeout.
 const DEFAULT_TIMEOUT_SECS: f64 = 6000.0;
-/// LiteLLM/transport kwargs that must not reach the request body.
+/// Client/transport kwargs that must not reach the request body.
 const NON_BODY: [&str; 8] =
     ["api_base", "base_url", "drop_params", "num_retries", "custom_llm_provider", "logger_fn", "litellm_debug", "max_retries"];
 
@@ -515,7 +514,7 @@ fn obj<'a>(m: &'a mut Map<String, Value>, k: &str) -> &'a mut Map<String, Value>
     m.get_mut(k).and_then(Value::as_object_mut).unwrap()
 }
 
-/// Pull transport-level settings out of LiteLLM-style params.
+/// Pull transport-level settings (headers, timeout, base URL) out of the call params.
 fn split_transport(p: &mut Map<String, Value>, ep: &Endpoint) -> (Vec<(String, String)>, Duration, Map<String, Value>) {
     let mut headers = ep.headers.clone();
     if let Some(k) = p.remove("api_key").and_then(|v| v.as_str().map(String::from)) {
@@ -546,13 +545,13 @@ fn split_transport(p: &mut Map<String, Value>, ep: &Endpoint) -> (Vec<(String, S
     (headers, Duration::from_secs_f64(timeout), extra)
 }
 
-/// OpenAI reasoning models only accept the default temperature; LiteLLM's drop_params drops it.
+/// OpenAI reasoning models only accept the default temperature, so it is dropped.
 fn openai_rejects_temperature(ep: &Endpoint, t: &Value) -> bool {
     let m = ep.model.to_lowercase();
     ep.provider == "openai" && ["o1", "o3", "o4", "gpt-5"].iter().any(|p| m.starts_with(p)) && t.as_f64() != Some(1.0)
 }
 
-/// LiteLLM's `reasoning_effort` -> Anthropic `thinking` mapping.
+/// `reasoning_effort` -> Anthropic `thinking` mapping.
 fn anthropic_thinking(effort: &str, adaptive: bool) -> Option<Value> {
     let budget = match effort {
         "none" => return None,
@@ -637,7 +636,7 @@ fn ints(v: &Value) -> Option<Vec<i64>> {
     v.as_array().map(|a| a.iter().filter_map(Value::as_i64).collect())
 }
 
-/// Chat-completions response -> LlmResponse (LiteLLM's ModelResponse handling in `call`).
+/// Chat-completions response -> LlmResponse.
 pub fn parse_chat(v: &Value, info: Option<&ModelInfo>, model: &str, rollout: bool) -> Result<LlmResponse, LlmError> {
     let choice =
         v["choices"].get(0).ok_or_else(|| api_err("APIError", format!("response has no choices: {}", tail(&v.to_string(), 2000))))?;
@@ -679,7 +678,7 @@ pub fn parse_chat(v: &Value, info: Option<&ModelInfo>, model: &str, rollout: boo
     Ok(r)
 }
 
-/// Anthropic Messages response -> LlmResponse (usage as LiteLLM reports it).
+/// Anthropic Messages response -> LlmResponse (usage in chat-completions terms).
 pub fn parse_anthropic(v: &Value, info: Option<&ModelInfo>, model: &str) -> Result<LlmResponse, LlmError> {
     let blocks =
         v["content"].as_array().ok_or_else(|| api_err("APIError", format!("unexpected response: {}", tail(&v.to_string(), 2000))))?;
@@ -708,7 +707,7 @@ pub fn parse_anthropic(v: &Value, info: Option<&ModelInfo>, model: &str) -> Resu
     })
 }
 
-/// Responses API response -> LlmResponse (`_call_responses`).
+/// Responses API response -> LlmResponse.
 pub fn parse_responses(v: &Value, info: Option<&ModelInfo>, model: &str) -> Result<LlmResponse, LlmError> {
     let mut content = String::new();
     for item in v["output"].as_array().into_iter().flatten().filter(|i| i["type"] == "message") {
@@ -764,12 +763,12 @@ impl ChatClient {
         Ok(ChatClient { cfg, ep, info })
     }
 
-    /// LiteLLM `completion_kwargs` for one call (before provider translation).
+    /// Completion params for one call (before provider translation).
     pub fn params(&self, messages: Vec<Value>, kw: &Map<String, Value>) -> Map<String, Value> {
         self.build_params(messages, kw, true)
     }
 
-    /// `full`: `LiteLLM.call`'s extras (rollout details, session id); computer-1's chat omits them.
+    /// `full`: include the extras (rollout details, session id); computer-1's chat omits them.
     fn build_params(&self, messages: Vec<Value>, kw: &Map<String, Value>, full: bool) -> Map<String, Value> {
         let mut p = self.cfg.llm_kwargs.clone();
         p.insert("messages".into(), Value::Array(messages));
@@ -846,7 +845,7 @@ impl ChatClient {
         Request { headers, body: Value::Object(body), timeout }
     }
 
-    /// Responses API request (`_call_responses`).
+    /// Responses API request.
     pub fn responses_request(
         &self,
         prompt: &str,
@@ -1485,11 +1484,11 @@ mod tests {
         assert_eq!(c.messages[1], json!({"role": "assistant", "content": "a", "reasoning_content": "think"}));
         assert_eq!(c.rollout_details(), vec![json!({"completion_token_ids": [[1], [1]], "logprobs": [[-0.1], [-0.1]]})]);
         assert!(approx_tokens(&c.messages) > 0);
-        // LiteLLM: 3 per message + role + content tokens + 3 priming (cl100k for prefixed names).
+        // 3 per message + role + content tokens + 3 priming (cl100k for prefixed names).
         let msgs = vec![json!({"role": "user", "content": "hello world"}), json!({"role": "assistant", "content": "hi"})];
         assert_eq!(token_counter("anthropic/claude-sonnet-4-5", &msgs), 3 + 1 + 2 + 3 + 1 + 1 + 3);
         assert_eq!(token_counter("anthropic/claude-sonnet-4-5", &[]), 3);
-        // Reference values from litellm 1.93 token_counter.
+        // Known-good counts for these messages.
         let m2 = vec![
             json!({"role": "system", "content": "You are an AI assistant tasked with solving command-line tasks in a Linux environment."}),
             json!({"role": "user", "content": "Task: create /app/hello.txt\n$ ls -la\ntotal 8\ndrwxr-xr-x 2 root root 4096 ."}),

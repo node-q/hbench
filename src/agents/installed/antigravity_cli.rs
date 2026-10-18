@@ -490,7 +490,7 @@ pub fn load_gemini_messages(text: &str) -> Option<Vec<Value>> {
     Some(ids.iter().map(|i| msgs[i].clone()).collect())
 }
 
-/// Post-run token totals (cost needs LiteLLM pricing, unavailable here).
+/// Post-run token totals (cost needs the model, unavailable here).
 pub fn usage_from_logs(logs_dir: &Path) -> Option<Totals> {
     let stream = || std::fs::read_to_string(logs_dir.join(STREAM_LOG)).ok().and_then(|t| stream_usage_totals(&t));
     let Some(text) = ["antigravity-cli.trajectory.jsonl", "antigravity-cli.trajectory.json"]
@@ -601,7 +601,7 @@ impl Agent for AntigravityCli {
     }
 }
 
-/// Cost from LiteLLM rates for the model (then provider-stripped),
+/// Cost from price-table rates for the model (then provider-stripped),
 /// cache reads at `cache_read_input_token_cost or input rate`. None when the model isn't priced.
 pub fn cost_from_pricing(model: &str, prompt: i64, completion: i64, cached: i64) -> Option<f64> {
     let p = crate::agents::pricing::model_cost(model)

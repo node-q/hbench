@@ -5,7 +5,7 @@ use super::pins;
 use super::{ensure_system_dependencies, exec_agent, exec_error};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::{kind_err, quote};
-use crate::fmt::float_with_point;
+use crate::fmt::{float_with_point, truthy};
 use anyhow::{Result, anyhow, bail};
 use regex::Regex;
 use serde_json::{Map, Value};
@@ -194,7 +194,7 @@ impl Vibe {
     }
 
     /// Dollars per million (input, output) tokens: explicit VIBE_INPUT_PRICE / VIBE_OUTPUT_PRICE,
-    /// else LiteLLM's table (full model name, then the provider-stripped id; all-zero entries skipped).
+    /// else the bundled price table (full model name, then the provider-stripped id; all-zero entries skipped).
     fn pricing(&self) -> Result<Option<(f64, f64)>> {
         let (i, o) = (self.args.get_env("VIBE_INPUT_PRICE"), self.args.get_env("VIBE_OUTPUT_PRICE"));
         match (&i, &o) {
@@ -369,15 +369,6 @@ fn session_chain(logs_dir: &Path) -> Vec<PathBuf> {
 fn session_usage(chain: &[PathBuf], has_pricing: bool) -> Option<(Option<i64>, Option<i64>, Option<f64>)> {
     let first = chain.first()?;
     let first_msgs = read_messages(first);
-    // Python truthiness.
-    let truthy = |v: &Value| match v {
-        Value::Null => false,
-        Value::Bool(b) => *b,
-        Value::Number(n) => n.as_f64() != Some(0.0),
-        Value::String(s) => !s.is_empty(),
-        Value::Array(a) => !a.is_empty(),
-        Value::Object(o) => !o.is_empty(),
-    };
     // The trajectory exists iff it has at least one step.
     let sys = read_meta(first).get("system_prompt").cloned().unwrap_or(Value::Null);
     let sys_step = truthy(&sys) && !first_msgs.iter().any(|m| m["role"] == "system") && (!sys.is_object() || truthy(&sys["content"]));
@@ -506,7 +497,7 @@ mod tests {
             assert!(c.contains(s), "{s} missing in {c}");
         }
         assert!(!c.contains("api_style") && !c.contains("thinking"));
-        // LiteLLM mistral/mistral-medium-3-5: 1.5e-6 / 7.5e-6 per token.
+        // Price table, mistral/mistral-medium-3-5: 1.5e-6 / 7.5e-6 per token.
         assert!(c.contains("input_price = 1.5") && c.contains("output_price = 7.5"), "{c}");
         assert!(c.starts_with("active_model = \"mistral-medium-3-5\"\nenable_telemetry = false\n"));
         assert_eq!(agent(json!({}), &[], Some("together_ai/openai/gpt-oss-120b")).model_id().unwrap(), "openai/gpt-oss-120b");
@@ -551,7 +542,7 @@ mod tests {
         assert!(
             agent(json!({"max_price": "2.50"}), &[("VIBE_INPUT_PRICE", "0"), ("VIBE_OUTPUT_PRICE", "0")], Some("m")).config_toml().is_err()
         );
-        // LiteLLM fallback (mistral/devstral-medium-2507: in 4e-7, out 2e-6 per token) makes --max-price enforceable.
+        // Price-table fallback (mistral/devstral-medium-2507: in 4e-7, out 2e-6 per token) makes --max-price enforceable.
         let p = agent(json!({"max_price": "2.50"}), &[], Some("mistral/devstral-medium-2507"));
         let (i, o) = p.pricing().unwrap().unwrap();
         assert!((i - 0.4).abs() < 1e-9 && (o - 2.0).abs() < 1e-9);

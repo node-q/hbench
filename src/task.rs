@@ -296,7 +296,7 @@ pub struct EnvironmentConfig {
     pub storage: Option<String>,
     pub gpus: Option<u32>,
     pub gpu_types: Option<Vec<String>>,
-    /// Accepted for upstream compatibility; docker has no TPUs.
+    /// Accepted so task.toml files that set it still parse; docker has no TPUs.
     pub tpu: Option<toml::Value>,
     pub env: BTreeMap<String, String>,
     pub workdir: Option<String>,
@@ -635,7 +635,7 @@ pub fn strip_canary(text: &str) -> String {
     lines[i..].join("\n")
 }
 
-/// Task digest (`Packager.compute_content_hash`, gitignore-filtered), `sha256:`-prefixed.
+/// Task digest over the packaged (gitignore-filtered) files, `sha256:`-prefixed.
 pub fn content_digest(dir: &Path) -> String {
     crate::authoring::content_hash(dir).map(|h| format!("sha256:{h}")).unwrap_or_default()
 }

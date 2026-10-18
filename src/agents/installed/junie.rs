@@ -58,7 +58,7 @@ pub fn create(args: AgentArgs) -> Result<AgentBox> {
     Ok(Box::new(Junie::new(args)?))
 }
 
-/// Pydantic lax bool.
+/// Boolean kwarg: bools, 0/1 and the usual yes/no strings.
 fn opt_bool(args: &AgentArgs, k: &str, default: bool) -> Result<bool> {
     match args.kwargs.get(k) {
         None => Ok(default),

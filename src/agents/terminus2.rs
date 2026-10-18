@@ -351,7 +351,7 @@ pub mod xml_parser {
 
     const SECTIONS: [&str; 4] = ["analysis", "plan", "commands", "task_complete"];
 
-    // An auto-fix appending `</response>` would key on an error `_try_parse` never
+    // An auto-fix appending `</response>` would key on an error the parser never
     // emits ("Missing </response> closing tag"), so it can't fire and is omitted.
     pub fn parse_response(response: &str) -> ParseResult {
         let mut w = vec![];
@@ -726,7 +726,7 @@ struct Options {
     session_id_headers: Vec<String>,
 }
 
-/// Pydantic-style (lax) kwarg coercion, collecting errors.
+/// Lenient kwarg coercion (numeric strings to numbers, `"true"` to bool, ...), collecting errors.
 pub(crate) struct Kw<'a> {
     m: &'a BTreeMap<String, Value>,
     errors: Vec<String>,

@@ -241,7 +241,7 @@ fn merge_hosts(p: NetworkPolicy, extra: &[String]) -> NetworkPolicy {
     NetworkPolicy { mode: NetworkMode::Allowlist, allowed_hosts: hosts }
 }
 
-/// upstream ignores run-level hosts on a public phase; `enforce` makes them the whole allowlist instead.
+/// Run-level hosts are ignored on a public phase unless `enforce`, which makes them the whole allowlist.
 fn agent_phase_policy(p: NetworkPolicy, extra: &[String], enforce: bool) -> NetworkPolicy {
     if enforce && p.mode == NetworkMode::Public {
         return NetworkPolicy { mode: NetworkMode::Allowlist, allowed_hosts: extra.to_vec() };
@@ -776,7 +776,7 @@ impl Trial {
             self.agent = Some(agent);
             r
         };
-        // Beyond upstream: a timed-out agent keeps running in the container after the dropped `docker compose
+        // A timed-out agent keeps running in the container after the dropped `docker compose
         // exec`, still writing files and able to read /tests. Stop the agent's own processes, whether it timed
         // out or exited, and leave what it deliberately detached (a server the task asks for) running.
         let r = match (self.env().kill_agent_processes(&before).await, r) {

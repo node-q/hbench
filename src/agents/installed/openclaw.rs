@@ -66,7 +66,7 @@ impl OpenClaw {
         f.join(" ")
     }
 
-    /// `_build_full_openclaw_config`: baseline + overlay + MCP + provider + denies.
+    /// The full openclaw config: baseline + overlay + MCP + provider + denies.
     fn full_config(&self) -> Value {
         let mut cfg = json!({"agents": {"defaults": {"workspace": "."}}, "gateway": {"mode": "local"}});
         deep_merge(&mut cfg, &self.config_overlay);
@@ -111,7 +111,7 @@ impl OpenClaw {
                     prov.insert("baseUrl".into(), json!(base));
                 }
             }
-            // `_normalize_provider_models_schema`: ensure a non-empty `models` array.
+            // Ensure the provider has a non-empty `models` array.
             if let Some(prov) =
                 cfg.get_mut("models").and_then(|m| m.get_mut("providers")).and_then(|p| p.get_mut(provider)).and_then(Value::as_object_mut)
                 && prov.get("models").and_then(Value::as_array).is_none_or(|a| a.is_empty())
@@ -149,7 +149,7 @@ impl OpenClaw {
     }
 }
 
-/// `_load_json_object`: whole text as an object, else the last `{...}` that consumes the suffix.
+/// The CLI envelope: whole text as an object, else the last `{...}` that consumes the suffix.
 pub fn load_envelope(raw: &str) -> Option<Map<String, Value>> {
     let text = raw.trim();
     if text.is_empty() {

@@ -175,7 +175,7 @@ impl GeminiCli {
 }
 
 /// Cost: the session has no cost field, so back it out of
-/// LiteLLM's table (cache reads fall back to the input rate). None on a pricing miss.
+/// the bundled price table (cache reads fall back to the input rate). None on a pricing miss.
 pub fn gemini_cost(model: &str, prompt: i64, completion: i64, cached: i64) -> Option<f64> {
     let p = pricing::model_cost(&pricing::pricing_key(model)?)?;
     let rate = |k: &str| p.get(k).and_then(Value::as_f64).filter(|v| *v != 0.0);

@@ -129,7 +129,7 @@ impl NemoAgent {
         }
     }
 
-    /// `_generate_config_yaml` (insertion-ordered like `yaml.dump(sort_keys=False)`).
+    /// The agent's config YAML (keys in insertion order).
     fn config_yaml(&self) -> String {
         let spec = provider_spec(&self.llm_type);
         let s = |v: &str| Yaml::String(v.into());

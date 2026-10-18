@@ -184,7 +184,7 @@ impl OpenHands {
         if let Some(k) = &conn.api_key {
             env.insert("LLM_API_KEY".into(), k.clone());
         }
-        // `api_base or configured_base_url`: Python `or` skips an empty api_base.
+        // `api_base`, unless empty, else the configured base URL.
         let base_url = raw_env(&self.args, "LLM_BASE_URL")
             .or_else(|| self.api_base.clone().filter(|s| !s.is_empty()).or(conn.configured_base_url.clone()));
         if let Some(u) = base_url {
