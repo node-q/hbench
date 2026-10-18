@@ -1,9 +1,14 @@
 #!/bin/sh
-# Install the latest hbench release (or HBENCH_VERSION=vX.Y.Z) into HBENCH_INSTALL_DIR (default ~/.local/bin).
-#   curl -fsSL https://raw.githubusercontent.com/sapphirestd/harness-benchmark/master/scripts/install.sh | sh
-# Uses `gh` when present (works for private repos), else plain curl against the public release URLs.
+# Install hbench into HBENCH_INSTALL_DIR (default ~/.local/bin).
+#   curl -fsSL https://nodeq.tech/install.sh | sh
+# HBENCH_VERSION=vX.Y.Z pins a release; the default is the latest release of the public
+# node-q/hbench-releases repo. If that download fails and `gh` is signed in, it falls back to
+# the private node-q/harness-benchmark releases.
 set -eu
-REPO=sapphirestd/harness-benchmark
+PUBLIC_REPO=node-q/hbench-releases
+PRIVATE_REPO=node-q/harness-benchmark
+# nodeq.tech/install.sh fills this in with the version the arenas pin.
+DEFAULT_VERSION=
 DIR=${HBENCH_INSTALL_DIR:-$HOME/.local/bin}
 
 case "$(uname -s)-$(uname -m)" in
@@ -17,15 +22,24 @@ esac
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
-  tag=${HBENCH_VERSION:-$(gh release view -R "$REPO" --json tagName -q .tagName)}
-  gh release download "$tag" -R "$REPO" -D "$tmp" -p "hbench-$tag-$target.tar.gz" -p SHA256SUMS
-else
+from_public() {
   # /releases/latest redirects to /releases/tag/<tag>; reading the redirect avoids the API rate limit.
-  tag=${HBENCH_VERSION:-$(curl -fsSLI -o /dev/null -w '%{url_effective}' "https://github.com/$REPO/releases/latest" | sed 's|.*/||')}
+  tag=${HBENCH_VERSION:-${DEFAULT_VERSION:-$(curl -fsSLI -o /dev/null -w '%{url_effective}' "https://github.com/$PUBLIC_REPO/releases/latest" | sed 's|.*/||')}}
+  case "$tag" in v*) ;; *) return 1 ;; esac
   for f in "hbench-$tag-$target.tar.gz" SHA256SUMS; do
-    curl -fsSL -o "$tmp/$f" "https://github.com/$REPO/releases/download/$tag/$f"
+    curl -fsSL -o "$tmp/$f" "https://github.com/$PUBLIC_REPO/releases/download/$tag/$f" || return 1
   done
+}
+
+from_private() {
+  command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1 || return 1
+  tag=${HBENCH_VERSION:-${DEFAULT_VERSION:-$(gh release view -R "$PRIVATE_REPO" --json tagName -q .tagName)}}
+  gh release download "$tag" -R "$PRIVATE_REPO" -D "$tmp" --clobber -p "hbench-$tag-$target.tar.gz" -p SHA256SUMS
+}
+
+if ! from_public; then
+  echo "download from $PUBLIC_REPO failed; trying $PRIVATE_REPO with gh" >&2
+  from_private || { echo "could not download hbench ${HBENCH_VERSION:-$DEFAULT_VERSION}" >&2; exit 1; }
 fi
 
 cd "$tmp"
