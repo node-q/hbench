@@ -25,10 +25,11 @@ mod viewer;
 use crate::config::{AgentConfig, DatasetConfig, JobConfig, SourceTrial, TaskRef, TrialConfig};
 use crate::task::{Artifact, Task};
 use anyhow::{Context, Result, bail};
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, CommandFactory, Parser, Subcommand};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::process::ExitCode;
 
 /// hbench: run agent benchmarks on tasks in Docker.
 #[derive(Parser)]
@@ -137,6 +138,11 @@ enum Cmd {
     ///
     /// Verification: use --print-config to inspect auto-inferred artifacts, --artifact to override them, or --disable-verification to skip existence-only checks.
     Exec(Box<exec::ExecArgs>),
+    /// Print a shell completion script, e.g. `hbench completions zsh > ~/.zfunc/_hbench`.
+    Completions {
+        /// Target shell.
+        shell: clap_complete::Shell,
+    },
 }
 
 #[derive(Args)]
@@ -149,11 +155,13 @@ struct InitArgs {
     /// Initialize a dataset.
     #[arg(short = 'd', long)]
     dataset: bool,
+    /// Directory to create the task or dataset in.
     #[arg(short = 'o', long, default_value = ".")]
     output_dir: PathBuf,
     /// Organization name (if name lacks org/).
     #[arg(long)]
     org: Option<String>,
+    /// Description written to the manifest.
     #[arg(long, default_value = "")]
     description: String,
     /// Author in 'Name <email>' or 'Name' format. Repeatable.
@@ -162,12 +170,16 @@ struct InitArgs {
     /// Create metric.py template (dataset only).
     #[arg(long)]
     with_metric: bool,
+    /// Don't scaffold a pytest test (task only).
     #[arg(long)]
     no_pytest: bool,
+    /// Don't scaffold solution/ (task only).
     #[arg(long)]
     no_solution: bool,
+    /// Add canary strings to generated files (task only).
     #[arg(long)]
     include_canary_strings: bool,
+    /// Add standard metadata fields to task.toml (task only).
     #[arg(long)]
     include_standard_metadata: bool,
     /// Skip [task] package section in task.toml.
@@ -205,11 +217,15 @@ struct RemoveArgs {
 
 #[derive(Subcommand)]
 enum SweepsCmd {
+    /// Run sweeps from a job config.
     Run {
+        /// Job config (YAML or JSON).
         #[arg(short = 'c', long = "config")]
         config: PathBuf,
+        /// Maximum number of sweeps.
         #[arg(long, default_value_t = 3)]
         max_sweeps: usize,
+        /// Attempts per task in each sweep.
         #[arg(long, default_value_t = 2)]
         trials_per_task: usize,
         /// Generic hint passed to agents as kwargs.hint.
@@ -218,6 +234,9 @@ enum SweepsCmd {
         /// JSON object {task_name: hint}; runs one job per task.
         #[arg(long)]
         hints_file: Option<PathBuf>,
+        /// Skip the API key check before starting.
+        #[arg(long)]
+        skip_preflight: bool,
     },
 }
 
@@ -231,18 +250,22 @@ enum TracesCmd {
         /// Output .jsonl (default: stdout).
         #[arg(short = 'o', long = "output")]
         output: Option<PathBuf>,
+        /// Only look at the given dir, not its subdirectories.
         #[arg(long)]
         no_recursive: bool,
         /// all | last
         #[arg(long, default_value = "all")]
         episodes: String,
+        /// Keep only successful or failed trials.
         #[arg(long, value_parser = ["success", "failure", "all"])]
         filter: Option<String>,
         /// Also emit a ShareGPT `conversations_sharegpt` column.
         #[arg(long)]
         sharegpt: bool,
+        /// Include the task instruction in each row.
         #[arg(long)]
         instruction_metadata: bool,
+        /// Include verifier output in each row.
         #[arg(long)]
         verifier_metadata: bool,
     },
@@ -250,13 +273,17 @@ enum TracesCmd {
 
 #[derive(Subcommand)]
 enum AgentsCmd {
+    /// List agent names.
     List {
+        /// Print as a JSON array.
         #[arg(long)]
         json: bool,
     },
     /// The user-facing kwargs an agent accepts.
     Schema {
+        /// Agent name.
         name: String,
+        /// Print the raw JSON schema.
         #[arg(long)]
         json: bool,
     },
@@ -266,12 +293,16 @@ enum AgentsCmd {
 enum CacheCmd {
     /// Remove ~/.cache/hbench and hbench-built docker images.
     Clean {
+        /// Don't ask for confirmation.
         #[arg(short = 'f', long)]
         force: bool,
+        /// Show what would be removed.
         #[arg(long)]
         dry: bool,
+        /// Keep docker images.
         #[arg(long)]
         no_docker: bool,
+        /// Keep the cache dir.
         #[arg(long)]
         no_cache_dir: bool,
     },
@@ -283,16 +314,30 @@ enum JobsCmd {
     Start(Box<RunArgs>),
     /// Resume a job: finished trials are kept, the rest (and filtered error types) rerun.
     Resume {
+        /// Job dir to resume.
         #[arg(short = 'p', long = "job-path")]
         path: PathBuf,
         /// Remove trials with these error types before resuming (repeatable).
         #[arg(short = 'f', long = "filter-error-type", default_values_t = vec!["CancelledError".to_string()])]
         filter_error_types: Vec<String>,
+        /// Skip the API key check before starting.
+        #[arg(long)]
+        skip_preflight: bool,
+        /// Exit 1 if any trial errored.
+        #[arg(long)]
+        fail_on_error: bool,
     },
     /// Print a job's stats.
     Summary {
+        /// Job dir.
+        #[arg(required_unless_present = "job_path", conflicts_with = "job_path")]
+        path: Option<PathBuf>,
+        /// Job dir (same as the positional argument).
         #[arg(short = 'p', long = "job-path")]
-        path: PathBuf,
+        job_path: Option<PathBuf>,
+        /// Print result.json (stats included) as JSON.
+        #[arg(long)]
+        json: bool,
     },
     /// Re-run (separate) verification against a finished job's recorded outputs.
     Regrade {
@@ -302,10 +347,13 @@ enum JobsCmd {
         /// Task dir or dir of tasks providing the (new) verifiers; matched by task name.
         #[arg(short = 'p', long = "path")]
         path: PathBuf,
+        /// Where the regrade job dir is created.
         #[arg(long, default_value = "jobs")]
         jobs_dir: PathBuf,
+        /// Regrade job name (default: timestamp).
         #[arg(long)]
         job_name: Option<String>,
+        /// Concurrent trials.
         #[arg(short = 'n', long = "n-concurrent", default_value_t = 4)]
         n_concurrent: usize,
     },
@@ -316,23 +364,36 @@ enum TrialsCmd {
     /// Print the trial config JSON schema.
     Schema,
     /// Resume a finished trial's agent session in the local agent CLI (claude-code, muse-code).
-    Handoff { trial_dir: PathBuf },
+    Handoff {
+        /// Trial dir of a finished trial.
+        trial_dir: PathBuf,
+    },
     /// Run one trial: `-p task` or `-c trial.yaml`.
     Start {
+        /// Trial config (YAML or JSON).
         #[arg(short = 'c', long = "config")]
         config: Option<PathBuf>,
+        /// Task dir.
         #[arg(short = 'p', long = "path")]
         path: Option<PathBuf>,
+        /// Agent name (see `hbench agents list`).
         #[arg(short = 'a', long = "agent", default_value = "oracle")]
         agent: String,
+        /// Model, usually provider/name.
         #[arg(short = 'm', long = "model")]
         model: Option<String>,
+        /// Agent kwarg KEY=VALUE (JSON values allowed), repeatable.
         #[arg(long = "ak", value_parser = parse_kv)]
         agent_kwargs: Vec<(String, String)>,
+        /// Agent env var KEY=VALUE, repeatable.
         #[arg(long = "ae", value_parser = parse_kv)]
         agent_env: Vec<(String, String)>,
+        /// Where the trial dir is created.
         #[arg(long, default_value = "trials")]
         trials_dir: PathBuf,
+        /// Skip the API key and kwargs checks before starting.
+        #[arg(long)]
+        skip_preflight: bool,
     },
 }
 
@@ -342,23 +403,31 @@ enum DatasetsCmd {
     List(RegistryArgs),
     /// Download a registry dataset's tasks into the cache (or --output-dir).
     Download {
+        /// Dataset, name[@version].
         dataset: String,
         #[command(flatten)]
         registry: RegistryArgs,
+        /// Download into this dir instead of the cache.
         #[arg(short = 'o', long)]
         output_dir: Option<PathBuf>,
     },
     /// Initialize a new dataset directory.
     Init {
+        /// Dataset name (org/name format).
         name: Option<String>,
+        /// Directory to create the dataset in.
         #[arg(short = 'o', long, default_value = ".")]
         output_dir: PathBuf,
+        /// Organization name (if name lacks org/).
         #[arg(long)]
         org: Option<String>,
+        /// Description written to dataset.toml.
         #[arg(long, default_value = "")]
         description: String,
+        /// Create metric.py template.
         #[arg(long)]
         with_metric: bool,
+        /// Author in 'Name <email>' or 'Name' format. Repeatable.
         #[arg(long)]
         author: Vec<String>,
     },
@@ -372,17 +441,24 @@ enum DatasetsCmd {
 enum TasksCmd {
     /// Initialize a new task directory.
     Init {
+        /// Task name (org/name format).
         name: Option<String>,
+        /// Directory to create the task in.
         #[arg(short = 'p', long = "tasks-dir", default_value = ".")]
         tasks_dir: PathBuf,
+        /// Organization name (if name lacks org/).
         #[arg(long)]
         org: Option<String>,
+        /// Description written to task.toml.
         #[arg(long, default_value = "")]
         description: String,
+        /// Don't scaffold a pytest test.
         #[arg(long)]
         no_pytest: bool,
+        /// Don't scaffold solution/.
         #[arg(long)]
         no_solution: bool,
+        /// Add canary strings to generated files.
         #[arg(long)]
         include_canary_strings: bool,
         /// Path to a template TOML file for task metadata and defaults.
@@ -390,10 +466,13 @@ enum TasksCmd {
         metadata_template: Option<PathBuf>,
         #[arg(long, hide = true)]
         include_standard_metadata: bool,
+        /// Skip [task] package section in task.toml.
         #[arg(long)]
         no_package: bool,
+        /// Author in 'Name <email>' or 'Name' format. Repeatable.
         #[arg(long)]
         author: Vec<String>,
+        /// Scaffold a multi-step task with N steps (0 = single-step).
         #[arg(long, default_value_t = 0)]
         steps: usize,
     },
@@ -401,32 +480,43 @@ enum TasksCmd {
     Schema,
     /// Start a task's environment and attach a shell (solution + tests uploaded by default).
     StartEnv {
+        /// Task dir.
         #[arg(short = 'p', long = "path")]
         path: PathBuf,
         /// Don't upload solution/ and tests/.
         #[arg(long)]
         no_all: bool,
+        /// Start the environment without attaching a shell.
         #[arg(long)]
         non_interactive: bool,
+        /// Also install this agent in the environment.
         #[arg(long)]
         agent: Option<String>,
+        /// Model for --agent.
         #[arg(short = 'm', long = "model")]
         model: Option<String>,
+        /// Agent kwarg KEY=VALUE (JSON values allowed), repeatable.
         #[arg(long = "ak", value_parser = parse_kv)]
         agent_kwargs: Vec<(String, String)>,
     },
     /// Migrate Terminal-Bench (v1) tasks to the current task format.
     Migrate {
+        /// Task dir or dir of tasks to migrate.
         #[arg(short = 'i', long = "input")]
         input: PathBuf,
+        /// Output dir.
         #[arg(short = 'o', long = "output")]
         output: PathBuf,
+        /// Override CPUs in migrated task.toml.
         #[arg(long)]
         cpus: Option<i64>,
+        /// Override memory (MB).
         #[arg(long)]
         memory_mb: Option<i64>,
+        /// Override storage (MB).
         #[arg(long)]
         storage_mb: Option<i64>,
+        /// Override GPUs.
         #[arg(long)]
         gpus: Option<i64>,
     },
@@ -438,6 +528,7 @@ enum TasksCmd {
     },
     /// Validate task dirs (config, files, test scripts).
     Check {
+        /// A task directory, or a directory of tasks.
         #[arg(short = 'p', long = "path")]
         path: PathBuf,
     },
@@ -445,6 +536,7 @@ enum TasksCmd {
 
 #[derive(Args)]
 struct RegistryArgs {
+    /// Registry URL (registry.json).
     #[arg(long)]
     registry_url: Option<String>,
     /// Local registry.json instead of --registry-url.
@@ -455,105 +547,140 @@ struct RegistryArgs {
 #[derive(Args)]
 struct RunArgs {
     /// Job config (YAML or JSON). CLI flags override it.
-    #[arg(short = 'c', long = "config")]
+    #[arg(short = 'c', long = "config", help_heading = "Selection")]
     config: Option<PathBuf>,
     /// Local task dir, or a dir of task dirs.
-    #[arg(short = 'p', long = "path")]
+    #[arg(short = 'p', long = "path", help_heading = "Selection")]
     path: Option<PathBuf>,
     /// Registry dataset, name[@version].
-    #[arg(short = 'd', long = "dataset")]
+    #[arg(short = 'd', long = "dataset", help_heading = "Selection")]
     dataset: Option<String>,
-    #[command(flatten)]
+    #[command(flatten, next_help_heading = "Selection")]
     registry: RegistryArgs,
-    #[arg(short = 'a', long = "agent")]
-    agent: Option<String>,
-    /// Model(s); one agent config per model.
-    #[arg(short = 'm', long = "model")]
-    models: Vec<String>,
-    /// Agent kwarg KEY=VALUE (JSON values allowed), repeatable.
-    #[arg(long = "ak", alias = "agent-kwarg", value_parser = parse_kv)]
-    agent_kwargs: Vec<(String, String)>,
-    /// Agent env var KEY=VALUE, repeatable.
-    #[arg(long = "ae", alias = "agent-env", value_parser = parse_kv)]
-    agent_env: Vec<(String, String)>,
-    /// Environment (container) env var KEY=VALUE, repeatable.
-    #[arg(long = "ee", alias = "environment-env", value_parser = parse_kv)]
-    env_env: Vec<(String, String)>,
-    /// Verifier env var KEY=VALUE, repeatable.
-    #[arg(long = "ve", alias = "verifier-env", value_parser = parse_kv)]
-    verifier_env: Vec<(String, String)>,
-    #[arg(short = 'k', long = "n-attempts")]
-    n_attempts: Option<usize>,
-    #[arg(short = 'n', long = "n-concurrent")]
-    n_concurrent: Option<usize>,
-    /// Per-agent cap on concurrent agent runs.
-    #[arg(long)]
-    n_concurrent_agent: Option<usize>,
-    #[arg(short = 'i', long = "include-task-name")]
+    /// Only tasks matching this glob (repeatable).
+    #[arg(short = 'i', long = "include-task-name", help_heading = "Selection")]
     include: Vec<String>,
-    #[arg(short = 'x', long = "exclude-task-name")]
+    /// Skip tasks matching this glob (repeatable).
+    #[arg(short = 'x', long = "exclude-task-name", help_heading = "Selection")]
     exclude: Vec<String>,
-    #[arg(short = 'l', long = "n-tasks")]
+    /// Run at most N tasks.
+    #[arg(short = 'l', long = "n-tasks", help_heading = "Selection")]
     n_tasks: Option<usize>,
-    #[arg(long)]
-    jobs_dir: Option<PathBuf>,
-    #[arg(long)]
-    job_name: Option<String>,
-    #[arg(long)]
-    timeout_multiplier: Option<f64>,
-    #[arg(long)]
-    agent_timeout_multiplier: Option<f64>,
-    #[arg(long)]
-    verifier_timeout_multiplier: Option<f64>,
-    #[arg(long)]
-    agent_setup_timeout_multiplier: Option<f64>,
-    #[arg(long)]
-    environment_build_timeout_multiplier: Option<f64>,
-    #[arg(long)]
-    max_retries: Option<u32>,
-    #[arg(long = "retry-include")]
-    retry_include: Vec<String>,
-    #[arg(long = "retry-exclude")]
-    retry_exclude: Vec<String>,
-    #[arg(long)]
-    force_build: bool,
-    /// Keep images/volumes after trials.
-    #[arg(long)]
-    no_delete: bool,
-    /// Stop (don't remove) containers after trials.
-    #[arg(long)]
-    keep_containers: bool,
-    #[arg(long)]
-    disable_verification: bool,
-    #[arg(long)]
-    install_only: bool,
-    #[arg(long)]
-    override_cpus: Option<u32>,
-    #[arg(long)]
-    override_memory_mb: Option<u64>,
-    #[arg(long)]
-    override_gpus: Option<u32>,
-    /// Extra host allowed during network-restricted tasks (repeatable).
-    #[arg(long)]
-    extra_allowed_host: Vec<String>,
-    /// Artifact path to collect (repeatable).
-    #[arg(long)]
-    artifact: Vec<String>,
-    #[arg(long)]
-    extra_instruction: Vec<String>,
-    #[arg(long)]
-    extra_instruction_path: Vec<PathBuf>,
-    /// Skill dir uploaded to /hbench/skills (repeatable).
-    #[arg(long)]
-    skill: Vec<String>,
-    #[arg(long)]
-    quiet: bool,
+    /// Attempts per task.
+    #[arg(short = 'k', long = "n-attempts", help_heading = "Selection")]
+    n_attempts: Option<usize>,
     /// Compare against earlier job(s): reuse / regrade / rerun (repeatable).
-    #[arg(long)]
+    #[arg(long, help_heading = "Selection")]
     diff: Vec<PathBuf>,
     /// Don't ask for confirmation (with --diff).
-    #[arg(short = 'y', long)]
+    #[arg(short = 'y', long, help_heading = "Selection")]
     yes: bool,
+
+    /// Agent name (see `hbench agents list`).
+    #[arg(short = 'a', long = "agent", help_heading = "Agent")]
+    agent: Option<String>,
+    /// Model(s); one agent config per model.
+    #[arg(short = 'm', long = "model", help_heading = "Agent")]
+    models: Vec<String>,
+    /// Agent kwarg KEY=VALUE (JSON values allowed), repeatable.
+    #[arg(long = "ak", alias = "agent-kwarg", value_parser = parse_kv, help_heading = "Agent")]
+    agent_kwargs: Vec<(String, String)>,
+    /// Agent env var KEY=VALUE, repeatable.
+    #[arg(long = "ae", alias = "agent-env", value_parser = parse_kv, help_heading = "Agent")]
+    agent_env: Vec<(String, String)>,
+    /// Per-agent cap on concurrent agent runs.
+    #[arg(long, help_heading = "Agent")]
+    n_concurrent_agent: Option<usize>,
+    /// Skill dir uploaded to /hbench/skills (repeatable).
+    #[arg(long, help_heading = "Agent")]
+    skill: Vec<String>,
+    /// Text appended to every task instruction (repeatable).
+    #[arg(long, help_heading = "Agent")]
+    extra_instruction: Vec<String>,
+    /// File whose contents are appended to every task instruction (repeatable).
+    #[arg(long, help_heading = "Agent")]
+    extra_instruction_path: Vec<PathBuf>,
+    /// Only install the agent; don't run it.
+    #[arg(long, help_heading = "Agent")]
+    install_only: bool,
+    /// Don't check agent API keys and kwargs before starting.
+    #[arg(long, help_heading = "Agent")]
+    skip_preflight: bool,
+
+    /// Environment (container) env var KEY=VALUE, repeatable.
+    #[arg(long = "ee", alias = "environment-env", value_parser = parse_kv, help_heading = "Environment")]
+    env_env: Vec<(String, String)>,
+    /// Verifier env var KEY=VALUE, repeatable.
+    #[arg(long = "ve", alias = "verifier-env", value_parser = parse_kv, help_heading = "Environment")]
+    verifier_env: Vec<(String, String)>,
+    /// Concurrent trials.
+    #[arg(short = 'n', long = "n-concurrent", help_heading = "Environment")]
+    n_concurrent: Option<usize>,
+    /// Rebuild task images even if cached.
+    #[arg(long, help_heading = "Environment")]
+    force_build: bool,
+    /// Keep images/volumes after trials.
+    #[arg(long, help_heading = "Environment")]
+    no_delete: bool,
+    /// Stop (don't remove) containers after trials.
+    #[arg(long, help_heading = "Environment")]
+    keep_containers: bool,
+    /// Skip the verifier (no rewards).
+    #[arg(long, help_heading = "Environment")]
+    disable_verification: bool,
+    /// Override each task's CPU count.
+    #[arg(long, help_heading = "Environment")]
+    override_cpus: Option<u32>,
+    /// Override each task's memory (MB).
+    #[arg(long, help_heading = "Environment")]
+    override_memory_mb: Option<u64>,
+    /// Override each task's GPU count.
+    #[arg(long, help_heading = "Environment")]
+    override_gpus: Option<u32>,
+    /// Extra host allowed during network-restricted tasks (repeatable).
+    #[arg(long, help_heading = "Environment")]
+    extra_allowed_host: Vec<String>,
+
+    /// Scale every timeout.
+    #[arg(long, help_heading = "Timeouts")]
+    timeout_multiplier: Option<f64>,
+    /// Scale the agent run timeout.
+    #[arg(long, help_heading = "Timeouts")]
+    agent_timeout_multiplier: Option<f64>,
+    /// Scale the verifier timeout.
+    #[arg(long, help_heading = "Timeouts")]
+    verifier_timeout_multiplier: Option<f64>,
+    /// Scale the agent setup (install) timeout.
+    #[arg(long, help_heading = "Timeouts")]
+    agent_setup_timeout_multiplier: Option<f64>,
+    /// Scale the image build timeout.
+    #[arg(long, help_heading = "Timeouts")]
+    environment_build_timeout_multiplier: Option<f64>,
+    /// Retries per failed trial.
+    #[arg(long, help_heading = "Timeouts")]
+    max_retries: Option<u32>,
+    /// Retry only these exception types (repeatable).
+    #[arg(long = "retry-include", help_heading = "Timeouts")]
+    retry_include: Vec<String>,
+    /// Never retry these exception types (repeatable).
+    #[arg(long = "retry-exclude", help_heading = "Timeouts")]
+    retry_exclude: Vec<String>,
+
+    /// Where job dirs are created (default: jobs).
+    #[arg(long, help_heading = "Output")]
+    jobs_dir: Option<PathBuf>,
+    /// Job dir name (default: timestamp).
+    #[arg(long, help_heading = "Output")]
+    job_name: Option<String>,
+    /// Artifact path to collect (repeatable).
+    #[arg(long, help_heading = "Output")]
+    artifact: Vec<String>,
+    /// No per-trial progress lines.
+    #[arg(long, help_heading = "Output")]
+    quiet: bool,
+    /// Exit 1 if any trial errored (default: only when every trial errored).
+    #[arg(long, help_heading = "Output")]
+    fail_on_error: bool,
 }
 
 /// One task directory, or every task directory directly under `path`, sorted.
@@ -641,7 +768,7 @@ fn build_job_config(a: &RunArgs) -> Result<JobConfig> {
             ..Default::default()
         });
     }
-    // CLI task filters apply to every dataset.
+    // CLI task filters apply to every dataset and to the job's single tasks.
     for d in cfg.datasets.iter_mut() {
         if !a.include.is_empty() {
             d.task_names = Some(a.include.clone());
@@ -652,6 +779,15 @@ fn build_job_config(a: &RunArgs) -> Result<JobConfig> {
         if a.n_tasks.is_some() {
             d.n_tasks = a.n_tasks;
         }
+    }
+    if !cfg.tasks.is_empty() && (!a.include.is_empty() || !a.exclude.is_empty() || a.n_tasks.is_some()) {
+        let f = DatasetConfig {
+            task_names: Some(a.include.clone()),
+            exclude_task_names: Some(a.exclude.clone()),
+            n_tasks: a.n_tasks,
+            ..Default::default()
+        };
+        cfg.tasks = registry::filter_names(std::mem::take(&mut cfg.tasks), TaskRef::display_name, &f)?;
     }
     if a.agent.is_some()
         || !a.models.is_empty()
@@ -729,32 +865,158 @@ fn build_job_config(a: &RunArgs) -> Result<JobConfig> {
     Ok(cfg)
 }
 
+/// Unknown agent names and agent kwargs outside the agent's options schema.
 fn preflight_agents(cfg: &JobConfig) -> Result<()> {
     let known = agents::agent_names();
     for a in &cfg.agents {
         if !known.contains(&a.name()) {
             bail!("Unknown agent {:?}. Known agents: {}", a.name(), known.join(", "));
         }
+        agents::check_kwargs(a.name(), &a.kwargs)?;
     }
     Ok(())
 }
 
-async fn run_with_ctrl_c(cfg: JobConfig, trials: Option<Vec<TrialConfig>>, filter: &[String]) -> Result<()> {
-    env::preflight().await?;
+/// Credential env vars an agent accepts, any one of which is enough (API keys, OAuth tokens,
+/// Bedrock/Vertex switches, custom endpoints). None = not decidable up front, so not checked.
+fn auth_envs(agent: &str) -> Option<&'static [&'static str]> {
+    // ponytail: only agents with a fixed provider; passthrough agents depend on the model/endpoint.
+    Some(match agent {
+        "claude-code" => &[
+            "ANTHROPIC_API_KEY",
+            "ANTHROPIC_AUTH_TOKEN",
+            "CLAUDE_CODE_OAUTH_TOKEN",
+            "ANTHROPIC_BASE_URL",
+            "AWS_BEARER_TOKEN_BEDROCK",
+            "CLAUDE_CODE_USE_BEDROCK",
+            "CLAUDE_CODE_USE_VERTEX",
+        ],
+        "codex" => &["OPENAI_API_KEY", "CODEX_AUTH_JSON_PATH", "CODEX_FORCE_AUTH_JSON", "OPENAI_BASE_URL", "OPENAI_API_BASE"],
+        "gemini-cli" => &[
+            "GEMINI_API_KEY",
+            "GOOGLE_API_KEY",
+            "GOOGLE_GENERATIVE_AI_API_KEY",
+            "GEMINI_OAUTH_CREDS_PATH",
+            "GEMINI_FORCE_OAUTH",
+            "GOOGLE_GENAI_USE_VERTEXAI",
+            "GOOGLE_APPLICATION_CREDENTIALS",
+            "GOOGLE_GEMINI_BASE_URL",
+        ],
+        _ => return None,
+    })
+}
+
+/// Fail fast when an agent has none of its credential env vars (host env or agent `env`).
+fn preflight_auth(cfg: &JobConfig) -> Result<()> {
+    if cfg.install_only {
+        return Ok(());
+    }
+    for a in &cfg.agents {
+        let Some(names) = auth_envs(a.name()) else { continue };
+        let env = crate::task::resolve_env_vars(&a.env).unwrap_or_default();
+        let set = |n: &&str| env.get(*n).or(std::env::var(n).ok().as_ref()).is_some_and(|v| !v.is_empty());
+        if !names.iter().any(set) {
+            bail!("agent {} needs credentials: set {} (or one of {}), or pass --skip-preflight", a.name(), names[0], names[1..].join(", "));
+        }
+    }
+    Ok(())
+}
+
+/// Marker error: the run was cancelled by a signal (exit 130).
+#[derive(Debug)]
+struct Cancelled;
+
+impl std::fmt::Display for Cancelled {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("cancelled")
+    }
+}
+
+impl std::error::Error for Cancelled {}
+
+/// Subdirectory names (trial names) of these job dirs.
+fn trial_names(job_dirs: &[PathBuf]) -> Vec<String> {
+    job_dirs
+        .iter()
+        .flat_map(|d| std::fs::read_dir(d).into_iter().flatten().flatten())
+        .filter(|e| e.path().is_dir())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect()
+}
+
+/// Cancel on SIGINT/SIGTERM/SIGHUP: the first signal flips the returned flag (trials tear down);
+/// the second force-quits with 130 after a quick `docker compose down` of the projects of
+/// `trials()` (trial names; compose projects are named after them).
+pub fn cancel_on_signal(trials: impl Fn() -> Vec<String> + Send + 'static) -> tokio::sync::watch::Receiver<bool> {
+    use tokio::signal::unix::{SignalKind, signal};
+    let (sig_tx, mut sigs) = tokio::sync::mpsc::unbounded_channel();
+    for kind in [SignalKind::interrupt(), SignalKind::terminate(), SignalKind::hangup()] {
+        let Ok(mut s) = signal(kind) else { continue };
+        let sig_tx = sig_tx.clone();
+        tokio::spawn(async move { while s.recv().await.is_some() && sig_tx.send(()).is_ok() {} });
+    }
     let (tx, rx) = tokio::sync::watch::channel(false);
     tokio::spawn(async move {
-        if tokio::signal::ctrl_c().await.is_ok() {
-            eprintln!("\ncancelling: tearing down containers (Ctrl-C again to force quit)...");
-            let _ = tx.send(true);
-            if tokio::signal::ctrl_c().await.is_ok() {
-                std::process::exit(130);
+        if sigs.recv().await.is_none() {
+            return;
+        }
+        eprintln!("\ncancelling: tearing down containers (signal again to force quit)...");
+        let _ = tx.send(true);
+        if sigs.recv().await.is_some() {
+            eprintln!("force quit: removing this run's compose projects (signal again to skip)...");
+            tokio::select! {
+                _ = force_cleanup(trials()) => {}
+                _ = sigs.recv() => {}
             }
+            std::process::exit(130);
         }
     });
+    rx
+}
+
+/// Best effort, bounded: `docker compose down` every project named after one of `trials`.
+async fn force_cleanup(trials: Vec<String>) {
+    use std::time::Duration;
+    use tokio::process::Command;
+    let prefixes: Vec<String> = trials.iter().map(|t| env::sanitize(t, false)).collect();
+    if prefixes.is_empty() {
+        return;
+    }
+    let ls = Command::new("docker").args(["compose", "ls", "--all", "--quiet"]).kill_on_drop(true).output();
+    let Ok(Ok(out)) = tokio::time::timeout(Duration::from_secs(10), ls).await else { return };
+    let mut downs = tokio::task::JoinSet::new();
+    for p in String::from_utf8_lossy(&out.stdout).lines().filter(|p| prefixes.iter().any(|x| p.starts_with(x.as_str()))) {
+        let mut c = Command::new("docker");
+        c.args(["compose", "-p", p, "down", "--volumes", "--remove-orphans", "-t", "0"]);
+        c.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).kill_on_drop(true);
+        downs.spawn(async move { c.status().await });
+    }
+    let _ = tokio::time::timeout(Duration::from_secs(30), downs.join_all()).await;
+}
+
+/// Exit 1 if every trial errored (or any did, with `fail_on_error`); else 0.
+fn job_exit_code(jr: &job::JobResult, fail_on_error: bool) -> ExitCode {
+    let s = &jr.stats;
+    let all = s.n_completed_trials > 0 && s.n_errored_trials == s.n_completed_trials;
+    if all || (fail_on_error && s.n_errored_trials > 0) {
+        eprintln!("{} of {} trial(s) errored", s.n_errored_trials, s.n_completed_trials);
+        return ExitCode::FAILURE;
+    }
+    ExitCode::SUCCESS
+}
+
+/// Run a job with signal cancellation and print its summary; `Err(Cancelled)` once cancelled.
+async fn run_with_ctrl_c(cfg: JobConfig, trials: Option<Vec<TrialConfig>>, filter: &[String]) -> Result<job::JobResult> {
+    env::preflight().await?;
     let job_dir = cfg.job_dir();
-    let jr = job::run_job(cfg, trials, filter, rx).await?;
+    let dir = job_dir.clone();
+    let rx = cancel_on_signal(move || trial_names(std::slice::from_ref(&dir)));
+    let jr = job::run_job(cfg, trials, filter, rx.clone()).await?;
     job::print_summary(&jr, &job_dir);
-    Ok(())
+    if *rx.borrow() {
+        return Err(Cancelled.into());
+    }
+    Ok(jr)
 }
 
 /// `hbench init`: task or dataset, with cross-type flag checks.
@@ -811,17 +1073,39 @@ fn run_init(a: InitArgs) -> Result<()> {
 }
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() -> ExitCode {
+    match run().await {
+        Ok(code) => code,
+        Err(e) if e.is::<Cancelled>() => {
+            eprintln!("cancelled");
+            ExitCode::from(130)
+        }
+        Err(e) => {
+            eprintln!("Error: {e:?}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+async fn run() -> Result<ExitCode> {
+    let ok = |r: Result<()>| r.map(|_| ExitCode::SUCCESS);
     match Cli::parse().cmd {
-        Cmd::Exec(a) => exec::run(*a).await,
+        Cmd::Exec(a) => ok(exec::run(*a).await),
+        Cmd::Completions { shell } => {
+            clap_complete::generate(shell, &mut Cli::command(), "hbench", &mut std::io::stdout());
+            Ok(ExitCode::SUCCESS)
+        }
         Cmd::Run(a) | Cmd::Jobs { cmd: JobsCmd::Start(a) } => {
             let mut cfg = build_job_config(&a)?;
             preflight_agents(&cfg)?;
+            if !a.skip_preflight {
+                preflight_auth(&cfg)?;
+            }
             if cfg.job_dir().join("config.json").exists() {
                 bail!("job {} already exists; use `hbench jobs resume -p {}`", cfg.job_name, cfg.job_dir().display());
             }
             if a.diff.is_empty() {
-                return run_with_ctrl_c(cfg, None, &[]).await;
+                return Ok(job_exit_code(&run_with_ctrl_c(cfg, None, &[]).await?, a.fail_on_error));
             }
             if cfg.install_only {
                 bail!("--diff cannot use --install-only.");
@@ -834,7 +1118,7 @@ async fn main() -> Result<()> {
             let trials = diff::trial_configs(targets, &diffs, &sources);
             if trials.is_empty() {
                 println!("Nothing to run: every target trial can be reused.");
-                return Ok(());
+                return Ok(ExitCode::SUCCESS);
             }
             if !a.yes {
                 eprint!("Proceed with {} trial(s)? [y/N] ", trials.len());
@@ -846,24 +1130,39 @@ async fn main() -> Result<()> {
             }
             cfg.source_jobs =
                 a.diff.iter().map(|p| config::SourceJob { action: "diff".into(), kind: None, job_id: None, path: p.clone() }).collect();
-            run_with_ctrl_c(cfg, Some(trials), &[]).await
+            Ok(job_exit_code(&run_with_ctrl_c(cfg, Some(trials), &[]).await?, a.fail_on_error))
         }
-        Cmd::Jobs { cmd: JobsCmd::Resume { path, filter_error_types } } => {
+        Cmd::Jobs { cmd: JobsCmd::Resume { path, filter_error_types, skip_preflight, fail_on_error } } => {
             let cfg = job::load_config(&path)?;
             preflight_agents(&cfg)?;
-            run_with_ctrl_c(cfg, None, &filter_error_types).await
+            if !skip_preflight {
+                preflight_auth(&cfg)?;
+            }
+            Ok(job_exit_code(&run_with_ctrl_c(cfg, None, &filter_error_types).await?, fail_on_error))
         }
-        Cmd::Jobs { cmd: JobsCmd::Summary { path } } => {
-            let s = std::fs::read_to_string(path.join("result.json")).context("reading result.json")?;
-            job::print_summary(&serde_json::from_str(&s)?, &path);
-            Ok(())
+        Cmd::Jobs { cmd: JobsCmd::Summary { path, job_path, json } } => {
+            let path = path.or(job_path).context("pass a job dir")?;
+            let p = path.join("result.json");
+            let s = std::fs::read_to_string(&p).with_context(|| format!("reading {}", p.display()))?;
+            if json {
+                let v: Value = serde_json::from_str(&s).with_context(|| format!("parsing {}", p.display()))?;
+                println!("{}", serde_json::to_string_pretty(&v)?);
+            } else {
+                job::print_summary(&serde_json::from_str(&s).with_context(|| format!("parsing {}", p.display()))?, &path);
+            }
+            Ok(ExitCode::SUCCESS)
         }
         Cmd::Jobs { cmd: JobsCmd::Regrade { source, path, jobs_dir, job_name, n_concurrent } } => {
-            let path = path.canonicalize()?;
+            let path = path.canonicalize().with_context(|| format!("task path {}", path.display()))?;
             let task_dirs: Vec<PathBuf> = if Task::is_task_dir(&path) {
                 vec![path.clone()]
             } else {
-                let mut v: Vec<PathBuf> = std::fs::read_dir(&path)?.flatten().map(|e| e.path()).filter(|p| Task::is_task_dir(p)).collect();
+                let mut v: Vec<PathBuf> = std::fs::read_dir(&path)
+                    .with_context(|| format!("reading {}", path.display()))?
+                    .flatten()
+                    .map(|e| e.path())
+                    .filter(|p| Task::is_task_dir(p))
+                    .collect();
                 v.sort();
                 v
             };
@@ -875,13 +1174,13 @@ async fn main() -> Result<()> {
                 }
                 by_name.insert(t.name(), d);
             }
-            let source = source.canonicalize()?;
+            let source = source.canonicalize().with_context(|| format!("source job {}", source.display()))?;
             let mut cfg = JobConfig { jobs_dir, n_concurrent_trials: n_concurrent, ..Default::default() };
             if let Some(n) = job_name {
                 cfg.job_name = n;
             }
             let mut trials = vec![];
-            for e in std::fs::read_dir(&source)?.flatten() {
+            for e in std::fs::read_dir(&source).with_context(|| format!("reading {}", source.display()))?.flatten() {
                 let Some(r) = std::fs::read_to_string(e.path().join("result.json"))
                     .ok()
                     .and_then(|s| serde_json::from_str::<trial::TrialResult>(&s).ok())
@@ -908,16 +1207,17 @@ async fn main() -> Result<()> {
                 bail!("no trials in {} match the provided tasks by name", source.display());
             }
             cfg.tasks = by_name.values().map(|p| TaskRef::local(p.clone(), None)).collect();
-            run_with_ctrl_c(cfg, Some(trials), &[]).await
+            Ok(job_exit_code(&run_with_ctrl_c(cfg, Some(trials), &[]).await?, false))
         }
-        Cmd::Trials { cmd: TrialsCmd::Start { config, path, agent, model, agent_kwargs, agent_env, trials_dir } } => {
+        Cmd::Trials { cmd: TrialsCmd::Start { config, path, agent, model, agent_kwargs, agent_env, trials_dir, skip_preflight } } => {
             let mut tc: TrialConfig = match config {
                 Some(c) => {
-                    let raw = std::fs::read_to_string(&c)?;
+                    let raw = std::fs::read_to_string(&c).with_context(|| format!("reading {}", c.display()))?;
                     serde_yaml_ng::from_str(&raw).with_context(|| format!("parsing {}", c.display()))?
                 }
                 None => {
-                    let p = path.context("pass -p <task dir> or -c <trial.yaml>")?.canonicalize()?;
+                    let p = path.context("pass -p <task dir> or -c <trial.yaml>")?;
+                    let p = p.canonicalize().with_context(|| format!("path {}", p.display()))?;
                     let tref = TaskRef::local(p, None);
                     let mut a = AgentConfig { name: Some(agent), model_name: model, ..Default::default() };
                     a.kwargs = agent_kwargs.iter().map(|(k, v)| (k.clone(), kwarg_value(v))).collect();
@@ -931,24 +1231,33 @@ async fn main() -> Result<()> {
                 tc.trial_name = job::trial_name(&tc.task);
             }
             tc.task.validate()?;
+            if !skip_preflight {
+                let cfg = JobConfig { agents: vec![tc.agent.clone()], ..Default::default() };
+                preflight_agents(&cfg)?;
+                preflight_auth(&cfg)?;
+            }
             registry::download(std::slice::from_ref(&tc.task))?;
             env::preflight().await?;
             let task = std::sync::Arc::new(Task::load(&registry::local_path(&tc.task))?);
-            let (_tx, rx) = tokio::sync::watch::channel(false);
-            let r = Box::pin(trial::Trial::new(tc, task, None)?.run(rx)).await;
+            let name = tc.trial_name.clone();
+            let rx = cancel_on_signal(move || vec![name.clone()]);
+            let r = Box::pin(trial::Trial::new(tc, task, None)?.run(rx.clone())).await;
             println!(
                 "{}",
                 serde_json::to_string_pretty(&serde_json::json!({
                     "trial_name": r.trial_name, "rewards": r.reward(), "exception": r.exception_info.as_ref().map(|e| &e.exception_type), "trial_uri": r.trial_uri
                 }))?
             );
-            Ok(())
+            if *rx.borrow() {
+                return Err(Cancelled.into());
+            }
+            Ok(if r.exception_info.is_some() { ExitCode::FAILURE } else { ExitCode::SUCCESS })
         }
         Cmd::Datasets { cmd: DatasetsCmd::List(r) } => {
             for d in registry::load(r.registry_url.as_deref(), r.registry_path.as_deref())? {
                 println!("{}@{}  ({} tasks)  {}", d.name, d.version, d.tasks.len(), d.description);
             }
-            Ok(())
+            Ok(ExitCode::SUCCESS)
         }
         Cmd::Datasets { cmd: DatasetsCmd::Download { dataset, registry: r, output_dir } } => {
             let (name, version) = match dataset.split_once('@') {
@@ -968,7 +1277,7 @@ async fn main() -> Result<()> {
             for t in &tasks {
                 println!("{}", registry::local_path(t).display());
             }
-            Ok(())
+            Ok(ExitCode::SUCCESS)
         }
         Cmd::Tasks {
             cmd:
@@ -1007,15 +1316,15 @@ async fn main() -> Result<()> {
                 steps,
                 ..Default::default()
             };
-            authoring::init_task(&name, &tasks_dir, &opts).map(|_| ())
+            ok(authoring::init_task(&name, &tasks_dir, &opts).map(|_| ()))
         }
-        Cmd::Init(a) => run_init(*a),
-        Cmd::Add(a) | Cmd::Datasets { cmd: DatasetsCmd::Add(a) } => authoring::add(&a.packages, &a.to, a.scan),
-        Cmd::Remove(a) | Cmd::Datasets { cmd: DatasetsCmd::Remove(a) } => authoring::remove(&a.package, &a.from, a.scan),
-        Cmd::Sync { path, upgrade, concurrency: _ } => authoring::sync(&path, upgrade),
+        Cmd::Init(a) => ok(run_init(*a)),
+        Cmd::Add(a) | Cmd::Datasets { cmd: DatasetsCmd::Add(a) } => ok(authoring::add(&a.packages, &a.to, a.scan)),
+        Cmd::Remove(a) | Cmd::Datasets { cmd: DatasetsCmd::Remove(a) } => ok(authoring::remove(&a.package, &a.from, a.scan)),
+        Cmd::Sync { path, upgrade, concurrency: _ } => ok(authoring::sync(&path, upgrade)),
         Cmd::Datasets { cmd: DatasetsCmd::Init { name, output_dir, org, description, with_metric, author } } => {
             let name = authoring::resolve_name(name, org)?;
-            authoring::init_dataset(&name, &output_dir, &description, with_metric, &authoring::parse_authors(&author))
+            ok(authoring::init_dataset(&name, &output_dir, &description, with_metric, &authoring::parse_authors(&author)))
         }
         Cmd::Tasks { cmd: TasksCmd::Digest { path } } => {
             let rows: Vec<Value> = task_dirs(&path)?
@@ -1027,7 +1336,7 @@ async fn main() -> Result<()> {
                 })
                 .collect::<Result<_>>()?;
             println!("{}", serde_json::to_string_pretty(&rows)?);
-            Ok(())
+            Ok(ExitCode::SUCCESS)
         }
         Cmd::Tasks { cmd: TasksCmd::Check { path } } => {
             let dirs = task_dirs(&path)?;
@@ -1044,22 +1353,39 @@ async fn main() -> Result<()> {
             if bad > 0 {
                 bail!("{bad} invalid task(s)");
             }
-            Ok(())
+            Ok(ExitCode::SUCCESS)
         }
-        Cmd::Sweeps { cmd: SweepsCmd::Run { config, max_sweeps, trials_per_task, hint, hints_file } } => {
+        Cmd::Sweeps { cmd: SweepsCmd::Run { config, max_sweeps, trials_per_task, hint, hints_file, skip_preflight } } => {
             let cfg = JobConfig::load(&config)?;
             preflight_agents(&cfg)?;
+            if !skip_preflight {
+                preflight_auth(&cfg)?;
+            }
             env::preflight().await?;
             let hints: BTreeMap<String, String> = match hints_file {
-                Some(p) => {
-                    serde_json::from_str(&std::fs::read_to_string(&p)?).context("--hints-file must be a JSON object {task_name: hint}")?
-                }
+                Some(p) => serde_json::from_str(&std::fs::read_to_string(&p).with_context(|| format!("reading {}", p.display()))?)
+                    .context("--hints-file must be a JSON object {task_name: hint}")?,
                 None => BTreeMap::new(),
             };
-            for d in sweeps::run(cfg, max_sweeps, trials_per_task, hint, hints).await? {
+            // Sweep job dirs are `<jobs_dir>/<job_name>.sweep-*`.
+            let (jobs_dir, prefix) = (cfg.jobs_dir.clone(), format!("{}.sweep-", cfg.job_name));
+            let rx = cancel_on_signal(move || {
+                let dirs: Vec<PathBuf> = std::fs::read_dir(&jobs_dir)
+                    .into_iter()
+                    .flatten()
+                    .flatten()
+                    .filter(|e| e.file_name().to_string_lossy().starts_with(&prefix))
+                    .map(|e| e.path())
+                    .collect();
+                trial_names(&dirs)
+            });
+            for d in sweeps::run(cfg, max_sweeps, trials_per_task, hint, hints, rx.clone()).await? {
                 println!("{}", d.display());
             }
-            Ok(())
+            if *rx.borrow() {
+                return Err(Cancelled.into());
+            }
+            Ok(ExitCode::SUCCESS)
         }
         Cmd::Tasks { cmd: TasksCmd::Migrate { input, output, cpus, memory_mb, storage_mb, gpus } } => {
             println!(
@@ -1067,7 +1393,7 @@ async fn main() -> Result<()> {
             );
             if !input.exists() {
                 println!("❌ Input path does not exist: {}", input.display());
-                return Ok(());
+                return Ok(ExitCode::SUCCESS);
             }
             let single = input.join("task.yaml").exists();
             if single {
@@ -1083,10 +1409,10 @@ async fn main() -> Result<()> {
                 Err(e) if single => println!("❌ Failed to migrate task: {e:#}"),
                 Err(e) => return Err(e),
             }
-            Ok(())
+            Ok(ExitCode::SUCCESS)
         }
         Cmd::Cache { cmd: CacheCmd::Clean { force, dry, no_docker, no_cache_dir } } => {
-            tools::cache_clean(force, dry, no_docker, no_cache_dir).await
+            ok(tools::cache_clean(force, dry, no_docker, no_cache_dir).await)
         }
         Cmd::Tasks { cmd: TasksCmd::StartEnv { path, no_all, non_interactive, agent, model, agent_kwargs } } => {
             env::preflight().await?;
@@ -1096,10 +1422,11 @@ async fn main() -> Result<()> {
                 kwargs: agent_kwargs.iter().map(|(k, v)| (k.clone(), kwarg_value(v))).collect(),
                 ..Default::default()
             });
-            tools::start_env(&path, !no_all, !non_interactive, a).await
+            ok(tools::start_env(&path, !no_all, !non_interactive, a).await)
         }
         Cmd::Trials { cmd: TrialsCmd::Handoff { trial_dir } } => {
-            let cmd = tools::handoff_command(&trial_dir.canonicalize()?, &std::env::current_dir()?)?;
+            let dir = trial_dir.canonicalize().with_context(|| format!("trial dir {}", trial_dir.display()))?;
+            let cmd = tools::handoff_command(&dir, &std::env::current_dir()?)?;
             println!("Resuming session from trial {} with: {}", trial_dir.display(), cmd.join(" "));
             use std::os::unix::process::CommandExt;
             Err(std::process::Command::new(&cmd[0]).args(&cmd[1..]).exec().into())
@@ -1108,11 +1435,11 @@ async fn main() -> Result<()> {
             for n in agents::agent_names() {
                 println!("{n}");
             }
-            Ok(())
+            Ok(ExitCode::SUCCESS)
         }
         Cmd::Agents { cmd: Some(AgentsCmd::List { json: true }) } => {
             println!("{}", serde_json::to_string_pretty(&agents::agent_names())?);
-            Ok(())
+            Ok(ExitCode::SUCCESS)
         }
         Cmd::Agents { cmd: Some(AgentsCmd::Schema { name, json }) } => {
             let Some(s) = schemas::agent(&name) else { bail!("Agent '{name}' does not declare an options_model") };
@@ -1121,18 +1448,18 @@ async fn main() -> Result<()> {
             } else {
                 print!("{}", schemas::options_table(&name, &serde_json::from_str(s)?));
             }
-            Ok(())
+            Ok(ExitCode::SUCCESS)
         }
         Cmd::Tasks { cmd: TasksCmd::Schema } => {
             println!("{}", schemas::TASK);
-            Ok(())
+            Ok(ExitCode::SUCCESS)
         }
         Cmd::Trials { cmd: TrialsCmd::Schema } => {
             println!("{}", schemas::TRIAL);
-            Ok(())
+            Ok(ExitCode::SUCCESS)
         }
-        Cmd::Analyze(a) => analyze::analyze_command(*a).await,
-        Cmd::Check(a) => analyze::check_command(*a).await,
+        Cmd::Analyze(a) => ok(analyze::analyze_command(*a).await),
+        Cmd::Check(a) => ok(analyze::check_command(*a).await),
         Cmd::View { folder, path, port, host, tasks, jobs, .. } => {
             //  `-p` is the folder flag but is also used as a port flag; a port-shaped value that isn't a dir is a port.
             let is_port = |p: &str| !std::path::Path::new(p).is_dir() && viewer::parse_port_range(p).is_ok();
@@ -1148,7 +1475,7 @@ async fn main() -> Result<()> {
             } else {
                 None
             };
-            viewer::serve(&folder.unwrap_or_else(|| "jobs".into()), mode, &host, viewer::parse_port_range(&port)?)
+            ok(viewer::serve(&folder.unwrap_or_else(|| "jobs".into()), mode, &host, viewer::parse_port_range(&port)?))
         }
         Cmd::Traces {
             cmd: TracesCmd::Export { path, output, no_recursive, episodes, filter, sharegpt, instruction_metadata, verifier_metadata },
@@ -1161,7 +1488,7 @@ async fn main() -> Result<()> {
                 include_instruction: instruction_metadata,
                 include_verifier_output: verifier_metadata,
             };
-            traces::run(&path, output.as_deref(), &o)
+            ok(traces::run(&path, output.as_deref(), &o))
         }
     }
 }
@@ -1213,5 +1540,74 @@ mod tests {
         assert_eq!((c.n_attempts, c.environment.delete), (3, false));
         assert_eq!(c.datasets[0].task_names.as_ref().unwrap(), &["t*"]);
         assert_eq!(c.artifacts, vec![Artifact::Path("/app/x".into())]);
+    }
+
+    #[test]
+    fn task_filters_apply_to_single_tasks() {
+        let dir = std::env::temp_dir().join(format!("hbench-cli-{}", uuid::Uuid::new_v4())).join("hello");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("task.toml"), "").unwrap();
+        let cfg = |extra: &[&str]| {
+            let mut args = vec!["hbench", "run", "-p", dir.to_str().unwrap()];
+            args.extend(extra);
+            let Cmd::Run(a) = Cli::parse_from(args).cmd else { panic!() };
+            build_job_config(&a)
+        };
+        assert_eq!(cfg(&["-i", "hel*"]).unwrap().tasks.len(), 1);
+        assert!(cfg(&["-i", "nope"]).unwrap_err().to_string().contains("No tasks matched"));
+        assert!(cfg(&["-x", "hello"]).is_err());
+    }
+
+    #[test]
+    fn preflight_checks_kwargs_and_keys() {
+        let agent = |name: &str, kw: Value, env: &[(&str, &str)]| JobConfig {
+            agents: vec![AgentConfig {
+                name: Some(name.into()),
+                kwargs: serde_json::from_value(kw).unwrap(),
+                env: env.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        assert!(preflight_agents(&agent("claude-code", serde_json::json!({"bogus": 1}), &[])).is_err());
+        assert!(preflight_auth(&agent("claude-code", serde_json::json!({}), &[("CLAUDE_CODE_OAUTH_TOKEN", "t")])).is_ok());
+        assert!(preflight_auth(&agent("aider", serde_json::json!({}), &[])).is_ok()); // undecidable: skipped
+        if auth_envs("codex").unwrap().iter().all(|n| std::env::var(n).is_err()) {
+            let e = preflight_auth(&agent("codex", serde_json::json!({}), &[])).unwrap_err().to_string();
+            assert!(e.contains("OPENAI_API_KEY"), "{e}");
+        }
+    }
+
+    #[test]
+    fn exit_codes() {
+        let jr = |done: usize, errored: usize| job::JobResult {
+            id: uuid::Uuid::nil(),
+            started_at: chrono::Utc::now(),
+            updated_at: None,
+            finished_at: None,
+            n_total_trials: done,
+            stats: job::JobStats { n_completed_trials: done, n_errored_trials: errored, ..Default::default() },
+        };
+        assert_eq!(job_exit_code(&jr(2, 1), false), ExitCode::SUCCESS);
+        assert_eq!(job_exit_code(&jr(2, 1), true), ExitCode::FAILURE);
+        assert_eq!(job_exit_code(&jr(2, 2), false), ExitCode::FAILURE);
+        assert_eq!(job_exit_code(&jr(0, 0), true), ExitCode::SUCCESS);
+    }
+
+    #[test]
+    fn summary_takes_a_positional_path() {
+        for args in [&["hbench", "jobs", "summary", "jobs/x"][..], &["hbench", "jobs", "summary", "-p", "jobs/x"]] {
+            let Cmd::Jobs { cmd: JobsCmd::Summary { path, job_path, .. } } = Cli::parse_from(args).cmd else { panic!() };
+            assert_eq!(path.or(job_path), Some(PathBuf::from("jobs/x")));
+        }
+    }
+
+    #[tokio::test]
+    async fn sighup_cancels() {
+        let mut rx = cancel_on_signal(Vec::new); // handlers are registered before it returns
+        let pid = std::process::id().to_string();
+        assert!(std::process::Command::new("kill").args(["-HUP", &pid]).status().unwrap().success());
+        tokio::time::timeout(std::time::Duration::from_secs(5), rx.changed()).await.unwrap().unwrap();
+        assert!(*rx.borrow());
     }
 }

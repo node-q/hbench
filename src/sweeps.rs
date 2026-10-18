@@ -30,6 +30,7 @@ pub async fn run(
     trials_per_task: usize,
     hint: Option<String>,
     hints: BTreeMap<String, String>,
+    cancel: tokio::sync::watch::Receiver<bool>,
 ) -> Result<Vec<PathBuf>> {
     let mut base = base;
     base.n_attempts = trials_per_task;
@@ -54,6 +55,9 @@ pub async fn run(
         };
         eprintln!("[sweeps] Starting sweep {idx} with {} tasks, {} trials/task", remaining.len(), base.n_attempts);
         for (name, tasks) in groups {
+            if *cancel.borrow() {
+                return Ok(job_dirs);
+            }
             let mut cfg = base.clone();
             cfg.job_name = name;
             if let Some(h) = tasks.first().and_then(|t| hints.get(&t.display_name())) {
@@ -62,8 +66,7 @@ pub async fn run(
                 }
             }
             cfg.tasks = tasks;
-            let (_tx, rx) = tokio::sync::watch::channel(false);
-            crate::job::run_job(cfg.clone(), None, &[], rx).await?;
+            crate::job::run_job(cfg.clone(), None, &[], cancel.clone()).await?;
             succeeded.extend(succeeded_tasks(&cfg.job_dir()));
             job_dirs.push(cfg.job_dir());
         }

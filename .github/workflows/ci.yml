@@ -48,6 +48,22 @@ jobs:
         env:
           RUSTFLAGS: ""
 
+  audit:
+    # RustSec advisories for Cargo.lock.
+    name: Security Audit
+    runs-on: [self-hosted, linux, x64, hpg]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+      - name: Set up Rust toolchain
+        uses: ./.github/actions/setup-rust
+      - name: Install cargo-audit
+        run: command -v cargo-audit >/dev/null || cargo install cargo-audit --locked
+        env:
+          RUSTFLAGS: ""
+      - name: Audit dependencies
+        run: cargo audit
+
   viewer:
     # viewer/dist is committed and embedded by build.rs, so it must match viewer/src.
     name: Viewer Bundle

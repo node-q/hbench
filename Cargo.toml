@@ -10,6 +10,7 @@ async-trait = "0.1.92"
 base64 = "0.23.1"
 chrono = { version = "0.4.45", features = ["serde"] }
 clap = { version = "4.6.7", features = ["derive"] }
+clap_complete = "4.6.11"
 minijinja = "3.0.0"
 regex = "1.13.1"
 serde = { version = "1.0.229", features = ["derive"] }
@@ -19,6 +20,11 @@ serde_yaml_ng = "0.10.0"
 sha2 = "0.11.0"
 tiktoken-rs = "0.12.1"
 tiny_http = "0.12.0"
-tokio = { version = "1.53.2", features = ["full"] }
+tokio = { version = "1.53.2", features = ["macros", "rt-multi-thread", "process", "signal", "sync", "time", "io-util"] }
 toml = { version = "1.1.8", features = ["preserve_order"] }
 uuid = { version = "1.28.0", features = ["v4", "serde"] }
+
+[profile.release]
+strip = true
+lto = "thin"
+codegen-units = 1

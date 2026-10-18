@@ -40,19 +40,25 @@ $B tasks init|check|digest|start-env|migrate|schema               # digest: task
 $B analyze jobs/<job> | <trial>    $B check <tasks>                 # agent-run trajectory analysis / task QA
 $B exec "summarize ./notes/*.md" --print-config                  # experimental: compile prompt+paths into tasks
 $B agents list | schema <agent>    $B trials schema    $B cache clean
+$B completions zsh > ~/.zfunc/_hbench                          # shell completions (bash, zsh, fish, ...)
 ```
 
 Docker: hbench uses whatever `docker` points at (`DOCKER_CONTEXT`/`DOCKER_HOST`). Remote ssh daemons work because
 files move with `docker compose cp` rather than bind mounts.
 
+`run`, `jobs resume`, `trials start` and `sweeps run` exit 130 when cancelled (SIGINT, SIGTERM or SIGHUP; a second
+signal force-quits after removing the run's compose projects), 1 on an error or when every trial errored
+(`--fail-on-error`: any trial), and 0 otherwise. Before starting they check agent kwargs against the agent's schema and,
+for `claude-code`, `codex` and `gemini-cli`, that some credential is set; `--skip-preflight` skips the check.
+
 ## Agents
 
-47 agents: `oracle`, `nop`, `terminus-2` (also `terminus`, `terminus-1`), `claude-code`, `codex`,
+46 agents (`hbench agents list`): `oracle`, `nop`, `terminus-2` (also `terminus`, `terminus-1`), `claude-code`, `codex`,
 `gemini-cli`, `opencode`, `aider`, `goose`, `copilot-cli`, `cursor-cli`, `openhands`, `openhands-sdk`, `mini-swe-agent`,
 `swe-agent`, `trae-agent`, `qwen-coder`, `kimi-cli`, `kimi-code`, `grok-build`, `hermes`, `junie`, `rovodev-cli`,
 `cline-cli`, `cortex-code`, `code-puppy`, `devin`, `langgraph`, `deerflow`, `strands`, `nemo-agent`, `mimo`, `mcode`,
 `pi`, `openclaw`, `antigravity-cli`, `antigravity-sdk`, `eve`, `fx`, `fx-dev`, `vibe`, `muse-code`, `acp` (+ `acp:<id>`),
-`computer-1`, `dspy-rlm`.
+`computer-1`, `dspy-rlm`, `deepseek-harness`.
 
 Each agent has pinned install commands and versions, validated CLI flags and env (`--ak key=value` / `kwargs`), auth
 resolution, error classification (`ApiRateLimitError`, `AgentAuthenticationError`, ...), and usage/cost parsing. Cost
@@ -74,6 +80,22 @@ session logs, and supports `resume_trajectory` for multi-step tasks.
 DEEPSEEK_API_KEY=... $B run -d terminal-bench@2.0 -a deepseek-harness -m deepseek/deepseek-v4-flash
 ```
 
+### Environment variables
+
+Credentials are read from the host environment or `--ae KEY=VALUE` (`agent.env` in a job config).
+
+| Agent | Credentials (any one) | Optional |
+|---|---|---|
+| `claude-code` | `ANTHROPIC_API_KEY` (or `ANTHROPIC_AUTH_TOKEN`); `CLAUDE_CODE_OAUTH_TOKEN` (`claude setup-token`; `CLAUDE_FORCE_OAUTH=1` prefers it); Bedrock: `AWS_BEARER_TOKEN_BEDROCK` or `CLAUDE_CODE_USE_BEDROCK=1` + AWS credentials | `ANTHROPIC_BASE_URL` |
+| `codex` | `OPENAI_API_KEY`; `CODEX_AUTH_JSON_PATH=<auth.json>` or `CODEX_FORCE_AUTH_JSON=1` (`~/.codex/auth.json`) | `OPENAI_BASE_URL` |
+| `gemini-cli` | `GEMINI_API_KEY` (or `GOOGLE_API_KEY`); `GEMINI_OAUTH_CREDS_PATH` or `GEMINI_FORCE_OAUTH=1` (`~/.gemini/oauth_creds.json`); Vertex: `GOOGLE_GENAI_USE_VERTEXAI=1` + `GOOGLE_CLOUD_PROJECT`/`GOOGLE_CLOUD_LOCATION` | `GOOGLE_GEMINI_BASE_URL` |
+| `deepseek-harness` | `DEEPSEEK_API_KEY` | `DEEPSEEK_BASE_URL` |
+| model-routed agents (`terminus-2`, `aider`, `opencode`, `goose`, `mini-swe-agent`, `swe-agent`, ...) | the key of the `-m provider/model` prefix: `anthropic/` `ANTHROPIC_API_KEY`, `openai/` `OPENAI_API_KEY`, `gemini/` `GEMINI_API_KEY`, `openrouter/` `OPENROUTER_API_KEY`, `deepseek/` `DEEPSEEK_API_KEY`, `xai/` `XAI_API_KEY`, `bedrock/` `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` + `AWS_REGION` | `<PROVIDER>_BASE_URL` |
+| `analyze`, `check` | run `claude-code` by default (`-a` picks another agent), so they need an Anthropic credential, usually `ANTHROPIC_API_KEY` | |
+
+`hbench agents schema <agent>` lists an agent's kwargs; `src/agents/model_connection.rs` has every provider's key names.
+Other hbench variables: `DOCKER_CONTEXT`/`DOCKER_HOST` (which daemon), `HBENCH_EGRESS_METHOD=proxy` (see below).
+
 ## Task format
 
 ```
@@ -91,7 +113,7 @@ Supported task features:
 - Shared and separate verifier environments, including bundled verifier images.
 - Artifacts: sidecar sources, destinations, excludes, `manifest.json`, and `[[verifier.collect]]` hooks.
 - Network policies: `public`, `no-network`, and `allowlist`, phase-scoped per agent/verifier/step. An egress
-  sidecar enforces them, and run-level `extra_allowed_hosts` are supported. As in upstream, those hosts only
+  sidecar enforces them, and run-level `extra_allowed_hosts` are supported. Those hosts only
   widen a restricted task and are ignored on a public one (most registry tasks declare no policy, so they are
   public); set `agent.enforce_allowlist: true` to make them the agent phase's whole allowlist there too.
   How the sidecar enforces them is recorded per trial in `result.json` as `egress` (see below).
@@ -115,9 +137,9 @@ allowlist in one of two ways, and `result.json` records which, with the refused 
 
 If neither can be set up, or the task's main service picks its own network, the trial fails at setup.
 
-Unlike upstream, hbench rejects keys it does not know in a job config or `task.toml`, so a misspelt
-`enforce_allowlist` stops the run instead of leaving the agent's network open. The legacy spellings upstream still
-accepts are rewritten first: `orchestrator.{n_concurrent_trials,quiet,retry}` move to the top level, a dataset's
+hbench rejects keys it does not know in a job config or `task.toml`, so a misspelt `enforce_allowlist` stops the
+run instead of leaving the agent's network open. Legacy spellings are rewritten first:
+`orchestrator.{n_concurrent_trials,quiet,retry}` move to the top level, a dataset's
 `registry: {url, path}` becomes `registry_url`/`registry_path`, `environment.mounts_json` becomes `mounts`,
 `plugins` and `environment.suppress_override_warnings` (both no-ops) are dropped, and a top-level `version` in
 `task.toml` means `schema_version`. Recorded `config.json` and `result.json` files are still read as they are.
@@ -130,7 +152,7 @@ starts (`src/integrity.rs`); the verifier still gets its own complete `tests/`.
 When the agent phase ends, by timeout or a normal exit, hbench stops the agent's own processes before grading: those
 still running under the agent's `docker compose exec`, and the foreground job of its terminal. Processes the agent
 detached on purpose, such as a server a task asks it to leave running (started with `nohup`, `setsid`, `&`, `tmux`
-or a service manager), keep running for the verifier, as in upstream. If they cannot be stopped, the trial ends
+or a service manager), keep running for the verifier. If they cannot be stopped, the trial ends
 ungraded with the run's own error (`AgentTimeoutError` after a timeout). In a shared verifier environment such a process
 could also change files while the tests run; it shows up in the trajectory, so review trajectories of top runs.
 
@@ -152,6 +174,20 @@ Agent setup is hardened so environment problems aren't charged to the agent:
   failure.
 - apt installs fall back to the image's sources minus the `*-security` suites. This matters for EOL releases like
   Debian bullseye, whose security index lists packages that are gone from the mirror.
+
+## Troubleshooting
+
+- **Docker unreachable** (`docker version` timed out / daemon unreachable): hbench talks to whatever `docker` uses.
+  Check `docker context ls`, `DOCKER_CONTEXT` and `DOCKER_HOST`; for an ssh context, make sure the remote daemon is up
+  and an existing ssh connection isn't stale.
+- **Leaked containers** (after a force quit or a crash): trial compose projects are named after the trial
+  (`<task>__<id>`). List them with `docker compose ls -a` and remove one with
+  `docker compose -p <name> down -v -t 0`; `hbench cache clean` removes hbench-built images and the cache dir.
+- **Rate limits**: trials that hit them end with `ApiRateLimitError`. Lower `-n`/`--n-concurrent-agent`, then
+  `hbench jobs resume -p jobs/<job> -f ApiRateLimitError` reruns just those trials (or retry them in the run with
+  `--max-retries N --retry-include ApiRateLimitError`).
+- **Missing credentials**: the run stops before starting trials and names the variable to set (see
+  [Environment variables](#environment-variables)).
 
 ## Viewer
 
@@ -186,7 +222,7 @@ are in the registry.
 - `scripts/install-matrix.sh`: installs every installed agent into a real container (`install_only`).
 
 CI (`.github/workflows/ci.yml`) runs on the org's self-hosted Linux runners (`[self-hosted, linux, x64, hpg]`): build +
-`cargo test`, clippy, a check that the committed `viewer/dist` matches `viewer/src`, and `scripts/e2e.sh`.
+`cargo test`, clippy, `cargo audit`, a check that the committed `viewer/dist` matches `viewer/src`, and `scripts/e2e.sh`.
 
 ## Releases
 

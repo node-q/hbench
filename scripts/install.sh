@@ -43,7 +43,7 @@ if ! from_public; then
 fi
 
 cd "$tmp"
-grep " hbench-$tag-$target.tar.gz\$" SHA256SUMS > sum
+grep " hbench-$tag-$target.tar.gz\$" SHA256SUMS > sum || { echo "SHA256SUMS of $tag has no entry for hbench-$tag-$target.tar.gz" >&2; exit 1; }
 if command -v sha256sum >/dev/null 2>&1; then sha256sum -c sum >/dev/null; else shasum -a 256 -c sum >/dev/null; fi
 tar -xzf "hbench-$tag-$target.tar.gz"
 mkdir -p "$DIR"
