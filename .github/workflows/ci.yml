@@ -18,9 +18,25 @@ env:
 # organisation over billing. The pool is Linux x64 only with no sudo, so macOS is not
 # covered here; its jobs have a Docker daemon, which the e2e job uses.
 jobs:
+  # The router runners pick the pool for the jobs below: mothership's while one of
+  # its runners is idle, either pool otherwise (infra's services/gh-runner-mothership).
+  route:
+    name: Route
+    runs-on: [self-hosted, hpg-route]
+    timeout-minutes: 2
+    outputs:
+      labels: ${{ steps.route.outputs.labels }}
+    steps:
+      - name: Pick the runner pool
+        id: route
+        uses: node-q/actions/runner-route@4d447ccec339824c49417463313800a2fbbcb210
+        with:
+          token: ${{ secrets.RUNNER_STATUS_TOKEN }}
+
   test:
     name: Build & Test
-    runs-on: [self-hosted, linux, x64, hpg]
+    needs: route
+    runs-on: ${{ fromJSON(needs.route.outputs.labels) }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -33,7 +49,8 @@ jobs:
 
   lint:
     name: Lint
-    runs-on: [self-hosted, linux, x64, hpg]
+    needs: route
+    runs-on: ${{ fromJSON(needs.route.outputs.labels) }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -51,7 +68,8 @@ jobs:
   viewer:
     # viewer/dist is committed and embedded by build.rs, so it must match viewer/src.
     name: Viewer Bundle
-    runs-on: [self-hosted, linux, x64, hpg]
+    needs: route
+    runs-on: ${{ fromJSON(needs.route.outputs.labels) }}
     defaults:
       run:
         working-directory: viewer
@@ -77,7 +95,8 @@ jobs:
     # The integrity guarantees (stopping the agent at timeout, the hidden-test scrub, the egress allowlist)
     # only show against a real daemon.
     name: E2E
-    runs-on: [self-hosted, linux, x64, hpg]
+    needs: route
+    runs-on: ${{ fromJSON(needs.route.outputs.labels) }}
     timeout-minutes: 45
     steps:
       - name: Checkout repository
