@@ -27,3 +27,9 @@ gh release download "$TAG" -p SHA256SUMS -O - | grep -v -- '-apple-darwin\.tar\.
 (cd "$DIST" && shasum -a 256 -- hbench-*-apple-darwin.tar.gz >> SHA256SUMS && sort -k2 -o SHA256SUMS SHA256SUMS)
 gh release upload "$TAG" "$DIST"/hbench-*-apple-darwin.tar.gz "$DIST/SHA256SUMS" --clobber
 echo "uploaded macOS binaries to $TAG"
+
+# The Linux release job created the public mirror release; add the macOS archives and the full SHA256SUMS.
+if gh release view "$TAG" -R node-q/hbench-releases >/dev/null 2>&1; then
+  gh release upload "$TAG" -R node-q/hbench-releases "$DIST"/hbench-*-apple-darwin.tar.gz "$DIST/SHA256SUMS" --clobber
+  echo "mirrored macOS binaries to node-q/hbench-releases"
+fi

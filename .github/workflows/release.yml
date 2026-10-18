@@ -66,3 +66,15 @@ jobs:
           files: |
             dist/*.tar.gz
             dist/SHA256SUMS
+      - name: Mirror to the public hbench-releases repo
+        # HBENCH_RELEASES_TOKEN: fine-grained PAT, Contents: write on node-q/hbench-releases only.
+        if: ${{ !contains(github.ref_name, '-') }}
+        env:
+          GH_TOKEN: ${{ secrets.HBENCH_RELEASES_TOKEN }}
+        run: |
+          [ -n "$GH_TOKEN" ] || { echo "::warning::HBENCH_RELEASES_TOKEN not set; not mirroring"; exit 0; }
+          repo=node-q/hbench-releases
+          notes="hbench $GITHUB_REF_NAME. Install: curl -fsSL https://nodeq.tech/install.sh | sh"
+          gh release view "$GITHUB_REF_NAME" -R "$repo" >/dev/null 2>&1 ||
+            gh release create "$GITHUB_REF_NAME" -R "$repo" --title "hbench $GITHUB_REF_NAME" --notes "$notes"
+          gh release upload "$GITHUB_REF_NAME" -R "$repo" dist/*.tar.gz dist/SHA256SUMS --clobber
