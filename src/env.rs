@@ -680,9 +680,11 @@ impl DockerEnv {
         Ok(r.stdout.split_whitespace().collect::<Vec<_>>().join(" "))
     }
 
-    /// Kill every process in main that is not in `snapshot`. Returns how many were killed.
-    pub async fn kill_processes_since(&self, snapshot: &str) -> Result<usize> {
-        let r = self.exec_root(&kill_since_script(snapshot), Some(Duration::from_secs(60))).await?;
+    /// Kill the processes the agent itself is still running: anything started since `snapshot` that still
+    /// descends from a live `docker exec` or is the foreground job of a terminal. Processes it detached
+    /// (reparented to PID 1, or a background job of its terminal) keep running. Returns how many were killed.
+    pub async fn kill_agent_processes(&self, snapshot: &str) -> Result<usize> {
+        let r = self.exec_root(&kill_agent_script(snapshot), Some(Duration::from_secs(60))).await?;
         if r.code != 0 {
             bail!("stopping processes failed: {}", r.stderr);
         }
@@ -714,22 +716,51 @@ const PROC_LIST: &str = r#"for_each_proc() {
   done
 }"#;
 
-/// Stop (so nothing forks while we look) then kill everything not in `snapshot`, until none is left.
-fn kill_since_script(snapshot: &str) -> String {
+/// Bash builtins only (see PROC_LIST). In /proc/<pid>/stat after the command name: $1 state, $2 ppid,
+/// $3 pgrp, $4 session, $5 tty, $6 terminal foreground pgrp, $20 starttime. A `docker exec` process has
+/// ppid 0 inside the container; an orphan is reparented to PID 1. Everything picked is stopped first, and
+/// the scan repeats until it finds nothing new, so no child is orphaned (and so spared) mid-way.
+fn kill_agent_script(snapshot: &str) -> String {
     format!(
-        r#"{PROC_LIST}
-keep=" {snapshot} "
-pick() {{ case "$keep" in *" $1 "*) ;; *) kill -STOP "${{1%%:*}}" 2>/dev/null && new="$new ${{1%%:*}}";; esac; }}
-total=0
-for round in 1 2 3 4 5; do
-  new=
-  for_each_proc pick
-  [ -z "$new" ] && break
-  kill -KILL $new 2>/dev/null
-  set -- $new
-  total=$((total + $#))
+        r#"keep=" {snapshot} "
+scan() {{
+  local p pid s
+  ppid=() fg=() new=()
+  for p in /proc/[0-9]*; do
+    pid=${{p#/proc/}}
+    read -r s 2>/dev/null < "$p/stat" || continue
+    set -- ${{s##*) }}
+    ppid[pid]=$2
+    case "$pid" in 1 | "$$") continue ;; esac
+    [ "$1" = Z ] && continue
+    case "$keep" in *" $pid:${{20}} "*) continue ;; esac
+    new+=("$pid")
+    [ "$5" != 0 ] && [ "$3" = "$6" ] && [ "$4" != "$pid" ] && fg[pid]=1
+  done
+}}
+owned() {{
+  local p=$1 n=0
+  while [ "$p" -gt 1 ] && [ "$p" != "$$" ] && [ $n -lt 1000 ]; do
+    [ -n "${{fg[p]}}" ] && return 0
+    [ "${{ppid[p]:-1}}" = 0 ] && return 0
+    p=${{ppid[p]:-1}}
+    n=$((n + 1))
+  done
+  return 1
+}}
+stopped=" "
+for ((round = 0; round < 20; round++)); do
+  scan
+  more=
+  for p in "${{new[@]}}"; do
+    case "$stopped" in *" $p "*) continue ;; esac
+    owned "$p" && kill -STOP "$p" 2>/dev/null && more=1 && stopped="$stopped$p "
+  done
+  [ -z "$more" ] && break
 done
-echo $total"#
+set -- $stopped
+[ $# -gt 0 ] && kill -KILL "$@" 2>/dev/null
+echo $#"#
     )
 }
 

@@ -93,6 +93,12 @@ the hidden tests, and Aider Polyglot and TB2's adaptive-rejection-sampler ship t
 the password in their public `solve.sh`. hbench removes these from the container before any agent but the oracle
 starts (`src/integrity.rs`); the verifier still gets its own complete `tests/`.
 
+When the agent phase ends, by timeout or a normal exit, hbench stops the agent's own processes before grading: those
+still running under the agent's `docker compose exec`, and the foreground job of its terminal. Processes the agent
+detached on purpose, such as a server a task asks it to leave running (started with `nohup`, `setsid`, `&`, `tmux`
+or a service manager), keep running for the verifier, as in upstream. In a shared verifier environment such a process
+could also change files while the tests run; it shows up in the trajectory, so review trajectories of top runs.
+
 ## Output
 
 ```
