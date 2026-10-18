@@ -1,6 +1,6 @@
 //! NVIDIA NeMo Agent Toolkit installed agent.
 
-use super::common::{installed_dir, upload_asset};
+use super::common::{installed_dir, upload_asset, uv_install};
 use super::pins;
 use super::{ensure_system_dependencies, exec_agent, exec_error, exec_root};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
@@ -250,15 +250,8 @@ impl Agent for NemoAgent {
         let none = BTreeMap::new();
         let install = async {
             ensure_system_dependencies(cx, if self.nat_repo.is_some() { &["curl", "git"] } else { &["curl"] }).await?;
-            exec_agent(
-                cx,
-                &format!(
-                    "{PATH_SETUP}; command -v uv > /dev/null 2>&1 || curl -LsSf {uv_installer} | sh",
-                    uv_installer = pins::uv_installer()
-                ),
-                &none,
-            )
-            .await?;
+            exec_agent(cx, &format!("{PATH_SETUP}; command -v uv > /dev/null 2>&1 || {uv_install}", uv_install = uv_install(None)), &none)
+                .await?;
             let user = cx.user.clone().unwrap_or_else(|| "root".into());
             exec_root(cx, &format!("mkdir -p /opt/nvidia-nat-venv && chown {user}:{user} /opt/nvidia-nat-venv"), &none).await?;
             exec_agent(cx, &format!("{PATH_SETUP}; uv venv /opt/nvidia-nat-venv --python 3.12 --clear"), &none).await?;

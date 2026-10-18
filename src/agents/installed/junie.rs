@@ -2,6 +2,7 @@
 
 use super::common::parse_jsonl;
 use super::common::{installed_dir, skills_dir};
+use super::pins;
 use super::{ensure_system_dependencies, exec_agent};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::quote;
@@ -270,11 +271,17 @@ impl Agent for Junie {
         ensure_system_dependencies(cx, &["curl", "bash", "unzip"]).await?;
         let url =
             if self.channel == "eap" { "https://junie.jetbrains.com/install-eap.sh" } else { "https://junie.jetbrains.com/install.sh" };
+        // EAP builds are numbered apart from releases, so only an explicit version pins them.
+        let version = match (self.version.as_deref(), self.channel) {
+            (None, "eap") => "latest",
+            (v, _) => pins::JUNIE.or(v),
+        };
+        let version_env = if version == "latest" { String::new() } else { format!("JUNIE_VERSION={} ", quote(version)) };
         let none = BTreeMap::new();
         exec_agent(
             cx,
             &format!(
-                "set -euo pipefail; curl -fsSL {url} | bash && {PATH_EXPORT}if [ ! -x \"$HOME/.local/bin/junie\" ]; then \
+                "set -euo pipefail; curl -fsSL {url} | {version_env}bash && {PATH_EXPORT}if [ ! -x \"$HOME/.local/bin/junie\" ]; then \
                  echo \"Junie launcher not found at $HOME/.local/bin/junie\" >&2; exit 1; fi && junie --version"
             ),
             &none,

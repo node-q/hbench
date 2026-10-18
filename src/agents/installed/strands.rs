@@ -1,6 +1,6 @@
 //! Strands: runs a user factory (`module:symbol`) that returns a `strands.Agent`, via assets/agents/strands/strands_runner.py.
 
-use super::common::{installed_dir, upload_asset};
+use super::common::{installed_dir, upload_asset, uv_install};
 use super::pins;
 use super::{connection, ensure_system_dependencies, exec_agent, exec_root, upload_text};
 use crate::agents::model_connection::{Resolved, Spec, with_canonical_provider_envs};
@@ -193,9 +193,9 @@ impl Strands {
         }
         let deps = deps.iter().map(|d| quote(d)).collect::<Vec<_>>().join(" ");
         format!(
-            "set -euo pipefail; curl -LsSf {uv_installer} | sh; if [ -f \"$HOME/.local/bin/env\" ]; then . \"$HOME/.local/bin/env\"; fi; \
+            "set -euo pipefail; {uv_install}; if [ -f \"$HOME/.local/bin/env\" ]; then . \"$HOME/.local/bin/env\"; fi; \
              uv python install 3.12; uv venv {VENV_DIR} --clear --python 3.12; uv pip install --python {PYTHON} {deps}",
-            uv_installer = pins::uv_installer()
+            uv_install = uv_install(None)
         )
     }
 }

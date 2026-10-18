@@ -1,5 +1,6 @@
 //! Muse Code installed agent.
 
+use super::common::fmt::json_spaced;
 use super::common::{installed_dir, skills_dir};
 use super::{connection, ensure_system_dependencies, exec_agent, exec_root, upload_text};
 use crate::agents::model_connection::{Resolved, Spec};
@@ -206,28 +207,6 @@ fn atif_session_id(traj: &Value) -> String {
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string())
 }
 
-/// Python `json.dumps` (default separators, ensure_ascii).
-fn py_json(v: &Value) -> String {
-    match v {
-        Value::Object(m) => format!(
-            "{{{}}}",
-            m.iter().map(|(k, v)| format!("{}: {}", py_json(&Value::String(k.clone())), py_json(v))).collect::<Vec<_>>().join(", ")
-        ),
-        Value::Array(a) => format!("[{}]", a.iter().map(py_json).collect::<Vec<_>>().join(", ")),
-        Value::String(s) => serde_json::to_string(s).unwrap().chars().fold(String::new(), |mut o, c| {
-            if c.is_ascii() {
-                o.push(c);
-            } else {
-                for u in c.encode_utf16(&mut [0; 2]) {
-                    o += &format!("\\u{u:04x}");
-                }
-            }
-            o
-        }),
-        v => v.to_string(),
-    }
-}
-
 /// Session message text: text content only.
 fn session_text(m: &Value) -> Result<String> {
     Ok(match m {
@@ -340,7 +319,7 @@ pub fn atif_to_native(traj: &Value, sid: &str) -> Result<String> {
                 .map(|c| {
                     let raw = &c["extra"]["muse_tool_call"];
                     let id = if raw.get("id").is_some() { raw["id"].clone() } else { json!(uuid::Uuid::new_v4().to_string()) };
-                    let args = if raw.get("args").is_some() { raw["args"].clone() } else { json!(py_json(&c["arguments"])) };
+                    let args = if raw.get("args").is_some() { raw["args"].clone() } else { json!(json_spaced(&c["arguments"])) };
                     json!({"call_id": c["tool_call_id"], "id": id, "name": c["function_name"], "args": args})
                 })
                 .collect();
@@ -376,7 +355,7 @@ pub fn atif_to_native(traj: &Value, sid: &str) -> Result<String> {
         bail!("Muse ATIF loading requires at least one user message");
     }
     event(&mut rows, &run_id, &mut run_seq, json!({"kind": "terminal", "terminal": "completed", "reason": null}));
-    Ok(rows.iter().map(|r| py_json(r) + "\n").collect())
+    Ok(rows.iter().map(|r| json_spaced(r) + "\n").collect())
 }
 
 /// Relocate a session: change only the copied workspace metadata.
@@ -385,7 +364,7 @@ pub fn relocate_session(text: &str, workspace: &str) -> String {
         .map(|line| match serde_json::from_str::<Value>(line) {
             Ok(mut row) if row["payload"]["kind"] == "metadata" => {
                 row["payload"]["record"]["workspace_root"] = json!(workspace);
-                py_json(&row) + "\n"
+                json_spaced(&row) + "\n"
             }
             _ => line.to_string(),
         })

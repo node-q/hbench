@@ -1,6 +1,7 @@
 //! Mistral Vibe installed agent.
 
-use super::common::{installed_dir, skills_dir};
+use super::common::fmt::float_with_point;
+use super::common::{installed_dir, skills_dir, uv_install};
 use super::pins;
 use super::{ensure_system_dependencies, exec_agent, exec_error};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
@@ -33,11 +34,6 @@ pub struct Vibe {
     args: AgentArgs,
     version: Option<String>,
     opts: Options,
-}
-
-/// Python `str(float)` for the values we write (`1.0`, not `1`).
-fn py_float(f: f64) -> String {
-    if f.is_finite() && f.fract() == 0.0 && f.abs() < 1e16 { format!("{f:.1}") } else { format!("{f}") }
 }
 
 fn toml_str(s: &str) -> String {
@@ -243,15 +239,15 @@ impl Vibe {
             ("name", toml_str(&alias)),
             ("provider", toml_str(provider_name)),
             ("alias", toml_str(&alias)),
-            ("temperature", py_float(self.opts.temperature)),
+            ("temperature", float_with_point(self.opts.temperature)),
         ];
         if let Some(t) = &self.opts.thinking {
             model.push(("thinking", toml_str(t)));
         }
         let pricing = self.pricing()?;
         if let Some((i, o)) = pricing {
-            model.push(("input_price", py_float(i)));
-            model.push(("output_price", py_float(o)));
+            model.push(("input_price", float_with_point(i)));
+            model.push(("output_price", float_with_point(o)));
         }
         if self.opts.max_price.is_some() && pricing.is_none_or(|(i, o)| i <= 0.0 && o <= 0.0) {
             bail!(
@@ -417,9 +413,9 @@ impl Agent for Vibe {
         exec_agent(
             cx,
             &format!(
-                "set -euo pipefail; if ! command -v uv &> /dev/null; then  curl -LsSf {uv_installer} | sh; fi && \
+                "set -euo pipefail; if ! command -v uv &> /dev/null; then  {uv_install}; fi && \
                  export PATH=\"$HOME/.local/bin:$PATH\" && uv tool install mistral-vibe{spec} && vibe --version",
-                uv_installer = pins::uv_installer()
+                uv_install = uv_install(None)
             ),
             &BTreeMap::new(),
         )

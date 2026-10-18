@@ -1,6 +1,7 @@
 //! Cline CLI.
 
-use super::common::{installed_dir, skills_dir};
+use super::common::fmt::value_text;
+use super::common::{installed_dir, nvm_install_script, skills_dir};
 use super::pins;
 use super::{exec_agent, exec_root};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
@@ -37,16 +38,9 @@ pub fn create(args: AgentArgs) -> Result<AgentBox> {
     Ok(Box::new(ClineCli::new(args)?))
 }
 
-fn pystr(v: &Value) -> String {
-    match v {
-        Value::String(s) => s.clone(),
-        v => v.to_string(),
-    }
-}
-
 /// Timeout seconds: positive integer from int/integral float/str.
 fn parse_positive_int(v: &Value, field: &str) -> Result<i64> {
-    let err = || anyhow!("Invalid {field} value: '{}'. Must be a positive integer.", pystr(v));
+    let err = || anyhow!("Invalid {field} value: '{}'. Must be a positive integer.", value_text(v));
     let n = match v {
         Value::Number(n) => match n.as_i64() {
             Some(i) => i,
@@ -62,14 +56,14 @@ fn parse_positive_int(v: &Value, field: &str) -> Result<i64> {
         _ => return Err(err()),
     };
     if n <= 0 {
-        bail!("Invalid {field} value: '{}'. Must be > 0 seconds.", pystr(v));
+        bail!("Invalid {field} value: '{}'. Must be > 0 seconds.", value_text(v));
     }
     Ok(n)
 }
 
 /// Non-negative float seconds from int/float/str.
 fn parse_nonneg_f64(v: &Value, field: &str, rule: &str) -> Result<f64> {
-    let err = || anyhow!("Invalid {field} value: '{}'. {rule}", pystr(v));
+    let err = || anyhow!("Invalid {field} value: '{}'. {rule}", value_text(v));
     let f = match v {
         Value::Number(n) => n.as_f64().ok_or_else(err)?,
         Value::String(s) => s.trim().parse::<f64>().map_err(|_| err())?,
@@ -85,7 +79,7 @@ impl ClineCli {
     fn new(args: AgentArgs) -> Result<ClineCli> {
         // First non-null value among a kwarg and its kebab-case aliases.
         let pick = |names: &[&str]| -> Option<Value> { names.iter().find_map(|n| args.kwargs.get(*n).filter(|v| !v.is_null()).cloned()) };
-        let pick_s = |names: &[&str]| pick(names).map(|v| pystr(&v));
+        let pick_s = |names: &[&str]| pick(names).map(|v| value_text(&v));
         if pick(&["double_check_completion", "double-check-completion", "double_check_completions", "double-check-completions"]).is_some() {
             bail!(
                 "double_check_completion is not supported by cline-cli; the new Cline CLI does not expose a --double-check-completion flag."
@@ -419,9 +413,9 @@ impl Agent for ClineCli {
         let mut parts = vec![
             format!(
                 "if command -v node &> /dev/null && node --version | grep -qE '^v2[2-9]|^v[3-9]'; then  echo 'Node.js already installed, skipping nvm setup...'; \
-                 else  curl -o- {} | bash &&  export NVM_DIR=\"$HOME/.nvm\" &&  \
+                 else  {} &&  export NVM_DIR=\"$HOME/.nvm\" &&  \
                  [ -s \"$NVM_DIR/nvm.sh\" ] && \\. \"$NVM_DIR/nvm.sh\" &&  nvm install 22 && nvm use 22 && nvm alias default 22; fi",
-                pins::nvm_installer()
+                nvm_install_script()
             ),
             "export NVM_DIR=\"$HOME/.nvm\" && { [ -s \"$NVM_DIR/nvm.sh\" ] && \\. \"$NVM_DIR/nvm.sh\" || true; }".into(),
         ];
