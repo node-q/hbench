@@ -679,30 +679,40 @@ impl Trial {
         if switch && let Err(e) = self.env().set_network_policy(&plan.agent_phase).await {
             return (ctx, t.finish(), Err(e));
         }
-        if self.user_agent.is_some() {
-            let r = self.run_simulated_user(instruction, &mut ctx, timeout).await;
-            if switch && let Err(e) = self.env().set_network_policy(&plan.agent_env_baseline).await {
-                return (ctx, t.finish(), Err(e));
-            }
-            return (ctx, t.finish(), r);
-        }
-        let mut agent = self.agent.take().expect("agent created");
-        let r = match self.agent_ctx(self.agent_user(step), step) {
-            Err(e) => Err(e),
-            Ok(cx) => {
-                let run = agent.run(instruction, &cx, &mut ctx, resume);
-                match timeout {
-                    Some(d) => match tokio::time::timeout(d, run).await {
-                        Ok(r) => r,
-                        Err(_) => {
-                            Err(kind_err("AgentTimeoutError", format!("Agent execution timed out after {} seconds", d.as_secs_f64())))
-                        }
-                    },
-                    None => run.await,
-                }
-            }
+        let before = match self.env().process_snapshot().await {
+            Ok(s) => s,
+            Err(e) => return (ctx, t.finish(), Err(e)),
         };
-        self.agent = Some(agent);
+        let r = if self.user_agent.is_some() {
+            self.run_simulated_user(instruction, &mut ctx, timeout).await
+        } else {
+            let mut agent = self.agent.take().expect("agent created");
+            let r = match self.agent_ctx(self.agent_user(step), step) {
+                Err(e) => Err(e),
+                Ok(cx) => {
+                    let run = agent.run(instruction, &cx, &mut ctx, resume);
+                    match timeout {
+                        Some(d) => match tokio::time::timeout(d, run).await {
+                            Ok(r) => r,
+                            Err(_) => {
+                                Err(kind_err("AgentTimeoutError", format!("Agent execution timed out after {} seconds", d.as_secs_f64())))
+                            }
+                        },
+                        None => run.await,
+                    }
+                }
+            };
+            self.agent = Some(agent);
+            r
+        };
+        // Beyond upstream: dropping the `docker compose exec` leaves the agent running in the container,
+        // still writing files (and reading /tests) while the verifier runs. Stop what it started.
+        if matches!(&r, Err(e) if error_kind(e) == "AgentTimeoutError") {
+            match self.env().kill_processes_since(&before).await {
+                Ok(n) => self.log.line(&format!("agent timed out: killed {n} process(es) it left running")),
+                Err(e) => return (ctx, t.finish(), Err(e)),
+            }
+        }
         if switch && let Err(e) = self.env().set_network_policy(&plan.agent_env_baseline).await {
             return (ctx, t.finish(), Err(e));
         }

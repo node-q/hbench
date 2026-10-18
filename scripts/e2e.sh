@@ -15,6 +15,7 @@ job = pathlib.Path(sys.argv[1])
 expect = {
     "reward-json":     ({"acc": 1, "partial": 0.5}, None),
     "agent-timeout":   ({"reward": 0.0}, "AgentTimeoutError"),
+    "agent-outlives-timeout": ({"reward": 1.0}, "AgentTimeoutError"),
     "no-reward":       (None, "RewardFileNotFoundError"),
     "users-env":       ({"reward": 1.0}, None),
     "no-network":      ({"reward": 1.0}, None),
@@ -33,7 +34,7 @@ for r in job.glob("*/result.json"):
 assert seen == {t: 2 for t in expect}, seen
 res = json.loads((job / "result.json").read_text())
 s = res["stats"]
-assert res["finished_at"] and s["n_completed_trials"] == 14 and s["n_errored_trials"] == 4, s
+assert res["finished_at"] and s["n_completed_trials"] == 16 and s["n_errored_trials"] == 6, s
 ev = s["evals"]["oracle__fixtures"]
 assert ev["exception_stats"].keys() == {"AgentTimeoutError", "RewardFileNotFoundError"}, ev
 print("fixture assertions OK")

@@ -671,6 +671,24 @@ impl DockerEnv {
         Ok(())
     }
 
+    /// The processes running in main now, as `pid:starttime` (starttime tells a reused pid apart).
+    pub async fn process_snapshot(&self) -> Result<String> {
+        let r = self.exec_root(&format!("{PROC_LIST}\nfor_each_proc echo"), Some(Duration::from_secs(60))).await?;
+        if r.code != 0 {
+            bail!("listing processes failed: {}", r.stderr);
+        }
+        Ok(r.stdout.split_whitespace().collect::<Vec<_>>().join(" "))
+    }
+
+    /// Kill every process in main that is not in `snapshot`. Returns how many were killed.
+    pub async fn kill_processes_since(&self, snapshot: &str) -> Result<usize> {
+        let r = self.exec_root(&kill_since_script(snapshot), Some(Duration::from_secs(60))).await?;
+        if r.code != 0 {
+            bail!("stopping processes failed: {}", r.stderr);
+        }
+        Ok(r.stdout.trim().parse().unwrap_or(0))
+    }
+
     pub async fn stop(&self) -> Result<()> {
         let args = if self.spec.keep_containers {
             sv(&["stop"])
@@ -681,6 +699,38 @@ impl DockerEnv {
         };
         self.run_ok(args, Some(Duration::from_secs(300))).await.map(|_| ())
     }
+}
+
+/// Bash builtins only, so walking /proc forks nothing that would show up in it.
+/// `for_each_proc cb` calls `cb pid:starttime` for every live process except PID 1 and this shell.
+const PROC_LIST: &str = r#"for_each_proc() {
+  local cb=$1 p s
+  for p in /proc/[0-9]*; do
+    case "${p#/proc/}" in 1 | "$$") continue ;; esac
+    read -r s 2>/dev/null < "$p/stat" || continue
+    set -- ${s##*) }
+    [ "$1" = Z ] && continue
+    "$cb" "${p#/proc/}:${20}"
+  done
+}"#;
+
+/// Stop (so nothing forks while we look) then kill everything not in `snapshot`, until none is left.
+fn kill_since_script(snapshot: &str) -> String {
+    format!(
+        r#"{PROC_LIST}
+keep=" {snapshot} "
+pick() {{ case "$keep" in *" $1 "*) ;; *) kill -STOP "${{1%%:*}}" 2>/dev/null && new="$new ${{1%%:*}}";; esac; }}
+total=0
+for round in 1 2 3 4 5; do
+  new=
+  for_each_proc pick
+  [ -z "$new" ] && break
+  kill -KILL $new 2>/dev/null
+  set -- $new
+  total=$((total + $#))
+done
+echo $total"#
+    )
 }
 
 fn cache_home() -> PathBuf {
