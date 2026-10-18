@@ -10,6 +10,9 @@ NFTABLES_RULESET_NAME=gost_egress
 # Must exceed the allowlist `reload: 1s` interval in gost.yaml so gost has
 # picked up the new allowlist before nftables enforcement turns on.
 RELOAD_WAIT=2
+# nft+proxy: nftables sends all TCP through gost. proxy: the task container sits on an
+# internal network, so the HTTP proxy is its only way out and nftables is not used.
+METHOD="${EGRESS_CONTROL_METHOD:-nft+proxy}"
 
 usage() {
   cat <<'EOF'
@@ -19,6 +22,7 @@ Usage:
   network-policy deny-all
   network-policy allow [TARGET...]
   network-policy rules
+  network-policy check-nftables
 
 TARGET can be a domain, wildcard domain, IP, CIDR, or IP range. With no targets,
 allow mode denies all controlled TCP egress.
@@ -38,15 +42,16 @@ ensure_file() {
 # listed in resolv.conf — the same trust boundary Docker's embedded resolver
 # has. Hostname allowlisting still happens in gost via SNI.
 nft_dns_rules() {
-  action="$1"
-  awk -v action="$action" '
+  family="$1"
+  action="$2"
+  awk -v family="$family" -v action="$action" '
     /^nameserver[[:space:]]+/ {
       ns = $2
       sub(/%.*/, "", ns)
-      if (ns ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) {
+      if (family == "ip" && ns ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) {
         printf "    ip daddr %s udp dport 53 %s\n", ns, action
         printf "    ip daddr %s tcp dport 53 %s\n", ns, action
-      } else if (ns ~ /:/) {
+      } else if (family == "ip6" && ns ~ /:/) {
         printf "    ip6 daddr %s udp dport 53 %s\n", ns, action
         printf "    ip6 daddr %s tcp dport 53 %s\n", ns, action
       }
@@ -54,18 +59,23 @@ nft_dns_rules() {
   ' /etc/resolv.conf
 }
 
-setup_nftables() {
-  nft --file - <<EOF
-add table inet $NFTABLES_RULESET_NAME
-flush table inet $NFTABLES_RULESET_NAME
+# One table per family rather than one inet table: `fib` in an inet table needs
+# CONFIG_NFT_FIB_INET, which Docker Desktop's kernel lacks, while the ip and ip6
+# variants (CONFIG_NFT_FIB_IPV4/IPV6) are there.
+nft_ruleset() {
+  family="$1"
+  if [ "$family" = ip ]; then icmp="ip protocol icmp accept"; else icmp="ip6 nexthdr icmpv6 accept"; fi
+  cat <<EOF
+add table $family $NFTABLES_RULESET_NAME
+flush table $family $NFTABLES_RULESET_NAME
 
-table inet $NFTABLES_RULESET_NAME {
+table $family $NFTABLES_RULESET_NAME {
   chain output {
     type nat hook output priority dstnat; policy accept;
 
     meta mark $GOST_MARK return
     fib daddr type local return
-$(nft_dns_rules return)
+$(nft_dns_rules "$family" return)
     meta l4proto tcp redirect to :$GOST_PORT
   }
 
@@ -74,21 +84,28 @@ $(nft_dns_rules return)
 
     meta mark $GOST_MARK accept
     fib daddr type local accept
-$(nft_dns_rules accept)
-    ip protocol icmp accept
-    ip6 nexthdr icmpv6 accept
+$(nft_dns_rules "$family" accept)
+    $icmp
     meta l4proto != tcp reject
   }
 }
 EOF
 }
 
+setup_nftables() {
+  [ "$METHOD" = proxy ] && return
+  { nft_ruleset ip; nft_ruleset ip6; } | nft --file -
+}
+
 remove_nftables() {
-  nft delete table inet "$NFTABLES_RULESET_NAME" 2>/dev/null || true
+  [ "$METHOD" = proxy ] && return
+  nft delete table ip "$NFTABLES_RULESET_NAME" 2>/dev/null || true
+  nft delete table ip6 "$NFTABLES_RULESET_NAME" 2>/dev/null || true
 }
 
 nftables_enabled() {
-  nft list table inet "$NFTABLES_RULESET_NAME" >/dev/null 2>&1
+  [ "$METHOD" = proxy ] && return 1
+  nft list table ip "$NFTABLES_RULESET_NAME" >/dev/null 2>&1
 }
 
 show() {
@@ -122,7 +139,9 @@ case "$cmd" in
     ;;
   allow-all)
     remove_nftables
-    : > "$ALLOWLIST"
+    # The HTTP proxy stays in use, so it must pass everything.
+    printf '%s\n' '*' 0.0.0.0/0 ::/0 > "$ALLOWLIST"
+    wait_reload
     echo "ok: allow all egress"
     ;;
   deny-all)
@@ -144,9 +163,16 @@ case "$cmd" in
     echo "ok: allowlist applied"
     show
     ;;
+  check-nftables)
+    # Whether this kernel takes the ruleset (run in a throwaway container).
+    setup_nftables
+    remove_nftables
+    echo "ok: nftables ruleset loads"
+    ;;
   rules)
     if nftables_enabled; then
-      nft list table inet "$NFTABLES_RULESET_NAME"
+      nft list table ip "$NFTABLES_RULESET_NAME"
+      nft list table ip6 "$NFTABLES_RULESET_NAME"
     else
       echo "mode: allow-all"
     fi

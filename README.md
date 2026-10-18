@@ -94,10 +94,26 @@ Supported task features:
   sidecar enforces them, and run-level `extra_allowed_hosts` are supported. As in upstream, those hosts only
   widen a restricted task and are ignored on a public one (most registry tasks declare no policy, so they are
   public); set `agent.enforce_allowlist: true` to make them the agent phase's whole allowlist there too.
+  How the sidecar enforces them is recorded per trial in `result.json` as `egress` (see below).
 - Healthchecks, `workdir`, task env, agent/verifier users, resource limits, and GPUs.
 - MCP servers and skills.
 - `trajectory.json` / `load_trajectory` (native + ATIF), the simulated-user ACP bridge (`user_agent`), regrades, and
   diffs.
+
+The egress sidecar runs gost with the allowlist and sets `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY` (both cases) in
+the task container, so proxy-aware clients send it host names and need no DNS of their own. It enforces the
+allowlist in one of two ways, and `result.json` records which, with the refused destinations:
+`"egress": {"enforced": true, "method": "nft+proxy", "denied": ["example.com:443"]}`.
+
+- `nft+proxy`, wherever the daemon's kernel takes the sidecar's nftables rules (Linux and Docker Desktop on
+  macOS): the task container shares the sidecar's network namespace, all of its TCP goes through gost, and other
+  protocols are refused.
+- `proxy`, where it does not: the task container sits on an internal network with no route out, and the proxy is
+  its only way out. TCP that skips the proxy fails even to an allowed host, so a task that needs it fails rather than runs
+  open. Public phases attach the container to the outside network again. `HBENCH_EGRESS_METHOD=proxy` forces
+  this method.
+
+If neither can be set up, or the task's main service picks its own network, the trial fails at setup.
 
 Unlike upstream, hbench rejects keys it does not know in a job config or `task.toml`, so a misspelt
 `enforce_allowlist` stops the run instead of leaving the agent's network open. The legacy spellings upstream still

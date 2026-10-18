@@ -2,7 +2,7 @@
 //!
 //! Files move with `docker compose cp` (never bind mounts for /logs), so the same
 //! code works against remote daemons (ssh contexts). Network allowlists use
-//! an egress-control sidecar (vendored under assets/egress-sidecar).
+//! an egress-control sidecar (vendored under assets/egress-sidecar); see [`EgressMethod`].
 
 use crate::task::{EnvironmentConfig, Healthcheck, MAIN, NetworkMode, NetworkPolicy};
 use anyhow::{Context, Result, anyhow, bail};
@@ -59,6 +59,133 @@ pub struct ExecResult {
 
 const EGRESS_SERVICE: &str = "hbench-egress-sidecar";
 const EGRESS_READY: &str = "/tmp/hbench-egress-sidecar.ready";
+/// gost's HTTP proxy port (gost.yaml).
+const PROXY_PORT: u16 = 3128;
+/// The network the proxy reaches the outside through, in the `proxy` method.
+const OUTSIDE_NETWORK: &str = "hb-egress";
+
+/// How a trial's network policy is enforced. Both sidecar methods run the same gost
+/// allowlist and set HTTP_PROXY/HTTPS_PROXY in the task container.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum EgressMethod {
+    /// The task container shares the sidecar's network namespace and nftables sends all of its TCP
+    /// through gost, and rejects everything else. Needs nftables with fib (CONFIG_NFT_FIB_IPV4/IPV6)
+    /// in the daemon's kernel, which Linux and Docker Desktop both have.
+    #[serde(rename = "nft+proxy")]
+    NftProxy,
+    /// The task container sits on an internal network with no route out, so the HTTP proxy is its
+    /// only way out: raw TCP even to an allowed host fails. For a kernel without those nftables
+    /// features. Public phases connect it to the outside network again.
+    #[serde(rename = "proxy")]
+    Proxy,
+}
+
+/// What result.json records about egress enforcement.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct EgressInfo {
+    pub enforced: bool,
+    pub method: EgressMethod,
+    /// Destinations (`host:port`) the allowlist refused, each once.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub denied: Vec<String>,
+}
+
+/// Picks the method for a run that needs egress control (`restricted`). `forced` is
+/// HBENCH_EGRESS_METHOD, which the e2e suite uses to test `proxy` on a Linux daemon.
+fn choose_method(restricted: bool, nft: bool, forced: Option<&str>) -> Result<Option<EgressMethod>> {
+    if !restricted {
+        return Ok(None);
+    }
+    Ok(Some(match forced.filter(|f| !f.is_empty()) {
+        Some("proxy") => EgressMethod::Proxy,
+        Some("nft+proxy") if nft => EgressMethod::NftProxy,
+        Some("nft+proxy") => bail!("HBENCH_EGRESS_METHOD=nft+proxy, but the docker host kernel does not take the egress nftables rules"),
+        Some(f) => bail!("HBENCH_EGRESS_METHOD must be proxy or nft+proxy, not {f:?}"),
+        None if nft => EgressMethod::NftProxy,
+        None => EgressMethod::Proxy,
+    }))
+}
+
+/// HTTP_PROXY and friends, both cases, for the task container. Compose services stay direct.
+fn proxy_env(method: EgressMethod, services: &[String]) -> BTreeMap<String, String> {
+    let host = if method == EgressMethod::NftProxy { "127.0.0.1" } else { EGRESS_SERVICE };
+    let proxy = format!("http://{host}:{PROXY_PORT}");
+    let mut no_proxy = vec!["localhost".to_string(), "127.0.0.1".into(), "::1".into()];
+    no_proxy.extend(services.iter().filter(|s| *s != MAIN).cloned());
+    let no_proxy = no_proxy.join(",");
+    let mut env = BTreeMap::new();
+    for (k, v) in [("http_proxy", &proxy), ("https_proxy", &proxy), ("no_proxy", &no_proxy)] {
+        env.insert(k.to_string(), v.clone());
+        env.insert(k.to_uppercase(), v.clone());
+    }
+    env
+}
+
+/// The compose override that puts the sidecar in front of `services`.
+fn egress_compose(
+    method: EgressMethod,
+    image: &str,
+    project: &str,
+    baseline: &NetworkPolicy,
+    services: &[String],
+    own_networks: &[String],
+) -> Result<Value> {
+    let mut sidecar = json!({
+        "image": image,
+        "entrypoint": ["/opt/egress-sidecar/entrypoint.sh"],
+        "init": true,
+        "environment": {
+            "EGRESS_CONTROL_METHOD": serde_json::to_value(method)?,
+            "EGRESS_CONTROL_INITIAL_NETWORK_MODE": serde_json::to_value(baseline.mode)?,
+            "EGRESS_CONTROL_INITIAL_ALLOWED_HOSTS": baseline.allowed_hosts.join(" "),
+        },
+        // nftables, and SO_MARK on gost's own connections.
+        "cap_add": ["NET_ADMIN", "NET_RAW"],
+        "healthcheck": {"test": ["CMD", "test", "-f", EGRESS_READY], "interval": "1s", "timeout": "5s", "retries": 30},
+    });
+    let depends = json!({EGRESS_SERVICE: {"condition": "service_healthy"}});
+    let mut doc = serde_json::Map::new();
+    let mut svcs = serde_json::Map::new();
+    match method {
+        EgressMethod::NftProxy => {
+            for s in services {
+                svcs.insert(s.clone(), json!({"network_mode": format!("service:{EGRESS_SERVICE}"), "depends_on": depends}));
+            }
+        }
+        EgressMethod::Proxy => {
+            sidecar["networks"] = json!(["default", OUTSIDE_NETWORK]);
+            let nets = if baseline.mode == NetworkMode::Public { json!(["default", OUTSIDE_NETWORK]) } else { json!(["default"]) };
+            for s in services {
+                svcs.insert(s.clone(), json!({"networks": nets, "depends_on": depends}));
+            }
+            for s in own_networks {
+                svcs.insert(s.clone(), json!({"networks": [OUTSIDE_NETWORK]}));
+            }
+            doc.insert(
+                "networks".into(),
+                json!({"default": {"internal": true}, OUTSIDE_NETWORK: {"name": format!("{project}_{OUTSIDE_NETWORK}")}}),
+            );
+        }
+    }
+    svcs.insert(EGRESS_SERVICE.into(), sidecar);
+    doc.insert("services".into(), Value::Object(svcs));
+    Ok(Value::Object(doc))
+}
+
+/// The destinations gost's allowlist refused, from its JSON log.
+fn parse_denials(logs: &str) -> Vec<String> {
+    let mut out = std::collections::BTreeSet::new();
+    for line in logs.lines() {
+        let Ok(v) = serde_json::from_str::<Value>(line.trim()) else { continue };
+        if v.get("kind").and_then(Value::as_str) != Some("bypass") {
+            continue;
+        }
+        if let Some(rest) = v.get("msg").and_then(Value::as_str).and_then(|m| m.strip_prefix("bypass: ")) {
+            out.insert(rest.split(',').next().unwrap_or(rest).trim().to_string());
+        }
+    }
+    out.into_iter().collect()
+}
 pub const LOG_DIRS: [&str; 3] = ["/logs/agent", "/logs/verifier", "/logs/artifacts"];
 
 /// Everything needed to start one compose project.
@@ -93,7 +220,9 @@ pub struct DockerEnv {
     files: Vec<PathBuf>,
     compose_env: BTreeMap<String, String>,
     build_image: Option<String>,
-    egress: bool,
+    egress: Option<EgressMethod>,
+    /// The services behind the sidecar.
+    egress_services: Vec<String>,
     log: Arc<TrialLog>,
 }
 
@@ -136,32 +265,46 @@ pub fn tail(s: &str, n: usize) -> &str {
     &s[i..]
 }
 
-/// Services in task compose files that don't declare their own networking.
-fn egress_eligible_services(files: &[PathBuf]) -> Result<Vec<String>> {
-    let mut explicit: BTreeMap<String, bool> = BTreeMap::new();
+/// Services in task compose files, each with whether it sets `network_mode` and whether it sets `networks`.
+fn compose_services(files: &[PathBuf]) -> Result<BTreeMap<String, (bool, bool)>> {
+    let mut out: BTreeMap<String, (bool, bool)> = BTreeMap::new();
     for f in files {
         let doc: Value = serde_yaml_ng::from_str(&std::fs::read_to_string(f)?).with_context(|| format!("parsing {}", f.display()))?;
         if let Some(services) = doc.get("services").and_then(Value::as_object) {
             for (name, cfg) in services {
-                let e = cfg.get("network_mode").is_some() || cfg.get("networks").is_some();
-                *explicit.entry(name.clone()).or_default() |= e;
+                let e = out.entry(name.clone()).or_default();
+                e.0 |= cfg.get("network_mode").is_some();
+                e.1 |= cfg.get("networks").is_some();
             }
         }
     }
-    explicit.entry(MAIN.into()).or_insert(false);
-    Ok(explicit.into_iter().filter(|(n, e)| !e && n != EGRESS_SERVICE).map(|(n, _)| n).collect())
+    out.entry(MAIN.into()).or_default();
+    out.remove(EGRESS_SERVICE);
+    Ok(out)
 }
 
-/// Whether the daemon's kernel supports the nftables rules the egress sidecar needs.
-async fn egress_kernel_support() -> bool {
+/// Services in task compose files that don't declare their own networking.
+fn egress_eligible_services(files: &[PathBuf]) -> Result<Vec<String>> {
+    Ok(compose_services(files)?.into_iter().filter(|(_, (m, n))| !m && !n).map(|(s, _)| s).collect())
+}
+
+/// Services that pick their own networks, which keeps them out of egress control. The `proxy`
+/// method makes the default network internal, so these get the outside network as well.
+fn own_network_services(files: &[PathBuf]) -> Result<Vec<String>> {
+    Ok(compose_services(files)?.into_iter().filter(|(_, (m, n))| !m && *n).map(|(s, _)| s).collect())
+}
+
+/// Whether the daemon's kernel takes the sidecar's nftables ruleset, tried once in a throwaway container.
+async fn nft_support(image: &str) -> bool {
     static CACHE: tokio::sync::OnceCell<bool> = tokio::sync::OnceCell::const_new();
     *CACHE
         .get_or_init(|| async {
-            let script =
-                "if [ ! -f /proc/config.gz ]; then exit 0; fi; zcat /proc/config.gz 2>/dev/null | grep -qE '^CONFIG_NFT_FIB_INET=[ym]'";
             let out = tokio::time::timeout(
                 Duration::from_secs(120),
-                Command::new("docker").args(["container", "run", "--rm", "alpine:3.23", "sh", "-c", script]).kill_on_drop(true).output(),
+                Command::new("docker")
+                    .args(["container", "run", "--rm", "--cap-add", "NET_ADMIN", "--entrypoint", "network-policy", image, "check-nftables"])
+                    .kill_on_drop(true)
+                    .output(),
             )
             .await;
             matches!(out, Ok(Ok(o)) if o.status.success())
@@ -261,19 +404,17 @@ impl DockerEnv {
             );
         }
 
-        // Network: egress sidecar when any phase needs no-network/allowlist; plain
-        // `network_mode: none` fallback only for a constant no-network policy.
+        // Network: egress sidecar when any phase needs no-network/allowlist.
         let policies: Vec<&NetworkPolicy> = std::iter::once(&spec.baseline).chain(spec.phase_policies.iter()).collect();
         let restricted = policies.iter().any(|p| p.mode != NetworkMode::Public);
-        let mut egress = false;
-        if restricted {
-            if egress_kernel_support().await {
-                egress = true;
-            } else if policies.iter().all(|p| p.mode == NetworkMode::NoNetwork) {
-                main.insert("network_mode".into(), json!("none"));
-            } else {
-                bail!("network allowlists need nftables (CONFIG_NFT_FIB_INET) on the docker host kernel");
-            }
+        let image = if restricted { Some(egress_image(&log).await?) } else { None };
+        let nft = match &image {
+            Some(i) => nft_support(i).await,
+            None => false,
+        };
+        let egress = choose_method(restricted, nft, std::env::var("HBENCH_EGRESS_METHOD").ok().as_deref())?;
+        if let Some(m) = egress {
+            log.line(&format!("egress control: {}", serde_json::to_value(m)?.as_str().unwrap_or_default()));
         }
 
         std::fs::create_dir_all(&spec.compose_dir)?;
@@ -291,8 +432,21 @@ impl DockerEnv {
         files.extend(user_files.iter().cloned());
         let mut startup_env = crate::task::resolve_env_vars(&ec.env)?;
         startup_env.extend(spec.persistent_env.clone());
-        if !startup_env.is_empty() {
-            files.push(write("docker-compose-env.json", json!({"services": {"main": {"environment": startup_env}}}))?);
+        let mut egress_services = vec![];
+        if egress.is_some() {
+            egress_services = egress_eligible_services(&user_files)?;
+            // Fail closed: a main that sets its own networking would bypass the sidecar.
+            if !egress_services.iter().any(|s| s == MAIN) {
+                bail!("the task's main service sets its own network_mode or networks, so its network policy cannot be enforced");
+            }
+        }
+        // Not in compose_env: the docker CLI itself would use these proxies.
+        let mut main_env = startup_env.clone();
+        if let Some(m) = egress {
+            main_env.extend(proxy_env(m, &egress_services));
+        }
+        if !main_env.is_empty() {
+            files.push(write("docker-compose-env.json", json!({"services": {"main": {"environment": main_env}}}))?);
         }
         // /logs dirs are named volumes, not host bind mounts: services that mount
         // ${HOST_*_PATH} share them with main, and it works on remote daemons too.
@@ -304,27 +458,11 @@ impl DockerEnv {
             let decl: serde_json::Map<String, Value> = spec.log_dirs.iter().map(|d| (log_volume(d), json!({}))).collect();
             files.push(write("docker-compose-mounts.json", json!({"services": {"main": {"volumes": volumes}}, "volumes": decl}))?);
         }
-        if egress {
-            let image = egress_image(&log).await?;
-            let mut services = serde_json::Map::new();
-            services.insert(
-                EGRESS_SERVICE.into(),
-                json!({
-                    "image": image,
-                    "entrypoint": ["/opt/egress-sidecar/entrypoint.sh"],
-                    "init": true,
-                    "environment": {
-                        "EGRESS_CONTROL_INITIAL_NETWORK_MODE": serde_json::to_value(spec.baseline.mode)?,
-                        "EGRESS_CONTROL_INITIAL_ALLOWED_HOSTS": spec.baseline.allowed_hosts.join(" "),
-                    },
-                    "cap_add": ["NET_ADMIN", "NET_RAW"],
-                    "healthcheck": {"test": ["CMD", "test", "-f", EGRESS_READY], "interval": "1s", "timeout": "5s", "retries": 30},
-                }),
-            );
-            for s in egress_eligible_services(&user_files)? {
-                services.insert(s, json!({"network_mode": format!("service:{EGRESS_SERVICE}"), "depends_on": {EGRESS_SERVICE: {"condition": "service_healthy"}}}));
-            }
-            files.push(write("docker-compose-egress.json", json!({"services": services}))?);
+        if let (Some(m), Some(image)) = (egress, &image) {
+            files.push(write(
+                "docker-compose-egress.json",
+                egress_compose(m, image, &spec.project, &spec.baseline, &egress_services, &own_network_services(&user_files)?)?,
+            )?);
         }
 
         // Variables task-authored compose files may interpolate.
@@ -354,7 +492,7 @@ impl DockerEnv {
             "DOCKER_CONFIG".into(),
             std::env::var("DOCKER_CONFIG").unwrap_or_else(|_| cache_home().join(".docker").display().to_string()),
         );
-        Ok(DockerEnv { spec, files, compose_env, build_image, egress, log })
+        Ok(DockerEnv { spec, files, compose_env, build_image, egress, egress_services, log })
     }
 
     pub fn workdir(&self) -> Option<&str> {
@@ -430,6 +568,9 @@ impl DockerEnv {
             }
             let _ = self.run(sv(&["down", "--remove-orphans"]), Some(Duration::from_secs(120)), "down (stale)", None).await;
             self.run_ok(sv(&["up", "--detach", "--wait"]), None).await?;
+            if self.egress == Some(EgressMethod::Proxy) && self.spec.baseline.mode != NetworkMode::Public {
+                self.check_isolated().await?;
+            }
             anyhow::Ok(())
         };
         match tokio::time::timeout(self.spec.build_timeout, started).await {
@@ -610,12 +751,26 @@ impl DockerEnv {
     }
 
     pub async fn set_network_policy(&self, p: &NetworkPolicy) -> Result<()> {
-        if !self.egress {
+        if self.egress.is_none() {
             if p.mode == NetworkMode::Public && self.spec.baseline.mode == NetworkMode::Public {
                 return Ok(());
             }
             bail!("Docker egress control was not enabled when the environment started, so it cannot enforce this network policy.");
         }
+        let proxy = self.egress == Some(EgressMethod::Proxy);
+        // Close the direct route before the proxy opens anything, and open it only after.
+        if proxy && p.mode != NetworkMode::Public {
+            self.connect_outside(false).await?;
+            self.check_isolated().await?;
+        }
+        self.apply_proxy_policy(p).await?;
+        if proxy && p.mode == NetworkMode::Public {
+            self.connect_outside(true).await?;
+        }
+        Ok(())
+    }
+
+    async fn apply_proxy_policy(&self, p: &NetworkPolicy) -> Result<()> {
         let mut args = sv(&["exec", "--no-TTY", EGRESS_SERVICE, "network-policy"]);
         match p.mode {
             NetworkMode::Public => args.push("allow-all".into()),
@@ -626,6 +781,66 @@ impl DockerEnv {
             }
         }
         self.run_ok(args, Some(Duration::from_secs(120))).await.map(|_| ())
+    }
+
+    async fn docker(&self, args: &[&str]) -> Result<String> {
+        let out = Command::new("docker").args(args).kill_on_drop(true).output().await?;
+        if !out.status.success() {
+            bail!("docker {} failed: {}", args.join(" "), String::from_utf8_lossy(&out.stderr).trim());
+        }
+        Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    }
+
+    async fn container_id(&self, service: &str) -> Result<String> {
+        let r = self.run_ok(vec!["ps".into(), "-q".into(), service.into()], Some(Duration::from_secs(60))).await?;
+        r.stdout.split_whitespace().next().map(str::to_string).ok_or_else(|| anyhow!("no running container for {service}"))
+    }
+
+    async fn container_networks(&self, id: &str) -> Result<Vec<String>> {
+        let out = self.docker(&["container", "inspect", "-f", "{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}", id]).await?;
+        Ok(out.split_whitespace().map(str::to_string).collect())
+    }
+
+    /// `proxy` method: attach the services behind the sidecar to the outside network, or detach them.
+    async fn connect_outside(&self, connect: bool) -> Result<()> {
+        let net = format!("{}_{OUTSIDE_NETWORK}", self.spec.project);
+        for s in &self.egress_services {
+            let id = self.container_id(s).await?;
+            let attached = self.container_networks(&id).await?.contains(&net);
+            if attached != connect {
+                let verb = if connect { "connect" } else { "disconnect" };
+                self.docker(&["network", verb, &net, &id]).await?;
+                self.log.line(&format!("{verb}ed {s} and {net}"));
+            }
+        }
+        Ok(())
+    }
+
+    /// Fail closed: every network the services behind the sidecar are on must be internal.
+    async fn check_isolated(&self) -> Result<()> {
+        for s in &self.egress_services {
+            let id = self.container_id(s).await?;
+            for n in self.container_networks(&id).await? {
+                if self.docker(&["network", "inspect", "-f", "{{.Internal}}", &n]).await? != "true" {
+                    bail!("egress control: {s} is still on network {n}, which has a route out");
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// The method this environment enforces egress with, and what the allowlist refused so far.
+    pub async fn egress_info(&self) -> Option<EgressInfo> {
+        let method = self.egress?;
+        let mut denied = vec![];
+        match self.compose(&sv(&["logs", "--no-color", "--no-log-prefix", EGRESS_SERVICE])).output().await {
+            Ok(o) if o.status.success() => denied = parse_denials(&String::from_utf8_lossy(&o.stdout)),
+            _ => self.log.line("could not read the egress sidecar's log"),
+        }
+        if !denied.is_empty() {
+            self.log.line(&format!("egress refused: {}", denied.join(" ")));
+        }
+        Some(EgressInfo { enforced: true, method, denied })
     }
 
     /// Docker HEALTHCHECK semantics: failures during the start period don't count.
@@ -806,12 +1021,73 @@ mod tests {
     }
 
     #[test]
+    fn picks_an_egress_method() {
+        use EgressMethod::*;
+        assert_eq!(choose_method(false, false, Some("proxy")).unwrap(), None);
+        assert_eq!(choose_method(true, true, None).unwrap(), Some(NftProxy));
+        assert_eq!(choose_method(true, false, None).unwrap(), Some(Proxy));
+        assert_eq!(choose_method(true, true, Some("proxy")).unwrap(), Some(Proxy));
+        assert_eq!(choose_method(true, true, Some("")).unwrap(), Some(NftProxy));
+        assert!(choose_method(true, false, Some("nft+proxy")).is_err());
+        assert!(choose_method(true, true, Some("iptables")).is_err());
+        assert_eq!(serde_json::to_value(NftProxy).unwrap(), json!("nft+proxy"));
+    }
+
+    #[test]
+    fn proxy_env_names_the_sidecar() {
+        let services = ["api".to_string(), MAIN.to_string()];
+        let e = proxy_env(EgressMethod::Proxy, &services);
+        assert_eq!(e["HTTPS_PROXY"], "http://hbench-egress-sidecar:3128");
+        assert_eq!(e["http_proxy"], e["HTTP_PROXY"]);
+        assert_eq!(e["no_proxy"], "localhost,127.0.0.1,::1,api");
+        assert_eq!(e.len(), 6);
+        assert_eq!(proxy_env(EgressMethod::NftProxy, &services)["https_proxy"], "http://127.0.0.1:3128");
+    }
+
+    #[test]
+    fn proxy_compose_isolates_the_services() {
+        let allow = NetworkPolicy { mode: NetworkMode::Allowlist, allowed_hosts: vec!["pypi.org".into()] };
+        let services = ["api".to_string(), MAIN.to_string()];
+        let c = egress_compose(EgressMethod::Proxy, "img", "p1", &allow, &services, &["db".into()]).unwrap();
+        assert_eq!(c["networks"]["default"]["internal"], json!(true));
+        assert_eq!(c["networks"][OUTSIDE_NETWORK]["name"], json!("p1_hb-egress"));
+        assert_eq!(c["services"][EGRESS_SERVICE]["networks"], json!(["default", OUTSIDE_NETWORK]));
+        assert_eq!(c["services"][EGRESS_SERVICE]["environment"]["EGRESS_CONTROL_METHOD"], json!("proxy"));
+        assert_eq!(c["services"]["main"]["networks"], json!(["default"]));
+        assert!(c["services"]["main"].get("network_mode").is_none());
+        assert_eq!(c["services"]["db"]["networks"], json!([OUTSIDE_NETWORK]));
+        // A public baseline starts with the route out; the agent phase removes it.
+        let c = egress_compose(EgressMethod::Proxy, "img", "p1", &NetworkPolicy::public(), &services, &[]).unwrap();
+        assert_eq!(c["services"]["api"]["networks"], json!(["default", OUTSIDE_NETWORK]));
+        let c = egress_compose(EgressMethod::NftProxy, "img", "p1", &allow, &services, &["db".into()]).unwrap();
+        assert_eq!(c["services"]["main"]["network_mode"], json!("service:hbench-egress-sidecar"));
+        assert!(c.get("networks").is_none());
+        assert!(c["services"].get("db").is_none());
+    }
+
+    #[test]
+    fn reads_denials_from_the_gost_log() {
+        let log = r#"{"bypass":"allowlist","kind":"bypass","level":"debug","msg":"bypass: example.com:443, whitelist: true"}
+{"bypass":"allowlist","kind":"bypass","level":"debug","msg":"proxy: pypi.org:80, whitelist: true"}
+{"kind":"handler","level":"debug","msg":"bypass: example.com:443"}
+not json
+{"bypass":"allowlist","kind":"bypass","level":"debug","msg":"bypass: 1.1.1.1:53, whitelist: true"}
+{"bypass":"allowlist","kind":"bypass","level":"debug","msg":"bypass: example.com:443, whitelist: true"}"#;
+        assert_eq!(parse_denials(log), ["1.1.1.1:53", "example.com:443"]);
+    }
+
+    #[test]
     fn egress_services() {
         let d = std::env::temp_dir().join(format!("hbench-eg-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&d).unwrap();
         let f = d.join("c.yaml");
-        std::fs::write(&f, "services:\n  main: {}\n  api: {image: x}\n  db: {image: y, network_mode: host}\n").unwrap();
-        assert_eq!(egress_eligible_services(&[f]).unwrap(), ["api", "main"]);
+        std::fs::write(
+            &f,
+            "services:\n  main: {}\n  api: {image: x}\n  db: {image: y, network_mode: host}\n  web: {networks: [default]}\n",
+        )
+        .unwrap();
+        assert_eq!(egress_eligible_services(std::slice::from_ref(&f)).unwrap(), ["api", "main"]);
+        assert_eq!(own_network_services(&[f]).unwrap(), ["web"]);
         assert_eq!(egress_eligible_services(&[]).unwrap(), ["main"]);
     }
 }
