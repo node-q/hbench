@@ -98,6 +98,42 @@ for run in sys.argv[3:]:
 print("egress assertions OK")
 EOF
 
+# Secrets from the host env and from the agent config never reach a command line (on the host, where
+# a Linux daemon's container processes are visible too), and every common encoding of them is scrubbed
+# from the job's files.
+host_key="hb-e2e-host-$(openssl rand -hex 12)" agent_token="hb-e2e-agent-$(openssl rand -hex 12)"
+cat > "$JOBS/secrets.yaml" <<EOF
+jobs_dir: $JOBS
+job_name: secrets
+tasks: [{path: tests/secrets/echo-secrets}]
+agents: [{name: oracle, env: {AGENT_TOKEN: "$agent_token"}}]
+EOF
+( while :; do ps -Ao args= | grep -F -e "$host_key" -e "$agent_token" | grep -v -e '^grep ' >> "$JOBS/argv-leaks.txt" || true; sleep 0.1; done ) &
+watch_pid=$!
+HB_E2E_API_KEY=$host_key $BIN run -c "$JOBS/secrets.yaml" >/dev/null
+kill $watch_pid; wait $watch_pid 2>/dev/null || true
+python3 - "$JOBS" "$host_key" "$agent_token" <<'EOF'
+import base64, json, pathlib, sys, urllib.parse
+jobs, secrets = pathlib.Path(sys.argv[1]), sys.argv[2:]
+argv = jobs / "argv-leaks.txt"
+leaks = argv.read_text().splitlines() if argv.exists() else []
+assert not leaks, f"secrets on a command line: {leaks}"
+(r,) = (jobs / "secrets").glob("*/result.json")
+d = json.loads(r.read_text())
+assert (d["verifier_result"] or {}).get("rewards") == {"reward": 1.0}, d["exception_info"]
+forms = {}
+for s in secrets:
+    forms |= {f"raw {s}": s, f"base64 {s}": base64.b64encode(s.encode()).decode(), f"url {s}": urllib.parse.quote(s, safe="")}
+    # The middle of user:<secret> in base64 (the ends share bits with the neighbours).
+    forms[f"basic {s}"] = base64.b64encode(f"user:{s}".encode()).decode()[8:-4]
+files = [p for p in (jobs / "secrets").rglob("*") if p.is_file()]
+found = [(name, str(p)) for p in files for name, f in forms.items() if f.encode() in p.read_bytes()]
+assert not found, f"unredacted: {found}"
+names = {p.name for p in files if b"[REDACTED]" in p.read_bytes()}
+assert {"oracle.txt", "trajectory-notes.txt", "leak.txt", "test-stdout.txt"} <= names, names
+print("secret assertions OK")
+EOF
+
 left=$(docker ps -a --filter label=com.docker.compose.service=main --format '{{.Names}}' | grep -E '__[0-9a-f]{7}-main' || true)
 [ -z "$left" ] || { echo "leaked containers: $left"; exit 1; }
 echo "E2E OK ($JOBS)"

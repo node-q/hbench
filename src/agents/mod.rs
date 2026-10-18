@@ -210,10 +210,13 @@ pub fn check_kwargs(name: &str, kwargs: &BTreeMap<String, Value>) -> Result<()> 
 
 pub fn create(cfg: &AgentConfig, logs_dir: PathBuf, task: Arc<Task>, load_trajectory: Option<PathBuf>) -> Result<AgentBox> {
     check_kwargs(cfg.name(), &cfg.kwargs)?;
+    let extra_env = crate::task::resolve_env_vars(&cfg.env)?;
+    crate::redact::register_env(&extra_env);
+    crate::redact::register_json(&serde_json::to_value(&cfg.kwargs)?);
     let args = AgentArgs {
         model_name: cfg.model_name.clone(),
         kwargs: cfg.kwargs.clone(),
-        extra_env: crate::task::resolve_env_vars(&cfg.env)?,
+        extra_env,
         mcp_servers: {
             let mut m = task.config.environment.mcp_servers.clone();
             m.extend(cfg.mcp_servers.clone());

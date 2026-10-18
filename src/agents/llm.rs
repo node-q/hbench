@@ -914,9 +914,8 @@ pub async fn send(url: &str, req: &Request) -> Result<Value, LlmError> {
 /// POST JSON; returns (HTTP status, body). Only transport failures are errors
 /// (kind `Timeout` or `APIConnectionError`).
 pub async fn send_raw(url: &str, req: &Request) -> Result<(u16, String), LlmError> {
-    let path = std::env::temp_dir().join(format!("hbench-llm-{}.json", uuid::Uuid::new_v4().simple()));
-    std::fs::write(&path, serde_json::to_vec(&req.body).unwrap_or_default())
-        .map_err(|e| api_err("APIConnectionError", format!("writing request body: {e}")))?;
+    let path = crate::env::private_temp_file("hbench-llm", &serde_json::to_vec(&req.body).unwrap_or_default())
+        .map_err(|e| api_err("APIConnectionError", format!("writing request body: {e:#}")))?;
     let mut cfg = format!(
         "url = {}\nrequest = \"POST\"\nsilent\nshow-error\nmax-time = {}\nwrite-out = \"\\n%{{http_code}}\"\ndata-binary = {}\nheader = \"content-type: application/json\"\n",
         cq(url),

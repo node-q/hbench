@@ -5,6 +5,7 @@ edition = "2024"
 license = "Apache-2.0"
 
 [dependencies]
+aho-corasick = "1.1.5"
 anyhow = "1.0.104"
 async-trait = "0.1.92"
 base64 = "0.23.1"
