@@ -298,7 +298,7 @@ impl Agent for KimiCli {
         Ok(())
     }
 
-    fn populate_context_post_run(&self, logs_dir: &std::path::Path, ctx: &mut AgentContext) {
+    fn collect_usage(&self, logs_dir: &std::path::Path, ctx: &mut AgentContext) {
         let Ok(text) = std::fs::read_to_string(logs_dir.join(OUTPUT_FILENAME)) else { return };
         if let Some(c) = usage_from_events(&parse_wire_events(&text)) {
             *ctx = c;

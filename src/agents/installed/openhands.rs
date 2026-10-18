@@ -397,7 +397,7 @@ impl Agent for OpenHands {
         Ok(())
     }
 
-    fn populate_context_post_run(&self, logs_dir: &Path, ctx: &mut AgentContext) {
+    fn collect_usage(&self, logs_dir: &Path, ctx: &mut AgentContext) {
         if let Some((p, c, cached, cost)) = usage_from_logs(logs_dir, self.raw_content) {
             ctx.n_input_tokens = Some(p.max(0));
             ctx.n_output_tokens = Some(c.max(0));
@@ -563,7 +563,7 @@ pub(super) mod tests {
 
         let a = agent(json!({}), &[], None).unwrap();
         let mut ctx = AgentContext::default();
-        a.populate_context_post_run(&d, &mut ctx);
+        a.collect_usage(&d, &mut ctx);
         assert_eq!(
             (ctx.n_input_tokens, ctx.n_cache_tokens, ctx.n_output_tokens, ctx.cost_usd),
             (Some(300), Some(150), Some(30), Some(0.03))

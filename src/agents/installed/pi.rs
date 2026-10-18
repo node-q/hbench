@@ -411,7 +411,7 @@ impl Agent for Pi {
         Ok(())
     }
 
-    fn populate_context_post_run(&self, logs_dir: &Path, ctx: &mut AgentContext) {
+    fn collect_usage(&self, logs_dir: &Path, ctx: &mut AgentContext) {
         let session = newest_session(&logs_dir.join("pi/sessions")).and_then(|p| {
             let copied = p.file_name().and_then(|n| self.session_usage_start.get(n.to_str()?)).copied().unwrap_or(0);
             session_usage(&std::fs::read_to_string(&p).ok()?, copied)

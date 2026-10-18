@@ -312,7 +312,7 @@ impl Agent for DeepSeekHarness {
         Ok(())
     }
 
-    fn populate_context_post_run(&self, logs_dir: &Path, ctx: &mut AgentContext) {
+    fn collect_usage(&self, logs_dir: &Path, ctx: &mut AgentContext) {
         let since = std::fs::read_to_string(logs_dir.join("dsh-run-start")).ok().and_then(|s| s.trim().parse().ok()).unwrap_or(0);
         let main_id = std::fs::read_to_string(logs_dir.join("dsh.jsonl"))
             .ok()

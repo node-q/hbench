@@ -180,7 +180,7 @@ impl Agent for CodePuppy {
         exec_agent(cx, &self.run_command(&instruction), &env).await.map(|_| ())
     }
 
-    fn populate_context_post_run(&self, logs_dir: &std::path::Path, ctx: &mut AgentContext) {
+    fn collect_usage(&self, logs_dir: &std::path::Path, ctx: &mut AgentContext) {
         if let Ok(t) = std::fs::read_to_string(logs_dir.join("code-puppy-usage.json")) {
             apply_usage(&t, ctx);
         }

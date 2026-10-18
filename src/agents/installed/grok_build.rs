@@ -493,7 +493,7 @@ impl Agent for GrokBuild {
         Ok(())
     }
 
-    fn populate_context_post_run(&self, logs_dir: &std::path::Path, ctx: &mut AgentContext) {
+    fn collect_usage(&self, logs_dir: &std::path::Path, ctx: &mut AgentContext) {
         if let Some(c) =
             std::fs::read_to_string(logs_dir.join(OUTPUT)).ok().and_then(|t| usage_from_output(&t, self.args.model_name.as_deref()))
         {

@@ -145,7 +145,7 @@ impl Agent for KimiCode {
         exec_agent(cx, &cmd, &env).await.map(|_| ())
     }
 
-    fn populate_context_post_run(&self, logs_dir: &Path, ctx: &mut AgentContext) {
+    fn collect_usage(&self, logs_dir: &Path, ctx: &mut AgentContext) {
         if let Some(c) = usage(logs_dir, self.args.model_name.as_deref()) {
             *ctx = c;
         }

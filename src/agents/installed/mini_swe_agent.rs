@@ -293,7 +293,7 @@ impl Agent for MiniSweAgent {
         exec_agent(cx, &cmd, &env).await.map(|_| ())
     }
 
-    fn populate_context_post_run(&self, logs_dir: &std::path::Path, ctx: &mut AgentContext) {
+    fn collect_usage(&self, logs_dir: &std::path::Path, ctx: &mut AgentContext) {
         if let Some(c) = std::fs::read_to_string(logs_dir.join("mini-swe-agent.trajectory.json")).ok().and_then(|t| parse_trajectory(&t)) {
             *ctx = c;
         }

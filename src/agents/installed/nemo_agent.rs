@@ -321,7 +321,7 @@ impl Agent for NemoAgent {
         Ok(())
     }
 
-    fn populate_context_post_run(&self, logs_dir: &std::path::Path, ctx: &mut AgentContext) {
+    fn collect_usage(&self, logs_dir: &std::path::Path, ctx: &mut AgentContext) {
         let out = std::fs::read_to_string(logs_dir.join("nemo-agent-output.txt")).ok();
         let traj = std::fs::read_to_string(logs_dir.join("trajectory.json")).ok();
         parse_outputs(out.as_deref(), traj.as_deref(), ctx);

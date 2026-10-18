@@ -298,7 +298,7 @@ impl Agent for MCode {
         Ok(())
     }
 
-    fn populate_context_post_run(&self, logs_dir: &std::path::Path, ctx: &mut AgentContext) {
+    fn collect_usage(&self, logs_dir: &std::path::Path, ctx: &mut AgentContext) {
         if let Some(c) = std::fs::read_to_string(logs_dir.join("mcode.jsonl")).ok().and_then(|t| parse_usage(&t)) {
             ctx.n_input_tokens = c.n_input_tokens;
             ctx.n_cache_tokens = c.n_cache_tokens;

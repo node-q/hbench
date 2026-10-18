@@ -591,7 +591,7 @@ impl Agent for AntigravityCli {
         r.map(|_| ())
     }
 
-    fn populate_context_post_run(&self, logs_dir: &Path, ctx: &mut AgentContext) {
+    fn collect_usage(&self, logs_dir: &Path, ctx: &mut AgentContext) {
         if let Some((i, o, c)) = usage_from_logs(logs_dir) {
             ctx.n_input_tokens = Some(i);
             ctx.n_output_tokens = Some(o);
@@ -784,7 +784,7 @@ mod tests {
         )
         .unwrap();
         let mut ctx = AgentContext::default();
-        agent(json!({}), &[], Some("google/gemini-3.5-flash")).unwrap().populate_context_post_run(&dir, &mut ctx);
+        agent(json!({}), &[], Some("google/gemini-3.5-flash")).unwrap().collect_usage(&dir, &mut ctx);
         assert_eq!((ctx.n_input_tokens, ctx.n_output_tokens, ctx.n_cache_tokens), (Some(70), Some(8), Some(0)));
         // gemini-3.5-flash: in 1.5e-6, out 9e-6, cache read 1.5e-7.
         assert!((ctx.cost_usd.unwrap() - (70.0 * 1.5e-6 + 8.0 * 9e-6)).abs() < 1e-12);

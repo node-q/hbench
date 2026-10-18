@@ -635,14 +635,14 @@ impl Agent for Eve {
         let command = format!("{NODE_PREFIX}node {}", quote(RUNNER_PATH));
         let env = self.runner_env_with(&|k| std::env::var(k).ok())?;
         let r = cx.exec(&format!("set -o pipefail; cd {PROJECT_DIR} || exit 1; {command}"), &env, None).await?;
-        // Artifacts land in /logs/agent; the trial downloads them and calls populate_context_post_run.
+        // Artifacts land in /logs/agent; the trial downloads them and calls collect_usage.
         if r.code != 0 {
             return Err(exec_error(&command, &r, None));
         }
         Ok(())
     }
 
-    fn populate_context_post_run(&self, logs_dir: &Path, ctx: &mut AgentContext) {
+    fn collect_usage(&self, logs_dir: &Path, ctx: &mut AgentContext) {
         populate(logs_dir, ctx);
     }
 }

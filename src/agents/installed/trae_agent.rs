@@ -239,7 +239,7 @@ impl Agent for TraeAgent {
         r.map(|_| ())
     }
 
-    fn populate_context_post_run(&self, logs_dir: &std::path::Path, ctx: &mut AgentContext) {
+    fn collect_usage(&self, logs_dir: &std::path::Path, ctx: &mut AgentContext) {
         let Some(raw) = std::fs::read_to_string(logs_dir.join(TRAJECTORY_FILE)).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok())
         else {
             return;
@@ -317,13 +317,13 @@ mod tests {
         let a = TraeAgent::new(args(json!({}), &[], Some("anthropic/x"))).unwrap();
         let dir = a.args.logs_dir.clone();
         let mut ctx = AgentContext::default();
-        a.populate_context_post_run(&dir, &mut ctx);
+        a.collect_usage(&dir, &mut ctx);
         assert!(ctx.n_input_tokens.is_none());
         std::fs::write(dir.join(TRAJECTORY_FILE), "{not json").unwrap();
-        a.populate_context_post_run(&dir, &mut ctx);
+        a.collect_usage(&dir, &mut ctx);
         assert!(ctx.n_input_tokens.is_none());
         std::fs::write(dir.join(TRAJECTORY_FILE), json!({"llm_interactions": [inter(1000, 200, 50)]}).to_string()).unwrap();
-        a.populate_context_post_run(&dir, &mut ctx);
+        a.collect_usage(&dir, &mut ctx);
         assert_eq!((ctx.n_input_tokens, ctx.n_output_tokens, ctx.n_cache_tokens), (Some(1000), Some(200), Some(50)));
 
         assert_eq!(trajectory_usage(&json!({"llm_interactions": [{"timestamp": "bad"}]})), None);

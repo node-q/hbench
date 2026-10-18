@@ -245,7 +245,7 @@ impl Agent for QwenCode {
         r.map(|_| ())
     }
 
-    fn populate_context_post_run(&self, logs_dir: &Path, ctx: &mut AgentContext) {
+    fn collect_usage(&self, logs_dir: &Path, ctx: &mut AgentContext) {
         let Some(session) = find_session_jsonl(logs_dir) else { return };
         let events = read_jsonl(&session);
         let Ok(Some((i, o, c))) = events_usage(&events) else { return };
@@ -353,7 +353,7 @@ mod tests {
         );
         sub("Bad-call_y", Value::Null, &[user("bad", json!({"timestamp": "not-a-timestamp"})), assistant(json!([]), su, json!({}))]);
         let mut ctx = AgentContext::default();
-        a.populate_context_post_run(&logs, &mut ctx);
+        a.collect_usage(&logs, &mut ctx);
         assert_eq!((ctx.n_input_tokens, ctx.n_output_tokens, ctx.n_cache_tokens, ctx.cost_usd), (Some(801), Some(81), Some(40), None));
 
         // Thought parts / non-step events; no steps -> no usage.

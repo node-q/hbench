@@ -458,7 +458,7 @@ impl Agent for Vibe {
         self.exec(cx, &cmd, &env).await
     }
 
-    fn populate_context_post_run(&self, logs_dir: &Path, ctx: &mut AgentContext) {
+    fn collect_usage(&self, logs_dir: &Path, ctx: &mut AgentContext) {
         let has_pricing = self.pricing().is_ok_and(|p| p.is_some());
         if let Some((input, output, cost)) = session_usage(&session_chain(logs_dir), has_pricing) {
             ctx.cost_usd = cost;
@@ -627,7 +627,7 @@ mod tests {
         let a = agent(json!({}), &[], Some("mistral-medium-3-5-external"));
         let root = std::env::temp_dir().join(format!("hbench-vibe-logs-{}", uuid::Uuid::new_v4()));
         let mut ctx = AgentContext::default();
-        a.populate_context_post_run(&root, &mut ctx);
+        a.collect_usage(&root, &mut ctx);
         assert!(ctx.is_empty());
 
         // Compaction: s2 continues s1; an unrelated newer-looking old session is ignored.
@@ -653,7 +653,7 @@ mod tests {
         );
         let chain = session_chain(&root);
         assert_eq!(chain.iter().map(|p| p.file_name().unwrap().to_str().unwrap()).collect::<Vec<_>>(), ["s1", "s2"]);
-        a.populate_context_post_run(&root, &mut ctx);
+        a.collect_usage(&root, &mut ctx);
         assert_eq!((ctx.n_input_tokens, ctx.n_output_tokens, ctx.cost_usd), (Some(100), Some(50), Some(0.0012)));
 
         // $0 cost without configured pricing is unknown; with explicit zero prices it's real.
@@ -665,10 +665,10 @@ mod tests {
             Some(json!({"stats": {"session_prompt_tokens": 10, "session_completion_tokens": 0, "session_cost": 0.0}})),
         );
         let mut c2 = AgentContext::default();
-        a.populate_context_post_run(&root2, &mut c2);
+        a.collect_usage(&root2, &mut c2);
         assert_eq!((c2.n_input_tokens, c2.n_output_tokens, c2.cost_usd), (Some(10), Some(0), None));
         let free = agent(json!({}), &[("VIBE_INPUT_PRICE", "0"), ("VIBE_OUTPUT_PRICE", "0")], Some("m"));
-        free.populate_context_post_run(&root2, &mut c2);
+        free.collect_usage(&root2, &mut c2);
         assert_eq!(c2.cost_usd, Some(0.0));
     }
 }

@@ -266,7 +266,7 @@ impl Agent for CortexCode {
         r.map(|_| ())
     }
 
-    fn populate_context_post_run(&self, logs_dir: &std::path::Path, ctx: &mut AgentContext) {
+    fn collect_usage(&self, logs_dir: &std::path::Path, ctx: &mut AgentContext) {
         let Ok(text) = std::fs::read_to_string(logs_dir.join(OUTPUT)) else { return };
         let (i, o, c) = usage_from_output(&text);
         if i != 0 || o != 0 || c != 0 {

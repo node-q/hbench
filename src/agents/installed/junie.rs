@@ -345,7 +345,7 @@ impl Agent for Junie {
         r.map(|_| ())
     }
 
-    fn populate_context_post_run(&self, logs_dir: &Path, ctx: &mut AgentContext) {
+    fn collect_usage(&self, logs_dir: &Path, ctx: &mut AgentContext) {
         if let Some(c) = find_events(logs_dir).and_then(|f| std::fs::read_to_string(f).ok()).and_then(|t| usage_from_events(&t)) {
             *ctx = c;
         }
@@ -413,7 +413,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("events.jsonl"), &text).unwrap();
         let mut ctx = AgentContext::default();
-        a.populate_context_post_run(&a.args.logs_dir, &mut ctx);
+        a.collect_usage(&a.args.logs_dir, &mut ctx);
         assert_eq!(ctx.n_input_tokens, Some(200));
     }
 }

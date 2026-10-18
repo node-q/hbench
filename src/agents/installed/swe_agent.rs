@@ -315,7 +315,7 @@ impl Agent for SweAgent {
         Ok(())
     }
 
-    fn populate_context_post_run(&self, logs_dir: &Path, ctx: &mut AgentContext) {
+    fn collect_usage(&self, logs_dir: &Path, ctx: &mut AgentContext) {
         let mut found = vec![];
         find_traj(&logs_dir.join("swe-agent-output"), &mut found);
         // Expect at most one .traj; with several we skip usage rather than panic.
@@ -443,7 +443,7 @@ mod tests {
         std::fs::write(dir.join("swe-agent-output/inst/inst.traj"), r#"{"environment":"swe_main","trajectory":[{"action":"ls"}],"info":{"model_name":"m","total_cost":0.0,"cost":1.5,"input_tokens":1000,"output_tokens":200}}"#).unwrap();
         let a = agent(json!({}), &[], "openai/gpt-5").unwrap();
         let mut ctx = AgentContext::default();
-        a.populate_context_post_run(&dir, &mut ctx);
+        a.collect_usage(&dir, &mut ctx);
         assert_eq!((ctx.n_input_tokens, ctx.n_output_tokens, ctx.cost_usd, ctx.n_cache_tokens), (Some(1000), Some(200), Some(1.5), None));
     }
 }

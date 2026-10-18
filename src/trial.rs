@@ -480,7 +480,7 @@ impl Trial {
         if let Some(a) = &self.agent {
             let mut ctx = self.result.agent_result.take();
             if let Some(c) = ctx.as_mut().filter(|c| c.is_empty()) {
-                a.populate_context_post_run(&self.dir.join("agent"), c);
+                a.collect_usage(&self.dir.join("agent"), c);
             }
             self.result.agent_result = ctx;
             self.result.agent_info.version = a.version().unwrap_or_else(|| "unknown".into());
@@ -880,7 +880,7 @@ impl Trial {
             let ud = self.dir.join("user-agent");
             let _ = self.env().download_dir(MAIN, "/logs/user-agent", &ud).await;
             if ctx.is_empty() {
-                ua.populate_context_post_run(&ud, ctx);
+                ua.collect_usage(&ud, ctx);
             }
             let usage = std::fs::read_to_string(agent_dir.join(crate::bridge::TRAJECTORY_FILENAME))
                 .ok()
@@ -896,7 +896,7 @@ impl Trial {
         } else if ctx.is_empty()
             && let Some(a) = &self.agent
         {
-            a.populate_context_post_run(&agent_dir, ctx);
+            a.collect_usage(&agent_dir, ctx);
         }
         if let Err(e) = self.env().upload_dir(&agent_dir, "/logs/agent").await {
             self.log.line(&format!("agent log upload failed: {e:#}"));

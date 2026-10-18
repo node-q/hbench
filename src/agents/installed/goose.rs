@@ -281,7 +281,7 @@ impl Agent for Goose {
         Ok(())
     }
 
-    fn populate_context_post_run(&self, logs_dir: &std::path::Path, ctx: &mut AgentContext) {
+    fn collect_usage(&self, logs_dir: &std::path::Path, ctx: &mut AgentContext) {
         let Some(c) = std::fs::read_to_string(logs_dir.join("goose.txt")).ok().and_then(|t| parse_goose_usage(&t)) else { return };
         ctx.n_input_tokens = c.n_input_tokens;
         ctx.n_output_tokens = c.n_output_tokens;

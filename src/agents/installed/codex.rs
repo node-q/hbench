@@ -649,7 +649,7 @@ impl Agent for Codex {
         Ok(())
     }
 
-    fn populate_context_post_run(&self, logs_dir: &Path, ctx: &mut AgentContext) {
+    fn collect_usage(&self, logs_dir: &Path, ctx: &mut AgentContext) {
         if let Some(c) = latest_session_file(logs_dir)
             .and_then(|p| std::fs::read_to_string(p).ok())
             .and_then(|t| parse_rollout_usage(&t, self.args.model_name.as_deref()))

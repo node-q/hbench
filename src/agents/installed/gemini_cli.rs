@@ -396,7 +396,7 @@ impl Agent for GeminiCli {
         r.map(|_| ())
     }
 
-    fn populate_context_post_run(&self, logs_dir: &Path, ctx: &mut AgentContext) {
+    fn collect_usage(&self, logs_dir: &Path, ctx: &mut AgentContext) {
         let Some(text) = ["gemini-cli.trajectory.jsonl", "gemini-cli.trajectory.json"]
             .iter()
             .map(|f| logs_dir.join(f))

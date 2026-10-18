@@ -681,7 +681,7 @@ impl Agent for MuseCode {
         Ok(())
     }
 
-    fn populate_context_post_run(&self, logs_dir: &Path, ctx: &mut AgentContext) {
+    fn collect_usage(&self, logs_dir: &Path, ctx: &mut AgentContext) {
         if let Some(u) = usage_from_logs(logs_dir) {
             ctx.n_input_tokens = u.prompt;
             ctx.n_cache_tokens = u.cached;
@@ -827,7 +827,7 @@ mod tests {
         write_session(&logs.join("sessions").join(&child), CHILD);
         std::fs::write(logs.join(MANIFEST), json!({"session_id": SID, "usage_start": {}, "copied_until": {}}).to_string()).unwrap();
         let mut ctx = AgentContext::default();
-        MuseCode::populate_context_post_run(&agent(json!({}), &[], None).unwrap(), &logs, &mut ctx);
+        MuseCode::collect_usage(&agent(json!({}), &[], None).unwrap(), &logs, &mut ctx);
         assert_eq!((ctx.n_input_tokens, ctx.n_cache_tokens, ctx.n_output_tokens, ctx.cost_usd), (Some(120), Some(56), Some(16), None));
         // Resume boundary: root lines up to 7 (first model_completed is line 6) are excluded.
         std::fs::write(logs.join(MANIFEST), json!({"session_id": SID, "usage_start": {SESSION: 7}}).to_string()).unwrap();

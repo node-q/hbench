@@ -336,7 +336,7 @@ impl Agent for Strands {
         r.map(|_| ())
     }
 
-    fn populate_context_post_run(&self, logs_dir: &Path, ctx: &mut AgentContext) {
+    fn collect_usage(&self, logs_dir: &Path, ctx: &mut AgentContext) {
         let result = std::fs::read_to_string(logs_dir.join("strands-result.json")).ok();
         let events = std::fs::read_to_string(logs_dir.join("strands-events.jsonl")).ok();
         let c = parse_context(result.as_deref(), events.as_deref());

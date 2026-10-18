@@ -229,7 +229,7 @@ impl Agent for OpenHandsSdk {
         Ok(())
     }
 
-    fn populate_context_post_run(&self, logs_dir: &Path, ctx: &mut AgentContext) {
+    fn collect_usage(&self, logs_dir: &Path, ctx: &mut AgentContext) {
         if let Some(c) = std::fs::read_to_string(logs_dir.join("trajectory.json")).ok().and_then(|t| parse_trajectory_metrics(&t)) {
             ctx.n_input_tokens = c.n_input_tokens;
             ctx.n_cache_tokens = c.n_cache_tokens;

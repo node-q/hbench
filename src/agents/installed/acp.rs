@@ -1123,7 +1123,7 @@ impl Agent for Acp {
         exec_agent(cx, &cmd, &self.run_env()).await.map(|_| ())
     }
 
-    fn populate_context_post_run(&self, logs_dir: &Path, ctx: &mut AgentContext) {
+    fn collect_usage(&self, logs_dir: &Path, ctx: &mut AgentContext) {
         let Some(summary) = std::fs::read_to_string(logs_dir.join(SUMMARY_FILENAME))
             .ok()
             .and_then(|t| serde_json::from_str::<Value>(&t).ok())
@@ -1327,7 +1327,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("hbench-acp-sum-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let mut ctx = AgentContext::default();
-        a.populate_context_post_run(&dir, &mut ctx);
+        a.collect_usage(&dir, &mut ctx);
         assert!(ctx.is_empty());
         let summary = json!({
             "prompt_response": {"stopReason": "end_turn", "usage": {"inputTokens": 101, "outputTokens": 5, "cachedReadTokens": 7, "totalTokens": 113}},
@@ -1338,7 +1338,7 @@ mod tests {
             "error": {"type": "RuntimeError", "message": "agent failed to start"},
         });
         std::fs::write(dir.join(SUMMARY_FILENAME), summary.to_string()).unwrap();
-        a.populate_context_post_run(&dir, &mut ctx);
+        a.collect_usage(&dir, &mut ctx);
         assert_eq!((ctx.n_input_tokens, ctx.n_output_tokens, ctx.n_cache_tokens, ctx.cost_usd), (Some(101), Some(5), Some(7), Some(0.12)));
         let m = &ctx.metadata.unwrap()["acp"];
         assert_eq!(m["registry_entry_id"], "codex-acp");
