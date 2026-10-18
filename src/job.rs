@@ -91,7 +91,7 @@ pub fn compute_stats(
             e.exception_stats.entry(ex.exception_type.clone()).or_default().push(r.trial_name.clone());
             e.n_errors += 1;
             s.n_errored_trials += 1;
-            if ex.exception_type == "CancelledError" {
+            if ex.exception_type == crate::env::ErrorKind::Cancelled.as_str() {
                 s.n_cancelled_trials += 1;
             }
         }

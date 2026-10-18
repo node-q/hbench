@@ -2,14 +2,14 @@
 //! without re-running the agent.
 
 use crate::artifacts::{ManifestEntry, host_path};
-use crate::env::kind_err;
+use crate::env::{ErrorKind, kind_err};
 use crate::task::{Artifact, Task, VerifierMode, with_convention};
 use crate::trial::{ExceptionInfo, StepResult, TimingInfo, Trial, TrialResult, VerifierResult, aggregate_step_rewards};
 use anyhow::{Result, bail};
 use std::path::{Path, PathBuf};
 
 fn err(msg: impl Into<String>) -> anyhow::Error {
-    kind_err("RegradeError", msg)
+    kind_err(ErrorKind::Regrade, msg)
 }
 
 /// None if every verifier in the task runs in separate mode, else the reason it can't be regraded.

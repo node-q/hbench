@@ -370,7 +370,7 @@ impl Default for RetryConfig {
 
 impl RetryConfig {
     pub fn should_retry(&self, kind: &str) -> bool {
-        if kind == "CancelledError" {
+        if kind == crate::env::ErrorKind::Cancelled.as_str() {
             return false;
         }
         if self.exclude_exceptions.as_ref().is_some_and(|s| s.contains(kind)) {

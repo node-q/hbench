@@ -10,7 +10,7 @@
 
 use super::model_connection::{self, Spec};
 use super::pricing::{self, Rates};
-use crate::env::{kind_err, tail};
+use crate::env::{ErrorKind, kind_err, tail};
 use anyhow::{Result, anyhow, bail};
 use serde_json::{Map, Value, json};
 use std::process::Stdio;
@@ -46,7 +46,7 @@ pub enum LlmError {
     ContextLength(String),
     /// The response hit the output token limit (finish_reason == "length").
     OutputLength { msg: String, truncated: String },
-    /// Anything else; `kind` is the LiteLLM exception class name. `retry_after`: `Some` for
+    /// Anything else; `kind` is the provider exception type name (`RateLimitError`, `APIConnectionError`, ...). `retry_after`: `Some` for
     /// transient failures (network, 408/409/429/5xx), holding the server's Retry-After (zero if none).
     Api { kind: &'static str, msg: String, retry_after: Option<Duration> },
 }
@@ -61,11 +61,11 @@ impl std::fmt::Display for LlmError {
 impl std::error::Error for LlmError {}
 
 impl LlmError {
-    pub fn kind(&self) -> &'static str {
+    pub fn kind(&self) -> ErrorKind {
         match self {
-            LlmError::ContextLength(_) => "ContextLengthExceededError",
-            LlmError::OutputLength { .. } => "OutputLengthExceededError",
-            LlmError::Api { kind, .. } => kind,
+            LlmError::ContextLength(_) => ErrorKind::ContextLengthExceeded,
+            LlmError::OutputLength { .. } => ErrorKind::OutputLengthExceeded,
+            LlmError::Api { kind, .. } => ErrorKind::from(*kind),
         }
     }
     /// `Some(server hint)` if the request may be retried.

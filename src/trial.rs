@@ -3,7 +3,7 @@
 use crate::agents::{self, AgentBox, AgentContext, AgentCtx};
 use crate::artifacts::{self, Claims};
 use crate::config::TrialConfig;
-use crate::env::{DockerEnv, EnvSpec, LOG_DIRS, TrialLog, error_kind, kind_err};
+use crate::env::{DockerEnv, EnvSpec, ErrorKind, LOG_DIRS, TrialLog, error_kind, kind_err};
 use crate::task::{
     Artifact, ArtifactSpec, EnvironmentConfig, MAIN, MinReward, NetworkMode, NetworkPolicy, RewardStrategy, StepConfig, Task, VerifierMode,
     normalize_hosts, resolve_env_vars, with_convention,
@@ -48,7 +48,7 @@ pub struct ExceptionInfo {
 impl ExceptionInfo {
     pub fn from(e: &anyhow::Error) -> ExceptionInfo {
         ExceptionInfo {
-            exception_type: error_kind(e).into(),
+            exception_type: error_kind(e).to_string(),
             exception_message: format!("{e:#}"),
             exception_traceback: format!("{e:?}"),
             occurred_at: Utc::now(),
@@ -217,19 +217,6 @@ impl std::fmt::Display for Unstopped {
 
 fn unstopped(e: &anyhow::Error) -> bool {
     e.downcast_ref::<Unstopped>().is_some()
-}
-
-/// Agent errors that are recorded while the verifier still runs (the
-/// AgentTimeoutError + NonZeroAgentExitCodeError family).
-pub fn is_agent_run_error(kind: &str) -> bool {
-    kind == "AgentTimeoutError"
-        || kind == "NonZeroAgentExitCodeError"
-        || kind == "AgentAuthenticationError"
-        || kind == "ModelNotFoundError"
-        || kind == "UnsupportedModelParametersError"
-        || kind == "NetworkConnectionError"
-        || kind.starts_with("Api")
-        || matches!(kind, "OutputTokenExceededError" | "ContextWindowExceededError" | "UnknownApiError" | "AgentSafetyRefusalError")
 }
 
 /// Per-phase network policies.
@@ -606,7 +593,7 @@ impl Trial {
         {
             let r = self.env().exec_root(&cmd, Some(Duration::from_secs(120))).await?;
             if r.code != 0 {
-                return Err(kind_err("EnvironmentStartError", format!("removing verifier-only files failed: {}", r.stderr)));
+                return Err(kind_err(ErrorKind::EnvironmentStart, format!("removing verifier-only files failed: {}", r.stderr)));
             }
             self.log.line("removed verifier-only files from the agent's container");
         }
@@ -621,7 +608,7 @@ impl Trial {
             self.cfg.agent_setup_timeout_multiplier,
         );
         let timeout_err =
-            |what: &str| kind_err("AgentSetupTimeoutError", format!("{what} timed out after {} seconds", setup_timeout.as_secs_f64()));
+            |what: &str| kind_err(ErrorKind::AgentSetupTimeout, format!("{what} timed out after {} seconds", setup_timeout.as_secs_f64()));
         if let Some(mut ua) = self.user_agent.take() {
             let overlay = resolve_env_vars(&self.cfg.user_agent.as_ref().unwrap().agent.env)?;
             let r = match self.ctx_with(user.clone(), None, overlay, "user-agent") {
@@ -662,7 +649,7 @@ impl Trial {
                 match tokio::time::timeout(setup_timeout, attempts).await {
                     Ok(Ok(())) => Ok(()),
                     Ok(Err((e, n))) => Err(kind_err(
-                        "AgentSetupError",
+                        ErrorKind::AgentSetup,
                         format!(
                             "Agent setup failed before the agent started (environment/install problem, {n} attempt{}): {e:#}",
                             if n == 1 { "" } else { "s" }
@@ -777,9 +764,10 @@ impl Trial {
                     match timeout {
                         Some(d) => match tokio::time::timeout(d, run).await {
                             Ok(r) => r,
-                            Err(_) => {
-                                Err(kind_err("AgentTimeoutError", format!("Agent execution timed out after {} seconds", d.as_secs_f64())))
-                            }
+                            Err(_) => Err(kind_err(
+                                ErrorKind::AgentTimeout,
+                                format!("Agent execution timed out after {} seconds", d.as_secs_f64()),
+                            )),
                         },
                         None => run.await,
                     }
@@ -799,9 +787,9 @@ impl Trial {
                 r
             }
             (Err(e), Ok(())) => {
-                Err(kind_err("EnvironmentError", "the agent's processes may still be running").context(Unstopped(format!("{e:#}"))))
+                Err(kind_err(ErrorKind::Environment, "the agent's processes may still be running").context(Unstopped(format!("{e:#}"))))
             }
-            (Err(e), Err(f)) if is_agent_run_error(error_kind(&f)) => Err(f.context(Unstopped(format!("{e:#}")))),
+            (Err(e), Err(f)) if error_kind(&f).is_agent_run_error() => Err(f.context(Unstopped(format!("{e:#}")))),
             (Err(e), Err(f)) => {
                 self.log.line(&format!("stopping the agent's processes failed: {e:#}"));
                 Err(f)
@@ -831,7 +819,7 @@ impl Trial {
                 let run = ua.run(&prompt, &cx, ctx, false);
                 match timeout {
                     Some(d) => tokio::time::timeout(d, run).await.unwrap_or_else(|_| {
-                        Err(kind_err("AgentTimeoutError", format!("Agent execution timed out after {} seconds", d.as_secs_f64())))
+                        Err(kind_err(ErrorKind::AgentTimeout, format!("Agent execution timed out after {} seconds", d.as_secs_f64())))
                     }),
                     None => run.await,
                 }
@@ -969,7 +957,7 @@ impl Trial {
         self.result.agent_execution = Some(timing);
         let mut fatal = None;
         if let Err(e) = r {
-            if is_agent_run_error(error_kind(&e)) && !unstopped(&e) {
+            if error_kind(&e).is_agent_run_error() && !unstopped(&e) {
                 self.record(&e);
             } else {
                 fatal = Some(e);
@@ -1173,8 +1161,8 @@ impl Trial {
                     *self.verifier_env.lock().unwrap_or_else(|e| e.into_inner()) = Some(venv.clone());
                     async {
                         venv.start().await.map_err(|e| {
-                            if error_kind(&e) == "EnvironmentStartTimeoutError" {
-                                kind_err("EnvironmentStartTimeoutError", format!("Verifier environment start timed out: {e:#}"))
+                            if error_kind(&e) == ErrorKind::EnvironmentStartTimeout {
+                                kind_err(ErrorKind::EnvironmentStartTimeout, format!("Verifier environment start timed out: {e:#}"))
                             } else {
                                 e
                             }
@@ -1194,7 +1182,7 @@ impl Trial {
         let r = match tokio::time::timeout(timeout, fut).await {
             Ok(r) => r,
             Err(_) => {
-                Err(kind_err("VerifierTimeoutError", format!("Verifier execution timed out after {} seconds", timeout.as_secs_f64())))
+                Err(kind_err(ErrorKind::VerifierTimeout, format!("Verifier execution timed out after {} seconds", timeout.as_secs_f64())))
             }
         };
         self.stop_verifier_env().await;
@@ -1234,7 +1222,7 @@ impl Trial {
             for src in &sources {
                 env.upload_dir(src, "/tests")
                     .await
-                    .map_err(|e| kind_err("AddTestsDirError", format!("Failed to add tests directory to environment: {e:#}")))?;
+                    .map_err(|e| kind_err(ErrorKind::AddTestsDir, format!("Failed to add tests directory to environment: {e:#}")))?;
             }
             format!("/tests/{rel}")
         };
@@ -1246,9 +1234,9 @@ impl Trial {
         venv.extend(resolve_env_vars(&self.cfg.verifier.env)?);
         env.exec(&format!("({script}) > /logs/verifier/test-stdout.txt 2>&1"), user, &venv, None).await?;
         let vdir = self.dir.join("verifier");
-        env.download_dir(MAIN, "/logs/verifier", &vdir)
-            .await
-            .map_err(|e| kind_err("DownloadVerifierDirError", format!("Failed to download verifier directory from environment: {e:#}")))?;
+        env.download_dir(MAIN, "/logs/verifier", &vdir).await.map_err(|e| {
+            kind_err(ErrorKind::DownloadVerifierDir, format!("Failed to download verifier directory from environment: {e:#}"))
+        })?;
         let v = &self.cfg.verifier;
         if !v.include_logs.is_empty() || !v.exclude_logs.is_empty() {
             filter_logs(&vdir, &v.include_logs, &v.exclude_logs, &["reward.txt", "reward.json"]);
@@ -1350,7 +1338,7 @@ pub fn trial_lock(c: &TrialConfig) -> Value {
 async fn cancellable<T>(mut cancel: watch::Receiver<bool>, fut: impl Future<Output = Result<T>>) -> Result<T> {
     tokio::select! {
         r = fut => r,
-        _ = cancel.wait_for(|c| *c) => Err(kind_err("CancelledError", "Trial cancelled")),
+        _ = cancel.wait_for(|c| *c) => Err(kind_err(ErrorKind::Cancelled, "Trial cancelled")),
     }
 }
 
@@ -1468,9 +1456,9 @@ pub fn parse_rewards(vdir: &Path) -> Result<Rewards> {
     if json_p.exists() {
         let raw = std::fs::read_to_string(&json_p)?;
         if raw.is_empty() {
-            return Err(kind_err("RewardFileEmptyError", format!("Reward file is empty at {}", json_p.display())));
+            return Err(kind_err(ErrorKind::RewardFileEmpty, format!("Reward file is empty at {}", json_p.display())));
         }
-        let parse_err = |m: String| kind_err("VerifierOutputParseError", m);
+        let parse_err = |m: String| kind_err(ErrorKind::VerifierOutputParse, m);
         let v: Value = serde_json::from_str(&raw)
             .map_err(|e| parse_err(format!("Failed to parse rewards from JSON file {}: {e}", json_p.display())))?;
         let Value::Object(map) = v else { return Err(parse_err(format!("Rewards in {} must be a JSON object", json_p.display()))) };
@@ -1487,18 +1475,18 @@ pub fn parse_rewards(vdir: &Path) -> Result<Rewards> {
     } else if txt_p.exists() {
         let raw = std::fs::read_to_string(&txt_p)?;
         if raw.is_empty() {
-            return Err(kind_err("RewardFileEmptyError", format!("Reward file is empty at {}", txt_p.display())));
+            return Err(kind_err(ErrorKind::RewardFileEmpty, format!("Reward file is empty at {}", txt_p.display())));
         }
         let v: f64 = raw
             .trim()
             .parse()
-            .map_err(|_| kind_err("VerifierOutputParseError", format!("Failed to parse rewards from text file {}", txt_p.display())))?;
+            .map_err(|_| kind_err(ErrorKind::VerifierOutputParse, format!("Failed to parse rewards from text file {}", txt_p.display())))?;
         let n = Number::from_f64(v)
             .filter(|_| v.is_finite())
-            .ok_or_else(|| kind_err("VerifierOutputParseError", format!("Non-finite reward in text file {}", txt_p.display())))?;
+            .ok_or_else(|| kind_err(ErrorKind::VerifierOutputParse, format!("Non-finite reward in text file {}", txt_p.display())))?;
         Ok([("reward".to_string(), n)].into())
     } else {
-        Err(kind_err("RewardFileNotFoundError", format!("No reward file found at {} or {}", txt_p.display(), json_p.display())))
+        Err(kind_err(ErrorKind::RewardFileNotFound, format!("No reward file found at {} or {}", txt_p.display(), json_p.display())))
     }
 }
 
@@ -1514,11 +1502,12 @@ mod tests {
 
     #[test]
     fn a_failed_stop_keeps_the_run_error_kind() {
-        let timeout = kind_err("AgentTimeoutError", "Agent execution timed out after 5 seconds").context(Unstopped("exec failed".into()));
+        let timeout =
+            kind_err(ErrorKind::AgentTimeout, "Agent execution timed out after 5 seconds").context(Unstopped("exec failed".into()));
         assert_eq!(error_kind(&timeout), "AgentTimeoutError");
         assert!(unstopped(&timeout));
         assert_eq!(format!("{timeout:#}"), "stopping the agent's processes failed: exec failed: Agent execution timed out after 5 seconds");
-        assert!(!unstopped(&kind_err("AgentTimeoutError", "timed out")));
+        assert!(!unstopped(&kind_err(ErrorKind::AgentTimeout, "timed out")));
     }
 
     #[test]

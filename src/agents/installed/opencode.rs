@@ -6,7 +6,7 @@ use super::pins;
 use super::{connection, ensure_system_dependencies, exec_agent, exec_root, safe_bin_symlink_command};
 use crate::agents::model_connection::Spec;
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
-use crate::env::{kind_err, quote};
+use crate::env::{ErrorKind, kind_err, quote};
 use anyhow::{Result, bail};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -256,7 +256,7 @@ impl Agent for OpenCode {
         let msgs = error_messages(&r.stdout);
         if !msgs.is_empty() {
             return Err(kind_err(
-                "NonZeroAgentExitCodeError",
+                ErrorKind::NonZeroAgentExitCode,
                 format!("OpenCode emitted error event(s): {}", msgs[..msgs.len().min(3)].join("; ")),
             ));
         }

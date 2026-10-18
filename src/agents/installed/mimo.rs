@@ -5,7 +5,7 @@ use super::pins;
 use super::{connection, ensure_system_dependencies, exec_agent};
 use crate::agents::model_connection::Spec;
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
-use crate::env::{kind_err, quote};
+use crate::env::{ErrorKind, kind_err, quote};
 use anyhow::{Result, bail};
 use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
@@ -207,7 +207,7 @@ impl Agent for MiMo {
         let msgs = error_messages(&r.stdout);
         if !msgs.is_empty() {
             return Err(kind_err(
-                "NonZeroAgentExitCodeError",
+                ErrorKind::NonZeroAgentExitCode,
                 format!("MiMo emitted error event(s): {}", msgs[..msgs.len().min(3)].join("; ")),
             ));
         }

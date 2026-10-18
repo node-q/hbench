@@ -1572,7 +1572,7 @@ mod tests {
         assert_eq!(o.http(None, &env(&[("OPENAI_API_KEY", "k")])).unwrap().url, "https://api.openai.com/v1/responses");
         assert!(o.http(None, &env(&[])).is_err());
         let e = status_error(Sdk::Stainless, 429, "{}");
-        assert_eq!((crate::env::error_kind(&e), e.to_string()), ("RateLimitError", "Error code: 429 - {}".to_string()));
+        assert_eq!((crate::env::error_kind(&e).as_str(), e.to_string()), ("RateLimitError", "Error code: 429 - {}".to_string()));
         let e = status_error(Sdk::Gemini, 400, r#"{"error": {"status": "INVALID_ARGUMENT"}}"#);
         assert_eq!(crate::env::error_kind(&e), "ClientError");
         assert!(e.to_string().starts_with("400 INVALID_ARGUMENT."));

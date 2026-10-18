@@ -16,10 +16,110 @@ use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
-/// Error carrying an exception type name (used for result.json + retry policy).
+macro_rules! error_kinds {
+    ($($variant:ident => $name:literal,)*) => {
+        /// Exception type of a failed trial step, as written to result.json and matched by the retry
+        /// include/exclude lists. Names hbench doesn't raise itself (agent- or provider-reported) are `Other`.
+        #[derive(Debug, Clone, PartialEq, Eq)]
+        pub enum ErrorKind {
+            $($variant,)*
+            Other(String),
+        }
+
+        impl ErrorKind {
+            pub fn as_str(&self) -> &str {
+                match self {
+                    $(ErrorKind::$variant => $name,)*
+                    ErrorKind::Other(s) => s,
+                }
+            }
+        }
+
+        impl From<&str> for ErrorKind {
+            fn from(s: &str) -> Self {
+                match s {
+                    $($name => ErrorKind::$variant,)*
+                    s => ErrorKind::Other(s.into()),
+                }
+            }
+        }
+    };
+}
+
+error_kinds! {
+    Runtime => "RuntimeError",
+    Timeout => "TimeoutError",
+    Cancelled => "CancelledError",
+    Environment => "EnvironmentError",
+    EnvironmentStart => "EnvironmentStartError",
+    EnvironmentStartTimeout => "EnvironmentStartTimeoutError",
+    Healthcheck => "HealthcheckError",
+    AgentSetup => "AgentSetupError",
+    AgentSetupTimeout => "AgentSetupTimeoutError",
+    AgentTimeout => "AgentTimeoutError",
+    NonZeroAgentExitCode => "NonZeroAgentExitCodeError",
+    AgentAuthentication => "AgentAuthenticationError",
+    AgentSafetyRefusal => "AgentSafetyRefusalError",
+    ModelNotFound => "ModelNotFoundError",
+    UnsupportedModelParameters => "UnsupportedModelParametersError",
+    NetworkConnection => "NetworkConnectionError",
+    ContextWindowExceeded => "ContextWindowExceededError",
+    OutputTokenExceeded => "OutputTokenExceededError",
+    ContextLengthExceeded => "ContextLengthExceededError",
+    OutputLengthExceeded => "OutputLengthExceededError",
+    UnknownApi => "UnknownApiError",
+    AddTestsDir => "AddTestsDirError",
+    DownloadVerifierDir => "DownloadVerifierDirError",
+    VerifierTimeout => "VerifierTimeoutError",
+    VerifierOutputParse => "VerifierOutputParseError",
+    RewardFileEmpty => "RewardFileEmptyError",
+    RewardFileNotFound => "RewardFileNotFoundError",
+    Regrade => "RegradeError",
+}
+
+impl ErrorKind {
+    /// Agent errors that are recorded while the verifier still runs (the agent timeout, non-zero
+    /// exit and classified agent/API failure family).
+    pub fn is_agent_run_error(&self) -> bool {
+        use ErrorKind::*;
+        matches!(
+            self,
+            AgentTimeout
+                | NonZeroAgentExitCode
+                | AgentAuthentication
+                | ModelNotFound
+                | UnsupportedModelParameters
+                | NetworkConnection
+                | OutputTokenExceeded
+                | ContextWindowExceeded
+                | UnknownApi
+                | AgentSafetyRefusal
+        ) || matches!(self, Other(s) if s.starts_with("Api"))
+    }
+}
+
+impl From<String> for ErrorKind {
+    fn from(s: String) -> Self {
+        ErrorKind::from(s.as_str())
+    }
+}
+
+impl std::fmt::Display for ErrorKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl PartialEq<&str> for ErrorKind {
+    fn eq(&self, other: &&str) -> bool {
+        self.as_str() == *other
+    }
+}
+
+/// Error carrying an exception type (used for result.json + retry policy).
 #[derive(Debug)]
 pub struct KindError {
-    pub kind: &'static str,
+    pub kind: ErrorKind,
     pub msg: String,
 }
 impl std::fmt::Display for KindError {
@@ -29,12 +129,13 @@ impl std::fmt::Display for KindError {
 }
 impl std::error::Error for KindError {}
 
-pub fn kind_err(kind: &'static str, msg: impl Into<String>) -> anyhow::Error {
-    KindError { kind, msg: msg.into() }.into()
+pub fn kind_err(kind: impl Into<ErrorKind>, msg: impl Into<String>) -> anyhow::Error {
+    KindError { kind: kind.into(), msg: msg.into() }.into()
 }
 
-pub fn error_kind(e: &anyhow::Error) -> &'static str {
-    e.chain().find_map(|c| c.downcast_ref::<KindError>()).map(|k| k.kind).unwrap_or("RuntimeError")
+/// The exception type of `e`: the first `KindError` in its chain, else `RuntimeError`.
+pub fn error_kind(e: &anyhow::Error) -> ErrorKind {
+    e.chain().find_map(|c| c.downcast_ref::<KindError>()).map_or(ErrorKind::Runtime, |k| k.kind.clone())
 }
 
 /// Append-only per-trial log (trial.log).
@@ -616,7 +717,7 @@ impl DockerEnv {
                 Ok(r) => r?,
                 Err(_) => {
                     self.log.line(&format!("timed out after {t:?}"));
-                    return Err(kind_err("TimeoutError", format!("`{label}` timed out after {t:?}")));
+                    return Err(kind_err(ErrorKind::Timeout, format!("`{label}` timed out after {t:?}")));
                 }
             },
             None => out.await?,
@@ -662,10 +763,10 @@ impl DockerEnv {
             anyhow::Ok(())
         };
         match tokio::time::timeout(self.spec.build_timeout, started).await {
-            Ok(r) => r.map_err(|e| kind_err("EnvironmentStartError", format!("{e:#}")))?,
+            Ok(r) => r.map_err(|e| kind_err(ErrorKind::EnvironmentStart, format!("{e:#}")))?,
             Err(_) => {
                 return Err(kind_err(
-                    "EnvironmentStartTimeoutError",
+                    ErrorKind::EnvironmentStartTimeout,
                     format!("Environment start timed out after {} seconds", self.spec.build_timeout.as_secs_f64()),
                 ));
             }
@@ -973,7 +1074,7 @@ impl DockerEnv {
                 failures += 1;
                 if failures >= hc.retries {
                     return Err(kind_err(
-                        "HealthcheckError",
+                        ErrorKind::Healthcheck,
                         format!("Healthcheck failed after {} consecutive retries: {}", hc.retries, hc.command),
                     ));
                 }
@@ -1124,6 +1225,15 @@ pub async fn preflight() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn error_kind_names_round_trip() {
+        for s in ["AgentTimeoutError", "CancelledError", "RateLimitError", "ApiUsageLimitError"] {
+            assert_eq!(ErrorKind::from(s).as_str(), s);
+        }
+        assert_eq!(ErrorKind::from("AgentTimeoutError"), ErrorKind::AgentTimeout);
+        assert!(ErrorKind::from("ApiRateLimitError").is_agent_run_error() && !ErrorKind::Runtime.is_agent_run_error());
+        assert_eq!(error_kind(&anyhow!("plain")), ErrorKind::Runtime);
+    }
     #[test]
     fn sanitizes_and_quotes() {
         assert_eq!(sanitize("Hello World__AbC", false), "hello-world__abc");

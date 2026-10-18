@@ -12,7 +12,7 @@
 use super::llm::{ChatClient, Llm, LlmConfig, LlmError, LlmResponse, add_anthropic_caching, api_err, lookup_model_info};
 use super::terminus2::{Kw, Shell, fill_template, limit_output_length, now, quote_repr};
 use super::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx, ModelUsage};
-use crate::env::{error_kind, quote};
+use crate::env::{ErrorKind, error_kind, quote};
 use crate::fmt::float_with_point;
 use anyhow::{Result, anyhow, bail};
 use base64::Engine;
@@ -600,7 +600,7 @@ impl Desktop {
                     return Err(rt_err(label, r.code.into(), if stderr.is_empty() { "exec returned non-zero" } else { stderr }));
                 }
                 Ok(r) => return Ok(r.stdout),
-                Err(e) if error_kind(&e) == "TimeoutError" => last = Some(rt_err(label, 28, format!("timed out after ~{timeout}s"))),
+                Err(e) if error_kind(&e) == ErrorKind::Timeout => last = Some(rt_err(label, 28, format!("timed out after ~{timeout}s"))),
                 Err(e) => last = Some(rt_err(label, 0, format!("environment.exec failed: {e:#}"))),
             }
             if attempt < retries {
@@ -888,7 +888,7 @@ impl Desktop {
         }
         let t = (a.timeout_sec.filter(|t| *t != 0.0).unwrap_or(self.bash_timeout).ceil() as u64).max(1);
         match sh.sh(&format!("cd / && {cmd}"), false, Some(Duration::from_secs(t))).await {
-            Err(e) if error_kind(&e) == "TimeoutError" => {
+            Err(e) if error_kind(&e) == ErrorKind::Timeout => {
                 json!({"status": "timeout", "return_code": 124, "stdout": "", "stderr": format!("bash action timed out after {t}s: {e}")})
             }
             Err(e) => json!({"status": "error", "return_code": 1, "stdout": "", "stderr": format!("bash action failed to dispatch: {e}")}),

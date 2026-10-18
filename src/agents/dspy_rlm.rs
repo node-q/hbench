@@ -171,9 +171,7 @@ impl DspyRlm {
         match done["error"].as_str() {
             // The Python exception class becomes the trial's exception type.
             // Leaks the (short) class name once per failed run; kind_err wants &'static str.
-            Some(e) => {
-                Err(kind_err(Box::leak(done["kind"].as_str().unwrap_or("RuntimeError").to_string().into_boxed_str()), e.to_string()))
-            }
+            Some(e) => Err(kind_err(done["kind"].as_str().unwrap_or("RuntimeError"), e.to_string())),
             None => Ok(()),
         }
     }

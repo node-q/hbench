@@ -1108,9 +1108,9 @@ impl Agent for Acp {
         }
         installed_dir(cx).await?;
         // Non-RuntimeError install failures are wrapped; exec failures pass through classified.
-        self.install(cx)
-            .await
-            .map_err(|e| if crate::env::error_kind(&e) == "RuntimeError" { anyhow!("Agent install failed: {e:#}") } else { e })
+        self.install(cx).await.map_err(|e| {
+            if crate::env::error_kind(&e) == crate::env::ErrorKind::Runtime { anyhow!("Agent install failed: {e:#}") } else { e }
+        })
     }
 
     async fn run(&mut self, instruction: &str, cx: &AgentCtx<'_>, _ctx: &mut AgentContext, _resume: bool) -> Result<()> {
