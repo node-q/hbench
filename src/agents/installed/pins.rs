@@ -89,7 +89,8 @@ pub const LANGSMITH: Pin = Pin::npm("langsmith", "0.3.68");
 pub const MCODE: Pin = Pin::npm("@minimax-ai/code", "0.6.12");
 pub const MINI_SWE_AGENT: Pin = Pin::pypi("mini-swe-agent", "2.4.6");
 pub const NEMO_AGENT: Pin = Pin::pypi("nvidia-nat", "1.9.0");
-pub const OPENCLAW: Pin = Pin::npm("openclaw", "2026.10.4");
+/// The newest line that still runs on Node 22, which the install sets up; 2026.9 and later need Node 24.
+pub const OPENCLAW: Pin = Pin::npm("openclaw", "2026.8.35");
 pub const OPENCODE: Pin = Pin::npm("opencode-ai", "1.19.3");
 pub const OPENHANDS: Pin = Pin::pypi("openhands-ai", "1.11.0");
 /// openhands-sdk and openhands-tools are released together, under one version.
