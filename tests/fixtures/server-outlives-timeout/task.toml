@@ -1,0 +1,4 @@
+[agent]
+timeout_sec = 10.0
+[verifier]
+timeout_sec = 60.0

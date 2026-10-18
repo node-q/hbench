@@ -724,10 +724,10 @@ impl Trial {
             self.agent = Some(agent);
             r
         };
-        // Beyond upstream: whatever the agent leaves running (a timed-out run the dropped `docker compose exec`
-        // did not stop, or a daemon it started) could still write files and read /tests while the verifier
-        // runs. Stop everything it started, whether it timed out or exited.
-        match self.env().kill_processes_since(&before).await {
+        // Beyond upstream: a timed-out agent keeps running in the container after the dropped `docker compose
+        // exec`, still writing files and able to read /tests. Stop the agent's own processes, whether it timed
+        // out or exited, and leave what it deliberately detached (a server the task asks for) running.
+        match self.env().kill_agent_processes(&before).await {
             Ok(0) => {}
             Ok(n) => self.log.line(&format!("killed {n} process(es) the agent left running")),
             Err(e) if matches!(&r, Err(f) if !is_agent_run_error(error_kind(f))) => {
