@@ -33,19 +33,37 @@ fn threshold(key: &str) -> Option<f64> {
     Some(if t.contains('k') { n * 1000.0 } else { n })
 }
 
-/// `litellm.cost_per_token(model, prompt_tokens, completion_tokens, cache_creation_input_tokens,
-/// cache_read_input_tokens)` -> (prompt_cost, completion_cost). `prompt_tokens` includes cached tokens.
-pub fn cost_per_token(model: &str, prompt: i64, completion: i64, cache_creation: i64, cache_read: i64) -> Option<(f64, f64)> {
-    let m = model_cost(model)?;
-    let mut input = unit(m, "input_cost_per_token").unwrap_or(0.0);
-    let mut output = unit(m, "output_cost_per_token").unwrap_or(0.0);
-    if output == 0.0
+/// Per-token rates for one request.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct Rates {
+    pub input: f64,
+    pub output: f64,
+    pub cache_read: f64,
+    pub cache_write: f64,
+}
+
+impl Rates {
+    /// (prompt_cost, completion_cost); `prompt` includes cached and cache-write tokens.
+    pub fn cost(&self, prompt: i64, completion: i64, cache_creation: i64, cache_read: i64) -> (f64, f64) {
+        let text = (prompt - cache_read - cache_creation).max(0);
+        let prompt_cost = text as f64 * self.input + cache_read as f64 * self.cache_read + cache_creation as f64 * self.cache_write;
+        (prompt_cost, completion as f64 * self.output)
+    }
+}
+
+/// The rates of pricing entry `m` for a request of `prompt` tokens (tiers applied).
+pub fn rates(m: &Map<String, Value>, prompt: i64) -> Rates {
+    let mut r = Rates {
+        input: unit(m, "input_cost_per_token").unwrap_or(0.0),
+        output: unit(m, "output_cost_per_token").unwrap_or(0.0),
+        cache_read: unit(m, "cache_read_input_token_cost").unwrap_or(0.0),
+        cache_write: unit(m, "cache_creation_input_token_cost").unwrap_or(0.0),
+    };
+    if r.output == 0.0
         && let Some(img) = unit(m, "output_cost_per_image_token")
     {
-        output = img;
+        r.output = img;
     }
-    let mut creation = unit(m, "cache_creation_input_token_cost").unwrap_or(0.0);
-    let mut read = unit(m, "cache_read_input_token_cost").unwrap_or(0.0);
     // Tiered pricing: the highest threshold below prompt_tokens applies to every token type.
     let tier_suffixes = ["_flex", "_priority"];
     let mut keys: Vec<&String> =
@@ -55,16 +73,20 @@ pub fn cost_per_token(model: &str, prompt: i64, completion: i64, cache_creation:
         let (Some(t), Some(v)) = (threshold(k), unit(m, k)) else { continue };
         if prompt as f64 > t {
             let ts = k.split("_above_").nth(1).unwrap().split("_tokens").next().unwrap();
-            input = v;
-            output = unit(m, &format!("output_cost_per_token_above_{ts}_tokens")).unwrap_or(output);
-            creation = unit(m, &format!("cache_creation_input_token_cost_above_{ts}_tokens")).unwrap_or(creation);
-            read = unit(m, &format!("cache_read_input_token_cost_above_{ts}_tokens")).unwrap_or(read);
+            r.input = v;
+            r.output = unit(m, &format!("output_cost_per_token_above_{ts}_tokens")).unwrap_or(r.output);
+            r.cache_write = unit(m, &format!("cache_creation_input_token_cost_above_{ts}_tokens")).unwrap_or(r.cache_write);
+            r.cache_read = unit(m, &format!("cache_read_input_token_cost_above_{ts}_tokens")).unwrap_or(r.cache_read);
             break;
         }
     }
-    let text = (prompt - cache_read - cache_creation).max(0);
-    let prompt_cost = text as f64 * input + cache_read as f64 * read + cache_creation as f64 * creation;
-    Some((prompt_cost, completion as f64 * output))
+    r
+}
+
+/// `cost_per_token(model, prompt_tokens, completion_tokens, cache_creation_input_tokens,
+/// cache_read_input_tokens)` -> (prompt_cost, completion_cost). `prompt_tokens` includes cached tokens.
+pub fn cost_per_token(model: &str, prompt: i64, completion: i64, cache_creation: i64, cache_read: i64) -> Option<(f64, f64)> {
+    Some(rates(model_cost(model)?, prompt).cost(prompt, completion, cache_creation, cache_read))
 }
 
 /// Total cost for a (possibly provider-prefixed) model, or None if LiteLLM has no entry.

@@ -3,7 +3,7 @@
 //! to the model through `llm.rs`. Writes an ATIF `trajectory.json` (plus summarization subagent
 //! trajectories) to the agent logs dir; the pane log and asciinema recording land in /logs/agent.
 
-use super::llm::{Chat, LiteLlm, Llm, LlmConfig, LlmError, LlmResponse, content_text};
+use super::llm::{Chat, ChatClient, Llm, LlmConfig, LlmError, LlmResponse, content_text};
 use super::{Agent, AgentArgs, AgentContext, AgentCtx, ModelUsage};
 use crate::agents::installed::{APT_INSTALL_FN, pins};
 use crate::env::{ExecResult, quote};
@@ -26,8 +26,11 @@ const VERSION: &str = "2.0.0";
 mod tmux;
 pub use tmux::{Shell, Tmux};
 
+/// Re-asks after a truncated (output-length) response before giving up.
+const MAX_OUTPUT_LENGTH_RETRIES: usize = 3;
+
 /// Python `str.format` with named fields (`{{` / `}}` escapes).
-pub(crate) fn py_format(tpl: &str, vars: &[(&str, &str)]) -> String {
+pub(crate) fn fill_template(tpl: &str, vars: &[(&str, &str)]) -> String {
     let mut out = String::with_capacity(tpl.len());
     let mut it = tpl.chars().peekable();
     while let Some(c) = it.next() {
@@ -52,7 +55,7 @@ pub(crate) fn pyf(f: f64) -> String {
 }
 
 /// Python `repr()` of a str.
-pub(crate) fn pyrepr(s: &str) -> String {
+pub(crate) fn quote_repr(s: &str) -> String {
     let q = if s.contains('\'') && !s.contains('"') { '"' } else { '\'' };
     let mut out = String::from(q);
     for c in s.chars() {
@@ -215,9 +218,9 @@ pub mod json_parser {
             Err(e) => {
                 let mut msg = format!("Invalid JSON: {e}");
                 if content.chars().count() < 200 {
-                    msg += &format!(" | Content: {}", pyrepr(content));
+                    msg += &format!(" | Content: {}", quote_repr(content));
                 } else {
-                    msg += &format!(" | Content preview: {}...", pyrepr(&content.chars().take(100).collect::<String>()));
+                    msg += &format!(" | Content preview: {}...", quote_repr(&content.chars().take(100).collect::<String>()));
                 }
                 return fail(msg, &w, String::new(), String::new());
             }
@@ -859,7 +862,7 @@ impl Options {
         }
         let header = re(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$");
         if let Some(h) = o.session_id_headers.iter().find(|h| !header.is_match(h)) {
-            bail!("Invalid HTTP header name in session_id_headers: {}", pyrepr(h));
+            bail!("Invalid HTTP header name in session_id_headers: {}", quote_repr(h));
         }
         if o.pane_width <= 0 || o.pane_height <= 0 {
             bail!("pane_width and pane_height must be positive integers.");
@@ -915,7 +918,7 @@ impl Terminus2 {
             use_responses_api: opts.use_responses_api,
             llm_kwargs,
         };
-        let llm = LiteLlm::new(cfg, &|k: &str| args.get_env(k))?;
+        let llm = ChatClient::new(cfg, &|k: &str| args.get_env(k))?;
         Ok(Self::with_llm(args, opts, model, Box::new(llm)))
     }
 
@@ -1094,7 +1097,8 @@ impl Terminus2 {
         if let Some(skills) = self.build_skills_section(sh).await? {
             augmented += &skills;
         }
-        let initial_prompt = py_format(self.opts.parser.template(), &[("instruction", &augmented), ("terminal_state", &terminal_state)]);
+        let initial_prompt =
+            fill_template(self.opts.parser.template(), &[("instruction", &augmented), ("terminal_state", &terminal_state)]);
         self.steps.push(Step::new(1, "user", initial_prompt.clone()));
         ctx.n_input_tokens = Some(0);
         ctx.n_output_tokens = Some(0);
@@ -1247,7 +1251,7 @@ impl Terminus2 {
         prompt: &str,
         orig: &str,
     ) -> Result<(Vec<Command>, bool, String, String, String, LlmResponse)> {
-        let resp = self.query_llm(sh, prompt.to_string(), orig).await?;
+        let resp = self.query_llm(sh, prompt.to_string(), orig, 0).await?;
         let r = self.opts.parser.parse(&resp.content);
         let feedback = match (r.error.is_empty(), r.warning.is_empty()) {
             (false, false) => format!("ERROR: {}\nWARNINGS: {}", r.error, r.warning),
@@ -1265,7 +1269,7 @@ impl Terminus2 {
         for c in commands {
             if !t.send_keys(sh, vec![c.keystrokes.clone()], false, c.duration_sec, 180.0).await? {
                 let state = limit_output_length(&t.get_incremental_output(sh).await?, 10_000);
-                let msg = py_format(
+                let msg = fill_template(
                     TIMEOUT_TEMPLATE,
                     &[("timeout_sec", &pyf(c.duration_sec)), ("command", &c.keystrokes), ("terminal_state", &state)],
                 );
@@ -1275,21 +1279,13 @@ impl Terminus2 {
         Ok((false, limit_output_length(&t.get_incremental_output(sh).await?, 10_000)))
     }
 
-    /// Query the LLM, 3 attempts (no retry on context overflow).
-    fn query_llm<'a>(&'a mut self, sh: &'a dyn Shell, prompt: String, orig: &'a str) -> BoxFut<'a, Result<LlmResponse>> {
-        Box::pin(async move {
-            let mut attempt = 0;
-            loop {
-                attempt += 1;
-                match self.query_llm_once(sh, &prompt, orig).await {
-                    Err(e) if attempt < 3 && !matches!(e.downcast_ref::<LlmError>(), Some(LlmError::ContextLength(_))) => continue,
-                    r => return r,
-                }
-            }
-        })
+    /// Query the LLM (the client retries transient errors). Truncated output re-asks up to
+    /// `MAX_OUTPUT_LENGTH_RETRIES` times (`depth`), then fails with the output-length error.
+    fn query_llm<'a>(&'a mut self, sh: &'a dyn Shell, prompt: String, orig: &'a str, depth: usize) -> BoxFut<'a, Result<LlmResponse>> {
+        Box::pin(async move { self.query_llm_once(sh, &prompt, orig, depth).await })
     }
 
-    async fn query_llm_once(&mut self, sh: &dyn Shell, prompt: &str, orig: &str) -> Result<LlmResponse> {
+    async fn query_llm_once(&mut self, sh: &dyn Shell, prompt: &str, orig: &str, depth: usize) -> Result<LlmResponse> {
         let start = Instant::now();
         let err = match self.chat.chat(&*self.llm, prompt, &self.call_kwargs).await {
             Ok(r) => {
@@ -1340,12 +1336,15 @@ impl Terminus2 {
                     }
                 })
             }
-            LlmError::OutputLength { truncated, .. } => {
+            LlmError::OutputLength { msg, truncated } => {
                 if self.opts.parser == ParserKind::Xml
                     && let (Some(salvaged), _) = xml_parser::salvage_truncated_response(&truncated)
                 {
                     // Wrap the salvaged string in a response.
                     return Ok(LlmResponse { content: salvaged, ..Default::default() });
+                }
+                if depth >= MAX_OUTPUT_LENGTH_RETRIES {
+                    return Err(LlmError::OutputLength { msg, truncated }.into());
                 }
                 let warnings = self.opts.parser.parse(&truncated).warning;
                 let limit = match self.llm.output_limit() {
@@ -1361,7 +1360,7 @@ impl Terminus2 {
                 self.chat.messages.push(json!({"role": "user", "content": prompt}));
                 self.chat.messages.push(json!({"role": "assistant", "content": truncated}));
                 self.chat.reset_response_chain();
-                self.query_llm(sh, error_msg, orig).await
+                self.query_llm(sh, error_msg, orig, depth + 1).await
             }
             e => Err(e.into()),
         }
@@ -1808,19 +1807,19 @@ mod tests {
 
     #[test]
     fn prompt_rendering_and_helpers() {
-        let p = py_format(JSON_TEMPLATE, &[("instruction", "Do {x}"), ("terminal_state", "$ ")]);
+        let p = fill_template(JSON_TEMPLATE, &[("instruction", "Do {x}"), ("terminal_state", "$ ")]);
         assert!(p.contains("{\n  \"analysis\": \"Analyze") && p.contains("{\"keystrokes\": \"\", \"duration\": 10.0}"));
         assert!(
             p.ends_with("Task Description:\nDo {x}\n\nCurrent terminal state:\n$ \n")
                 || p.ends_with("Task Description:\nDo {x}\n\nCurrent terminal state:\n$ ")
         );
-        let p = py_format(XML_TEMPLATE, &[("instruction", "T"), ("terminal_state", "S")]);
+        let p = fill_template(XML_TEMPLATE, &[("instruction", "T"), ("terminal_state", "S")]);
         assert!(p.contains("<keystrokes duration=\"0.1\">ls -la") && p.contains("Task Description:\nT\n"));
-        let t = py_format(TIMEOUT_TEMPLATE, &[("timeout_sec", &pyf(5.0)), ("command", "sleep 99\n"), ("terminal_state", "S")]);
+        let t = fill_template(TIMEOUT_TEMPLATE, &[("timeout_sec", &pyf(5.0)), ("command", "sleep 99\n"), ("terminal_state", "S")]);
         assert!(t.starts_with("Previous command:\nsleep 99\n") && t.contains("timed out after 5.0 seconds") && t.ends_with("\n\nS ")); // template ends with a space
         assert_eq!((pyf(1.0), pyf(0.1), pyf(60.0)), ("1.0".to_string(), "0.1".to_string(), "60.0".to_string()));
-        assert_eq!(pyrepr("it's"), "\"it's\"");
-        assert_eq!(pyrepr("a\nb'\""), "'a\\nb\\'\"'");
+        assert_eq!(quote_repr("it's"), "\"it's\"");
+        assert_eq!(quote_repr("a\nb'\""), "'a\\nb\\'\"'");
         assert_eq!(last_chars("héllo", 3), "llo");
         let long = "é".repeat(6000);
         let l = limit_output_length(&long, 10_000);
@@ -2081,6 +2080,14 @@ mod tests {
         let p = llm.prompts();
         assert!(p[1].0.starts_with("ERROR!! NONE of the actions you just requested were performed because you exceeded 4096 tokens."));
         assert_eq!(p[1].1, 2); // truncated exchange was appended to history
+
+        // Re-asks are bounded: the output-length error surfaces after MAX_OUTPUT_LENGTH_RETRIES.
+        let cut = || Err(LlmError::OutputLength { msg: "cut".into(), truncated: "x".into() });
+        let llm = MockLlm::new((0..=MAX_OUTPUT_LENGTH_RETRIES + 1).map(|_| cut()).collect());
+        let (mut t, _) = agent(json!({}), &llm);
+        let e = t.run_with("task", &MockShell::default(), &mut AgentContext::default()).await.unwrap_err();
+        assert_eq!(crate::env::error_kind(&e), "OutputLengthExceededError");
+        assert_eq!(llm.prompts().len(), MAX_OUTPUT_LENGTH_RETRIES + 1);
 
         let llm = MockLlm::new(vec![
             Err(LlmError::OutputLength { msg: "cut".into(), truncated: format!("{XML_OK}<response>trunc") }),

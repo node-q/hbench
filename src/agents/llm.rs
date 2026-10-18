@@ -1,18 +1,20 @@
-//! Async LLM chat client (a LiteLLM-style wrapper) used by host-side agents.
+//! Async multi-provider LLM chat client used by host-side agents.
 //!
 //! `anthropic/` models go to the Anthropic Messages API; everything else to an OpenAI-compatible
 //! chat-completions endpoint (or the OpenAI Responses API when asked). Keys and base URLs come from
-//! `model_connection`. Failed calls are retried, context overflow
+//! `model_connection`. Transient failures are retried with exponential backoff, context overflow
 //! is a distinct error, and usage/cost are reported like LiteLLM's `ModelResponse.usage`.
 //!
 //! HTTP goes through the host `curl` (no HTTP client crate in Cargo.toml), like
 //! `registry.rs`. Secrets travel on curl's stdin config, never argv.
 
 use super::model_connection::{self, Spec};
+use super::pricing::{self, Rates};
 use crate::env::{kind_err, tail};
 use anyhow::{Result, anyhow, bail};
 use serde_json::{Map, Value, json};
 use std::process::Stdio;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 
@@ -44,8 +46,9 @@ pub enum LlmError {
     ContextLength(String),
     /// The response hit the output token limit (finish_reason == "length").
     OutputLength { msg: String, truncated: String },
-    /// Anything else; `kind` is the LiteLLM exception class name.
-    Api { kind: &'static str, msg: String },
+    /// Anything else; `kind` is the LiteLLM exception class name. `retry_after`: `Some` for
+    /// transient failures (network, 408/409/429/5xx), holding the server's Retry-After (zero if none).
+    Api { kind: &'static str, msg: String, retry_after: Option<Duration> },
 }
 
 impl std::fmt::Display for LlmError {
@@ -65,9 +68,12 @@ impl LlmError {
             LlmError::Api { kind, .. } => kind,
         }
     }
-    /// Everything but these is retried.
-    fn retryable(&self) -> bool {
-        !matches!(self, LlmError::ContextLength(_) | LlmError::OutputLength { .. } | LlmError::Api { kind: "AuthenticationError", .. })
+    /// `Some(server hint)` if the request may be retried.
+    fn retry_after(&self) -> Option<Duration> {
+        match self {
+            LlmError::Api { retry_after, .. } => *retry_after,
+            _ => None,
+        }
     }
     /// For the trial result: a `KindError` carrying the exception type name.
     pub fn into_anyhow(self) -> anyhow::Error {
@@ -75,8 +81,41 @@ impl LlmError {
     }
 }
 
-fn api_err(kind: &'static str, msg: impl Into<String>) -> LlmError {
-    LlmError::Api { kind, msg: msg.into() }
+/// A non-retryable API error.
+pub fn api_err(kind: &'static str, msg: impl Into<String>) -> LlmError {
+    LlmError::Api { kind, msg: msg.into(), retry_after: None }
+}
+
+/// A transient (retryable) error; `retry_after` is the server's hint, zero if none.
+fn transient_err(kind: &'static str, msg: impl Into<String>, retry_after: Duration) -> LlmError {
+    LlmError::Api { kind, msg: msg.into(), retry_after: Some(retry_after) }
+}
+
+/// Delay before retry number `attempt` (1-based): `base * 2^(attempt-1)` capped at `cap` seconds,
+/// minus up to 25% jitter; a server Retry-After hint (capped at 5 min) wins when given.
+pub fn backoff(attempt: i32, base: f64, cap: f64, hint: Duration) -> Duration {
+    if !hint.is_zero() {
+        return hint.min(Duration::from_secs(300));
+    }
+    let jitter = (uuid::Uuid::new_v4().as_u128() % 1000) as f64 / 1000.0;
+    Duration::from_secs_f64((base * 2f64.powi(attempt - 1)).min(cap) * (1.0 - 0.25 * jitter))
+}
+
+/// Attempts per request, including the first (waits ~2, 4, 8, 16, 32s in between).
+const MAX_ATTEMPTS: i32 = 6;
+
+/// Run `f` until it succeeds, fails non-transiently, or `MAX_ATTEMPTS` is reached.
+async fn with_retries<T, Fut: std::future::Future<Output = Result<T, LlmError>>>(mut f: impl FnMut() -> Fut) -> Result<T, LlmError> {
+    let mut attempt = 0;
+    loop {
+        attempt += 1;
+        match f().await {
+            Err(e) if attempt < MAX_ATTEMPTS && e.retry_after().is_some() => {
+                tokio::time::sleep(backoff(attempt, 2.0, 60.0, e.retry_after().unwrap_or_default())).await
+            }
+            r => return r,
+        }
+    }
 }
 
 /// LiteLLM model-map fields used here (limits + per-token pricing).
@@ -91,10 +130,12 @@ pub struct ModelInfo {
     pub cache_write_cost: f64,
     /// Claude models where LiteLLM maps reasoning_effort to `thinking: {type: adaptive}`.
     pub adaptive_thinking: bool,
+    /// The pricing-table entry (tiered rates); `None` once `model_info` overrides a cost.
+    pub pricing: Option<&'static Map<String, Value>>,
 }
 
 /// LiteLLM's `model_cost` entry (from the pinned LiteLLM version's table).
-/// Unknown models get no pricing (cost 0/None) and the 1M fallback context limit.
+/// Unknown models get no pricing (cost 0/None) and the `DEFAULT_CONTEXT_LIMIT` fallback.
 fn builtin_info(name: &str) -> Option<ModelInfo> {
     let m = crate::agents::pricing::model_cost(name)?;
     let f = |k: &str| m.get(k).and_then(|v| v.as_f64().or_else(|| v.as_str()?.parse().ok()));
@@ -106,6 +147,7 @@ fn builtin_info(name: &str) -> Option<ModelInfo> {
         cache_read_cost: f("cache_read_input_token_cost").unwrap_or(0.0),
         cache_write_cost: f("cache_creation_input_token_cost").unwrap_or(0.0),
         adaptive_thinking: m.get("supports_adaptive_thinking").and_then(|v| v.as_bool()).unwrap_or(false),
+        pricing: Some(m),
     })
 }
 
@@ -137,6 +179,7 @@ fn merge_model_info(mut info: ModelInfo, v: &Value) -> ModelInfo {
     ] {
         if let Some(x) = i(k) {
             *f = x;
+            info.pricing = None;
         }
     }
     info
@@ -301,7 +344,7 @@ pub trait Llm: Send + Sync {
     fn count_tokens(&self, messages: &[Value]) -> i64 {
         approx_tokens(messages)
     }
-    /// One chat-completions request over raw (possibly multimodal) messages, no retries:
+    /// One chat-completions request over raw (possibly multimodal) messages (transient errors retried):
     /// computer-1's `Computer1Chat` path. Default: `call` with the last message as the prompt.
     async fn complete(&self, messages: Vec<Value>, kw: &Map<String, Value>) -> Result<LlmResponse, LlmError> {
         let (last, history) = messages.split_last().map(|(l, h)| (content_text(&l["content"]), h.to_vec())).unwrap_or_default();
@@ -426,8 +469,9 @@ pub fn is_context_length_error(text: &str) -> bool {
     .any(|p| t.contains(p))
 }
 
-/// LiteLLM's exception class for an HTTP error status.
-pub fn classify_http(status: u16, body: &str) -> LlmError {
+/// LiteLLM's exception class for an HTTP error status. Transient statuses (408/409/429/5xx)
+/// are retryable and carry the server's Retry-After (`retry_after`, zero if none).
+pub fn classify_http(status: u16, body: &str, retry_after: Duration) -> LlmError {
     let msg = format!("HTTP {status}: {}", tail(body, 4000));
     if matches!(status, 400 | 413) && is_context_length_error(body) {
         return LlmError::ContextLength(msg);
@@ -444,7 +488,7 @@ pub fn classify_http(status: u16, body: &str) -> LlmError {
         s if s >= 500 => "InternalServerError",
         _ => "APIError",
     };
-    api_err(kind, msg)
+    if matches!(status, 408 | 409 | 429) || status >= 500 { transient_err(kind, msg, retry_after) } else { api_err(kind, msg) }
 }
 
 /// One HTTP request, provider-specific.
@@ -454,6 +498,9 @@ pub struct Request {
     pub body: Value,
     pub timeout: Duration,
 }
+
+/// Context window assumed for models with no known limit.
+const DEFAULT_CONTEXT_LIMIT: i64 = 128_000;
 
 /// LiteLLM's default request timeout.
 const DEFAULT_TIMEOUT_SECS: f64 = 6000.0;
@@ -565,11 +612,21 @@ fn to_anthropic_messages(messages: &[Value]) -> (Vec<Value>, Vec<Value>) {
 
 fn cost(info: Option<&ModelInfo>, uncached_in: i64, cache_read: i64, cache_write: i64, output: i64) -> f64 {
     let Some(i) = info else { return 0.0 };
-    let or_in = |c: f64| if c > 0.0 { c } else { i.input_cost };
-    uncached_in as f64 * i.input_cost
-        + cache_read as f64 * or_in(i.cache_read_cost)
-        + cache_write as f64 * or_in(i.cache_write_cost)
-        + output as f64 * i.output_cost
+    let prompt = uncached_in + cache_read + cache_write;
+    let mut r = i.pricing.map(|m| pricing::rates(m, prompt)).unwrap_or(Rates {
+        input: i.input_cost,
+        output: i.output_cost,
+        cache_read: i.cache_read_cost,
+        cache_write: i.cache_write_cost,
+    });
+    // Unpriced cache tokens bill like input.
+    for c in [&mut r.cache_read, &mut r.cache_write] {
+        if *c <= 0.0 {
+            *c = r.input;
+        }
+    }
+    let (p, c) = r.cost(prompt, output, cache_write, cache_read);
+    p + c
 }
 
 fn n(v: &Value) -> i64 {
@@ -596,8 +653,14 @@ pub fn parse_chat(v: &Value, info: Option<&ModelInfo>, model: &str, rollout: boo
     let u = &v["usage"];
     let prompt = n(&u["prompt_tokens"]);
     let completion = n(&u["completion_tokens"]);
-    let cached = u["prompt_tokens_details"]["cached_tokens"].as_i64().or(u["prompt_cache_hit_tokens"].as_i64()).unwrap_or(0);
-    let cost_usd = u["cost"].as_f64().filter(|c| *c > 0.0).unwrap_or_else(|| cost(info, prompt - cached, cached, 0, completion));
+    let d = &u["prompt_tokens_details"];
+    let cached = d["cached_tokens"].as_i64().or(u["prompt_cache_hit_tokens"].as_i64()).unwrap_or(0);
+    // Cache writes, where reported (OpenRouter-style details, or Anthropic-style top-level).
+    let written = d["cache_write_tokens"].as_i64().or(u["cache_creation_input_tokens"].as_i64()).unwrap_or(0);
+    let cost_usd = u["cost"]
+        .as_f64()
+        .filter(|c| *c > 0.0)
+        .unwrap_or_else(|| cost(info, (prompt - cached - written).max(0), cached, written, completion));
     let mut r = LlmResponse {
         content,
         reasoning_content: reasoning,
@@ -660,8 +723,8 @@ pub fn parse_responses(v: &Value, info: Option<&ModelInfo>, model: &str) -> Resu
         });
     }
     let usage = v.get("usage").filter(|u| !u.is_null()).map(|u| {
-        let (i, o) = (n(&u["input_tokens"]), n(&u["output_tokens"]));
-        Usage { prompt_tokens: i, completion_tokens: o, cache_tokens: 0, cost_usd: cost(info, i, 0, 0, o) }
+        let (i, o, c) = (n(&u["input_tokens"]), n(&u["output_tokens"]), n(&u["input_tokens_details"]["cached_tokens"]));
+        Usage { prompt_tokens: i, completion_tokens: o, cache_tokens: c, cost_usd: cost(info, (i - c).max(0), c, 0, o) }
     });
     Ok(LlmResponse {
         content,
@@ -672,15 +735,15 @@ pub fn parse_responses(v: &Value, info: Option<&ModelInfo>, model: &str) -> Resu
     })
 }
 
-/// The LiteLLM-compatible backend.
-pub struct LiteLlm {
+/// The HTTP chat client: one provider endpoint plus model limits and pricing.
+pub struct ChatClient {
     cfg: LlmConfig,
     ep: Endpoint,
     info: Option<ModelInfo>,
 }
 
-impl LiteLlm {
-    pub fn new(cfg: LlmConfig, get: &dyn Fn(&str) -> Option<String>) -> Result<LiteLlm> {
+impl ChatClient {
+    pub fn new(cfg: LlmConfig, get: &dyn Fn(&str) -> Option<String>) -> Result<ChatClient> {
         if cfg.model_name.to_lowercase().contains("hosted_vllm") {
             validate_hosted_vllm(&cfg.model_name, cfg.model_info.as_ref())?;
         }
@@ -689,7 +752,16 @@ impl LiteLlm {
             info = Some(merge_model_info(info.unwrap_or_default(), v));
         }
         let ep = resolve_endpoint(&cfg.model_name, cfg.api_base.as_deref(), cfg.use_responses_api, get)?;
-        Ok(LiteLlm { cfg, ep, info })
+        if info.and_then(|i| i.max_input_tokens).is_none() {
+            static WARNED: AtomicBool = AtomicBool::new(false);
+            if !WARNED.swap(true, Ordering::Relaxed) {
+                eprintln!(
+                    "warning: unknown context window for model '{}'; assuming {DEFAULT_CONTEXT_LIMIT} tokens (set model_info.max_input_tokens to override)",
+                    cfg.model_name
+                );
+            }
+        }
+        Ok(ChatClient { cfg, ep, info })
     }
 
     /// LiteLLM `completion_kwargs` for one call (before provider translation).
@@ -829,12 +901,13 @@ impl LiteLlm {
         let mut p = self.params(add_anthropic_caching(messages, model), kw);
         let v = match send(&self.ep.url, &self.request(p.clone())).await {
             // Providers that reject return_token_ids / session_id in extra_body: retry without them.
-            Err(LlmError::Api { kind: "BadRequestError", msg })
-                if msg.contains("Unrecognized request argument") && p.contains_key("extra_body") =>
+            Err(e @ LlmError::Api { kind: "BadRequestError", .. })
+                if e.to_string().contains("Unrecognized request argument") && p.contains_key("extra_body") =>
             {
+                let msg = e.to_string();
                 let rejected: Vec<&str> = ["return_token_ids", "session_id"].into_iter().filter(|k| msg.contains(k)).collect();
                 if rejected.is_empty() {
-                    return Err(LlmError::Api { kind: "BadRequestError", msg });
+                    return Err(e);
                 }
                 let eb = obj(&mut p, "extra_body");
                 for k in rejected {
@@ -855,8 +928,8 @@ impl LiteLlm {
 }
 
 #[async_trait::async_trait]
-impl Llm for LiteLlm {
-    /// 3 attempts with exponential backoff (4-15s), except on context/output/auth errors.
+impl Llm for ChatClient {
+    /// Transient errors are retried (`with_retries`); context/output/auth/other 4xx are not.
     async fn call(
         &self,
         prompt: &str,
@@ -864,17 +937,10 @@ impl Llm for LiteLlm {
         kw: &Map<String, Value>,
         previous_response_id: Option<&str>,
     ) -> Result<LlmResponse, LlmError> {
-        let mut attempt = 0;
-        loop {
-            attempt += 1;
-            match self.call_once(prompt, history, kw, previous_response_id).await {
-                Err(e) if e.retryable() && attempt < 3 => tokio::time::sleep(Duration::from_secs(4)).await,
-                r => return r,
-            }
-        }
+        with_retries(|| self.call_once(prompt, history, kw, previous_response_id)).await
     }
     fn context_limit(&self) -> i64 {
-        self.info.and_then(|i| i.max_input_tokens).unwrap_or(1_000_000)
+        self.info.and_then(|i| i.max_input_tokens).unwrap_or(DEFAULT_CONTEXT_LIMIT)
     }
     fn count_tokens(&self, messages: &[Value]) -> i64 {
         token_counter(&self.cfg.model_name, messages)
@@ -889,7 +955,8 @@ impl Llm for LiteLlm {
         if m.contains("fable") || m.contains("mythos") {
             p.remove("thinking");
         }
-        let v = send(&self.ep.url, &self.request(p)).await?;
+        let req = self.request(p);
+        let v = with_retries(|| send(&self.ep.url, &req)).await?;
         match self.ep.api {
             Api::Anthropic => parse_anthropic(&v, self.info.as_ref(), &self.cfg.model_name),
             _ => parse_chat(&v, self.info.as_ref(), &self.cfg.model_name, false),
@@ -904,24 +971,57 @@ fn cq(s: &str) -> String {
 
 /// POST JSON; non-2xx statuses become classified errors.
 pub async fn send(url: &str, req: &Request) -> Result<Value, LlmError> {
-    let (status, body) = send_raw(url, req).await?;
+    let (status, body, retry_after) = send_raw(url, req).await?;
     if !(200..300).contains(&status) {
-        return Err(classify_http(status, &body));
+        return Err(classify_http(status, &body, retry_after.unwrap_or_default()));
     }
     serde_json::from_str(&body).map_err(|e| api_err("APIError", format!("invalid JSON from {url}: {e}: {}", tail(&body, 1000))))
 }
 
-/// POST JSON; returns (HTTP status, body). Only transport failures are errors
-/// (kind `Timeout` or `APIConnectionError`).
-pub async fn send_raw(url: &str, req: &Request) -> Result<(u16, String), LlmError> {
-    let path = std::env::temp_dir().join(format!("hbench-llm-{}.json", uuid::Uuid::new_v4().simple()));
-    std::fs::write(&path, serde_json::to_vec(&req.body).unwrap_or_default())
+/// Removes the file when dropped, so a cancelled request leaves no prompt behind.
+struct TempFile(std::path::PathBuf);
+impl Drop for TempFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+/// The last `retry-after-ms` / `retry-after` (seconds or HTTP date) in a curl header dump.
+fn parse_retry_after(headers: &str) -> Option<Duration> {
+    let (mut ms, mut secs) = (None, None);
+    for line in headers.lines() {
+        let Some((k, v)) = line.split_once(':') else { continue };
+        let v = v.trim();
+        match k.trim().to_ascii_lowercase().as_str() {
+            "retry-after-ms" => ms = v.parse::<f64>().ok().map(|x| x / 1000.0),
+            "retry-after" => {
+                secs = v.parse::<f64>().ok().or_else(|| {
+                    let t = chrono::DateTime::parse_from_rfc2822(v).ok()?;
+                    Some((t.timestamp_millis() - chrono::Utc::now().timestamp_millis()) as f64 / 1000.0)
+                })
+            }
+            _ => {}
+        }
+    }
+    ms.or(secs).filter(|d| d.is_finite() && *d > 0.0).map(Duration::from_secs_f64)
+}
+
+/// POST JSON; returns (HTTP status, body, Retry-After). Only transport failures are errors
+/// (kind `Timeout` or `APIConnectionError`, both retryable).
+pub async fn send_raw(url: &str, req: &Request) -> Result<(u16, String, Option<Duration>), LlmError> {
+    let id = uuid::Uuid::new_v4().simple();
+    let body = TempFile(std::env::temp_dir().join(format!("hbench-llm-{id}.json")));
+    let hdrs = TempFile(std::env::temp_dir().join(format!("hbench-llm-{id}.headers")));
+    std::fs::write(&body.0, serde_json::to_vec(&req.body).unwrap_or_default())
         .map_err(|e| api_err("APIConnectionError", format!("writing request body: {e}")))?;
+    // No low-speed abort: non-streaming responses are legitimately silent for many minutes.
+    // TCP keepalive catches dead peers instead.
     let mut cfg = format!(
-        "url = {}\nrequest = \"POST\"\nsilent\nshow-error\nmax-time = {}\nwrite-out = \"\\n%{{http_code}}\"\ndata-binary = {}\nheader = \"content-type: application/json\"\n",
+        "url = {}\nrequest = \"POST\"\nsilent\nshow-error\nconnect-timeout = 30\nkeepalive-time = 60\nmax-time = {}\nwrite-out = \"\\n%{{http_code}}\"\ndump-header = {}\ndata-binary = {}\nheader = \"content-type: application/json\"\n",
         cq(url),
         req.timeout.as_secs_f64(),
-        cq(&format!("@{}", path.display()))
+        cq(&hdrs.0.display().to_string()),
+        cq(&format!("@{}", body.0.display()))
     );
     for (k, v) in &req.headers {
         cfg += &format!("header = {}\n", cq(&format!("{k}: {v}")));
@@ -939,16 +1039,16 @@ pub async fn send_raw(url: &str, req: &Request) -> Result<(u16, String), LlmErro
         drop(si);
         child.wait_with_output().await
     }
-    .await;
-    let _ = std::fs::remove_file(&path);
-    let out = out.map_err(|e| api_err("APIConnectionError", format!("running curl: {e}")))?;
+    .await
+    .map_err(|e| api_err("APIConnectionError", format!("running curl: {e}")))?;
     let stdout = String::from_utf8_lossy(&out.stdout);
     if !out.status.success() {
         let kind = if out.status.code() == Some(28) { "Timeout" } else { "APIConnectionError" };
-        return Err(api_err(kind, format!("{url}: {}", String::from_utf8_lossy(&out.stderr).trim())));
+        return Err(transient_err(kind, format!("{url}: {}", String::from_utf8_lossy(&out.stderr).trim()), Duration::ZERO));
     }
+    let retry_after = std::fs::read_to_string(&hdrs.0).ok().and_then(|h| parse_retry_after(&h));
     let (body, status) = stdout.rsplit_once('\n').unwrap_or(("", &stdout));
-    Ok((status.trim().parse().unwrap_or(0), body.to_string()))
+    Ok((status.trim().parse().unwrap_or(0), body.to_string(), retry_after))
 }
 
 /// A chat: message history plus cumulative usage.
@@ -1032,8 +1132,8 @@ mod tests {
         move |k: &str| vars.iter().find(|(n, _)| *n == k).map(|(_, v)| v.to_string())
     }
 
-    fn llm(cfg: LlmConfig, vars: &'static [(&'static str, &'static str)]) -> LiteLlm {
-        LiteLlm::new(cfg, &env(vars)).unwrap()
+    fn llm(cfg: LlmConfig, vars: &'static [(&'static str, &'static str)]) -> ChatClient {
+        ChatClient::new(cfg, &env(vars)).unwrap()
     }
 
     #[test]
@@ -1221,6 +1321,21 @@ mod tests {
         let v = json!({"id": "resp_9", "status": "completed", "output": [{"type": "reasoning"}, {"type": "message", "content": [{"type": "output_text", "text": "a"}, {"type": "output_text", "text": "b"}]}], "usage": {"input_tokens": 3, "output_tokens": 4}});
         let r = parse_responses(&v, None, "m").unwrap();
         assert_eq!((r.content.as_str(), r.response_id.as_deref(), r.usage.unwrap().prompt_tokens), ("ab", Some("resp_9"), 3));
+        let v = json!({"output": [], "usage": {"input_tokens": 1000, "output_tokens": 10, "input_tokens_details": {"cached_tokens": 400}}});
+        let u = parse_responses(&v, lookup_model_info("openai/gpt-4o").as_ref(), "m").unwrap().usage.unwrap();
+        assert_eq!((u.prompt_tokens, u.cache_tokens), (1000, 400));
+        assert!((u.cost_usd - (600.0 * 2.5e-6 + 400.0 * 1.25e-6 + 10.0 * 1e-5)).abs() < 1e-12);
+        // Cache writes reported through a chat-completions gateway bill at the write rate.
+        let v = json!({"choices": [{"finish_reason": "stop", "message": {"content": "x"}}],
+            "usage": {"prompt_tokens": 3100, "completion_tokens": 50, "prompt_tokens_details": {"cached_tokens": 2000, "cache_write_tokens": 1000}}});
+        let u = parse_chat(&v, lookup_model_info("anthropic/claude-sonnet-4-5").as_ref(), "m", false).unwrap().usage.unwrap();
+        assert!((u.cost_usd - (100.0 * 3e-6 + 1000.0 * 3.75e-6 + 2000.0 * 3e-7 + 50.0 * 1.5e-5)).abs() < 1e-12);
+        // Tiered rates above 200k prompt tokens; model_info cost overrides price flat.
+        let info = lookup_model_info("gemini/gemini-2.5-pro");
+        assert!((cost(info.as_ref(), 300_000, 0, 0, 1000) - (300_000.0 * 2.5e-6 + 1000.0 * 1.5e-5)).abs() < 1e-9);
+        assert!((cost(info.as_ref(), 100_000, 0, 0, 0) - 100_000.0 * 1.25e-6).abs() < 1e-9);
+        let flat = merge_model_info(info.unwrap(), &json!({"input_cost_per_token": 1e-6}));
+        assert!((cost(Some(&flat), 300_000, 0, 0, 0) - 0.3).abs() < 1e-9);
     }
 
     #[test]
@@ -1228,18 +1343,44 @@ mod tests {
         assert!(matches!(
             classify_http(
                 400,
-                r#"{"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long: 210000 tokens > 200000 maximum"}}"#
+                r#"{"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long: 210000 tokens > 200000 maximum"}}"#,
+                Duration::ZERO
             ),
             LlmError::ContextLength(_)
         ));
-        assert!(matches!(classify_http(400, r#"{"error":{"code":"context_length_exceeded"}}"#), LlmError::ContextLength(_)));
-        assert!(matches!(classify_http(400, "This model's maximum context length is 8192 tokens"), LlmError::ContextLength(_)));
-        assert_eq!(classify_http(429, "slow down").kind(), "RateLimitError");
-        assert_eq!(classify_http(529, "overloaded").kind(), "InternalServerError");
-        let auth = classify_http(401, "invalid x-api-key");
+        assert!(matches!(
+            classify_http(400, r#"{"error":{"code":"context_length_exceeded"}}"#, Duration::ZERO),
+            LlmError::ContextLength(_)
+        ));
+        assert!(matches!(
+            classify_http(400, "This model's maximum context length is 8192 tokens", Duration::ZERO),
+            LlmError::ContextLength(_)
+        ));
+        assert_eq!(classify_http(429, "slow down", Duration::ZERO).kind(), "RateLimitError");
+        assert_eq!(classify_http(529, "overloaded", Duration::ZERO).kind(), "InternalServerError");
+        let auth = classify_http(401, "invalid x-api-key", Duration::ZERO);
         assert_eq!(auth.kind(), "AuthenticationError");
-        assert!(!auth.retryable() && classify_http(500, "").retryable() && !LlmError::ContextLength(String::new()).retryable());
-        assert_eq!(crate::env::error_kind(&classify_http(429, "").into_anyhow()), "RateLimitError");
+        assert!(auth.retry_after().is_none() && LlmError::ContextLength(String::new()).retry_after().is_none());
+        for s in [408, 409, 429, 500, 503, 529] {
+            assert_eq!(classify_http(s, "", Duration::ZERO).retry_after(), Some(Duration::ZERO), "{s}");
+        }
+        for s in [400, 403, 404, 422] {
+            assert!(classify_http(s, "", Duration::ZERO).retry_after().is_none(), "{s}");
+        }
+        assert_eq!(classify_http(429, "", Duration::from_secs(7)).retry_after(), Some(Duration::from_secs(7)));
+        assert_eq!(
+            parse_retry_after("HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 429 Too Many\r\nRetry-After: 3\r\n"),
+            Some(Duration::from_secs(3))
+        );
+        assert_eq!(parse_retry_after("retry-after: 3\r\nretry-after-ms: 250\r\n"), Some(Duration::from_millis(250)));
+        assert_eq!(parse_retry_after("retry-after: soon\r\n"), None);
+        let later = (chrono::Utc::now() + chrono::Duration::seconds(30)).to_rfc2822();
+        assert!(parse_retry_after(&format!("Retry-After: {later}\n")).is_some_and(|d| d > Duration::from_secs(20)));
+        assert_eq!(backoff(1, 2.0, 60.0, Duration::from_secs(9)), Duration::from_secs(9));
+        let d = backoff(3, 2.0, 60.0, Duration::ZERO);
+        assert!(d > Duration::from_secs(5) && d <= Duration::from_secs(8));
+        assert!(backoff(20, 2.0, 60.0, Duration::ZERO) <= Duration::from_secs(60));
+        assert_eq!(crate::env::error_kind(&classify_http(429, "", Duration::ZERO).into_anyhow()), "RateLimitError");
     }
 
     #[test]
@@ -1247,7 +1388,7 @@ mod tests {
         assert_eq!(lookup_model_info("openrouter/anthropic/claude-haiku-4-5").unwrap().max_input_tokens, Some(200_000));
         assert!(lookup_model_info("openai/unknown").is_none());
         let l = llm(LlmConfig { model_name: "openai/unknown".into(), ..Default::default() }, &[]);
-        assert_eq!((l.context_limit(), l.output_limit()), (1_000_000, None));
+        assert_eq!((l.context_limit(), l.output_limit()), (DEFAULT_CONTEXT_LIMIT, None));
         let info =
             json!({"max_input_tokens": 32768, "max_output_tokens": "4096", "input_cost_per_token": 1e-7, "output_cost_per_token": 2e-7});
         let l = llm(
@@ -1261,13 +1402,13 @@ mod tests {
         );
         assert_eq!((l.context_limit(), l.output_limit()), (32768, Some(4096)));
         assert!(
-            LiteLlm::new(
+            ChatClient::new(
                 LlmConfig { model_name: "hosted_vllm/llama".into(), api_base: Some("http://h".into()), ..Default::default() },
                 &env(&[])
             )
             .is_err()
         );
-        assert!(LiteLlm::new(LlmConfig { model_name: "hosted_vllm/a/b".into(), ..Default::default() }, &env(&[])).is_err());
+        assert!(ChatClient::new(LlmConfig { model_name: "hosted_vllm/a/b".into(), ..Default::default() }, &env(&[])).is_err());
     }
 
     /// The curl transport end to end: config escaping, auth header, status classification, parsing.
@@ -1280,7 +1421,10 @@ mod tests {
         let port = server.server_addr().to_ip().unwrap().port();
         let handle = std::thread::spawn(move || {
             let rq = server.recv().unwrap();
-            rq.respond(tiny_http::Response::from_string(r#"{"error": "slow down"}"#).with_status_code(429)).unwrap();
+            rq.respond(tiny_http::Response::from_string("bad key").with_status_code(401)).unwrap();
+            let rq = server.recv().unwrap();
+            let ra = tiny_http::Header::from_bytes("retry-after-ms", "10").unwrap();
+            rq.respond(tiny_http::Response::from_string(r#"{"error": "slow down"}"#).with_status_code(429).with_header(ra)).unwrap();
             let mut rq = server.recv().unwrap();
             let path = rq.url().to_string();
             let mut body = String::new();
@@ -1294,9 +1438,10 @@ mod tests {
         let cfg =
             LlmConfig { model_name: "openai/gpt-4o".into(), api_base: Some(format!("http://127.0.0.1:{port}/v1")), ..Default::default() };
         let l = llm(cfg, &[("OPENAI_API_KEY", "sk-\"q\\")]);
-        let e = l.call_once("x", &[], &Map::new(), None).await.unwrap_err();
-        assert_eq!(e.kind(), "RateLimitError");
-        let r = l.call_once("he said \"hi\" \\ ok", &[], &Map::new(), None).await.unwrap();
+        // 401 is not retried; the 429 is, after its Retry-After.
+        let e = l.call("x", &[], &Map::new(), None).await.unwrap_err();
+        assert_eq!(e.kind(), "AuthenticationError");
+        let r = l.call("he said \"hi\" \\ ok", &[], &Map::new(), None).await.unwrap();
         assert_eq!(r.content, "/v1/chat/completions|Bearer sk-\"q\\|he said \"hi\" \\ ok");
         assert_eq!((r.model_name.as_deref(), r.usage.unwrap().prompt_tokens), (Some("gpt-4o-x"), 3));
         handle.join().unwrap();

@@ -165,13 +165,13 @@ impl Tmux {
     }
 
     fn send_error(&self, action: &str, cmd: &str, r: &ExecResult) -> anyhow::Error {
-        let c: String = pyrepr(cmd).chars().take(100).collect();
+        let c: String = quote_repr(cmd).chars().take(100).collect();
         anyhow!(
             "{}: failed to send {action} keys: command={c}, return_code={}, stderr={}, stdout={}",
             self.name,
             r.code,
-            pyrepr(&r.stderr),
-            pyrepr(&r.stdout)
+            quote_repr(&r.stderr),
+            quote_repr(&r.stdout)
         )
     }
 
