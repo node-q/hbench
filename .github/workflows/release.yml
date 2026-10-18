@@ -39,6 +39,8 @@ jobs:
         run: cargo test --locked
       - name: Build release binaries
         run: |
+          # Keep the runner's home (checkout, cargo registry, toolchain) out of panic and debug paths.
+          export RUSTFLAGS="--remap-path-prefix=$HOME=/build --remap-path-prefix=$PWD=/build/hbench"
           for target in $TARGETS; do
             cargo build --release --locked --target "$target"
           done
