@@ -1,4 +1,4 @@
-//! Model loading (pydantic validate + dump).
+//! Model loading: validate result/config JSON and re-dump it in canonical form.
 
 use super::*;
 use serde_json::{Map, Value, json};
@@ -27,7 +27,7 @@ pub(super) fn job_config(job_dir: &Path) -> Option<Value> {
     job_config_value(read_json(&job_dir.join("config.json"))?)
 }
 
-/// `JobResult` as pydantic loads it: required fields present, `updated_at` derived, `trial_results` defaulted.
+/// `JobResult` as loaded for the viewer: required fields present, `updated_at` derived, `trial_results` defaulted.
 pub(super) fn job_result(job_dir: &Path) -> Option<Value> {
     let mut r = read_json_object(&job_dir.join("result.json"))?;
     let o = r.as_object_mut()?;

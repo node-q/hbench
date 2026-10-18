@@ -45,7 +45,7 @@ impl App {
                     None | Some(Value::Null) => {}
                     Some(v) if v == "public" || v == "private" => {}
                     Some(v) => {
-                        return Err(err(400, format!("Invalid visibility {}; must be 'public', 'private', or omitted.", py_repr(v))));
+                        return Err(err(400, format!("Invalid visibility {}; must be 'public', 'private', or omitted.", repr_scalar(v))));
                     }
                 }
                 Err(err(401, NOT_AUTHENTICATED))

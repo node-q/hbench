@@ -279,7 +279,7 @@ impl App {
                     items.retain(|s| {
                         s["name"].as_str().is_some_and(|x| x.to_lowercase().contains(&n))
                             || s["source"].as_str().is_some_and(|x| x.to_lowercase().contains(&n))
-                            || s["metadata"].as_object().into_iter().flatten().any(|(_, v)| py_str(v).to_lowercase().contains(&n))
+                            || s["metadata"].as_object().into_iter().flatten().any(|(_, v)| search_text(v).to_lowercase().contains(&n))
                     });
                 }
                 for (param, field) in [("difficulty", "difficulty"), ("category", "category")] {
@@ -335,13 +335,13 @@ impl App {
     }
 }
 
-/// Python `str()` of a JSON value (metadata search).
-fn py_str(v: &Value) -> String {
+/// Searchable text of a metadata value: strings as-is, `True`/`False`/`None` literals, lists as quoted items.
+fn search_text(v: &Value) -> String {
     match v {
         Value::String(x) => x.clone(),
         Value::Bool(b) => if *b { "True" } else { "False" }.into(),
         Value::Null => "None".into(),
-        Value::Array(a) => format!("[{}]", a.iter().map(py_repr).collect::<Vec<_>>().join(", ")),
+        Value::Array(a) => format!("[{}]", a.iter().map(repr_scalar).collect::<Vec<_>>().join(", ")),
         x => x.to_string(),
     }
 }

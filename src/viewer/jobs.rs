@@ -468,7 +468,7 @@ fn partial_trial_result(trial_name: &str, dir: &Path, cfg: &crate::config::Trial
         "trial_uri": as_uri(dir), "task_id": task_id, "source": cfg.task.source, "task_checksum": "", "config": c,
         "agent_info": {"name": agent_name_from_config(&c["agent"]), "version": "", "model_info": mi.map(|(p, n)| json!({"name": n, "provider": p}))},
         "agent_result": null, "verifier_result": null, "verifier_environment_mode": null, "exception_info": null,
-        "started_at": mtime_dt(&dir.join("config.json")).map(py_dt), "finished_at": null, "environment_setup": null, "agent_setup": null,
+        "started_at": mtime_dt(&dir.join("config.json")).map(iso_utc), "finished_at": null, "environment_setup": null, "agent_setup": null,
         "agent_execution": null, "verifier": null, "step_results": null,
     })
 }
