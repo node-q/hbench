@@ -4,14 +4,14 @@ use crate::config::{JobConfig, TaskRef, TrialConfig};
 use crate::metrics;
 use crate::registry;
 use crate::task::Task;
-use crate::trial::{Trial, TrialResult};
+use crate::trial::{Trial, TrialResult, write_atomic};
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 use tokio::sync::{Semaphore, watch};
 
@@ -152,14 +152,49 @@ pub fn resolve_tasks(cfg: &JobConfig) -> Result<Vec<TaskRef>> {
     Ok(v)
 }
 
-/// Identity of a trial config for resume matching (excludes name/job id).
+/// Identity of a trial config for resume matching (excludes name/job id/job dir). Local tasks match by
+/// dir name, so a job (and its tasks) can be moved and still resume.
 fn identity(c: &TrialConfig) -> Value {
-    let mut v = serde_json::to_value(c).unwrap();
+    let mut c = c.clone();
+    if c.task.git_url.is_none() {
+        c.task.path = c.task.path.as_deref().and_then(Path::file_name).map(PathBuf::from);
+    }
+    let mut v = serde_json::to_value(&c).unwrap();
     if let Some(o) = v.as_object_mut() {
         o.remove("trial_name");
         o.remove("job_id");
+        o.remove("trials_dir");
     }
     v
+}
+
+/// The explicit trial plan of a job not built from its config (regrade, --diff), kept for resume.
+const PLAN_FILE: &str = "trials.json";
+
+fn stored_plan(cfg: &JobConfig) -> Result<Option<Vec<TrialConfig>>> {
+    let job_dir = cfg.job_dir();
+    let Ok(s) = std::fs::read_to_string(job_dir.join(PLAN_FILE)) else {
+        let regrade = std::fs::read_dir(&job_dir)?
+            .flatten()
+            .any(|e| std::fs::read_to_string(e.path().join("config.json")).is_ok_and(|s| s.contains("\"source_trial\"")));
+        if regrade || !cfg.source_jobs.is_empty() {
+            bail!(
+                "{} is a regrade/--diff job without a stored trial plan ({PLAN_FILE}); it cannot be resumed, start it again instead",
+                job_dir.display()
+            );
+        }
+        return Ok(None);
+    };
+    let mut plan: Vec<TrialConfig> = serde_json::from_str(&s).with_context(|| format!("parsing {PLAN_FILE}"))?;
+    for c in &mut plan {
+        c.trials_dir = job_dir.clone();
+    }
+    Ok(Some(plan))
+}
+
+/// A panicking writer must not take every later lock down with it.
+fn locked<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 pub fn build_trial_configs(cfg: &JobConfig, tasks: &[TaskRef], job_id: uuid::Uuid) -> Vec<TrialConfig> {
@@ -221,8 +256,14 @@ pub async fn run_job(
     log.line(&format!("job {} started ({} agent config(s))", cfg.job_name, cfg.agents.len()));
 
     let mut pending = match trial_configs {
-        Some(t) => t,
-        None => build_trial_configs(&cfg, &resolve_tasks(&cfg)?, job_id),
+        Some(t) => {
+            write_atomic(&job_dir.join(PLAN_FILE), serde_json::to_string_pretty(&t)?)?;
+            t
+        }
+        None => match stored_plan(&cfg)? {
+            Some(t) => t,
+            None => build_trial_configs(&cfg, &resolve_tasks(&cfg)?, job_id),
+        },
     };
     // Load each distinct task once (validates before any container starts).
     let mut tasks: HashMap<PathBuf, Arc<Task>> = HashMap::new();
@@ -259,6 +300,9 @@ pub async fn run_job(
     if !previous.is_empty() {
         eprintln!("resuming: {} trial(s) already complete, {} to run", previous.len(), pending.len());
     }
+    if !cfg.quiet {
+        eprintln!("job {}: {} trial(s) to run, concurrency {}", job_dir.display(), pending.len(), cfg.n_concurrent_trials);
+    }
     let lock = serde_json::json!({
         "schema_version": 3,
         "created_at": Utc::now(),
@@ -283,11 +327,11 @@ pub async fn run_job(
         let (job_result, shared, path, metric_cfgs) =
             (job_result.clone(), shared.clone(), job_dir.join("result.json"), metric_cfgs.clone());
         move || {
-            let sh = shared.lock().unwrap();
-            let mut jr = job_result.lock().unwrap();
+            let sh = locked(&shared);
+            let mut jr = locked(&job_result);
             jr.updated_at = Some(Utc::now());
             jr.stats = compute_stats(&sh.results, jr.n_total_trials, sh.running, sh.retries, &metric_cfgs);
-            let _ = std::fs::write(&path, serde_json::to_string_pretty(&*jr).unwrap());
+            let _ = write_atomic(&path, serde_json::to_string_pretty(&*jr).unwrap());
         }
     };
     write();
@@ -307,28 +351,39 @@ pub async fn run_job(
         let (sem, shared, write, cancel, retry, log) =
             (sem.clone(), shared.clone(), write.clone(), cancel.clone(), cfg.retry.clone(), log.clone());
         handles.push(tokio::spawn(async move {
+            // The agent's own pool first, so a trial holding a global slot never waits on it.
+            let _agent_permit = match pool {
+                Some(p) => Some(p.acquire_owned().await.unwrap()),
+                None => None,
+            };
             let _permit = sem.acquire_owned().await.unwrap();
             if *cancel.borrow() {
                 return;
             }
-            shared.lock().unwrap().running += 1;
+            locked(&shared).running += 1;
             write();
             log.line(&format!("trial {} started (task {}, agent {})", tcfg.trial_name, tcfg.task.display_name(), tcfg.agent.name()));
             let mut attempt = 0;
             let result = loop {
-                let r = match Trial::new(tcfg.clone(), task.clone(), pool.clone()) {
-                    Ok(t) => Box::pin(t.run(cancel.clone())).await,
+                let r = match Trial::new(tcfg.clone(), task.clone()) {
+                    Ok(mut t) => {
+                        t.progress = !quiet;
+                        // Its own task, so a panic becomes this trial's error instead of losing the bookkeeping.
+                        match tokio::spawn(t.run(cancel.clone())).await {
+                            Ok(r) => r,
+                            Err(e) => TrialResult::errored(tcfg.clone(), &task, &anyhow::anyhow!("trial panicked: {e}")),
+                        }
+                    }
                     Err(e) => {
                         eprintln!("{}: could not create trial: {e:#}", tcfg.trial_name);
-                        shared.lock().unwrap().running -= 1;
-                        return;
+                        TrialResult::errored(tcfg.clone(), &task, &e)
                     }
                 };
                 let Some(kind) = r.exception_info.as_ref().map(|e| e.exception_type.clone()) else { break r };
                 if !retry.should_retry(&kind) || attempt >= retry.max_retries || *cancel.borrow() {
                     break r;
                 }
-                shared.lock().unwrap().retries += 1;
+                locked(&shared).retries += 1;
                 let wait = retry.backoff_sec(attempt);
                 attempt += 1;
                 eprintln!("retrying {} ({attempt}/{}) after {kind} in {wait:.1}s", tcfg.trial_name, retry.max_retries);
@@ -337,7 +392,7 @@ pub async fn run_job(
                 tokio::time::sleep(Duration::from_secs_f64(wait)).await;
             };
             {
-                let mut sh = shared.lock().unwrap();
+                let mut sh = locked(&shared);
                 sh.running -= 1;
                 sh.results.push(result.clone());
                 log.line(&format!(
@@ -360,16 +415,18 @@ pub async fn run_job(
         }));
     }
     for h in handles {
-        h.await.context("trial task panicked")?;
+        if let Err(e) = h.await {
+            eprintln!("trial task failed: {e}");
+        }
     }
     if !*cancel.borrow() {
-        job_result.lock().unwrap().finished_at = Some(Utc::now());
+        locked(&job_result).finished_at = Some(Utc::now());
         log.line("job finished");
     } else {
         log.line("job cancelled");
     }
     write();
-    let jr = job_result.lock().unwrap().clone();
+    let jr = locked(&job_result).clone();
     Ok(jr)
 }
 
@@ -692,5 +749,25 @@ Job  runtime 1h 2m 5s
         assert_eq!(identity(&plan[0]), identity(&plan[4]));
         assert_ne!(identity(&plan[0]), identity(&plan[1]));
         assert!(plan[0].trial_name.starts_with("a__") && plan[0].trial_name.len() == 10);
+        // A moved job (tasks moved along) still matches its finished trials.
+        let mut moved = plan[0].clone();
+        moved.trials_dir = "/elsewhere/j".into();
+        moved.task.path = Some("/moved/t/a".into());
+        assert_eq!(identity(&moved), identity(&plan[0]));
+    }
+
+    #[test]
+    fn regrade_job_without_plan_is_not_resumable() {
+        let d = std::env::temp_dir().join(format!("hbench-plan-{}", uuid::Uuid::new_v4()));
+        let cfg = JobConfig { jobs_dir: d.clone(), job_name: "j".into(), ..Default::default() };
+        std::fs::create_dir_all(cfg.job_dir().join("t1")).unwrap();
+        assert!(stored_plan(&cfg).unwrap().is_none());
+        std::fs::write(cfg.job_dir().join("t1/config.json"), r#"{"source_trial": {}}"#).unwrap();
+        assert!(stored_plan(&cfg).is_err());
+        let tc: TrialConfig =
+            serde_json::from_value(serde_json::json!({"task": {"path": "/t/a"}, "trial_name": "a__1", "trials_dir": "/old/j"})).unwrap();
+        write_atomic(&cfg.job_dir().join(PLAN_FILE), serde_json::to_string(&[tc]).unwrap()).unwrap();
+        assert_eq!(stored_plan(&cfg).unwrap().unwrap()[0].trials_dir, cfg.job_dir());
+        let _ = std::fs::remove_dir_all(&d);
     }
 }

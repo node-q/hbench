@@ -15,9 +15,9 @@ use serde_json::{Number, Value};
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tokio::sync::{Semaphore, watch};
+use tokio::sync::watch;
 
 pub type Rewards = BTreeMap<String, Number>;
 
@@ -114,6 +114,46 @@ pub struct TrialResult {
 }
 
 impl TrialResult {
+    fn new(cfg: TrialConfig, task: &Task, dir: &Path) -> TrialResult {
+        TrialResult {
+            id: uuid::Uuid::new_v4(),
+            task_name: task.name(),
+            trial_name: cfg.trial_name.clone(),
+            trial_uri: format!("file://{}", dir.canonicalize().unwrap_or(dir.to_path_buf()).display()),
+            task_id: task_id(&cfg),
+            source: cfg.task.source.clone(),
+            task_checksum: task.checksum().unwrap_or_default(),
+            agent_info: AgentInfo {
+                name: cfg.agent.name().into(),
+                version: "unknown".into(),
+                model_info: model_info(&cfg.agent.model_name),
+            },
+            config: cfg,
+            agent_result: None,
+            verifier_result: None,
+            verifier_environment_mode: (!task.has_steps()).then(|| task.verifier_mode(None)),
+            exception_info: None,
+            started_at: Some(Utc::now()),
+            finished_at: None,
+            environment_setup: None,
+            agent_setup: None,
+            agent_execution: None,
+            verifier: None,
+            step_results: None,
+            egress: None,
+        }
+    }
+    /// A trial that never produced its own result (could not be created, or panicked); saved best-effort.
+    pub fn errored(cfg: TrialConfig, task: &Task, e: &anyhow::Error) -> TrialResult {
+        let dir = cfg.trials_dir.join(&cfg.trial_name);
+        let mut r = TrialResult::new(cfg, task, &dir);
+        r.exception_info = Some(ExceptionInfo::from(e));
+        r.finished_at = r.started_at;
+        if dir.is_dir() {
+            let _ = write_atomic(&dir.join("result.json"), serde_json::to_string_pretty(&r).unwrap());
+        }
+        r
+    }
     pub fn reward(&self) -> Option<&Rewards> {
         self.verifier_result.as_ref()?.rewards.as_ref()
     }
@@ -151,6 +191,14 @@ pub fn task_id(cfg: &TrialConfig) -> Value {
     }
     m.insert("path".into(), t.path.as_ref().map(|p| p.display().to_string()).into());
     Value::Object(m)
+}
+
+/// Write via a sibling temp file + rename, so readers never see a partial file.
+pub fn write_atomic(path: &Path, contents: impl AsRef<[u8]>) -> std::io::Result<()> {
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(".tmp");
+    std::fs::write(&tmp, contents)?;
+    std::fs::rename(&tmp, path)
 }
 
 /// Agent setup tries, all within the setup timeout.
@@ -222,17 +270,20 @@ pub struct Trial {
     agent: Option<AgentBox>,
     env: Option<DockerEnv>,
     env_stopped: bool,
+    /// Separate verifier env while it is up, so cancellation can still tear it down.
+    verifier_env: Mutex<Option<Arc<DockerEnv>>>,
     result: TrialResult,
-    agent_permit: Option<Arc<Semaphore>>,
     shared_verifier_dirty: bool,
     user_agent: Option<AgentBox>,
     bridge: Option<crate::bridge::Bridge>,
     /// The agent's own env overlay (captured at creation; agents may normalize `agent.env`).
     agent_env: Option<BTreeMap<String, String>>,
+    /// Print a stderr line as the trial enters each phase.
+    pub progress: bool,
 }
 
 impl Trial {
-    pub fn new(cfg: TrialConfig, task: Arc<Task>, agent_permit: Option<Arc<Semaphore>>) -> Result<Trial> {
+    pub fn new(cfg: TrialConfig, task: Arc<Task>) -> Result<Trial> {
         // Absolute: docker compose runs with the task's environment/ as cwd.
         let dir = std::path::absolute(cfg.trials_dir.join(&cfg.trial_name))?;
         for d in ["agent", "verifier", "artifacts"] {
@@ -241,33 +292,7 @@ impl Trial {
         std::fs::write(dir.join("config.json"), serde_json::to_string_pretty(&cfg.config_json())?)?;
         std::fs::write(dir.join("lock.json"), serde_json::to_string_pretty(&trial_lock(&cfg))?)?;
         let log = TrialLog::create(&dir.join("trial.log"))?;
-        let result = TrialResult {
-            id: uuid::Uuid::new_v4(),
-            task_name: task.name(),
-            trial_name: cfg.trial_name.clone(),
-            trial_uri: format!("file://{}", dir.canonicalize().unwrap_or(dir.clone()).display()),
-            task_id: task_id(&cfg),
-            source: cfg.task.source.clone(),
-            task_checksum: task.checksum().unwrap_or_default(),
-            config: cfg.clone(),
-            agent_info: AgentInfo {
-                name: cfg.agent.name().into(),
-                version: "unknown".into(),
-                model_info: model_info(&cfg.agent.model_name),
-            },
-            agent_result: None,
-            verifier_result: None,
-            verifier_environment_mode: (!task.has_steps()).then(|| task.verifier_mode(None)),
-            exception_info: None,
-            started_at: Some(Utc::now()),
-            finished_at: None,
-            environment_setup: None,
-            agent_setup: None,
-            agent_execution: None,
-            verifier: None,
-            step_results: None,
-            egress: None,
-        };
+        let result = TrialResult::new(cfg.clone(), &task, &dir);
         Ok(Trial {
             cfg,
             task,
@@ -276,13 +301,20 @@ impl Trial {
             agent: None,
             env: None,
             env_stopped: false,
+            verifier_env: Mutex::new(None),
             result,
-            agent_permit,
             shared_verifier_dirty: false,
             user_agent: None,
             bridge: None,
             agent_env: None,
+            progress: false,
         })
+    }
+
+    fn phase(&self, what: &str) {
+        if self.progress {
+            eprintln!("{}: {what}", self.cfg.trial_name);
+        }
     }
 
     fn secs(&self, base: f64, max: Option<f64>, mult: Option<f64>) -> Duration {
@@ -443,6 +475,7 @@ impl Trial {
                 let _ = self.download_agent_logs(&self.dir.join("agent")).await;
             }
         }
+        self.stop_verifier_env().await;
         self.stop_env().await;
         if let Some(a) = &self.agent {
             let mut ctx = self.result.agent_result.take();
@@ -456,8 +489,17 @@ impl Trial {
             cleanup_empty(&self.dir);
         }
         self.result.finished_at = Some(Utc::now());
-        let _ = std::fs::write(self.dir.join("result.json"), serde_json::to_string_pretty(&self.result).unwrap());
+        let _ = write_atomic(&self.dir.join("result.json"), serde_json::to_string_pretty(&self.result).unwrap());
         self.result
+    }
+
+    async fn stop_verifier_env(&self) {
+        let venv = self.verifier_env.lock().unwrap_or_else(|e| e.into_inner()).take();
+        if let Some(v) = venv
+            && let Err(e) = v.stop().await
+        {
+            self.log.line(&format!("failed to stop verifier env: {e:#}"));
+        }
     }
 
     async fn stop_env(&mut self) {
@@ -550,6 +592,7 @@ impl Trial {
         let env = DockerEnv::new(spec, self.log.clone()).await?;
         self.env = Some(env);
 
+        self.phase("starting environment");
         let t = TimingInfo::start();
         let r = self.env().start().await;
         self.result.environment_setup = Some(t.finish());
@@ -569,6 +612,7 @@ impl Trial {
         }
         self.upload_skills().await?;
 
+        self.phase("agent setup");
         let t = TimingInfo::start();
         let user = self.agent_user(steps[0]);
         let setup_timeout = self.secs(
@@ -701,7 +745,7 @@ impl Trial {
         Ok(())
     }
 
-    /// Run the agent under its timeout, phase network policy and agent concurrency permit.
+    /// Run the agent under its timeout and phase network policy.
     async fn agent_phase(&mut self, instruction: &str, step: Option<&StepConfig>, resume: bool) -> (AgentContext, TimingInfo, Result<()>) {
         let mut ctx = AgentContext::default();
         let t = TimingInfo::start();
@@ -709,10 +753,10 @@ impl Trial {
             Ok(p) => p,
             Err(e) => return (ctx, t.finish(), Err(e)),
         };
-        let _permit = match &self.agent_permit {
-            Some(s) => Some(s.clone().acquire_owned().await.unwrap()),
-            None => None,
-        };
+        self.phase(&match step {
+            Some(s) => format!("agent run (step {})", s.name),
+            None => "agent run".into(),
+        });
         let timeout = self.agent_timeout(step);
         let switch = plan.agent_phase != plan.agent_env_baseline;
         if switch && let Err(e) = self.env().set_network_policy(&plan.agent_phase).await {
@@ -800,7 +844,8 @@ impl Trial {
 
     async fn close_bridge(&mut self, user: Option<String>, overlay: BTreeMap<String, String>) {
         let Some(bridge) = self.bridge.take() else { return };
-        let mut agent = self.agent.take().unwrap();
+        // Cancelled during agent setup: the agent is still borrowed by the dropped future.
+        let Some(mut agent) = self.agent.take() else { return };
         if let Ok(cx) = self.ctx_with(user, None, overlay, "agent") {
             if bridge.ready
                 && let Err(e) = bridge.export(&cx, &self.dir.join("agent")).await
@@ -1075,14 +1120,16 @@ impl Trial {
         }
         let env = self.env();
         let user = self.agent_user(Some(step));
-        let wd = env.exec("pwd", user.as_deref(), &BTreeMap::new(), None).await?.stdout.trim().to_string();
+        let wd = env.exec("pwd", user.as_deref(), &BTreeMap::new(), Some(Duration::from_secs(60))).await?.stdout.trim().to_string();
         let wd = if wd.is_empty() { "/".to_string() } else { wd };
         let wdir = self.task.step_dir(&step.name).join("workdir");
         if wdir.exists() {
             env.upload_dir(&wdir, &wd).await?;
             if wdir.join("setup.sh").exists() {
                 let script = format!("{}/setup.sh", wd.trim_end_matches('/'));
-                let r = env.exec(&format!("bash {}", crate::env::quote(&script)), user.as_deref(), &BTreeMap::new(), None).await?;
+                let timeout =
+                    self.secs(self.cfg.agent.override_setup_timeout_sec.unwrap_or(600.0), None, self.cfg.agent_setup_timeout_multiplier);
+                let r = env.exec(&format!("bash {}", crate::env::quote(&script)), user.as_deref(), &BTreeMap::new(), Some(timeout)).await?;
                 if r.code != 0 {
                     bail!("Step '{}' setup.sh exited with code {}: {}", step.name, r.code, r.stderr);
                 }
@@ -1096,6 +1143,10 @@ impl Trial {
 
     /// Shared verifier runs in the agent env; separate builds a fresh env from the verifier definition.
     async fn verify(&self, step: Option<&StepConfig>, artifacts_dir: &Path) -> Result<Rewards> {
+        self.phase(&match step {
+            Some(s) => format!("verify (step {})", s.name),
+            None => "verify".into(),
+        });
         let timeout = self.verifier_timeout(step);
         let fut = async {
             let plan = self.net_plan(step)?;
@@ -1118,8 +1169,9 @@ impl Trial {
                     let baseline = plan.verifier_env_baseline.clone().unwrap_or_else(NetworkPolicy::public);
                     let mut spec = self.env_spec(project, dir, ec, baseline.clone(), vec![plan.verifier_phase.clone()], false)?;
                     spec.upload_env_dir = !bundled;
-                    let venv = DockerEnv::new(spec, self.log.clone()).await?;
-                    let r = async {
+                    let venv = Arc::new(DockerEnv::new(spec, self.log.clone()).await?);
+                    *self.verifier_env.lock().unwrap_or_else(|e| e.into_inner()) = Some(venv.clone());
+                    async {
                         venv.start().await.map_err(|e| {
                             if error_kind(&e) == "EnvironmentStartTimeoutError" {
                                 kind_err("EnvironmentStartTimeoutError", format!("Verifier environment start timed out: {e:#}"))
@@ -1135,20 +1187,18 @@ impl Trial {
                         }
                         self.run_tests(&venv, step, user.as_deref(), bundled).await
                     }
-                    .await;
-                    if let Err(e) = venv.stop().await {
-                        self.log.line(&format!("failed to stop verifier env: {e:#}"));
-                    }
-                    r
+                    .await
                 }
             }
         };
-        match tokio::time::timeout(timeout, fut).await {
+        let r = match tokio::time::timeout(timeout, fut).await {
             Ok(r) => r,
             Err(_) => {
                 Err(kind_err("VerifierTimeoutError", format!("Verifier execution timed out after {} seconds", timeout.as_secs_f64())))
             }
-        }
+        };
+        self.stop_verifier_env().await;
+        r
     }
 
     /// Upload tests, run /tests/test.sh, download /logs/verifier, parse rewards.

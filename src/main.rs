@@ -935,7 +935,7 @@ async fn main() -> Result<()> {
             env::preflight().await?;
             let task = std::sync::Arc::new(Task::load(&registry::local_path(&tc.task))?);
             let (_tx, rx) = tokio::sync::watch::channel(false);
-            let r = Box::pin(trial::Trial::new(tc, task, None)?.run(rx)).await;
+            let r = Box::pin(trial::Trial::new(tc, task)?.run(rx)).await;
             println!(
                 "{}",
                 serde_json::to_string_pretty(&serde_json::json!({

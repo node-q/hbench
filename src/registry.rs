@@ -6,8 +6,10 @@ use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 pub const DEFAULT_REGISTRY_URL: &str = "https://raw.githubusercontent.com/node-q/hbench-datasets/main/registry.json";
 
@@ -139,11 +141,67 @@ pub fn local_path(t: &TaskRef) -> PathBuf {
     }
 }
 
+/// Ceiling for a single git call (the shallow, blob-less fetch is the slow one).
+const GIT_TIMEOUT: Duration = Duration::from_secs(600);
+
 fn git(dir: &Path, args: &[&str]) -> Result<()> {
-    let out = Command::new("git").arg("-C").arg(dir).args(args).output().context("running git")?;
-    if !out.status.success() {
-        bail!("git {} failed: {}", args.join(" "), String::from_utf8_lossy(&out.stderr));
+    let mut child = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("running git")?;
+    let start = Instant::now();
+    let status = loop {
+        if let Some(s) = child.try_wait()? {
+            break s;
+        }
+        if start.elapsed() > GIT_TIMEOUT {
+            let _ = child.kill();
+            let _ = child.wait();
+            bail!("git {} timed out after {}s", args.join(" "), GIT_TIMEOUT.as_secs());
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    if !status.success() {
+        let mut err = String::new();
+        let _ = child.stderr.take().map(|mut e| e.read_to_string(&mut err));
+        bail!("git {} failed: {err}", args.join(" "));
     }
+    Ok(())
+}
+
+/// Fresh sparse, shallow checkout of `paths` into a temp dir beside `dir`, then swapped into place, so a
+/// failed fetch never leaves a half-initialised cache and other jobs never see `dir` half-deleted.
+fn fetch(dir: &Path, url: &str, commit: &str, paths: &[String]) -> Result<()> {
+    let name = dir.file_name().context("task cache dir has no name")?.to_string_lossy().into_owned();
+    let sibling = |tag: &str| dir.with_file_name(format!(".{name}.{tag}-{}", uuid::Uuid::new_v4().simple()));
+    let tmp = sibling("tmp");
+    std::fs::create_dir_all(&tmp)?;
+    let r = (|| {
+        git(&tmp, &["init", "-q"])?;
+        git(&tmp, &["remote", "add", "origin", url])?;
+        let mut sparse = vec!["sparse-checkout", "set", "--no-cone"];
+        sparse.extend(paths.iter().map(String::as_str));
+        git(&tmp, &sparse)?;
+        git(&tmp, &["fetch", "-q", "--depth", "1", "--filter=blob:none", "origin", commit])?;
+        git(&tmp, &["checkout", "-q", "FETCH_HEAD"])
+    })();
+    if r.is_err() {
+        let _ = std::fs::remove_dir_all(&tmp);
+        return r;
+    }
+    let old = sibling("old");
+    let _ = std::fs::rename(dir, &old);
+    // Losing a race to a concurrent download is fine: the caller checks the tasks are there.
+    if std::fs::rename(&tmp, dir).is_err() {
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+    let _ = std::fs::remove_dir_all(&old);
     Ok(())
 }
 
@@ -153,34 +211,25 @@ pub fn download(tasks: &[TaskRef]) -> Result<()> {
     for t in tasks.iter().filter(|t| t.git_url.is_some()) {
         groups.entry(cache_dir(t)).or_default().push(t);
     }
+    let sparse_path = |t: &&TaskRef| format!("/{}/", t.path.as_ref().unwrap().display().to_string().trim_matches('/'));
     for (dir, ts) in groups {
         let url = ts[0].git_url.clone().unwrap();
         let commit = ts[0].git_commit_id.clone().unwrap_or_else(|| "HEAD".into());
-        let missing: Vec<String> = ts
-            .iter()
-            .filter(|t| !local_path(t).join("task.toml").exists())
-            .map(|t| format!("/{}/", t.path.as_ref().unwrap().display().to_string().trim_matches('/')))
-            .collect();
+        let missing: Vec<String> = ts.iter().filter(|t| !local_path(t).join("task.toml").exists()).map(sparse_path).collect();
         let refetch = commit == "HEAD" || ts.iter().any(|t| t.overwrite);
-        if !missing.is_empty() && !refetch && dir.join(".git").exists() {
-            // Widen the existing sparse checkout; keeps tasks other jobs may be using.
+        // Widen the existing sparse checkout; keeps tasks other jobs may be using.
+        let widened = !missing.is_empty() && !refetch && dir.join(".git").exists() && {
             let mut add = vec!["sparse-checkout", "add"];
             add.extend(missing.iter().map(String::as_str));
-            git(&dir, &add)?;
-        } else if !missing.is_empty() || refetch {
+            git(&dir, &add).is_ok()
+        };
+        if !widened && (!missing.is_empty() || refetch) {
             // HEAD moves, so it is always refetched; `overwrite` forces a refetch.
-            let _ = std::fs::remove_dir_all(&dir);
-            std::fs::create_dir_all(&dir)?;
+            if let Some(p) = dir.parent() {
+                std::fs::create_dir_all(p)?;
+            }
             eprintln!("downloading {} task(s) from {url}@{commit}", ts.len());
-            git(&dir, &["init", "-q"])?;
-            git(&dir, &["remote", "add", "origin", &url])?;
-            let paths: Vec<String> =
-                ts.iter().map(|t| format!("/{}/", t.path.as_ref().unwrap().display().to_string().trim_matches('/'))).collect();
-            let mut sparse = vec!["sparse-checkout", "set", "--no-cone"];
-            sparse.extend(paths.iter().map(String::as_str));
-            git(&dir, &sparse)?;
-            git(&dir, &["fetch", "-q", "--depth", "1", "--filter=blob:none", "origin", &commit])?;
-            git(&dir, &["checkout", "-q", "FETCH_HEAD"])?;
+            fetch(&dir, &url, &commit, &ts.iter().map(sparse_path).collect::<Vec<_>>())?;
         }
         for t in ts {
             if !local_path(t).join("task.toml").exists() {
@@ -189,4 +238,17 @@ pub fn download(tasks: &[TaskRef]) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn failed_fetch_leaves_no_cache() {
+        let root = std::env::temp_dir().join(format!("hbench-reg-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let missing = root.join("no-such-repo");
+        assert!(super::fetch(&root.join("cache"), &missing.to_string_lossy(), "HEAD", &["/t/".into()]).is_err());
+        assert_eq!(std::fs::read_dir(&root).unwrap().count(), 0);
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }
