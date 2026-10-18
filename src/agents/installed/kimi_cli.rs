@@ -1,6 +1,7 @@
 //! Kimi CLI installed agent.
 
 use super::common::{installed_dir, skills_dir};
+use super::pins;
 use super::{ensure_system_dependencies, exec_agent, exec_error};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::quote;
@@ -28,23 +29,6 @@ fn provider_config(provider: &str) -> Option<(&'static str, &'static str, &'stat
     })
 }
 const PROVIDERS: &str = "['anthropic', 'gemini', 'google', 'kimi', 'moonshot', 'openai', 'openrouter']";
-
-/// Strict options: reject unknown kwargs and native config.
-pub(super) fn validate_kwargs(name: &str, args: &AgentArgs, extra: &[&str]) -> Result<()> {
-    if args.kwargs.get("config").is_some_and(|v| !v.is_null()) {
-        bail!("Agent '{name}' does not support config. You can implement it.");
-    }
-    let unknown: Vec<String> = args
-        .kwargs
-        .keys()
-        .filter(|k| !["version", "prompt_template_path", "config"].contains(&k.as_str()) && !extra.contains(&k.as_str()))
-        .map(|k| format!("  Unknown option '{k}'."))
-        .collect();
-    if !unknown.is_empty() {
-        bail!("Invalid kwargs for agent '{name}':\n{}\nSee `hbench agents schema {name}` for available options.", unknown.join("\n"));
-    }
-    Ok(())
-}
 
 /// `json.loads(s, strict=False)`: raw control characters are allowed inside strings.
 pub(super) fn loads_lenient(s: &str) -> Option<Value> {
@@ -82,7 +66,6 @@ pub fn create(args: AgentArgs) -> Result<AgentBox> {
 
 impl KimiCli {
     fn new(args: AgentArgs) -> Result<KimiCli> {
-        validate_kwargs("kimi-cli", &args, &["api_key", "base_url", "model_info"])?;
         for k in ["api_key", "base_url"] {
             if args.kwargs.get(k).is_some_and(|v| !(v.is_null() || v.is_string() || v.is_number())) {
                 bail!("Invalid kwargs for agent 'kimi-cli':\n  {k}: Input should be a valid string");
@@ -283,12 +266,13 @@ impl Agent for KimiCli {
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
         installed_dir(cx).await?;
         ensure_system_dependencies(cx, &["curl"]).await?;
-        let spec = self.version.as_ref().map(|v| format!("=={v}")).unwrap_or_default();
+        let spec = pins::KIMI_CLI.pip_constraint(self.version.as_deref());
         exec_agent(
             cx,
             &format!(
-                "set -euo pipefail; curl -LsSf https://astral.sh/uv/install.sh | bash && export PATH=\"$HOME/.local/bin:$PATH\" && \
-                 uv tool install --python 3.13 kimi-cli{spec} && kimi --version"
+                "set -euo pipefail; curl -LsSf {uv_installer} | bash && export PATH=\"$HOME/.local/bin:$PATH\" && \
+                 uv tool install --python 3.13 kimi-cli{spec} && kimi --version",
+                uv_installer = pins::uv_installer()
             ),
             &BTreeMap::new(),
         )
@@ -404,8 +388,6 @@ mod tests {
 
     #[test]
     fn validation() {
-        assert!(agent(json!({"bogus": 1}), &[], None).is_err());
-        assert!(agent(json!({"config": {}}), &[], None).is_err());
         assert!(agent(json!({"model_info": "x"}), &[], None).is_err());
         let a = agent(json!({}), &[], Some("nomodel")).unwrap();
         assert!(a.commands("x", false).unwrap_err().to_string().contains("provider/model_name"));

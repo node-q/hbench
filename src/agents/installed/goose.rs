@@ -1,6 +1,7 @@
 //! Goose.
 
 use super::common::{detect_version, installed_dir, opts, skills_dir};
+use super::pins;
 use super::{connection, ensure_system_dependencies, exec_agent, exec_error};
 use crate::agents::model_connection::{Resolved, Spec, with_canonical_provider_envs};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
@@ -16,7 +17,6 @@ const INSTRUCTIONS: &str = "You are given a task and you need to complete it. Yo
     use your own tools to complete the task without any intervention.";
 
 pub fn create(args: AgentArgs) -> Result<AgentBox> {
-    opts::check_known(&args, "goose", &["max_turns", "reasoning_effort", "temperature", "max_tokens", "context_limit"], false)?;
     let a = Goose { version: args.version_kw(), args };
     a.cli_flags()?;
     a.option_env()?;
@@ -233,11 +233,18 @@ impl Agent for Goose {
             &env,
         )
         .await?;
-        let url_v = self.version.as_deref().unwrap_or("stable");
+        // The script installs GOOSE_VERSION when set, else the stable release whatever its URL.
+        let (tag, pinned) = match pins::GOOSE.or(self.version.as_deref()) {
+            "latest" | "stable" => ("stable".to_string(), String::new()),
+            v => {
+                let tag = format!("v{}", v.trim_start_matches('v'));
+                (tag.clone(), format!("GOOSE_VERSION={} ", quote(&tag)))
+            }
+        };
         exec_agent(
             cx,
             &format!(
-                "set -euo pipefail; curl -fsSL https://github.com/block/goose/releases/download/{url_v}/download_cli.sh | bash && \
+                "set -euo pipefail; curl -fsSL https://github.com/block/goose/releases/download/{tag}/download_cli.sh | {pinned}bash && \
                  export PATH=\"$HOME/.local/bin:$PATH\" && goose --version"
             ),
             &env,

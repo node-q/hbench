@@ -1,6 +1,7 @@
 //! grok-build.
 
 use super::common::{deep_merge, installed_dir, parse_bool_env_value, skills_dir};
+use super::pins;
 use super::{ensure_system_dependencies, exec_agent, exec_error};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx, pricing};
 use crate::env::{kind_err, quote};
@@ -437,7 +438,10 @@ impl Agent for GrokBuild {
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
         installed_dir(cx).await?;
         ensure_system_dependencies(cx, &["curl", "bash", "ca_certificates", "coreutils", "procps"]).await?;
-        let version_arg = self.version.as_ref().map(|v| format!(" -s {}", quote(v))).unwrap_or_default();
+        let version_arg = match pins::GROK_BUILD.or(self.version.as_deref()) {
+            "latest" => String::new(),
+            v => format!(" -s {}", quote(v)),
+        };
         let none = BTreeMap::new();
         exec_agent(
             cx,

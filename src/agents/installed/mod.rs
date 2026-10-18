@@ -37,6 +37,7 @@ pub mod opencode;
 pub mod openhands;
 pub mod openhands_sdk;
 pub mod pi;
+pub mod pins;
 pub mod qwen_code;
 pub mod rovodev_cli;
 pub mod strands;
@@ -424,13 +425,15 @@ pub async fn upload_text(cx: &AgentCtx<'_>, path: &str, content: &str) -> Result
 
 /// Shell snippet ensuring a Node >= 20 toolchain is active (nvm-installs Node 22 if needed).
 pub fn ensure_acp_node_command() -> String {
-    "if [ -s \"$HOME/.nvm/nvm.sh\" ]; then . \"$HOME/.nvm/nvm.sh\"; fi; \
-     _hb_node_major=\"$(node --version 2>/dev/null | sed \"s/^v//\" | cut -d. -f1 || true)\"; \
-     if [ \"${_hb_node_major:-0}\" -lt 20 ]; then \
-       curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.2/install.sh | bash && \
-       export NVM_DIR=\"$HOME/.nvm\" && . \"$NVM_DIR/nvm.sh\" && nvm install 22; \
-     fi"
-    .to_string()
+    format!(
+        "if [ -s \"$HOME/.nvm/nvm.sh\" ]; then . \"$HOME/.nvm/nvm.sh\"; fi; \
+         _hb_node_major=\"$(node --version 2>/dev/null | sed \"s/^v//\" | cut -d. -f1 || true)\"; \
+         if [ \"${{_hb_node_major:-0}}\" -lt 20 ]; then \
+           curl -o- {} | bash && \
+           export NVM_DIR=\"$HOME/.nvm\" && . \"$NVM_DIR/nvm.sh\" && nvm install 22; \
+         fi",
+        pins::nvm_installer()
+    )
 }
 
 /// Executable wrapper at `dest` running `target` with `interpreter` (keeps npm shims on their node).
@@ -477,8 +480,7 @@ mod tests {
         let mut seen = std::collections::BTreeSet::new();
         for name in names() {
             assert!(seen.insert(name), "{name} registered twice");
-            assert!(crate::agents::allowed_kwargs::allowed(name).is_some(), "{name} missing from allowed_kwargs");
-            assert!(crate::schemas::agent(name).is_some(), "{name} has no options schema");
+            assert!(crate::schemas::options(name).is_some(), "{name} has no options schema");
             let created = create(name, common::test_args(serde_json::json!({}), &[], None));
             assert!(!matches!(created, Ok(None)), "{name} not constructed by create");
         }

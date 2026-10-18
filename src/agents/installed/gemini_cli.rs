@@ -1,6 +1,7 @@
 //! Gemini CLI, incl. ACP target mode.
 
 use super::common::{detect_version, installed_dir, nvm_node_install_snippet, opts, parse_bool_env, skills_dir};
+use super::pins;
 use super::{connection, ensure_system_dependencies, exec_agent, exec_root, pinned_bin_wrapper_command, safe_bin_symlink_command};
 use crate::agents::model_connection::{Resolved, Spec};
 use crate::agents::pricing;
@@ -30,7 +31,6 @@ pub struct GeminiCli {
 
 impl GeminiCli {
     fn new(args: AgentArgs) -> Result<GeminiCli> {
-        opts::check_known(&args, "gemini-cli", &["disable_web_search", "sandbox", "reasoning_effort"], false)?;
         let a = GeminiCli { version: args.version_kw(), args };
         a.cli_flags()?;
         a.disable_web_search()?;
@@ -338,9 +338,8 @@ impl Agent for GeminiCli {
         installed_dir(cx).await?;
         ensure_system_dependencies(cx, &["curl"]).await?;
         let none = BTreeMap::new();
-        let spec = format!("@{}", self.version.as_deref().unwrap_or("latest"));
-        exec_agent(cx, &format!("set -euo pipefail; {} && npm install -g @google/gemini-cli{spec}", nvm_node_install_snippet(22)), &none)
-            .await?;
+        let spec = pins::GEMINI_CLI.npm_spec(self.version.as_deref());
+        exec_agent(cx, &format!("set -euo pipefail; {} && npm install -g {spec}", nvm_node_install_snippet(22)), &none).await?;
         exec_agent(cx, "mkdir -p ~/.gemini && cat > ~/.gemini/settings.json << 'SETTINGS'\n{\n  \"experimental\": {\n    \"skills\": true\n  }\n}\nSETTINGS", &none).await?;
         exec_agent(cx, ". ~/.nvm/nvm.sh && gemini --version", &none).await?;
         if self.version.is_none() {

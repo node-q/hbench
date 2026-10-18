@@ -1,8 +1,8 @@
 //! antigravity-sdk: Google's Antigravity SDK driven by an uploaded uv script (assets/agents/antigravity-sdk).
 
 use super::antigravity_cli::validate_base_url;
-use super::common::opts::check_options;
 use super::common::{installed_dir, skills_dir};
+use super::pins;
 use super::{ensure_system_dependencies, exec_agent, exec_root};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::quote;
@@ -76,7 +76,6 @@ pub fn parse_trajectory(text: &str, model_name: Option<&str>) -> Option<AgentCon
 
 impl AntigravitySdk {
     pub fn new(args: AgentArgs) -> Result<AntigravitySdk> {
-        check_options(&args, "antigravity-sdk", &["reasoning_effort", "load_skills", "skill_paths"])?;
         let load_skills = match args.kwargs.get("load_skills") {
             None => true,
             Some(_) => args.kw_bool("load_skills").ok_or_else(|| anyhow!("Invalid value for 'load_skills': expected bool"))?,
@@ -202,7 +201,7 @@ impl AntigravitySdk {
         let wheel = self.wheel_path()?;
         if cx.exec("command -v uv >/dev/null 2>&1", &BTreeMap::new(), None).await?.code != 0 {
             ensure_system_dependencies(cx, &["curl", "ca_certificates", "python3"]).await?;
-            exec_root(cx, "curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh", &BTreeMap::new()).await?;
+            exec_root(cx, &format!("curl -LsSf {} | env UV_INSTALL_DIR=/usr/local/bin sh", pins::uv_installer()), &BTreeMap::new()).await?;
         }
         let remote_wheel = wheel.as_ref().map(|w| format!("/installed-agent/{}", w.file_name().unwrap().to_string_lossy()));
         if let (Some(w), Some(r)) = (&wheel, &remote_wheel) {
@@ -298,7 +297,6 @@ mod tests {
         assert_eq!(custom.run_env().unwrap()["SKILLS_PATHS_JSON"], r#"["/a","/b"]"#);
         let off = agent(json!({"load_skills": false}), &[("GEMINI_API_KEY", "k")]);
         assert_eq!(off.run_env().unwrap()["SKILLS_PATHS_JSON"], "[]");
-        assert!(AntigravitySdk::new(args(json!({"nope": 1}), &[], None, vec![])).is_err());
         assert!(AntigravitySdk::new(args(json!({"skill_paths": "x"}), &[], None, vec![])).is_err());
     }
 

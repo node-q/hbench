@@ -1,6 +1,7 @@
 //! Cline CLI.
 
 use super::common::{installed_dir, skills_dir};
+use super::pins;
 use super::{exec_agent, exec_root};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::{ExecResult, quote};
@@ -182,9 +183,10 @@ impl ClineCli {
     fn source_install_command(&self, reason: &str) -> String {
         let repo = quote(&format!("https://github.com/{}/cline.git", self.github_user.as_deref().unwrap_or("cline")));
         let r#ref = quote(&self.commit_hash);
+        let bun = pins::BUN.version;
         format!(
             "echo {} && export BUN_INSTALL=\"$HOME/.bun\" && export PATH=\"$BUN_INSTALL/bin:$PATH\" && \
-             if ! command -v bun >/dev/null 2>&1; then curl -fsSL https://bun.sh/install | bash && export PATH=\"$BUN_INSTALL/bin:$PATH\"; fi && \
+             if ! command -v bun >/dev/null 2>&1; then curl -fsSL https://bun.sh/install | bash -s bun-v{bun} && export PATH=\"$BUN_INSTALL/bin:$PATH\"; fi && \
              CLONE_DIR=\"$HOME/.cache/hbench-cline-source\" && REPO_URL={repo} && REF={ref} && rm -rf \"$CLONE_DIR\" && mkdir -p \"$(dirname \"$CLONE_DIR\")\" && \
              (git clone --branch \"$REF\" --depth 1 \"$REPO_URL\" \"$CLONE_DIR\" || (git clone \"$REPO_URL\" \"$CLONE_DIR\" && cd \"$CLONE_DIR\" && git checkout \"$REF\")) && \
              cd \"$CLONE_DIR/sdk\" && bun install && bun run build:sdk && CLINE_SHIM=\"$(dirname \"$(command -v node)\")/cline\" && \
@@ -415,10 +417,12 @@ impl Agent for ClineCli {
         .await?;
 
         let mut parts = vec![
-            "if command -v node &> /dev/null && node --version | grep -qE '^v2[2-9]|^v[3-9]'; then  echo 'Node.js already installed, skipping nvm setup...'; \
-             else  curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.2/install.sh | bash &&  export NVM_DIR=\"$HOME/.nvm\" &&  \
-             [ -s \"$NVM_DIR/nvm.sh\" ] && \\. \"$NVM_DIR/nvm.sh\" &&  nvm install 22 && nvm use 22 && nvm alias default 22; fi"
-                .to_string(),
+            format!(
+                "if command -v node &> /dev/null && node --version | grep -qE '^v2[2-9]|^v[3-9]'; then  echo 'Node.js already installed, skipping nvm setup...'; \
+                 else  curl -o- {} | bash &&  export NVM_DIR=\"$HOME/.nvm\" &&  \
+                 [ -s \"$NVM_DIR/nvm.sh\" ] && \\. \"$NVM_DIR/nvm.sh\" &&  nvm install 22 && nvm use 22 && nvm alias default 22; fi",
+                pins::nvm_installer()
+            ),
             "export NVM_DIR=\"$HOME/.nvm\" && { [ -s \"$NVM_DIR/nvm.sh\" ] && \\. \"$NVM_DIR/nvm.sh\" || true; }".into(),
         ];
         if let Some(p) = &self.tarball_path {
@@ -432,8 +436,7 @@ impl Agent for ClineCli {
         } else if let Some(g) = &self.github_user {
             parts.push(self.source_install_command(&format!("Installing Cline from source: {g}/cline @ {}", self.commit_hash)));
         } else {
-            let v = self.cline_version.as_deref().unwrap_or("nightly");
-            parts.push(self.npm_install_command(&format!("cline@{v}")));
+            parts.push(self.npm_install_command(&pins::CLINE.npm_spec(self.cline_version.as_deref())));
         }
         if let Some(p) = &self.plugin_tarball_path {
             if !p.is_file() {

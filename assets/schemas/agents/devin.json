@@ -35,5 +35,6 @@
     }
   },
   "title": "InstalledAgentOptions",
-  "type": "object"
+  "type": "object",
+  "x-native-config": true
 }

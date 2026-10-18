@@ -3,6 +3,7 @@
 
 use super::common::opts::kw_int;
 use super::common::{installed_dir, upload_asset};
+use super::pins;
 use super::{ensure_system_dependencies, exec_agent, exec_error, exec_root};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::quote;
@@ -13,7 +14,6 @@ use std::time::Duration;
 
 const RUNNER: &str = include_str!("../../../assets/agents/deerflow/deerflow_runner.py");
 const DEERFLOW_REPO: &str = "https://github.com/bytedance/deer-flow.git";
-const DEERFLOW_REF: &str = "7a6c4a994a86583d2a3c056ee9d0f157d4f030c2";
 const REPO_DIR: &str = "/installed-agent/deer-flow";
 const VENV_DIR: &str = "/opt/hbench-deerflow-venv";
 const PROJECT_DIR: &str = "/installed-agent/deerflow-project";
@@ -110,7 +110,7 @@ impl DeerFlow {
         }
         Ok(DeerFlow {
             repo_url: args.kw("repo_url").unwrap_or_else(|| DEERFLOW_REPO.into()),
-            repo_ref: if args.kwargs.contains_key("repo_ref") { args.kw("repo_ref") } else { Some(DEERFLOW_REF.into()) },
+            repo_ref: if args.kwargs.contains_key("repo_ref") { args.kw("repo_ref") } else { Some(pins::DEERFLOW.version.into()) },
             openrouter_base_url: args.kw("openrouter_base_url").unwrap_or_else(|| "https://openrouter.ai/api/v1".into()),
             workdir_opt: args.kw("workdir"),
             subagent: kw_flag(&args, "subagent", false)?,
@@ -273,10 +273,11 @@ impl DeerFlow {
             .map(|r| format!("git -C {REPO_DIR} fetch --depth 1 origin {0}; git -C {REPO_DIR} checkout --quiet FETCH_HEAD; ", quote(r)))
             .unwrap_or_default();
         format!(
-            "set -euo pipefail; curl -LsSf https://astral.sh/uv/install.sh | sh; if [ -f \"$HOME/.local/bin/env\" ]; then . \"$HOME/.local/bin/env\"; \
+            "set -euo pipefail; curl -LsSf {uv_installer} | sh; if [ -f \"$HOME/.local/bin/env\" ]; then . \"$HOME/.local/bin/env\"; \
              else export PATH=\"$HOME/.local/bin:$PATH\"; fi; git clone --depth 1 {} {REPO_DIR}; {checkout}uv python install 3.12; \
              uv venv {VENV_DIR} --python 3.12; uv pip install -q --python {VENV_PYTHON} {REPO_DIR}/backend/packages/harness",
-            quote(&self.repo_url)
+            quote(&self.repo_url),
+            uv_installer = pins::uv_installer()
         )
     }
 
@@ -450,7 +451,7 @@ mod tests {
             (env["DEERFLOW_SUBAGENT_ENABLED"].as_str(), env["DEERFLOW_RECURSION_LIMIT"].as_str(), env["DEERFLOW_MODEL_NAME"].as_str()),
             ("true", "400", "hbench-model")
         );
-        assert!(d.install_command().contains(&format!("git -C {REPO_DIR} fetch --depth 1 origin {DEERFLOW_REF}; ")));
+        assert!(d.install_command().contains(&format!("git -C {REPO_DIR} fetch --depth 1 origin {}; ", pins::DEERFLOW.version)));
     }
 
     #[test]

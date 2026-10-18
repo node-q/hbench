@@ -11,7 +11,7 @@ Each installed agent lives in `src/agents/installed/<name>.rs`, with any payload
     agent `env` overlay applied last. `exec_as(cmd, Some("root"), ...)`. `cx.env` is the `DockerEnv`
     (`upload_file`, `upload_dir`, `download_file`, `exec_root`, ...). `cx.logs_dir` = host dir mirrored from `/logs/agent`.
   - `AgentArgs`: `model_name`, `kwargs` (JSON values from `--ak` / config `kwargs`), `extra_env` (`--ae`), `mcp_servers`,
-    `skills`, `task`. Helpers: `kw(k)`, `kw_bool(k)`, `get_env(k)` (agent env > host env), `version_kw()`,
+    `skills`, `task`. Helpers: `kw(k)`, `kw_bool(k)` (`opts::lax_bool`), `get_env(k)` (agent env > host env), `version_kw()`,
     `render_instruction()` (applies the `prompt_template_path` kwarg).
 - `src/agents/installed/mod.rs`
   - `ensure_system_dependencies(cx, &["curl", "nodejs", ...])`: installs system packages from the shared package table.
@@ -24,9 +24,12 @@ Each installed agent lives in `src/agents/installed/<name>.rs`, with any payload
 
 ## What an agent implements
 
-1. `pub fn create(args: AgentArgs) -> Result<AgentBox>`, registered in the factory. Validate options eagerly here.
-2. `setup`: `mkdir -p /installed-agent` as root, install (pin versions via the `version` kwarg), then detect the version
-   (`get_version_command` + `parse_version`).
+1. `pub fn create(args: AgentArgs) -> Result<AgentBox>`, registered in the factory. Validate option values eagerly
+   here. The accepted keys come from `assets/schemas/agents/<name>.json` (registered in `src/schemas.rs`): its
+   properties, each property's `x-aliases`, and `x-native-config: true` when the agent takes `config`.
+2. `setup`: `mkdir -p /installed-agent` as root, install, then detect the version (`parse_version`). Add the agent's
+   default version to `pins.rs` (`pins::X.npm_spec(self.version.as_deref())`, `pip_constraint`, ...) and list it in the
+   table its test checks; install uv and nvm through `pins::uv_installer()` / `pins::nvm_installer()`.
 3. `run`: render the instruction, build env (auth via model connection, model name mapping, agent-specific env vars,
    options → env) and CLI flags, with validated names, defaults and env fallbacks. Write logs to `/logs/agent/<file>`
    (`tee`). Upload secrets with `upload_text`.

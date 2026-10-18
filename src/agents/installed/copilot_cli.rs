@@ -1,6 +1,7 @@
 //! GitHub Copilot CLI.
 
 use super::common::{detect_version, installed_dir, opts, skills_dir};
+use super::pins;
 use super::{ensure_system_dependencies, exec_agent, exec_error, parse_version};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::quote;
@@ -13,7 +14,6 @@ const TRAJECTORY_PATH: &str = "/logs/agent/copilot-cli.jsonl";
 const OUTPUT_PATH: &str = "/logs/agent/copilot-cli.txt";
 
 pub fn create(args: AgentArgs) -> Result<AgentBox> {
-    opts::check_known(&args, "copilot-cli", &["reasoning_effort", "disable_web_search"], false)?;
     let a = CopilotCli { version: args.version_kw(), args };
     a.cli_flags()?;
     a.disable_web_search()?;
@@ -128,7 +128,7 @@ impl Agent for CopilotCli {
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
         installed_dir(cx).await?;
         ensure_system_dependencies(cx, &["curl", "bash", "git"]).await?;
-        let v = self.version.as_ref().map(|v| format!(" VERSION={}", quote(v))).unwrap_or_default();
+        let v = format!(" VERSION={}", quote(pins::COPILOT_CLI.or(self.version.as_deref())));
         exec_agent(
             cx,
             &format!(

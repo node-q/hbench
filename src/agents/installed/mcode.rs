@@ -2,6 +2,7 @@
 
 use super::common::opts::kw_int;
 use super::common::{installed_setup, nvm_node_install_snippet, parse_jsonl, skills_dir};
+use super::pins;
 use super::{connection, ensure_system_dependencies, exec_agent};
 use crate::agents::model_connection::{Spec, provider as provider_access};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
@@ -280,11 +281,10 @@ impl Agent for MCode {
     }
 
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
-        let spec = format!("@{}", self.version.as_deref().unwrap_or("latest"));
+        let spec = pins::MCODE.npm_spec(self.version.as_deref());
         let install = async {
             ensure_system_dependencies(cx, &["curl", "coreutils"]).await?;
-            let cmd =
-                format!("set -euo pipefail; {} && npm install -g @minimax-ai/code{spec} && mcode --version", nvm_node_install_snippet(22));
+            let cmd = format!("set -euo pipefail; {} && npm install -g {spec} && mcode --version", nvm_node_install_snippet(22));
             exec_agent(cx, &cmd, &BTreeMap::new()).await.map(|_| ())
         };
         installed_setup(cx, &mut self.version, install, ". ~/.nvm/nvm.sh; mcode --version", |s| s.trim().to_string()).await

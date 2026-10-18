@@ -82,7 +82,10 @@
       ],
       "default": null,
       "description": "Thinking level written to config.toml.",
-      "title": "Thinking"
+      "title": "Thinking",
+      "x-aliases": [
+        "reasoning_effort"
+      ]
     },
     "temperature": {
       "default": 0.2,

@@ -1,6 +1,7 @@
 //! Claude Code.
 
 use super::common::{installed_dir, skills_dir};
+use super::pins;
 use super::{
     connection, ensure_acp_node_command, ensure_system_dependencies, exec_agent, exec_error, exec_root, filter_jsonl_events, parse_version,
     pinned_bin_wrapper_command, safe_bin_symlink_command, upload_text,
@@ -13,7 +14,6 @@ use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
 /// Zed ACP adapter version (bridges ACP <-> the Claude Agent SDK).
-const CLAUDE_CODE_ACP_VERSION: &str = "0.16.2";
 const SETTINGS_DIR: &str = "/tmp/claude-code-settings";
 const SETTINGS_PATH: &str = "/tmp/claude-code-settings/settings.json";
 const SPEC: Spec = Spec {
@@ -363,9 +363,10 @@ impl Agent for ClaudeCode {
                 "set -euo pipefail; mkdir -p {sessions}; {settings}_hb_system_node=\"$(command -v node 2>/dev/null || true)\"; \
                  _hb_claude=\"$(command -v claude 2>/dev/null || true)\"; \
                  if [ -z \"$_hb_claude\" ] && [ -x \"$HOME/.local/bin/claude\" ]; then _hb_claude=\"$HOME/.local/bin/claude\"; fi; \
-                 {} && npm install -g @zed-industries/claude-code-acp@{CLAUDE_CODE_ACP_VERSION} && \
+                 {} && npm install -g {adapter} && \
                  echo \"${{_hb_system_node:-none}}:$(command -v node):$(command -v claude-code-acp):${{_hb_claude:-none}}\"",
-                ensure_acp_node_command()
+                ensure_acp_node_command(),
+                adapter = pins::CLAUDE_CODE_ACP.npm_spec(None),
             ),
             &BTreeMap::new(),
         )
@@ -403,13 +404,13 @@ impl Agent for ClaudeCode {
         };
         if !check {
             ensure_system_dependencies(cx, &["curl", "bash", "nodejs", "npm", "procps"]).await?;
-            let npm_v = self.version.as_ref().map(|v| format!("@{v}")).unwrap_or_default();
-            let sh_v = self.version.as_ref().map(|v| format!(" {v}")).unwrap_or_default();
+            let npm = pins::CLAUDE_CODE.npm_spec(self.version.as_deref());
+            let v = pins::CLAUDE_CODE.or(self.version.as_deref());
             exec_agent(
                 cx,
                 &format!(
-                    "set -euo pipefail; if command -v apk &> /dev/null; then  npm install -g @anthropic-ai/claude-code{npm_v}; \
-                     else  curl -fsSL https://downloads.claude.ai/claude-code-releases/bootstrap.sh | bash -s --{sh_v}; fi && \
+                    "set -euo pipefail; if command -v apk &> /dev/null; then  npm install -g {npm}; \
+                     else  curl -fsSL https://downloads.claude.ai/claude-code-releases/bootstrap.sh | bash -s -- {v}; fi && \
                      echo 'export PATH=\"$HOME/.local/bin:$PATH\"' >> ~/.bashrc && export PATH=\"$HOME/.local/bin:$PATH\" && claude --version"
                 ),
                 &BTreeMap::new(),

@@ -51,7 +51,13 @@ files move with `docker compose cp` rather than bind mounts.
 
 Each agent has pinned install commands and versions, validated CLI flags and env (`--ak key=value` / `kwargs`), auth
 resolution, error classification (`ApiRateLimitError`, `AgentAuthenticationError`, ...), and usage/cost parsing. Cost
-uses a pinned LiteLLM price table. Claude Code works with an API key or a subscription token (`CLAUDE_CODE_OAUTH_TOKEN`, from `claude setup-token`).
+uses a pinned LiteLLM price table.
+
+Installs default to the versions in `src/agents/installed/pins.rs`, helpers included (uv, nvm, bun), so an upstream
+release changes neither results nor installs until the pin moves. `--ak version=X` installs another version and
+`version=latest` the newest. The vendor installers of `antigravity-cli`, `cortex-code`, `cursor-cli`, `junie`, `mimo`,
+`muse-code` and `rovodev-cli` take no version and always fetch the newest release; `result.json` records what was
+installed. `scripts/dev/check-pins.py` lists the pins with a newer release. Claude Code works with an API key or a subscription token (`CLAUDE_CODE_OAUTH_TOKEN`, from `claude setup-token`).
 
 `deepseek-harness` runs DeepSeek's own harness ([`dsh`](https://github.com/deepseek-ai/deepseek-harness),
 npm `@deepseek-ai/dsh`) in its headless profile. It needs `DEEPSEEK_API_KEY` (optional `DEEPSEEK_BASE_URL`, an

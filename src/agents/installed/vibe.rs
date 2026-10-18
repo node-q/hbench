@@ -1,6 +1,7 @@
 //! Mistral Vibe installed agent.
 
 use super::common::{installed_dir, skills_dir};
+use super::pins;
 use super::{ensure_system_dependencies, exec_agent, exec_error};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::{kind_err, quote};
@@ -14,19 +15,6 @@ use std::sync::OnceLock;
 const VIBE_HOME: &str = "/logs/agent/vibe-home";
 const PROVIDER_NAME: &str = "hbench-openai";
 const DEFAULT_API_BASE: &str = "https://api.mistral.ai/v1";
-const OPTION_KEYS: &[&str] = &[
-    "version",
-    "prompt_template_path",
-    "config",
-    "max_turns",
-    "max_price",
-    "max_tokens",
-    "thinking",
-    "reasoning_effort",
-    "temperature",
-    "backend",
-];
-
 pub fn create(args: AgentArgs) -> Result<AgentBox> {
     Ok(Box::new(Vibe::new(args)?))
 }
@@ -119,12 +107,6 @@ impl Vibe {
         let bad = |k: &str, why: &str| {
             anyhow!("Invalid kwargs for agent 'vibe':\n  {k}: {why}\nSee `hbench agents schema vibe` for available options.")
         };
-        if let Some(k) = args.kwargs.keys().find(|k| !OPTION_KEYS.contains(&k.as_str())) {
-            bail!("Invalid kwargs for agent 'vibe':\n  Unknown option '{k}'.\nSee `hbench agents schema vibe` for available options.");
-        }
-        if args.kwargs.get("config").is_some_and(|v| !v.is_null()) {
-            bail!("Agent 'vibe' does not support config. You can implement it.");
-        }
         let int = |k: &str, env: &str| -> Result<Option<i64>> {
             let v = match args.kwargs.get(k) {
                 Some(Value::Null) => return Ok(None), // explicit None opts out of the env fallback
@@ -431,12 +413,13 @@ impl Agent for Vibe {
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
         installed_dir(cx).await?;
         ensure_system_dependencies(cx, &["curl", "bash"]).await?;
-        let spec = self.version.as_ref().map(|v| format!("=={v}")).unwrap_or_default();
+        let spec = pins::VIBE.pip_constraint(self.version.as_deref());
         exec_agent(
             cx,
             &format!(
-                "set -euo pipefail; if ! command -v uv &> /dev/null; then  curl -LsSf https://astral.sh/uv/install.sh | sh; fi && \
-                 export PATH=\"$HOME/.local/bin:$PATH\" && uv tool install mistral-vibe{spec} && vibe --version"
+                "set -euo pipefail; if ! command -v uv &> /dev/null; then  curl -LsSf {uv_installer} | sh; fi && \
+                 export PATH=\"$HOME/.local/bin:$PATH\" && uv tool install mistral-vibe{spec} && vibe --version",
+                uv_installer = pins::uv_installer()
             ),
             &BTreeMap::new(),
         )
@@ -597,8 +580,6 @@ mod tests {
         assert_eq!(f.cli_flags(), "--max-turns 5 --max-price 2.50 --max-tokens 100");
         assert_eq!(agent(json!({"max_turns": null}), &[("VIBE_MAX_TURNS", "9")], Some("m")).cli_flags(), "");
         assert!(agent_with(json!({"max_turns": "x"}), &[], Some("m"), vec![]).is_err());
-        assert!(agent_with(json!({"bogus": 1}), &[], Some("m"), vec![]).is_err());
-        assert!(agent_with(json!({"config": {}}), &[], Some("m"), vec![]).is_err());
         assert_eq!(parse_vibe_version("\nvibe 2.17.1\n"), "2.17.1");
     }
 

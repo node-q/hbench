@@ -1,6 +1,7 @@
 //! NVIDIA NeMo Agent Toolkit installed agent.
 
 use super::common::{installed_dir, upload_asset};
+use super::pins;
 use super::{ensure_system_dependencies, exec_agent, exec_error, exec_root};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::quote;
@@ -251,7 +252,10 @@ impl Agent for NemoAgent {
             ensure_system_dependencies(cx, if self.nat_repo.is_some() { &["curl", "git"] } else { &["curl"] }).await?;
             exec_agent(
                 cx,
-                &format!("{PATH_SETUP}; command -v uv > /dev/null 2>&1 || curl -LsSf https://astral.sh/uv/install.sh | sh"),
+                &format!(
+                    "{PATH_SETUP}; command -v uv > /dev/null 2>&1 || curl -LsSf {uv_installer} | sh",
+                    uv_installer = pins::uv_installer()
+                ),
                 &none,
             )
             .await?;
@@ -260,8 +264,7 @@ impl Agent for NemoAgent {
             exec_agent(cx, &format!("{PATH_SETUP}; uv venv /opt/nvidia-nat-venv --python 3.12 --clear"), &none).await?;
             let spec = match (&self.nat_repo, &self.version) {
                 (Some(r), _) => quote(&format!("{r}[eval,langchain]")),
-                (None, Some(v)) => quote(&format!("nvidia-nat[eval,langchain]=={v}")),
-                _ => quote("nvidia-nat[eval,langchain]>=1.5"),
+                (None, v) => quote(&format!("nvidia-nat[eval,langchain]{}", pins::NEMO_AGENT.pip_constraint(v.as_deref()))),
             };
             let cmd = format!("{PATH_SETUP}; uv pip install --python /opt/nvidia-nat-venv/bin/python {spec}");
             let r = cx.exec(&format!("set -o pipefail; {cmd}"), &none, Some(Duration::from_secs(300))).await?;

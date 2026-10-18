@@ -1,6 +1,7 @@
 //! LangGraph: runs a user's LangGraph project (Python or LangGraph.js) via the bundled runners.
 
 use super::common::{installed_dir, nvm_node_install_snippet, upload_asset};
+use super::pins;
 use super::{ensure_system_dependencies, exec_agent, exec_root};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::quote;
@@ -28,7 +29,7 @@ const NODE_SUFFIXES: [&str; 8] = [".js", ".mjs", ".cjs", ".ts", ".mts", ".cts", 
 const NODE_PACKAGE_MANAGERS: [(&str, &[&str], &str, &str); 4] = [
     ("pnpm", &["pnpm-lock.yaml"], "corepack enable && pnpm install --frozen-lockfile", "corepack enable && pnpm install"),
     ("yarn", &["yarn.lock"], "corepack enable && yarn install --immutable", "corepack enable && yarn install"),
-    ("bun", &["bun.lock", "bun.lockb"], "npm install -g bun && bun install --frozen-lockfile", "npm install -g bun && bun install"),
+    ("bun", &["bun.lock", "bun.lockb"], "bun install --frozen-lockfile", "bun install"),
     ("npm", &["package-lock.json"], "npm ci", "npm install"),
 ];
 const FORWARDED_ENV_VARS: [&str; 21] = [
@@ -334,7 +335,11 @@ impl LangGraph {
         if manager == "yarn" && self.yarn_major() < 2 {
             locked = "corepack enable && yarn install --frozen-lockfile";
         }
-        if self.has_lockfile(locks) { locked } else { unlocked }.to_string()
+        let install = if self.has_lockfile(locks) { locked } else { unlocked };
+        match manager {
+            "bun" => format!("npm install -g {} && {install}", pins::BUN.npm_spec(None)),
+            _ => install.to_string(),
+        }
     }
 
     fn node_install_command(&self) -> String {
@@ -367,8 +372,8 @@ impl LangGraph {
         let deps = serde_json::to_string(&self.dependency_overrides).unwrap();
         let pv = quote(&self.python_version);
         format!(
-            "set -euo pipefail; curl -LsSf https://astral.sh/uv/install.sh | sh; if [ -f \"$HOME/.local/bin/env\" ]; then . \"$HOME/.local/bin/env\"; fi; \
-             uv python install {pv}; uv venv {VENV_DIR} --python {pv} --clear; . {VENV_DIR}/bin/activate; uv pip install langgraph==1.2.15 python-dotenv==1.2.4; python - <<'PY'\n\
+            "set -euo pipefail; curl -LsSf {uv_installer} | sh; if [ -f \"$HOME/.local/bin/env\" ]; then . \"$HOME/.local/bin/env\"; fi; \
+             uv python install {pv}; uv venv {VENV_DIR} --python {pv} --clear; . {VENV_DIR}/bin/activate; uv pip install {langgraph} {dotenv}; python - <<'PY'\n\
              import json, os, subprocess, sys\n\
              project_dir = {}\n\
              config_name = {}\n\
@@ -388,6 +393,9 @@ impl LangGraph {
             py_repr(PROJECT_DIR),
             py_repr(&self.config),
             py_repr(&deps),
+            uv_installer = pins::uv_installer(),
+            langgraph = pins::LANGGRAPH.requirement(),
+            dotenv = pins::PYTHON_DOTENV.requirement()
         )
     }
 
@@ -564,7 +572,7 @@ impl Agent for LangGraph {
         upload_asset(cx, runner, runner_path).await?;
         exec_root(cx, &format!("chown -R {user}:{user} {PROJECT_DIR}"), &none).await?;
         if node {
-            let tools = ["tsx@4.19.3", "langsmith@0.3.68"].join(" ");
+            let tools = [pins::TSX, pins::LANGSMITH].map(|p| p.npm_spec(None)).join(" ");
             exec_agent(
                 cx,
                 &format!(

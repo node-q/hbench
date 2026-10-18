@@ -1,6 +1,5 @@
 //! Agent abstraction and the factory mapping names to agents.
 
-pub mod allowed_kwargs;
 pub mod computer1;
 pub mod dspy_rlm;
 pub mod installed;
@@ -154,17 +153,9 @@ impl AgentArgs {
             v => Some(v.to_string()),
         }
     }
+    /// kwargs value as a boolean ([`installed::common::opts::lax_bool`]); None when absent, null or not a boolean.
     pub fn kw_bool(&self, k: &str) -> Option<bool> {
-        match self.kwargs.get(k)? {
-            Value::Bool(b) => Some(*b),
-            Value::String(s) => match s.to_lowercase().as_str() {
-                "true" | "1" | "yes" => Some(true),
-                "false" | "0" | "no" => Some(false),
-                _ => None,
-            },
-            Value::Number(n) => Some(n.as_f64() != Some(0.0)),
-            _ => None,
-        }
+        self.kwargs.get(k).and_then(installed::common::opts::lax_bool)
     }
     /// Env lookup: agent `env` (--ae) > host environment.
     pub fn get_env(&self, k: &str) -> Option<String> {
@@ -204,14 +195,15 @@ pub fn agent_names() -> Vec<&'static str> {
     v
 }
 
-/// Options validation: kwargs outside the agent's options model are rejected.
+/// Reject kwargs outside the agent's options schema, and `config` unless the agent supports it natively.
 pub fn check_kwargs(name: &str, kwargs: &BTreeMap<String, Value>) -> Result<()> {
-    let key = if name.starts_with("acp:") { "acp" } else { name };
-    let Some(allowed) = allowed_kwargs::allowed(key) else { return Ok(()) };
-    let unknown: Vec<String> =
-        kwargs.keys().filter(|k| !allowed.contains(&k.as_str())).map(|k| format!("  Unknown option '{k}'.")).collect();
+    let Some(options) = crate::schemas::options(name) else { return Ok(()) };
+    let unknown: Vec<String> = kwargs.keys().filter(|k| !options.keys.contains(*k)).map(|k| format!("  Unknown option '{k}'.")).collect();
     if !unknown.is_empty() {
         bail!("Invalid kwargs for agent '{name}':\n{}\nSee `hbench agents schema {name}` for available options.", unknown.join("\n"));
+    }
+    if !options.native_config && kwargs.get("config").is_some_and(|v| !v.is_null()) {
+        bail!("Agent '{name}' does not support config. You can implement it.");
     }
     Ok(())
 }
@@ -244,4 +236,24 @@ pub fn create(cfg: &AgentConfig, logs_dir: PathBuf, task: Arc<Task>, load_trajec
             None => bail!("Unknown agent {other:?}. Known agents: {}", agent_names().join(", ")),
         },
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn options_come_from_the_schema() {
+        let kw = |v: Value| -> BTreeMap<String, Value> { serde_json::from_value(v).unwrap() };
+        for name in agent_names().into_iter().filter(|n| !matches!(*n, "oracle" | "nop")) {
+            let err = check_kwargs(name, &kw(serde_json::json!({"bogus": 1, "nope": 2}))).unwrap_err().to_string();
+            assert!(err.contains("Unknown option 'bogus'.\n  Unknown option 'nope'."), "{name}: {err}");
+            let native = crate::schemas::options(name).unwrap().native_config;
+            let config = check_kwargs(name, &kw(serde_json::json!({"config": {}})));
+            assert_eq!(config.is_ok(), native, "{name}: {config:?}");
+        }
+        assert!(check_kwargs("cline-cli", &kw(serde_json::json!({"cline-timeout": 60}))).is_ok());
+        assert!(check_kwargs("terminus", &kw(serde_json::json!({"max_episodes": 5}))).is_ok());
+        assert!(check_kwargs("acp:goose", &kw(serde_json::json!({"config": {}}))).is_err());
+    }
 }

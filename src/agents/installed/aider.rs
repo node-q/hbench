@@ -1,6 +1,7 @@
 //! aider.
 
 use super::common::{detect_version, installed_dir, opts};
+use super::pins;
 use super::{connection, ensure_system_dependencies, exec_agent};
 use crate::agents::model_connection::{Spec, provider};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
@@ -20,12 +21,6 @@ const SNAPSHOT_UNTRACKED_WORKSPACE: &str = "if command -v git >/dev/null 2>&1 \
     fi; ";
 
 pub fn create(args: AgentArgs) -> Result<AgentBox> {
-    opts::check_known(
-        &args,
-        "aider",
-        &["reasoning_effort", "thinking_tokens", "cache_prompts", "auto_lint", "auto_test", "test_cmd", "stream", "map_tokens"],
-        false,
-    )?;
     let a = Aider { version: args.version_kw(), args };
     a.cli_flags()?;
     Ok(Box::new(a))
@@ -109,8 +104,13 @@ impl Agent for Aider {
         ensure_system_dependencies(cx, &["curl", "git", "coreutils"]).await?;
         exec_agent(
             cx,
-            "set -euo pipefail; curl -LsSf https://aider.chat/install.sh | sh && \
-             if [ -f \"$HOME/.local/bin/env\" ]; then source \"$HOME/.local/bin/env\"; fi && aider --version",
+            &format!(
+                "set -euo pipefail; curl -LsSf {} | sh && \
+                 if [ -f \"$HOME/.local/bin/env\" ]; then source \"$HOME/.local/bin/env\"; else export PATH=\"$HOME/.local/bin:$PATH\"; fi && \
+                 uv tool install --force --python python3.12 --with pip aider-chat{} && aider --version",
+                pins::uv_installer(),
+                pins::AIDER.pip_constraint(self.version.as_deref())
+            ),
             &BTreeMap::new(),
         )
         .await?;
@@ -144,12 +144,7 @@ mod tests {
 
     fn agent(kwargs: serde_json::Value, env: &[(&str, &str)], model: Option<&str>) -> Result<Aider> {
         let args = common::test_args(kwargs, env, model);
-        opts::check_known(
-            &args,
-            "aider",
-            &["reasoning_effort", "thinking_tokens", "cache_prompts", "auto_lint", "auto_test", "test_cmd", "stream", "map_tokens"],
-            false,
-        )?;
+        crate::agents::check_kwargs("aider", &args.kwargs)?;
         let a = Aider { version: None, args };
         a.cli_flags()?;
         Ok(a)

@@ -2,6 +2,7 @@
 
 use super::common::opts::kw_int;
 use super::common::{installed_setup, nvm_node_install_snippet, skills_dir};
+use super::pins;
 use super::{connection, ensure_system_dependencies, exec_agent, upload_text};
 use crate::agents::model_connection::{Resolved, Spec};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
@@ -14,7 +15,6 @@ use std::path::Path;
 const SPEC: Spec = Spec { default_provider: None, api_key_envs: &[], base_url_envs: &[], passthrough: true };
 const CONFIG_DIR: &str = "/tmp/hbench-pi-agent";
 const CUSTOM_PROVIDER: &str = "hbench-endpoint";
-const MCP_ADAPTER_PACKAGE: &str = "pi-mcp-adapter@2.34.0";
 const MCP_ADAPTER_DEFAULT_PI_VERSION: &str = "0.85.1";
 const MCP_ADAPTER_DIR: &str = "/tmp/hbench-pi-mcp-adapter";
 const MCP_ADAPTER_EXTENSION: &str = "/tmp/hbench-pi-mcp-adapter/node_modules/pi-mcp-adapter/index.ts";
@@ -70,7 +70,7 @@ impl Pi {
     fn package_name(&self) -> &'static str {
         match self.version.as_deref().and_then(version) {
             Some(v) if v < [0, 74, 0, 0] => "@mariozechner/pi-coding-agent",
-            _ => "@earendil-works/pi-coding-agent",
+            _ => pins::PI.name,
         }
     }
 
@@ -81,7 +81,7 @@ impl Pi {
             let v = install_version.get_or_insert_with(|| MCP_ADAPTER_DEFAULT_PI_VERSION.into()).clone();
             let Some(p) = version(&v) else { bail!("Pi MCP requires a valid Pi version in the supported range <0.86.0,>=0.84.1") };
             if !([0, 84, 1, 0]..[0, 86, 0, 0]).contains(&p) {
-                bail!("Pi MCP adapter {MCP_ADAPTER_PACKAGE} requires Pi <0.86.0,>=0.84.1; got {v}");
+                bail!("Pi MCP adapter {} requires Pi <0.86.0,>=0.84.1; got {v}", pins::PI_MCP_ADAPTER.npm_spec(None));
             }
         }
         if self.max_turns.is_some()
@@ -92,11 +92,11 @@ impl Pi {
                 bail!("Pi max_turns requires the extension turn_end and abort APIs, available in Pi >=0.35.0; got {v}");
             }
         }
-        let spec = format!("@{}", install_version.as_deref().unwrap_or("latest"));
+        let spec = format!("@{}", pins::PI.or(install_version.as_deref()));
         let mcp = if self.args.mcp_servers.is_empty() {
             String::new()
         } else {
-            format!(" && npm install --prefix {MCP_ADAPTER_DIR} --ignore-scripts {MCP_ADAPTER_PACKAGE}")
+            format!(" && npm install --prefix {MCP_ADAPTER_DIR} --ignore-scripts {}", pins::PI_MCP_ADAPTER.npm_spec(None))
         };
         Ok(format!(
             "set -euo pipefail; {} && npm install -g --ignore-scripts {}{spec}{mcp} && pi --version",
@@ -453,7 +453,7 @@ mod tests {
                 .contains("npm install -g --ignore-scripts @mariozechner/pi-coding-agent@0.73.9 && pi --version")
         );
         assert!(pi(json!({"version": "0.30.0", "max_turns": 3}), &[], None).unwrap().install_command().is_err());
-        assert!(pi(json!({}), &[], None).unwrap().install_command().unwrap().contains("@earendil-works/pi-coding-agent@latest"));
+        assert!(pi(json!({}), &[], None).unwrap().install_command().unwrap().contains("@earendil-works/pi-coding-agent@1.3.0"));
         let mut a = args(json!({}), &[], None);
         a.mcp_servers = vec![serde_json::from_value(json!({"name": "s", "transport": "stdio", "command": "npx", "args": ["x"]})).unwrap()];
         let m = Pi::new(a).unwrap();

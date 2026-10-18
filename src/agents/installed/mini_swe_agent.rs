@@ -1,6 +1,7 @@
 //! mini-swe-agent installed agent.
 
 use super::common::installed_dir;
+use super::pins;
 use super::{connection, ensure_system_dependencies, exec_agent};
 use crate::agents::model_connection::{Resolved, Spec};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
@@ -18,25 +19,9 @@ const SPEC: Spec = Spec {
 };
 const DEFAULT_LITELLM_TIMEOUT_SEC: u32 = 3600;
 const PYTHON_VERSION: &str = "3.12";
-/// Exact versions, so a new upstream release cannot break the install (litellm 1.106.0 imports `mcp`, which
-/// it does not depend on, and every model call fails). The `version` kwarg still picks mini-swe-agent.
-const DEFAULT_VERSION: &str = "2.4.6";
-const PINNED_DEPS: &[&str] = &["litellm==1.105.1", "orjson==3.13.0", "fastapi==0.143.2"];
 const TRAJECTORY_PATH: &str = "/logs/agent/mini-swe-agent.trajectory.json";
 const ENV_PRELUDE: &str =
     "if [ -f \"$HOME/.local/bin/env\" ]; then . \"$HOME/.local/bin/env\"; else export PATH=\"$HOME/.local/bin:$PATH\"; fi; ";
-const OPTIONS: &[&str] = &[
-    "version",
-    "prompt_template_path",
-    "config",
-    "cost_limit",
-    "reasoning_effort",
-    "max_tokens",
-    "config_file",
-    "litellm_model_registry_file",
-    "litellm_model_registry",
-    "session_id_headers",
-];
 
 /// Python type name, for Python-style error messages.
 pub(crate) fn py_type(v: &Value) -> &'static str {
@@ -59,14 +44,6 @@ pub(crate) fn opt_str(args: &AgentArgs, agent: &str, k: &str) -> Result<Option<S
         Some(Value::Number(n)) => Ok(Some(n.to_string())),
         Some(_) => bail!("Invalid kwargs for agent '{agent}':\n  {k}: Input should be a valid string"),
     }
-}
-
-/// `extra="forbid"` on the options model.
-pub(crate) fn reject_unknown(args: &AgentArgs, agent: &str, known: &[&str]) -> Result<()> {
-    if let Some(k) = args.kwargs.keys().find(|k| !known.contains(&k.as_str()) && *k != "override_setup_timeout_sec") {
-        bail!("Invalid kwargs for agent '{agent}':\n  Unknown option '{k}'.\nSee `hbench agents schema {agent}` for available options.");
-    }
-    Ok(())
 }
 
 /// Trial session id (`{trial_name}__agent`); logs_dir is `<trial>/agent`.
@@ -92,15 +69,16 @@ pub fn create(args: AgentArgs) -> Result<AgentBox> {
 
 impl MiniSweAgent {
     fn install_command(&self) -> String {
-        let version = self.version.as_deref().unwrap_or(DEFAULT_VERSION);
         let py = quote(PYTHON_VERSION);
-        let pkg = quote(&format!("mini-swe-agent=={version}"));
-        let deps: String = PINNED_DEPS.iter().map(|d| format!(" --with {}", quote(d))).collect();
+        let pkg = quote(&format!("mini-swe-agent{}", pins::MINI_SWE_AGENT.pip_constraint(self.version.as_deref())));
+        let deps: String =
+            [pins::LITELLM, pins::ORJSON, pins::FASTAPI].iter().map(|d| format!(" --with {}", quote(&d.requirement()))).collect();
         format!(
-            "set -euo pipefail; if ! command -v uv >/dev/null 2>&1; then  curl -LsSf https://astral.sh/uv/install.sh | sh; fi && \
+            "set -euo pipefail; if ! command -v uv >/dev/null 2>&1; then  curl -LsSf {uv_installer} | sh; fi && \
              if ! grep -q 'export PATH=\"$HOME/.local/bin:$PATH\"' \"$HOME/.bashrc\" 2>/dev/null; then  echo 'export PATH=\"$HOME/.local/bin:$PATH\"' >> \"$HOME/.bashrc\"; fi && \
              if [ -f \"$HOME/.local/bin/env\" ]; then source \"$HOME/.local/bin/env\"; fi && export PATH=\"$HOME/.local/bin:$PATH\" && \
-             uv python install {py} && uv tool install --python {py} {pkg}{deps} && mini-swe-agent --help"
+             uv python install {py} && uv tool install --python {py} {pkg}{deps} && mini-swe-agent --help",
+            uv_installer = pins::uv_installer()
         )
     }
 
@@ -150,7 +128,6 @@ impl MiniSweAgent {
                 Some(serde_json::to_string_pretty(&v)?)
             }
         };
-        reject_unknown(&args, N, OPTIONS)?;
         let cost_limit = if args.kwargs.contains_key("cost_limit") { opt_str(&args, N, "cost_limit")? } else { Some("0".into()) };
         let reasoning_effort = opt_str(&args, N, "reasoning_effort")?;
         let session_id_headers = validate_session_id_headers(args.kwargs.get("session_id_headers"))?;
@@ -314,7 +291,7 @@ impl Agent for MiniSweAgent {
         ensure_system_dependencies(cx, &["curl", "bash", "build_tools", "git"]).await?;
         exec_agent(cx, &self.install_command(), &BTreeMap::new()).await?;
         if self.version.is_none() {
-            self.version = Some(DEFAULT_VERSION.into());
+            self.version = Some(pins::MINI_SWE_AGENT.version.into());
         }
         Ok(())
     }
@@ -430,7 +407,6 @@ pub(crate) mod tests {
         assert!(err(json!({"litellm_model_registry": "{}"})).contains("expected a mapping, got str"));
         assert!(err(json!({"litellm_model_registry": {}, "litellm_model_registry_file": "/r.json"})).contains("mutually exclusive"));
         assert!(err(json!({"session_id_headers": ["bad header"]})).contains("Invalid HTTP header name"));
-        assert!(err(json!({"bogus": 1})).contains("Unknown option 'bogus'"));
         let f = std::env::temp_dir().join(format!("reg-{}.json", uuid::Uuid::new_v4()));
         std::fs::write(&f, "[1, 2, 3]").unwrap();
         assert!(

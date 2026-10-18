@@ -3,8 +3,9 @@
 
 pub mod opts;
 
+use super::pins;
 use crate::agents::{AgentArgs, AgentCtx};
-use anyhow::{Result, bail};
+use anyhow::{Result, anyhow};
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
 
@@ -16,10 +17,11 @@ pub fn skills_dir(args: &AgentArgs) -> Option<String> {
 /// Shell snippet installing Node via nvm.
 pub fn nvm_node_install_snippet(node_major: u32) -> String {
     format!(
-        "curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.2/install.sh | env -u NODE_VERSION bash && \
+        "curl -o- {nvm_installer} | env -u NODE_VERSION bash && \
          export NVM_DIR=\"$HOME/.nvm\" && \\. \"$NVM_DIR/nvm.sh\" || true && \
          command -v nvm &>/dev/null || {{ echo 'Error: NVM failed to load' >&2; exit 1; }} && \
-         nvm install {node_major} && nvm alias default {node_major} && npm -v"
+         nvm install {node_major} && nvm alias default {node_major} && npm -v",
+        nvm_installer = pins::nvm_installer()
     )
 }
 
@@ -83,16 +85,12 @@ pub fn parse_jsonl(text: &str) -> Vec<Value> {
     text.lines().filter_map(|l| serde_json::from_str(l.trim()).ok()).collect()
 }
 
-/// Parse a boolean env value.
 pub fn parse_bool_env_value(v: &str, name: &str) -> Result<bool> {
-    match v.trim().to_lowercase().as_str() {
-        "true" | "1" | "yes" => Ok(true),
-        "false" | "0" | "no" => Ok(false),
-        _ => bail!("Invalid value for '{name}': cannot parse '{v}' as bool (expected true/false/1/0/yes/no)"),
-    }
+    opts::lax_bool(&Value::String(v.into()))
+        .ok_or_else(|| anyhow!("Invalid value for '{name}': cannot parse '{v}' as bool (expected true/false/1/0/yes/no)"))
 }
 
-/// `parse_bool_env_value`, defaulting to false.
+/// An unset variable is false.
 pub fn parse_bool_env(v: Option<String>, name: &str) -> Result<bool> {
     v.map_or(Ok(false), |v| parse_bool_env_value(&v, name))
 }

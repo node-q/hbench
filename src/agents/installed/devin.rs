@@ -4,6 +4,7 @@
 //! context), so there is no usage parsing; sessions.db is still copied to logs.
 
 use super::common::installed_dir;
+use super::pins;
 use super::{ensure_system_dependencies, exec_agent, upload_text};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::quote;
@@ -84,13 +85,12 @@ impl Agent for Devin {
             exec_agent(cx, "DATA_DIR=\"${XDG_DATA_HOME:-$HOME/.local/share}/devin\"; mkdir -p \"$DATA_DIR\"; echo \"$DATA_DIR\"", &none)
                 .await?;
         upload_text(cx, &format!("{}/credentials.toml", data_dir.stdout.trim()), &creds).await?;
-        let v = self.version.as_ref().map(|v| format!(" {v}")).unwrap_or_default();
-        exec_agent(
-            cx,
-            &format!("curl -fsSL https://cli.devin.ai/install.sh | bash -s --{v}; export PATH=\"$HOME/.local/bin:$PATH\"; devin version"),
-            &none,
-        )
-        .await?;
+        // The versioned setup script installs that release; the top-level one ignores arguments.
+        let installer = match pins::DEVIN.or(self.version.as_deref()) {
+            "latest" => "https://cli.devin.ai/install.sh".to_string(),
+            v => format!("https://static.devin.ai/cli/{v}/setup.sh"),
+        };
+        exec_agent(cx, &format!("curl -fsSL {installer} | bash; export PATH=\"$HOME/.local/bin:$PATH\"; devin version"), &none).await?;
         if !self.args.mcp_servers.is_empty() {
             let dir = exec_agent(
                 cx,

@@ -1,7 +1,7 @@
 //! fx. `fx-dev` reuses this struct with `dev = true`.
 
-use super::common::opts::check_options;
 use super::common::{installed_dir, skills_dir};
+use super::pins;
 use super::{connection, ensure_system_dependencies, exec_agent, upload_text};
 use crate::agents::model_connection::Spec;
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
@@ -40,11 +40,6 @@ pub struct Fx {
 impl Fx {
     pub fn new(args: AgentArgs, dev: bool) -> Result<Fx> {
         let name = if dev { "fx-dev" } else { "fx" };
-        let mut fields = vec!["max_agent_steps", "reasoning_effort", "permission_mode"];
-        if dev {
-            fields.extend(["trace_log", "trace_scopes"]);
-        }
-        check_options(&args, name, &fields)?;
         let reasoning_effort = args.kw("reasoning_effort");
         if let Some(r) = &reasoning_effort
             && !REASONING_EFFORTS.contains(&r.as_str())
@@ -143,8 +138,10 @@ impl Fx {
     }
 
     fn install_command(&self) -> String {
-        let version = self.version.as_ref().map(|v| if v.starts_with('v') { v.clone() } else { format!("v{v}") });
-        let version_arg = version.map(|v| format!(" -s -- {}", quote(&v))).unwrap_or_default();
+        let version_arg = match pins::FX.or(self.version.as_deref()) {
+            "latest" => String::new(),
+            v => format!(" -s -- {}", quote(&format!("v{}", v.trim_start_matches('v')))),
+        };
         format!("set -euo pipefail; curl -fsSL {INSTALL_SCRIPT_URL} | bash{version_arg} && {PATH_EXPORT} && fx --version")
     }
 
@@ -259,12 +256,7 @@ pub(crate) mod tests {
                 .to_string()
                 .contains("permission_mode")
         );
-        assert!(Fx::new(args(json!({"bogus": 1}), &[], None, vec![]), false).err().unwrap().to_string().contains("Unknown option 'bogus'"));
-        assert!(Fx::new(args(json!({"trace_log": "x"}), &[], None, vec![]), false).is_err());
         assert!(Fx::new(args(json!({"max_agent_steps": "abc"}), &[], None, vec![]), false).is_err());
-        assert!(
-            Fx::new(args(json!({"config": {}}), &[], None, vec![]), false).err().unwrap().to_string().contains("does not support config")
-        );
     }
 
     #[test]

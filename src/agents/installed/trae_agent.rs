@@ -1,6 +1,7 @@
 //! trae-agent installed agent.
 
 use super::common::installed_dir;
+use super::pins;
 use super::{connection, ensure_system_dependencies, exec_agent};
 use crate::agents::model_connection::{Resolved, Spec, with_canonical_provider_envs};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
@@ -47,20 +48,6 @@ pub(crate) fn opt_str(k: &str, v: &Value) -> Result<String> {
     }
 }
 
-/// `extra="forbid"` plus BaseInstalledAgent's `config` rejection (no native_config).
-pub(crate) fn check_kwargs(name: &str, args: &AgentArgs, fields: &[&str]) -> Result<()> {
-    for k in args.kwargs.keys() {
-        if k == "config" {
-            if !args.kwargs[k].is_null() {
-                bail!("Agent '{name}' does not support config. You can implement it.");
-            }
-        } else if !["version", "prompt_template_path"].contains(&k.as_str()) && !fields.contains(&k.as_str()) {
-            bail!("Invalid kwargs for agent '{name}':\n  Unknown option '{k}'.");
-        }
-    }
-    Ok(())
-}
-
 pub struct TraeAgent {
     args: AgentArgs,
     version: Option<String>,
@@ -77,7 +64,6 @@ pub fn create(args: AgentArgs) -> Result<AgentBox> {
 
 impl TraeAgent {
     fn new(args: AgentArgs) -> Result<TraeAgent> {
-        check_kwargs("trae-agent", &args, &["max_steps", "temperature", "max_tokens", "top_p", "top_k"])?;
         // kwarg > fallback env (extra_env > host) > default.
         let raw =
             |k: &str, env: &str| args.kwargs.get(k).filter(|v| !v.is_null()).cloned().or_else(|| args.get_env(env).map(Value::String));
@@ -206,13 +192,17 @@ impl Agent for TraeAgent {
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
         installed_dir(cx).await?;
         ensure_system_dependencies(cx, &["curl", "git"]).await?;
-        let vs = self.version.as_ref().map(|v| format!("@{v}")).unwrap_or_default();
+        let vs = match pins::TRAE_AGENT.or(self.version.as_deref()) {
+            "latest" => String::new(),
+            v => format!("@{v}"),
+        };
         exec_agent(
             cx,
             &format!(
-                "set -euo pipefail; if ! command -v uv &>/dev/null; then  curl -LsSf https://astral.sh/uv/install.sh | sh &&  \
+                "set -euo pipefail; if ! command -v uv &>/dev/null; then  curl -LsSf {uv_installer} | sh &&  \
                  export PATH=\"$HOME/.local/bin:$PATH\"; fi && uv tool install --python 3.12 \"trae-agent[test,evaluation] @ \
-                 git+https://github.com/bytedance/trae-agent.git{vs}\" && export PATH=\"$HOME/.local/bin:$PATH\" && trae-cli --help"
+                 git+https://github.com/bytedance/trae-agent.git{vs}\" && export PATH=\"$HOME/.local/bin:$PATH\" && trae-cli --help",
+                uv_installer = pins::uv_installer()
             ),
             &BTreeMap::new(),
         )
@@ -305,8 +295,6 @@ mod tests {
         assert_eq!(cfg["model_providers"]["openai"]["base_url"], "http://x");
 
         assert!(TraeAgent::new(args(json!({"max_steps": "many"}), &[], None)).is_err());
-        assert!(TraeAgent::new(args(json!({"bogus": 1}), &[], None)).is_err());
-        assert!(TraeAgent::new(args(json!({"config": {}}), &[], None)).is_err());
         // Run-time validation.
         assert!(TraeAgent::new(args(json!({}), &[], Some("nomodel"))).unwrap().prepare().is_err());
         assert!(TraeAgent::new(args(json!({}), &[("XAI_API_KEY", "k")], Some("xai/grok"))).unwrap().prepare().is_err());

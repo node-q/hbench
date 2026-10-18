@@ -105,5 +105,6 @@
     }
   },
   "title": "CodexOptions",
-  "type": "object"
+  "type": "object",
+  "x-native-config": true
 }

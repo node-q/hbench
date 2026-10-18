@@ -55,7 +55,10 @@
       ],
       "default": null,
       "description": "OpenClaw thinking level.",
-      "title": "Thinking"
+      "title": "Thinking",
+      "x-aliases": [
+        "reasoning_effort"
+      ]
     },
     "timeout": {
       "anyOf": [
@@ -105,5 +108,6 @@
     }
   },
   "title": "OpenClawOptions",
-  "type": "object"
+  "type": "object",
+  "x-native-config": true
 }

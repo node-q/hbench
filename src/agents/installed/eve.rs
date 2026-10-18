@@ -2,6 +2,7 @@
 //! Eve's HTTP session API via the uploaded `eve_runner.mjs`.
 
 use super::common::{installed_dir, parse_bool_env_value, skills_dir};
+use super::pins;
 use super::{ensure_system_dependencies, exec_agent, exec_error, exec_root};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::quote;
@@ -17,8 +18,6 @@ const PROJECT_DIR: &str = "/installed-agent/eve-project";
 const RUNNER_PATH: &str = "/installed-agent/eve_runner.mjs";
 const INSTRUCTION_PATH: &str = "/installed-agent/eve-instruction.txt";
 const NODE_PREFIX: &str = "export NVM_DIR=\"$HOME/.nvm\"; [ -s \"$NVM_DIR/nvm.sh\" ] && . \"$NVM_DIR/nvm.sh\"; ";
-const OPTIONS: &[&str] =
-    &["version", "prompt_template_path", "config", "path", "install_command", "auto_env", "port", "startup_timeout_ms"];
 const IGNORE_NAMES: &[&str] = &[
     ".DS_Store",
     ".cache",
@@ -225,14 +224,6 @@ fn auto_env_texts(dir: &Path, out: &mut Vec<String>) {
 
 impl Eve {
     pub fn new(args: AgentArgs) -> Result<Eve> {
-        let unknown: Vec<&String> = args.kwargs.keys().filter(|k| !OPTIONS.contains(&k.as_str())).collect();
-        if !unknown.is_empty() {
-            let lines: Vec<String> = unknown.iter().map(|k| format!("  Unknown option '{k}'.")).collect();
-            bail!("Invalid kwargs for agent 'eve':\n{}\nSee `hbench agents schema eve` for available options.", lines.join("\n"));
-        }
-        if args.kwargs.get("config").is_some_and(|v| !v.is_null()) {
-            bail!("Agent 'eve' does not support config. You can implement it.");
-        }
         let raw = args.kw("path").map(PathBuf::from).unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
         let raw = match raw.to_str().and_then(|s| s.strip_prefix("~/")) {
             Some(rest) => PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(rest),
@@ -358,11 +349,8 @@ impl Eve {
             return Ok(c.clone());
         }
         let has = |f: &str| self.path.join(f).exists();
-        let (pnpm, yarn, bun) = (
-            "corepack enable && pnpm install --frozen-lockfile",
-            "corepack enable && yarn install --frozen-lockfile",
-            "npm install -g bun && bun install --frozen-lockfile",
-        );
+        let bun = format!("npm install -g {} && bun install --frozen-lockfile", pins::BUN.npm_spec(None));
+        let (pnpm, yarn) = ("corepack enable && pnpm install --frozen-lockfile", "corepack enable && yarn install --frozen-lockfile");
         if let Some(pm) = self.package_json()?.get("packageManager").and_then(Value::as_str) {
             if pm.starts_with("pnpm@") {
                 return Ok(pnpm.into());
@@ -371,24 +359,23 @@ impl Eve {
                 return Ok(yarn.into());
             }
             if pm.starts_with("bun@") {
-                return Ok(bun.into());
+                return Ok(bun);
             }
             if pm.starts_with("npm@") {
                 return Ok(if has("package-lock.json") { "npm ci" } else { "npm install" }.into());
             }
         }
         Ok(if has("pnpm-lock.yaml") {
-            pnpm
+            pnpm.into()
         } else if has("yarn.lock") {
-            yarn
+            yarn.into()
         } else if has("bun.lock") || has("bun.lockb") {
             bun
         } else if has("package-lock.json") {
-            "npm ci"
+            "npm ci".into()
         } else {
-            "npm install"
-        }
-        .into())
+            "npm install".into()
+        })
     }
 
     /// Inferred provider keys forwarded from the host env, plus the model hint.
@@ -674,9 +661,8 @@ impl Eve {
             cx,
             &format!(
                 "set -euo pipefail; {NODE_PREFIX}if command -v node >/dev/null 2>&1 && node -e 'process.exit(Number(process.versions.node.split(\".\")[0]) >= 24 ? 0 : 1)'; then \
-                 node --version; else curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.2/install.sh | bash; {NODE_PREFIX}nvm install 24; nvm alias default 24; \
-                 node --version; fi; npm --version; corepack enable || true"
-            ),
+                 node --version; else curl -o- {nvm_installer} | bash; {NODE_PREFIX}nvm install 24; nvm alias default 24; \
+                 node --version; fi; npm --version; corepack enable || true", nvm_installer = pins::nvm_installer()),
             &BTreeMap::from([("NVM_NODEJS_ORG_MIRROR".to_string(), "https://nodejs.org/dist".to_string())]),
         )
         .await?;
@@ -756,8 +742,6 @@ mod tests {
         let ps = p.display().to_string();
         assert!(agent(json!({"path": ps, "port": "x"}), &[], vec![]).is_err());
         assert!(agent(json!({"path": ps, "auto_env": "maybe"}), &[], vec![]).is_err());
-        assert!(agent(json!({"path": ps, "bogus": 1}), &[], vec![]).is_err());
-        assert!(agent(json!({"path": ps, "config": {}}), &[], vec![]).is_err());
         let empty = std::env::temp_dir().join(format!("hbench-eve-empty-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&empty).unwrap();
         assert!(agent(json!({"path": empty.display().to_string()}), &[], vec![]).err().unwrap().to_string().contains("package.json"));
@@ -809,11 +793,11 @@ mod tests {
         for (pkg, lock, want) in [
             (json!({"packageManager": "pnpm@9"}), None, "corepack enable && pnpm install --frozen-lockfile"),
             (json!({"packageManager": "yarn@4"}), None, "corepack enable && yarn install --frozen-lockfile"),
-            (json!({"packageManager": "bun@1"}), None, "npm install -g bun && bun install --frozen-lockfile"),
+            (json!({"packageManager": "bun@1"}), None, "npm install -g bun@1.4.3 && bun install --frozen-lockfile"),
             (json!({"packageManager": "npm@10"}), Some("package-lock.json"), "npm ci"),
             (json!({}), Some("pnpm-lock.yaml"), "corepack enable && pnpm install --frozen-lockfile"),
             (json!({}), Some("yarn.lock"), "corepack enable && yarn install --frozen-lockfile"),
-            (json!({}), Some("bun.lockb"), "npm install -g bun && bun install --frozen-lockfile"),
+            (json!({}), Some("bun.lockb"), "npm install -g bun@1.4.3 && bun install --frozen-lockfile"),
             (json!({}), Some("package-lock.json"), "npm ci"),
             (json!({}), None, "npm install"),
         ] {
