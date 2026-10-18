@@ -59,7 +59,7 @@ pub fn evals_key(r: &TrialResult) -> String {
     }
 }
 
-/// Python-repr-like formatting of a reward value used as a JSON object key.
+/// A reward value as a JSON object key: integers plain, floats with a decimal point (`1.0`, `0.5`).
 fn reward_key(n: &serde_json::Number) -> String {
     match n.as_i64() {
         Some(i) => i.to_string(),
@@ -483,7 +483,7 @@ pub fn render_summary(jr: &JobResult, job_dir: &Path, color: bool) -> String {
         for (i, m) in e.metrics.iter().enumerate() {
             for (k, v) in m {
                 let label = if e.metrics.len() > 1 { format!("Metric {}: {k}", i + 1) } else { k.clone() };
-                metrics.push((py_title(&label), v));
+                metrics.push((title_case(&label), v));
             }
         }
         let pass: Vec<(String, f64)> = e.pass_at_k.iter().map(|(k, v)| (format!("Pass@{k}"), *v)).collect();
@@ -524,7 +524,7 @@ pub fn render_summary(jr: &JobResult, job_dir: &Path, color: bool) -> String {
             format!("  {label:<w$}  {}{bars}\n", paint("1", &format!("{text:>6}")))
         };
         for (l, v) in &metrics {
-            out += &score(l, py_str(v), v.as_f64().filter(|f| (0.0..=1.0).contains(f)));
+            out += &score(l, metric_text(v), v.as_f64().filter(|f| (0.0..=1.0).contains(f)));
         }
         for (l, v) in &pass {
             out += &score(l, format!("{v:.3}"), Some(*v));
@@ -606,8 +606,8 @@ fn format_duration(start: DateTime<Utc>, end: Option<DateTime<Utc>>) -> String {
     }
 }
 
-/// Python `str.title()`.
-fn py_title(s: &str) -> String {
+/// Capitalizes the first letter of each alphabetic run and lowercases the rest (`pass_rate` -> `Pass_Rate`).
+fn title_case(s: &str) -> String {
     let mut prev_alpha = false;
     s.chars()
         .map(|c| {
@@ -618,12 +618,11 @@ fn py_title(s: &str) -> String {
         .collect()
 }
 
-/// Floats as `{:.3}`, anything else via Python `str()`.
-fn py_str(v: &Value) -> String {
+/// Metric value for the summary table: floats as `{:.3}`, `-` for none, strings as-is, anything else as JSON.
+fn metric_text(v: &Value) -> String {
     match v {
         Value::Number(n) if n.is_f64() => format!("{:.3}", n.as_f64().unwrap()),
-        Value::Null => "None".into(),
-        Value::Bool(b) => if *b { "True" } else { "False" }.into(),
+        Value::Null => "-".into(),
         Value::String(s) => s.clone(),
         v => v.to_string(),
     }
@@ -732,7 +731,7 @@ Job  runtime 1h 2m 5s
             group_title("claude-code__deepseek/deepseek-v4-flash__terminal-bench@2.0"),
             "terminal-bench@2.0 • claude-code • deepseek/deepseek-v4-flash"
         );
-        assert_eq!(py_title("Metric 1: pass_rate"), "Metric 1: Pass_Rate");
+        assert_eq!(title_case("Metric 1: pass_rate"), "Metric 1: Pass_Rate");
     }
 
     #[test]
