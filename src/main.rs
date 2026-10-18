@@ -8,6 +8,7 @@ mod config;
 mod diff;
 mod env;
 mod exec;
+mod integrity;
 mod job;
 mod metrics;
 mod migrate;

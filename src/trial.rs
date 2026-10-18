@@ -528,6 +528,16 @@ impl Trial {
         if let Some(hc) = &task.config.environment.healthcheck {
             self.env().run_healthcheck(hc).await?;
         }
+        // Not for the oracle: it is the reference, and decrypts the solutions this removes.
+        if self.cfg.agent.name() != "oracle"
+            && let Some(cmd) = crate::integrity::scrub_command(&crate::integrity::leaks(&task.dir))
+        {
+            let r = self.env().exec_root(&cmd, Some(Duration::from_secs(120))).await?;
+            if r.code != 0 {
+                return Err(kind_err("EnvironmentStartError", format!("removing verifier-only files failed: {}", r.stderr)));
+            }
+            self.log.line("removed verifier-only files from the agent's container");
+        }
         self.upload_skills().await?;
 
         let t = TimingInfo::start();
