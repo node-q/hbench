@@ -366,6 +366,18 @@ pub fn tail(s: &str, n: usize) -> &str {
     &s[i..]
 }
 
+const SSH_ATTEMPTS: u32 = 5;
+
+/// The docker CLI's ssh transport failed before a session was open (sshd MaxStartups/MaxSessions under
+/// load), so the command never reached the daemon and is safe to rerun. A session that drops once
+/// open reads "Connection to HOST closed by remote host" instead and is not matched.
+fn ssh_not_connected(r: &ExecResult) -> bool {
+    let e = &r.stderr;
+    let pre_session = ["kex_exchange_identification", "Session open refused", "Connection refused"].iter().any(|m| e.contains(m))
+        || ["Connection closed by ", "Connection reset by "].iter().any(|m| e.contains(m) && e.contains(" port "));
+    r.code != 0 && e.contains("dial-stdio") && pre_session
+}
+
 /// Pull/registry/daemon failures worth another `up`, as opposed to errors in the task's compose setup.
 fn transient_docker_error(stderr: &str) -> bool {
     let s = stderr.to_ascii_lowercase();
@@ -702,6 +714,19 @@ impl DockerEnv {
     async fn run_cmd(&self, mut c: Command, timeout: Option<Duration>, label: &str, stdin: Option<Vec<u8>>) -> Result<ExecResult> {
         c.stdin(if stdin.is_some() { Stdio::piped() } else { Stdio::null() }).stdout(Stdio::piped()).stderr(Stdio::piped());
         self.log.line(&format!("$ {label}"));
+        for attempt in 1.. {
+            let r = self.spawn_once(&mut c, timeout, label, stdin.clone()).await?;
+            if attempt < SSH_ATTEMPTS && ssh_not_connected(&r) {
+                self.log.line(&format!("ssh transport not connected; retrying (attempt {})", attempt + 1));
+                tokio::time::sleep(Duration::from_millis(500 * (1 << attempt))).await;
+                continue;
+            }
+            return Ok(r);
+        }
+        unreachable!()
+    }
+
+    async fn spawn_once(&self, c: &mut Command, timeout: Option<Duration>, label: &str, stdin: Option<Vec<u8>>) -> Result<ExecResult> {
         let mut child = c.spawn().context("spawning `docker compose` (is docker installed?)")?;
         if let Some(data) = stdin {
             let mut si = child.stdin.take().unwrap();
@@ -1224,6 +1249,18 @@ pub async fn preflight() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn ssh_not_connected_only_before_a_session() {
+        let r = |code, stderr: &str| ExecResult { code, stdout: String::new(), stderr: stderr.into() };
+        let dial = "command [ssh -l u -T -- h docker system dial-stdio] has exited with exit status 255, ...: stderr=";
+        assert!(ssh_not_connected(&r(1, &format!("{dial}kex_exchange_identification: read: Connection reset by peer"))));
+        assert!(ssh_not_connected(&r(1, &format!("{dial}Connection closed by 100.70.90.125 port 22"))));
+        assert!(ssh_not_connected(&r(1, &format!("{dial}mux_client_request_session: Session open refused by peer"))));
+        assert!(!ssh_not_connected(&r(1, &format!("{dial}Connection to 100.70.90.125 closed by remote host."))));
+        assert!(!ssh_not_connected(&r(1, "bash: line 1: foo: command not found")));
+        assert!(!ssh_not_connected(&r(0, &format!("{dial}Connection closed by h port 22"))));
+    }
+
     use super::*;
     #[test]
     fn error_kind_names_round_trip() {
