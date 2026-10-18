@@ -142,7 +142,8 @@ impl App {
         data["jobs_dir"] = json!(self.folder.to_string_lossy());
         let mut raw = data.clone();
         crate::config::migrate_legacy(&mut raw);
-        let cfg: crate::config::JobConfig = serde_json::from_value(raw).map_err(|e| err(422, format!("Invalid run configuration: {e}")))?;
+        let cfg: crate::config::JobConfig =
+            crate::config::strict_value(raw).map_err(|e| err(422, format!("Invalid run configuration: {e:#}")))?;
         if cfg.datasets.is_empty() && cfg.tasks.is_empty() {
             return Err(err(422, "Specify a dataset, a task, or a local path to run."));
         }

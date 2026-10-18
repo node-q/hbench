@@ -844,7 +844,8 @@ async fn main() -> Result<()> {
                     bail!("aborted");
                 }
             }
-            cfg.source_jobs = a.diff.iter().map(|p| config::SourceJob { action: "diff".into(), path: p.clone() }).collect();
+            cfg.source_jobs =
+                a.diff.iter().map(|p| config::SourceJob { action: "diff".into(), kind: None, job_id: None, path: p.clone() }).collect();
             run_with_ctrl_c(cfg, Some(trials), &[]).await
         }
         Cmd::Jobs { cmd: JobsCmd::Resume { path, filter_error_types } } => {

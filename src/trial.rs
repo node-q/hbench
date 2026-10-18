@@ -153,6 +153,21 @@ pub fn task_id(cfg: &TrialConfig) -> Value {
 /// Agent setup tries, all within the setup timeout.
 const SETUP_ATTEMPTS: u32 = 3;
 
+/// Context on an agent phase whose processes could not be stopped: grading then would be unsafe, so the
+/// trial ends there, still reporting the run's own error kind.
+#[derive(Debug)]
+struct Unstopped(String);
+
+impl std::fmt::Display for Unstopped {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "stopping the agent's processes failed: {}", self.0)
+    }
+}
+
+fn unstopped(e: &anyhow::Error) -> bool {
+    e.downcast_ref::<Unstopped>().is_some()
+}
+
 /// Agent errors that are recorded while the verifier still runs (the
 /// AgentTimeoutError + NonZeroAgentExitCodeError family).
 pub fn is_agent_run_error(kind: &str) -> bool {
@@ -727,14 +742,22 @@ impl Trial {
         // Beyond upstream: a timed-out agent keeps running in the container after the dropped `docker compose
         // exec`, still writing files and able to read /tests. Stop the agent's own processes, whether it timed
         // out or exited, and leave what it deliberately detached (a server the task asks for) running.
-        match self.env().kill_agent_processes(&before).await {
-            Ok(0) => {}
-            Ok(n) => self.log.line(&format!("killed {n} process(es) the agent left running")),
-            Err(e) if matches!(&r, Err(f) if !is_agent_run_error(error_kind(f))) => {
-                self.log.line(&format!("stopping the agent's processes failed: {e:#}"))
+        let r = match (self.env().kill_agent_processes(&before).await, r) {
+            (Ok(n), r) => {
+                if n > 0 {
+                    self.log.line(&format!("killed {n} process(es) the agent left running"));
+                }
+                r
             }
-            Err(e) => return (ctx, t.finish(), Err(e)),
-        }
+            (Err(e), Ok(())) => {
+                Err(kind_err("EnvironmentError", "the agent's processes may still be running").context(Unstopped(format!("{e:#}"))))
+            }
+            (Err(e), Err(f)) if is_agent_run_error(error_kind(&f)) => Err(f.context(Unstopped(format!("{e:#}")))),
+            (Err(e), Err(f)) => {
+                self.log.line(&format!("stopping the agent's processes failed: {e:#}"));
+                Err(f)
+            }
+        };
         if switch && let Err(e) = self.env().set_network_policy(&plan.agent_env_baseline).await {
             return (ctx, t.finish(), Err(e));
         }
@@ -896,7 +919,7 @@ impl Trial {
         self.result.agent_execution = Some(timing);
         let mut fatal = None;
         if let Err(e) = r {
-            if is_agent_run_error(error_kind(&e)) {
+            if is_agent_run_error(error_kind(&e)) && !unstopped(&e) {
                 self.record(&e);
             } else {
                 fatal = Some(e);
@@ -970,11 +993,18 @@ impl Trial {
             let instruction = self.instruction(Some(step))?;
             let (mut ctx, timing, r) = self.agent_phase(&instruction, Some(step), resume).await;
             sr.agent_execution = Some(timing);
+            let unverifiable = r.as_ref().err().is_some_and(unstopped);
             if let Err(e) = r {
                 sr.exception_info = Some(ExceptionInfo::from(&e));
             }
             self.sync_agent_output(&mut ctx).await;
             sr.agent_result = Some(ctx);
+            if unverifiable {
+                self.log.line(&format!("step {}: the agent's processes could not be stopped; not verifying", step.name));
+                archive_step(&self.dir, &sdir, false);
+                results.push(sr);
+                break;
+            }
 
             let mode = task.verifier_mode(Some(step));
             let last = index == total;
@@ -1424,6 +1454,15 @@ mod tests {
         let d = std::env::temp_dir().join(format!("hbench-test-{name}-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    #[test]
+    fn a_failed_stop_keeps_the_run_error_kind() {
+        let timeout = kind_err("AgentTimeoutError", "Agent execution timed out after 5 seconds").context(Unstopped("exec failed".into()));
+        assert_eq!(error_kind(&timeout), "AgentTimeoutError");
+        assert!(unstopped(&timeout));
+        assert_eq!(format!("{timeout:#}"), "stopping the agent's processes failed: exec failed: Agent execution timed out after 5 seconds");
+        assert!(!unstopped(&kind_err("AgentTimeoutError", "timed out")));
     }
 
     #[test]

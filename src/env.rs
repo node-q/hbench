@@ -673,7 +673,7 @@ impl DockerEnv {
 
     /// The processes running in main now, as `pid:starttime` (starttime tells a reused pid apart).
     pub async fn process_snapshot(&self) -> Result<String> {
-        let r = self.exec_root(&format!("{PROC_LIST}\nfor_each_proc echo"), Some(Duration::from_secs(60))).await?;
+        let r = self.exec_from_root(&format!("{PROC_LIST}\nfor_each_proc echo")).await?;
         if r.code != 0 {
             bail!("listing processes failed: {}", r.stderr);
         }
@@ -684,11 +684,16 @@ impl DockerEnv {
     /// descends from a live `docker exec` or is the foreground job of a terminal. Processes it detached
     /// (reparented to PID 1, or a background job of its terminal) keep running. Returns how many were killed.
     pub async fn kill_agent_processes(&self, snapshot: &str) -> Result<usize> {
-        let r = self.exec_root(&kill_agent_script(snapshot), Some(Duration::from_secs(60))).await?;
+        let r = self.exec_from_root(&kill_agent_script(snapshot)).await?;
         if r.code != 0 {
             bail!("stopping processes failed: {}", r.stderr);
         }
-        Ok(r.stdout.trim().parse().unwrap_or(0))
+        r.stdout.trim().parse().with_context(|| format!("stopping processes printed {:?}, not a count", r.stdout.trim()))
+    }
+
+    /// As root from `/`: the agent may have deleted or renamed the task's workdir, and `exec -w` would fail.
+    async fn exec_from_root(&self, command: &str) -> Result<ExecResult> {
+        self.exec_in(command, Some("root"), &BTreeMap::new(), Some(Duration::from_secs(60)), Some("/")).await
     }
 
     pub async fn stop(&self) -> Result<()> {
