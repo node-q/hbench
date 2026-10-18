@@ -2,7 +2,7 @@
 //! Installs a registry (or git-source) ACP server plus the bundled `acp_runner.py`, which
 //! drives one prompt over the Agent Client Protocol and writes acp-summary.json.
 
-use super::common::{installed_dir, nvm_node_install_snippet};
+use super::common::{installed_dir, system_or_nvm_node, uv_install};
 use super::pins;
 use super::{exec_agent, exec_root};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
@@ -79,12 +79,22 @@ pub fn parse_registry_spec(spec: &str) -> Result<(String, Option<String>)> {
 
 /// GET a JSON document with GitHub headers (30s timeout), via host curl.
 pub fn fetch_json(url: &str) -> Result<Value> {
-    let mut c = std::process::Command::new("curl");
-    c.args(["-fsSL", "--max-time", "30", "-H", "Accept: application/vnd.github+json", "-H", "User-Agent: hbench-acp-registry"]);
+    use std::io::Write;
+    use std::process::Stdio;
+    // Headers go through a curl config on stdin so the token never shows in the process list.
+    let mut cfg = String::from("header = \"Accept: application/vnd.github+json\"\nheader = \"User-Agent: hbench-acp-registry\"\n");
     if let Some(t) = std::env::var("GITHUB_TOKEN").ok().filter(|t| !t.is_empty()) {
-        c.args(["-H", &format!("Authorization: Bearer {t}")]);
+        cfg += &format!("header = \"Authorization: Bearer {}\"\n", t.replace('\\', "\\\\").replace('"', "\\\""));
     }
-    let out = c.arg(url).output().context("running curl")?;
+    let mut child = std::process::Command::new("curl")
+        .args(["-fsSL", "--max-time", "30", "-K", "-", url])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("running curl")?;
+    child.stdin.take().unwrap().write_all(cfg.as_bytes()).context("running curl")?;
+    let out = child.wait_with_output().context("running curl")?;
     if !out.status.success() {
         bail!("Failed to fetch {url}: {}", String::from_utf8_lossy(&out.stderr).trim());
     }
@@ -942,7 +952,7 @@ fn dependencies_command(kind: &str) -> String {
             # independently, then use it to provision the runner with a supported Python.
             if [ ! -x {uv} ]; then
               mkdir -p {UV_INSTALL_DIR}
-              curl -LsSf {uv_installer} | env UV_INSTALL_DIR={UV_INSTALL_DIR} sh
+              {uv_install}
             fi
 
             if [ ! -x {py} ] || ! {py} -c \"import acp, sys; raise SystemExit(sys.version_info < (3, 12))\" >/dev/null 2>&1; then
@@ -958,17 +968,14 @@ fn dependencies_command(kind: &str) -> String {
             if [ \"{install_uv}\" = \"1\" ] && [ ! -x {RUNNER_VENV_PATH}/bin/uvx ]; then
               {uv} pip install --python {py} {uv_pip}
             fi",
-        uv_installer = pins::uv_installer(),
+        uv_install = uv_install(Some(UV_INSTALL_DIR)),
         protocol = pins::ACP_PROTOCOL.requirement(),
         uv_pip = pins::UV.requirement(),
     )
 }
 
 fn node_install_command() -> String {
-    format!(
-        "set -euo pipefail; if ldd --version 2>&1 | grep -qi musl || [ -f /etc/alpine-release ]; then node --version && npm --version; else {}; fi",
-        nvm_node_install_snippet(22)
-    )
+    format!("set -euo pipefail; {}", system_or_nvm_node(22))
 }
 
 fn binary_install_command(t: &BinaryTarget) -> String {

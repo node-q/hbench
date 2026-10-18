@@ -1,6 +1,7 @@
 //! Helpers shared by the installed agents: common setup steps, the nvm node install
 //! snippet, and small parsing utilities.
 
+pub mod fmt;
 pub mod opts;
 
 use super::pins;
@@ -14,15 +15,50 @@ pub fn skills_dir(args: &AgentArgs) -> Option<String> {
     args.task.config.environment.skills_dir.clone().or_else(|| (!args.skills.is_empty()).then(|| "/hbench/skills".into()))
 }
 
+/// Shell snippet loading nvm when it is installed (a no-op otherwise). A macro so consts can `concat!` it.
+macro_rules! nvm_load {
+    () => {
+        "if [ -s \"$HOME/.nvm/nvm.sh\" ]; then . \"$HOME/.nvm/nvm.sh\"; fi"
+    };
+}
+pub(crate) use nvm_load;
+pub const NVM_LOAD: &str = nvm_load!();
+
+/// Shell command running the pinned uv installer, installing into `dir` when given.
+pub fn uv_install(dir: Option<&str>) -> String {
+    let url = pins::uv_installer();
+    match dir {
+        Some(d) => format!("curl -LsSf {url} | env UV_INSTALL_DIR={d} sh"),
+        None => format!("curl -LsSf {url} | sh"),
+    }
+}
+
+/// Shell command running the pinned nvm installer.
+pub fn nvm_install_script() -> String {
+    format!("curl -o- {} | bash", pins::nvm_installer())
+}
+
+/// Shell snippet loading a just-installed nvm (failing if it did not load), then installing Node `node_major`
+/// as the default.
+pub fn nvm_activate_node(node_major: u32) -> String {
+    format!(
+        "export NVM_DIR=\"$HOME/.nvm\" && \\. \"$NVM_DIR/nvm.sh\" || true && \
+         command -v nvm &>/dev/null || {{ echo 'Error: NVM failed to load' >&2; exit 1; }} && \
+         nvm install {node_major} && nvm alias default {node_major} && npm -v"
+    )
+}
+
 /// Shell snippet installing Node via nvm.
 pub fn nvm_node_install_snippet(node_major: u32) -> String {
-    format!(
-        "curl -o- {nvm_installer} | env -u NODE_VERSION bash && \
-         export NVM_DIR=\"$HOME/.nvm\" && \\. \"$NVM_DIR/nvm.sh\" || true && \
-         command -v nvm &>/dev/null || {{ echo 'Error: NVM failed to load' >&2; exit 1; }} && \
-         nvm install {node_major} && nvm alias default {node_major} && npm -v",
-        nvm_installer = pins::nvm_installer()
-    )
+    format!("curl -o- {} | env -u NODE_VERSION bash && {}", pins::nvm_installer(), nvm_activate_node(node_major))
+}
+
+/// Shell condition true on musl (Alpine) images, where nvm's prebuilt Node does not run.
+pub const IS_MUSL: &str = "ldd --version 2>&1 | grep -qi musl || [ -f /etc/alpine-release ]";
+
+/// Shell snippet keeping the system Node on musl images, else installing Node `node_major` via nvm.
+pub fn system_or_nvm_node(node_major: u32) -> String {
+    format!("if {IS_MUSL}; then node --version && npm --version; else {}; fi", nvm_node_install_snippet(node_major))
 }
 
 /// Create `/installed-agent`, where agents keep their install payloads.

@@ -1,6 +1,6 @@
 //! Kimi Code installed agent, with usage totals from its wire log.
 
-use super::common::{installed_dir, nvm_node_install_snippet, skills_dir};
+use super::common::{installed_dir, nvm_load, nvm_node_install_snippet, skills_dir};
 use super::kimi_cli::loads_lenient;
 use super::pins;
 use super::{exec_agent, exec_root};
@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 
 const KIMI_CODE_HOME: &str = "/logs/agent/.kimi-code";
 const OUTPUT_PATH: &str = "/logs/agent/kimi-code.txt";
-const NODE_PATH_SETUP: &str = "if [ -s \"$HOME/.nvm/nvm.sh\" ]; then . \"$HOME/.nvm/nvm.sh\"; fi; export PATH=\"$HOME/.local/bin:$PATH\"; ";
+const NODE_PATH_SETUP: &str = concat!(nvm_load!(), "; export PATH=\"$HOME/.local/bin:$PATH\"; ");
 const SYSTEM_INSTALL: &str = r#"if command -v apk >/dev/null 2>&1; then
   if ! command -v node >/dev/null 2>&1 || \
      ! command -v npm >/dev/null 2>&1; then

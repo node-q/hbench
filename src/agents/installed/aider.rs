@@ -1,6 +1,6 @@
 //! aider.
 
-use super::common::{detect_version, installed_dir, opts};
+use super::common::{detect_version, installed_dir, opts, uv_install};
 use super::pins;
 use super::{connection, ensure_system_dependencies, exec_agent};
 use crate::agents::model_connection::{Spec, provider};
@@ -105,10 +105,10 @@ impl Agent for Aider {
         exec_agent(
             cx,
             &format!(
-                "set -euo pipefail; curl -LsSf {} | sh && \
+                "set -euo pipefail; {} && \
                  if [ -f \"$HOME/.local/bin/env\" ]; then source \"$HOME/.local/bin/env\"; else export PATH=\"$HOME/.local/bin:$PATH\"; fi && \
                  uv tool install --force --python python3.12 --with pip aider-chat{} && aider --version",
-                pins::uv_installer(),
+                uv_install(None),
                 pins::AIDER.pip_constraint(self.version.as_deref())
             ),
             &BTreeMap::new(),
@@ -172,7 +172,7 @@ mod tests {
     #[test]
     fn version_parsing() {
         assert_eq!(parse_aider_version("\naider 0.86.1\n"), "0.86.1");
-        assert_eq!(opts::py_float(1.0), "1.0");
-        assert_eq!(opts::py_float(0.25), "0.25");
+        assert_eq!(crate::agents::installed::common::fmt::float_with_point(1.0), "1.0");
+        assert_eq!(crate::agents::installed::common::fmt::float_with_point(0.25), "0.25");
     }
 }

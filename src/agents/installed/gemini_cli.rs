@@ -1,7 +1,7 @@
 //! Gemini CLI, incl. ACP target mode.
 
 use super::common::parse_jsonl;
-use super::common::{detect_version, installed_dir, nvm_node_install_snippet, opts, parse_bool_env, skills_dir};
+use super::common::{NVM_LOAD, detect_version, installed_dir, nvm_load, nvm_node_install_snippet, opts, parse_bool_env, skills_dir};
 use super::pins;
 use super::{connection, ensure_system_dependencies, exec_agent, exec_root, pinned_bin_wrapper_command, safe_bin_symlink_command};
 use crate::agents::model_connection::{Resolved, Spec};
@@ -271,7 +271,7 @@ pub fn gemini_usage(session: &Value) -> AgentContext {
     AgentContext { n_input_tokens: Some(i), n_cache_tokens: Some(c), n_output_tokens: Some(o), ..Default::default() }
 }
 
-const VERSION_CMD: &str = "if [ -s ~/.nvm/nvm.sh ]; then . ~/.nvm/nvm.sh; fi; gemini --version";
+const VERSION_CMD: &str = concat!(nvm_load!(), "; gemini --version");
 
 #[async_trait::async_trait]
 impl Agent for GeminiCli {
@@ -302,8 +302,10 @@ impl Agent for GeminiCli {
     async fn acp_install(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
         let r = exec_agent(
             cx,
-            "_hb_system_node=\"$(command -v node 2>/dev/null || true)\"; if [ -s \"$HOME/.nvm/nvm.sh\" ]; then . \"$HOME/.nvm/nvm.sh\"; fi; \
-             echo \"${_hb_system_node:-none}:$(command -v node):$(command -v gemini)\"",
+            &format!(
+                "_hb_system_node=\"$(command -v node 2>/dev/null || true)\"; {NVM_LOAD}; \
+                 echo \"${{_hb_system_node:-none}}:$(command -v node):$(command -v gemini)\""
+            ),
             &BTreeMap::new(),
         )
         .await?;
@@ -375,7 +377,7 @@ impl Agent for GeminiCli {
         let flags = self.cli_flags()?;
         let extra = if flags.is_empty() { String::new() } else { format!("{flags} ") };
         let cmd = format!(
-            "mkdir -p /logs/agent; if [ -s ~/.nvm/nvm.sh ]; then . ~/.nvm/nvm.sh; fi; gemini --yolo {}{extra}--model={} --prompt={} \
+            "mkdir -p /logs/agent; {NVM_LOAD}; gemini --yolo {}{extra}--model={} --prompt={} \
              2>&1 </dev/null | stdbuf -oL tee /logs/agent/gemini-cli.txt",
             if resume { "--resume latest " } else { "" },
             quote(alias.as_deref().unwrap_or(&model)),

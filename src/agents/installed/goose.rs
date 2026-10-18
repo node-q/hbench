@@ -1,5 +1,6 @@
 //! Goose.
 
+use super::common::fmt::float_with_point;
 use super::common::parse_jsonl;
 use super::common::{detect_version, installed_dir, opts, skills_dir};
 use super::pins;
@@ -45,7 +46,7 @@ impl Goose {
             if !(0.0..=1.0).contains(&t) {
                 bail!("Invalid value for 'temperature': must be between 0.0 and 1.0");
             }
-            env.insert("GOOSE_TEMPERATURE".into(), opts::py_float(t));
+            env.insert("GOOSE_TEMPERATURE".into(), float_with_point(t));
         }
         if let Some(n) = opts::int(a, "max_tokens", None)? {
             if !(1..=2_147_483_647).contains(&n) {

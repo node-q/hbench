@@ -1,6 +1,7 @@
 //! MiMo installed agent.
 
 use super::common::{deep_merge, installed_setup, parse_jsonl, skills_dir};
+use super::pins;
 use super::{connection, ensure_system_dependencies, exec_agent};
 use crate::agents::model_connection::Spec;
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
@@ -153,11 +154,17 @@ impl Agent for MiMo {
     }
 
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
+        let version_arg = match pins::MIMO.or(self.version.as_deref()) {
+            "latest" => String::new(),
+            v => format!(" -s -- --version {}", quote(v)),
+        };
         let install = async {
             ensure_system_dependencies(cx, &["curl"]).await?;
             exec_agent(
                 cx,
-                "set -euo pipefail; curl -fsSL https://mimo.xiaomi.com/install | bash && export PATH=\"$HOME/.mimocode/bin:$PATH\" && mimo --version",
+                &format!(
+                    "set -euo pipefail; curl -fsSL https://mimo.xiaomi.com/install | bash{version_arg} && export PATH=\"$HOME/.mimocode/bin:$PATH\" && mimo --version"
+                ),
                 &BTreeMap::new(),
             )
             .await

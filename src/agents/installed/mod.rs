@@ -49,6 +49,7 @@ use super::model_connection::{self, Resolved, Spec};
 use super::{AgentArgs, AgentBox, AgentCtx};
 use crate::env::{ExecResult, kind_err, quote, tail};
 use anyhow::{Result, bail};
+use common::NVM_LOAD;
 use regex::Regex;
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
@@ -423,13 +424,13 @@ pub async fn upload_text(cx: &AgentCtx<'_>, path: &str, content: &str) -> Result
 /// Shell snippet ensuring a Node >= 20 toolchain is active (nvm-installs Node 22 if needed).
 pub fn ensure_acp_node_command() -> String {
     format!(
-        "if [ -s \"$HOME/.nvm/nvm.sh\" ]; then . \"$HOME/.nvm/nvm.sh\"; fi; \
+        "{NVM_LOAD}; \
          _hb_node_major=\"$(node --version 2>/dev/null | sed \"s/^v//\" | cut -d. -f1 || true)\"; \
          if [ \"${{_hb_node_major:-0}}\" -lt 20 ]; then \
-           curl -o- {} | bash && \
+           {} && \
            export NVM_DIR=\"$HOME/.nvm\" && . \"$NVM_DIR/nvm.sh\" && nvm install 22; \
          fi",
-        pins::nvm_installer()
+        common::nvm_install_script()
     )
 }
 

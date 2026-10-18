@@ -86,7 +86,9 @@ pub const KIMI_CLI: Pin = Pin::pypi("kimi-cli", "1.52.0");
 pub const KIMI_CODE: Pin = Pin::npm("@moonshot-ai/kimi-code", "2.2.0");
 pub const LANGGRAPH: Pin = Pin::pypi("langgraph", "1.2.15");
 pub const LANGSMITH: Pin = Pin::npm("langsmith", "0.3.68");
+pub const JUNIE: Pin = Pin::github("JetBrains/junie", "3659.7");
 pub const MCODE: Pin = Pin::npm("@minimax-ai/code", "0.6.12");
+pub const MIMO: Pin = Pin::url("mimo", "0.1.15", "https://mimocode.cnbj1.mi-fds.com/mimocode/mimocode/releases/latest");
 pub const MINI_SWE_AGENT: Pin = Pin::pypi("mini-swe-agent", "2.4.6");
 pub const NEMO_AGENT: Pin = Pin::pypi("nvidia-nat", "1.9.0");
 /// The newest line that still runs on Node 22, which the install sets up; 2026.9 and later need Node 24.
@@ -134,7 +136,8 @@ mod tests {
     #[derive(Debug)]
     enum Install {
         Pinned(&'static [Pin]),
-        /// The vendor's installer always fetches its newest release and takes no version.
+        /// The vendor's installer always fetches its newest release and takes no version (antigravity-cli, cortex-code
+        /// and muse-code read a channel manifest; cursor-cli's script has its release baked in).
         Vendor,
     }
 
@@ -160,12 +163,12 @@ mod tests {
         ("goose", Install::Pinned(&[GOOSE])),
         ("grok-build", Install::Pinned(&[GROK_BUILD])),
         ("hermes", Install::Pinned(&[HERMES])),
-        ("junie", Install::Vendor),
+        ("junie", Install::Pinned(&[JUNIE])),
         ("kimi-cli", Install::Pinned(&[KIMI_CLI, UV])),
         ("kimi-code", Install::Pinned(&[KIMI_CODE])),
         ("langgraph", Install::Pinned(&[LANGGRAPH, PYTHON_DOTENV, TSX, LANGSMITH, BUN, UV, NVM])),
         ("mcode", Install::Pinned(&[MCODE, NVM])),
-        ("mimo", Install::Vendor),
+        ("mimo", Install::Pinned(&[MIMO])),
         ("mini-swe-agent", Install::Pinned(&[MINI_SWE_AGENT, LITELLM, ORJSON, FASTAPI, UV])),
         ("muse-code", Install::Vendor),
         ("nemo-agent", Install::Pinned(&[NEMO_AGENT, UV])),

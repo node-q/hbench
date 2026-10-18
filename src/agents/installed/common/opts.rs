@@ -95,8 +95,3 @@ pub fn kw_int(args: &AgentArgs, k: &str) -> Result<Option<i64>> {
         Some(_) => bail!("Invalid value for '{k}': expected int"),
     }
 }
-
-/// Python `str(float)`.
-pub fn py_float(f: f64) -> String {
-    if f.is_finite() && f.fract() == 0.0 { format!("{f:.1}") } else { f.to_string() }
-}
