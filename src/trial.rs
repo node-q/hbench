@@ -1271,11 +1271,12 @@ impl Trial {
     }
 }
 
-/// Pydantic `exclude_none`: drop null-valued keys recursively.
-fn exclude_none(v: Value) -> Value {
+/// Removes null-valued object keys, recursively (lock.json omits nulls at every depth, including inside
+/// nested configs whose own serialization keeps them, so a serde attribute can't express it).
+fn drop_nulls(v: Value) -> Value {
     match v {
-        Value::Object(m) => Value::Object(m.into_iter().filter(|(_, x)| !x.is_null()).map(|(k, x)| (k, exclude_none(x))).collect()),
-        Value::Array(a) => Value::Array(a.into_iter().map(exclude_none).collect()),
+        Value::Object(m) => Value::Object(m.into_iter().filter(|(_, x)| !x.is_null()).map(|(k, x)| (k, drop_nulls(x))).collect()),
+        Value::Array(a) => Value::Array(a.into_iter().map(drop_nulls).collect()),
         x => x,
     }
 }
@@ -1284,7 +1285,7 @@ fn sha256_prefixed(b: &[u8]) -> String {
     format!("sha256:{}", crate::task::hex(&<sha2::Sha256 as sha2::Digest>::digest(b)))
 }
 
-/// Trial lock (lock.json), dumped with `exclude_none`.
+/// Trial lock (lock.json), with null fields omitted.
 pub fn trial_lock(c: &TrialConfig) -> Value {
     let local = crate::registry::local_path(&c.task);
     let task = Task::load(&local).ok();
@@ -1309,7 +1310,7 @@ pub fn trial_lock(c: &TrialConfig) -> Value {
         .map(|s| serde_json::json!({"name": Path::new(s).file_name().map(|n| n.to_string_lossy().into_owned()), "source": s, "digest": crate::task::content_digest(Path::new(s))}))
         .collect();
     let user_agent = c.user_agent.as_ref();
-    exclude_none(serde_json::json!({
+    drop_nulls(serde_json::json!({
         "schema_version": 2,
         "task": {
             "name": name,

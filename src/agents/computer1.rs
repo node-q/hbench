@@ -1381,7 +1381,7 @@ impl Computer1 {
         vec![json!({"role": "user", "content": content})]
     }
 
-    /// Append an ATIF step (None fields dropped, like `exclude_none`).
+    /// Append an ATIF step (None fields dropped).
     fn push_step(&mut self, mut step: Map<String, Value>) {
         step.insert("step_id".into(), json!(self.steps.len() + 1));
         step.insert("timestamp".into(), json!(now()));

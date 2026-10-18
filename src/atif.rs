@@ -871,7 +871,7 @@ mod tests {
         );
         assert_eq!(f.total_cost_usd, Some(0.0421));
         assert_eq!(f.extra.unwrap()["service_tiers"], json!(["standard"]));
-        // to_json_dict(exclude_none=True): no nulls on model fields
+        // No nulls on model fields
         assert!(v["steps"][0].get("tool_calls").is_none() && v.get("notes").is_none());
     }
 
