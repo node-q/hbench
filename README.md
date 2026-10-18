@@ -86,6 +86,11 @@ Supported task features:
 - `trajectory.json` / `load_trajectory` (native + ATIF), the simulated-user ACP bridge (`user_agent`), regrades, and
   diffs.
 
+Some registry datasets build verifier-only data into the agent's image: LiveCodeBench's `/app/config.json` holds
+the hidden tests, and Aider Polyglot and TB2's adaptive-rejection-sampler ship the reference solution encrypted with
+the password in their public `solve.sh`. hbench removes these from the container before any agent but the oracle
+starts (`src/integrity.rs`); the verifier still gets its own complete `tests/`.
+
 ## Output
 
 ```

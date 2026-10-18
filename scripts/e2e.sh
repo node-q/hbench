@@ -41,6 +41,18 @@ assert ev["exception_stats"].keys() == {"AgentTimeoutError", "RewardFileNotFound
 print("fixture assertions OK")
 EOF
 
+# Verifier-only files datasets build into the agent's image are gone before a (non-oracle) agent starts.
+$BIN run -p tests/integrity -a nop --jobs-dir "$JOBS" --job-name integrity >/dev/null
+python3 - "$JOBS/integrity" <<'EOF'
+import json, sys, pathlib
+got = {}
+for r in pathlib.Path(sys.argv[1]).glob("*/result.json"):
+    d = json.loads(r.read_text())
+    got[d["task_name"]] = (d["verifier_result"] or {}).get("rewards")
+assert got == {"hidden-tests": {"reward": 1.0}, "encrypted-solution": {"reward": 1.0}}, got
+print("integrity assertions OK")
+EOF
+
 left=$(docker ps -a --filter label=com.docker.compose.service=main --format '{{.Names}}' | grep -E '__[0-9a-f]{7}-main' || true)
 [ -z "$left" ] || { echo "leaked containers: $left"; exit 1; }
 echo "E2E OK ($JOBS)"
