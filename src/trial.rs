@@ -705,13 +705,16 @@ impl Trial {
             self.agent = Some(agent);
             r
         };
-        // Beyond upstream: dropping the `docker compose exec` leaves the agent running in the container,
-        // still writing files (and reading /tests) while the verifier runs. Stop what it started.
-        if matches!(&r, Err(e) if error_kind(e) == "AgentTimeoutError") {
-            match self.env().kill_processes_since(&before).await {
-                Ok(n) => self.log.line(&format!("agent timed out: killed {n} process(es) it left running")),
-                Err(e) => return (ctx, t.finish(), Err(e)),
+        // Beyond upstream: whatever the agent leaves running (a timed-out run the dropped `docker compose exec`
+        // did not stop, or a daemon it started) could still write files and read /tests while the verifier
+        // runs. Stop everything it started, whether it timed out or exited.
+        match self.env().kill_processes_since(&before).await {
+            Ok(0) => {}
+            Ok(n) => self.log.line(&format!("killed {n} process(es) the agent left running")),
+            Err(e) if matches!(&r, Err(f) if !is_agent_run_error(error_kind(f))) => {
+                self.log.line(&format!("stopping the agent's processes failed: {e:#}"))
             }
+            Err(e) => return (ctx, t.finish(), Err(e)),
         }
         if switch && let Err(e) = self.env().set_network_policy(&plan.agent_env_baseline).await {
             return (ctx, t.finish(), Err(e));
