@@ -14,10 +14,9 @@ env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
 
-# Every job runs on the org's self-hosted pool (starship-hpg-1..4, VM 201 in
-# the infra repository): GitHub refuses hosted jobs for this organisation over billing.
-# The pool is Linux x64 only, has no sudo and no docker access, so macOS and
-# scripts/e2e.sh are not covered here; run e2e locally before a release.
+# Every job runs on the org's self-hosted pool: GitHub refuses hosted jobs for this
+# organisation over billing. The pool is Linux x64 only with no sudo, so macOS is not
+# covered here; its jobs have a Docker daemon, which the e2e job uses.
 jobs:
   test:
     name: Build & Test
@@ -73,3 +72,19 @@ jobs:
         run: |
           git status --porcelain -- dist
           test -z "$(git status --porcelain -- dist)" || { echo "::error::viewer/dist is stale; run 'npm run build' in viewer/ and commit"; exit 1; }
+
+  e2e:
+    # The integrity guarantees (stopping the agent at timeout, the hidden-test scrub, the egress allowlist)
+    # only show against a real daemon.
+    name: E2E
+    runs-on: [self-hosted, linux, x64, hpg]
+    timeout-minutes: 45
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+      - name: Set up Rust toolchain
+        uses: ./.github/actions/setup-rust
+      - name: Run the e2e suite
+        run: scripts/e2e.sh
+        env:
+          E2E_REQUIRE_EGRESS: "1"

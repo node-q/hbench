@@ -88,6 +88,13 @@ Supported task features:
 - `trajectory.json` / `load_trajectory` (native + ATIF), the simulated-user ACP bridge (`user_agent`), regrades, and
   diffs.
 
+Unlike upstream, hbench rejects keys it does not know in a job config or `task.toml`, so a misspelt
+`enforce_allowlist` stops the run instead of leaving the agent's network open. The legacy spellings upstream still
+accepts are rewritten first: `orchestrator.{n_concurrent_trials,quiet,retry}` move to the top level, a dataset's
+`registry: {url, path}` becomes `registry_url`/`registry_path`, `environment.mounts_json` becomes `mounts`,
+`plugins` and `environment.suppress_override_warnings` (both no-ops) are dropped, and a top-level `version` in
+`task.toml` means `schema_version`. Recorded `config.json` and `result.json` files are still read as they are.
+
 Some registry datasets build verifier-only data into the agent's image: LiveCodeBench's `/app/config.json` holds
 the hidden tests, and Aider Polyglot and TB2's adaptive-rejection-sampler ship the reference solution encrypted with
 the password in their public `solve.sh`. hbench removes these from the container before any agent but the oracle
@@ -96,7 +103,8 @@ starts (`src/integrity.rs`); the verifier still gets its own complete `tests/`.
 When the agent phase ends, by timeout or a normal exit, hbench stops the agent's own processes before grading: those
 still running under the agent's `docker compose exec`, and the foreground job of its terminal. Processes the agent
 detached on purpose, such as a server a task asks it to leave running (started with `nohup`, `setsid`, `&`, `tmux`
-or a service manager), keep running for the verifier, as in upstream. In a shared verifier environment such a process
+or a service manager), keep running for the verifier, as in upstream. If they cannot be stopped, the trial ends
+ungraded with the run's own error (`AgentTimeoutError` after a timeout). In a shared verifier environment such a process
 could also change files while the tests run; it shows up in the trajectory, so review trajectories of top runs.
 
 ## Output
@@ -151,8 +159,7 @@ are in the registry.
 - `scripts/install-matrix.sh`: installs every installed agent into a real container (`install_only`).
 
 CI (`.github/workflows/ci.yml`) runs on the org's self-hosted Linux runners (`[self-hosted, linux, x64, hpg]`): build +
-`cargo test`, clippy, and a check that the committed `viewer/dist` matches `viewer/src`. Those runners have no docker
-access, so run `scripts/e2e.sh` locally before a release.
+`cargo test`, clippy, a check that the committed `viewer/dist` matches `viewer/src`, and `scripts/e2e.sh`.
 
 ## Releases
 

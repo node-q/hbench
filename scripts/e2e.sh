@@ -75,6 +75,8 @@ for enforce, want in [("false", 0.0), ("true", 1.0)]:
     assert got == want, f"enforce_allowlist={enforce}: reward {got}, want {want}"
 print("egress assertions OK")
 EOF
+elif [ -n "${E2E_REQUIRE_EGRESS:-}" ]; then
+  echo "egress assertions required, but this docker host has no nftables fib support"; exit 1
 else
   echo "egress assertions skipped: no nftables fib support on this docker host"
 fi
