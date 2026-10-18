@@ -1,5 +1,6 @@
 //! OpenCode installed agent, incl. ACP target mode.
 
+use super::common::parse_jsonl;
 use super::common::{deep_merge_maps, detect_version, installed_dir, nvm_node_install_snippet, opts, skills_dir};
 use super::pins;
 use super::{connection, ensure_system_dependencies, exec_agent, exec_root, safe_bin_symlink_command};
@@ -82,13 +83,9 @@ impl OpenCode {
     }
 }
 
-fn parse_events(text: &str) -> Vec<Value> {
-    text.lines().filter_map(|l| serde_json::from_str(l.trim()).ok()).collect()
-}
-
 /// Messages of `error` events in the run output.
 pub fn error_messages(text: &str) -> Vec<String> {
-    parse_events(text)
+    parse_jsonl(text)
         .iter()
         .filter(|e| e["type"] == "error")
         .map(|e| {
@@ -107,7 +104,7 @@ pub fn error_messages(text: &str) -> Vec<String> {
 pub fn parse_opencode_usage(text: &str) -> Option<AgentContext> {
     let (mut open, mut turns) = (false, 0);
     let (mut cost, mut input, mut output, mut cache) = (0.0, 0i64, 0i64, 0i64);
-    for e in parse_events(text) {
+    for e in parse_jsonl(text) {
         match e["type"].as_str() {
             Some("step_start") => open = true,
             Some("step_finish") if open => {

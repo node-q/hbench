@@ -317,7 +317,7 @@ pub async fn run_job(
             let mut attempt = 0;
             let result = loop {
                 let r = match Trial::new(tcfg.clone(), task.clone(), pool.clone()) {
-                    Ok(t) => t.run(cancel.clone()).await,
+                    Ok(t) => Box::pin(t.run(cancel.clone())).await,
                     Err(e) => {
                         eprintln!("{}: could not create trial: {e:#}", tcfg.trial_name);
                         shared.lock().unwrap().running -= 1;
@@ -374,11 +374,19 @@ pub async fn run_job(
 }
 
 pub fn load_config(job_dir: &Path) -> Result<JobConfig> {
+    // `jobs resume -p .` (or `..`) has no file name to take the job's name from.
+    let resolved;
+    let job_dir = if job_dir.file_name().is_some() {
+        job_dir
+    } else {
+        resolved = job_dir.canonicalize().with_context(|| format!("job dir {}", job_dir.display()))?;
+        &resolved
+    };
     let p = job_dir.join("config.json");
     let s = std::fs::read_to_string(&p).with_context(|| format!("reading {}", p.display()))?;
     let mut cfg: JobConfig = serde_json::from_str(&s).context("parsing job config.json")?;
     // Trust the directory we were pointed at (the job may have been moved).
-    cfg.job_name = job_dir.file_name().unwrap().to_string_lossy().into_owned();
+    cfg.job_name = job_dir.file_name().context("a job dir can't be /")?.to_string_lossy().into_owned();
     cfg.jobs_dir = job_dir.parent().map(Path::to_path_buf).unwrap_or_default();
     Ok(cfg)
 }

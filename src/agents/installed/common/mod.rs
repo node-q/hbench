@@ -25,19 +25,19 @@ pub fn nvm_node_install_snippet(node_major: u32) -> String {
     )
 }
 
-/// BaseInstalledAgent.setup prelude.
+/// Create `/installed-agent`, where agents keep their install payloads.
 pub async fn installed_dir(cx: &AgentCtx<'_>) -> Result<()> {
     cx.env.exec_root("[ -d /installed-agent ] || mkdir -p /installed-agent", None).await?;
     Ok(())
 }
 
-/// Best-effort version detection after install (`get_version_command` + `parse_version`).
+/// Run `cmd` and parse its output as the installed version; None if it fails or prints nothing.
 pub async fn detect_version(cx: &AgentCtx<'_>, cmd: &str, parse: impl Fn(&str) -> String) -> Option<String> {
     let r = cx.exec(cmd, &BTreeMap::new(), None).await.ok()?;
     (r.code == 0 && !r.stdout.is_empty()).then(|| parse(&r.stdout))
 }
 
-/// `BaseInstalledAgent.setup` around `install`: mkdir, install, best-effort version detection.
+/// Create `/installed-agent`, run `install`, then detect the version unless the `version` kwarg set it.
 pub async fn installed_setup(
     cx: &AgentCtx<'_>,
     version: &mut Option<String>,
@@ -62,7 +62,7 @@ pub async fn upload_asset(cx: &AgentCtx<'_>, content: &str, path: &str) -> Resul
     r
 }
 
-/// Recursive dict merge (`_deep_merge`): `over` wins, nested objects merge.
+/// Recursive merge: `over` wins, nested objects merge.
 pub fn deep_merge(base: &mut Value, over: &Value) {
     if let (Value::Object(b), Value::Object(o)) = (base, over) {
         deep_merge_maps(b, o);

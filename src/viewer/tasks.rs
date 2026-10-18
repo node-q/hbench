@@ -98,9 +98,9 @@ fn dump_value(v: &Value, prop: &Value, root: &Value) -> Option<Value> {
                 (Value::Object(_), Some("object"))
                 | (Value::Array(_), Some("array"))
                 | (Value::String(_), Some("string"))
-                | (Value::Bool(_), Some("boolean")) => true,
+                | (Value::Bool(_), Some("boolean"))
+                | (Value::Number(_), Some("number")) => true,
                 (Value::Number(n), Some("integer")) => n.is_i64() || n.is_u64(),
-                (Value::Number(_), Some("number")) => true,
                 (Value::String(_), None) => d.get("enum").is_some(),
                 _ => false,
             }

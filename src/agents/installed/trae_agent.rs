@@ -84,7 +84,6 @@ impl TraeAgent {
         with_canonical_provider_envs(connection(&self.args, SPEC))
     }
 
-    // ponytail: serde_json map keys serialize alphabetically rather than in insertion order; same YAML document.
     fn config_yaml(&self, provider: &str, model: &str, api_key: &str, base_url: Option<&str>) -> Result<String> {
         let float = |k: &str, v: &str| v.trim().parse::<f64>().map_err(|_| anyhow!("could not convert string to float: '{v}' ({k})"));
         let mut prov = json!({"api_key": api_key, "provider": provider});
@@ -130,7 +129,7 @@ impl TraeAgent {
 }
 
 /// ATIF Step timestamp check: Python's `datetime.fromisoformat(v.replace("Z", "+00:00"))`.
-// ponytail: covers the RFC 3339 / naive date-time / date forms agents emit, not every fromisoformat variant.
+// Covers the RFC 3339 / naive date-time / date forms agents emit, not every fromisoformat variant.
 pub(crate) fn iso_timestamp_ok(v: &Value) -> bool {
     use chrono::{DateTime, NaiveDate, NaiveDateTime};
     let Some(s) = v.as_str() else { return v.is_null() };

@@ -1,5 +1,6 @@
 //! Hermes.
 
+use super::common::parse_jsonl;
 use super::common::{installed_dir, skills_dir};
 use super::pins;
 use super::{ensure_system_dependencies, exec_agent, exec_error};
@@ -159,7 +160,7 @@ async fn exec_timeout(cx: &AgentCtx<'_>, cmd: &str, env: &BTreeMap<String, Strin
 }
 
 fn native_session_id(text: &str) -> Option<String> {
-    text.lines().filter_map(|l| serde_json::from_str::<Value>(l).ok()).find_map(|v| v["id"].as_str().map(String::from))
+    parse_jsonl(text).iter().find_map(|v| v["id"].as_str().map(String::from))
 }
 
 fn text_of(c: &Value) -> String {

@@ -5,7 +5,7 @@
 //! `model_connection`. Failed calls are retried, context overflow
 //! is a distinct error, and usage/cost are reported like LiteLLM's `ModelResponse.usage`.
 //!
-//! ponytail: HTTP goes through the host `curl` (no HTTP client crate in Cargo.toml), like
+//! HTTP goes through the host `curl` (no HTTP client crate in Cargo.toml), like
 //! `registry.rs`. Secrets travel on curl's stdin config, never argv.
 
 use super::model_connection::{self, Spec};
@@ -94,7 +94,7 @@ pub struct ModelInfo {
 }
 
 /// LiteLLM's `model_cost` entry (from the pinned LiteLLM version's table).
-/// ponytail: unknown models get no pricing (cost 0/None) and the 1M fallback context limit.
+/// Unknown models get no pricing (cost 0/None) and the 1M fallback context limit.
 fn builtin_info(name: &str) -> Option<ModelInfo> {
     let m = crate::agents::pricing::model_cost(name)?;
     let f = |k: &str| m.get(k).and_then(|v| v.as_f64().or_else(|| v.as_str()?.parse().ok()));
@@ -309,14 +309,14 @@ pub trait Llm: Send + Sync {
     }
 }
 
-/// ponytail: rough estimate for mock LLMs in tests; real clients use `token_counter`.
+/// Rough estimate for mock LLMs in tests; real clients use `token_counter`.
 pub fn approx_tokens(messages: &[Value]) -> i64 {
     3 + messages.iter().map(|m| 4 + (content_text(&m["content"]).chars().count() as i64 + 3) / 4).sum::<i64>()
 }
 
 /// LiteLLM 1.93 `token_counter(model, messages)` (tiktoken path). Provider-prefixed / non-OpenAI
 /// names fall back to gpt-3.5-turbo's cl100k_base, as `_fix_model_name` does; bare OpenAI chat
-/// models use their own encoding. ponytail: bare pre-claude-3 names use LiteLLM's bundled Claude
+/// models use their own encoding. Bare pre-claude-3 names use LiteLLM's bundled Claude
 /// HF tokenizer there; cl100k_base here.
 pub fn token_counter(model: &str, messages: &[Value]) -> i64 {
     let bare_openai = !model.contains('/') && ["gpt-", "o1", "o3", "o4", "chatgpt"].iter().any(|p| model.starts_with(p));

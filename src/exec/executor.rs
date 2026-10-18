@@ -39,7 +39,7 @@ pub(super) fn job_config(j: &ExecJobConfig, task_dirs: &[PathBuf]) -> Result<Job
 
 async fn run_phase(mut cfg: JobConfig, task_dirs: Vec<PathBuf>, cancel: &tokio::sync::watch::Receiver<bool>) -> Result<Phase> {
     let job_dir = cfg.job_dir();
-    // ponytail: env.rs resolves the compose dir against the task's environment/ dir, so a relative
+    // Env.rs resolves the compose dir against the task's environment/ dir, so a relative
     // jobs_dir breaks `docker compose` (also in `hbench run`); hand the runner an absolute one.
     cfg.jobs_dir = std::path::absolute(&cfg.jobs_dir)?;
     let result = job::run_job(cfg, None, &[], cancel.clone()).await?;
@@ -71,7 +71,7 @@ async fn execute(cfg: &ExecConfig) -> Result<(Phase, Option<Phase>)> {
     Ok((map, Some(reduce)))
 }
 
-/// Trial results of a finished job, ordered by trial name. ponytail: not completion
+/// Trial results of a finished job, ordered by trial name. Not completion
 /// order, since JobResult has no trial list; read the trial dirs instead.
 fn trial_results(job_dir: &Path) -> Result<Vec<crate::trial::TrialResult>> {
     let mut out: Vec<crate::trial::TrialResult> = vec![];

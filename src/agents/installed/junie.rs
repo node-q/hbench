@@ -1,5 +1,6 @@
 //! Junie.
 
+use super::common::parse_jsonl;
 use super::common::{installed_dir, skills_dir};
 use super::{ensure_system_dependencies, exec_agent};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
@@ -203,7 +204,7 @@ fn num(v: &Value) -> i64 {
 /// Whole-session usage over `LlmResponseMetadataEvent` records; None when no LLM step exists.
 pub fn usage_from_events(text: &str) -> Option<AgentContext> {
     let (mut steps, mut prompt, mut completion, mut cached, mut cost) = (0, 0, 0, 0, None::<f64>);
-    for e in text.lines().filter_map(|l| serde_json::from_str::<Value>(l.trim()).ok()) {
+    for e in parse_jsonl(text) {
         let a = &e["event"]["agentEvent"];
         if a["kind"] != "LlmResponseMetadataEvent" {
             continue;

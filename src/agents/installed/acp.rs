@@ -34,10 +34,7 @@ const MAX_SOURCE_FILES: usize = 10_000;
 const MAX_SOURCE_BYTES: u64 = 100 * 1024 * 1024;
 const MAX_MANIFEST_BYTES: usize = 64 * 1024;
 
-// ---------------------------------------------------------------------------
-// Registry (acp_registry.py): `acp:<id>[@version]` agent names resolve to the
-// generic ACP agent with `registry_spec=<id>[@version]`.
-// ---------------------------------------------------------------------------
+// `acp:<id>[@version]` agent names resolve to the generic ACP agent with `registry_spec=<id>[@version]`.
 
 pub const ACP_SHORTHAND_PREFIX: &str = "acp:";
 pub const DEFAULT_REGISTRY_REF: &str = "main";
@@ -157,10 +154,6 @@ pub fn resolve_registry_entry_payload(
     bail!("ACP registry agent version not found: {id}@{requested}")
 }
 
-// ---------------------------------------------------------------------------
-// Registry entry model
-// ---------------------------------------------------------------------------
-
 #[derive(Debug, Clone, Deserialize)]
 pub struct BinaryTarget {
     pub archive: String,
@@ -278,10 +271,6 @@ impl Target {
 fn binary_command_name(cmd: &str) -> String {
     Path::new(cmd).file_name().map(|n| n.to_string_lossy().to_string()).filter(|n| !n.is_empty()).unwrap_or_else(|| "acp-agent".into())
 }
-
-// ---------------------------------------------------------------------------
-// Git source (models/agent/acp_source.py)
-// ---------------------------------------------------------------------------
 
 fn default_source_dir() -> String {
     ".".into()
@@ -589,10 +578,6 @@ async fn fetch_source(source: &AcpSource, checkout: &Path) -> Result<String> {
     std::fs::remove_dir_all(checkout.join(".git"))?;
     Ok(sha)
 }
-
-// ---------------------------------------------------------------------------
-// Agent
-// ---------------------------------------------------------------------------
 
 pub struct Acp {
     args: AgentArgs,

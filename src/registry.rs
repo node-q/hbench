@@ -35,7 +35,7 @@ pub fn load(url: Option<&str>, path: Option<&Path>) -> Result<Vec<Dataset>> {
         Some(p) => std::fs::read_to_string(p).with_context(|| format!("reading {}", p.display()))?,
         None => {
             let url = url.unwrap_or(DEFAULT_REGISTRY_URL);
-            // ponytail: curl instead of an HTTP client crate.
+            // Curl instead of an HTTP client crate.
             let out = Command::new("curl").args(["-fsSL", "--max-time", "60", url]).output().context("running curl")?;
             if !out.status.success() {
                 bail!("fetching registry {url}: {}", String::from_utf8_lossy(&out.stderr));

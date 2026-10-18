@@ -275,7 +275,7 @@ fn write_task_config(cfg: &CompileConfig, dir: &Path, environment: Option<&Compi
     Ok(())
 }
 
-/// `Task.is_valid_dir`. ponytail: separate-verifier detection is "tests/ ships a Dockerfile or
+/// `Task.is_valid_dir`. Separate-verifier detection is "tests/ ships a Dockerfile or
 /// compose file"; [verifier.environment] definitions aren't resolved.
 fn is_valid_dir(dir: &Path, disable_verification: bool) -> bool {
     let Ok(text) = std::fs::read_to_string(dir.join("task.toml")) else { return false };

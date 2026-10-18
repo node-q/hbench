@@ -2,6 +2,7 @@
 //! one-shot `headless` profile with the `--json` event stream.
 //! Follows the installed-agent conventions of the other agents.
 
+use super::common::parse_jsonl;
 use super::common::{detect_version, installed_dir, nvm_node_install_snippet, opts};
 use super::pins;
 use super::{classify, connection, ensure_system_dependencies, exec_agent, upload_text};
@@ -112,7 +113,7 @@ impl DeepSeekHarness {
 }
 
 fn events(text: &str) -> Vec<Value> {
-    text.lines().filter_map(|l| serde_json::from_str::<Value>(l.trim()).ok()).filter(Value::is_object).collect()
+    parse_jsonl(text).into_iter().filter(Value::is_object).collect()
 }
 
 /// Error type for a failed run: the provider status on the last errored `turn_end`, else output patterns.

@@ -935,7 +935,7 @@ async fn main() -> Result<()> {
             env::preflight().await?;
             let task = std::sync::Arc::new(Task::load(&registry::local_path(&tc.task))?);
             let (_tx, rx) = tokio::sync::watch::channel(false);
-            let r = trial::Trial::new(tc, task, None)?.run(rx).await;
+            let r = Box::pin(trial::Trial::new(tc, task, None)?.run(rx)).await;
             println!(
                 "{}",
                 serde_json::to_string_pretty(&serde_json::json!({
@@ -1134,7 +1134,7 @@ async fn main() -> Result<()> {
         Cmd::Analyze(a) => analyze::analyze_command(*a).await,
         Cmd::Check(a) => analyze::check_command(*a).await,
         Cmd::View { folder, path, port, host, tasks, jobs, .. } => {
-            // ponytail: `-p` is the folder flag but is also used as a port flag; a port-shaped value that isn't a dir is a port.
+            //  `-p` is the folder flag but is also used as a port flag; a port-shaped value that isn't a dir is a port.
             let is_port = |p: &str| !std::path::Path::new(p).is_dir() && viewer::parse_port_range(p).is_ok();
             let (folder, port) = match path {
                 Some(p) if is_port(&p) => (folder, p),

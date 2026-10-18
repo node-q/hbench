@@ -1,5 +1,6 @@
 //! Goose.
 
+use super::common::parse_jsonl;
 use super::common::{detect_version, installed_dir, opts, skills_dir};
 use super::pins;
 use super::{connection, ensure_system_dependencies, exec_agent, exec_error};
@@ -141,7 +142,7 @@ pub fn parse_goose_usage(text: &str) -> Option<AgentContext> {
     let mut order: Vec<String> = vec![];
     let mut msgs: BTreeMap<String, Msg> = BTreeMap::new();
     let mut complete: Option<Value> = None;
-    for (i, e) in text.trim().lines().filter_map(|l| serde_json::from_str::<Value>(l.trim()).ok()).enumerate() {
+    for (i, e) in parse_jsonl(text).into_iter().enumerate() {
         match e["type"].as_str() {
             Some("message") => {
                 let m = &e["message"];

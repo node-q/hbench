@@ -23,10 +23,6 @@ const TIMEOUT_TEMPLATE: &str = include_str!("../../assets/agents/terminus2/timeo
 const NAME: &str = "terminus-2";
 const VERSION: &str = "2.0.0";
 
-// ---------------------------------------------------------------------------------------------
-// Python-compatibility helpers
-// ---------------------------------------------------------------------------------------------
-
 /// Python `str.format` with named fields (`{{` / `}}` escapes).
 pub(crate) fn py_format(tpl: &str, vars: &[(&str, &str)]) -> String {
     let mut out = String::with_capacity(tpl.len());
@@ -128,10 +124,6 @@ pub(crate) fn limit_output_length(output: &str, max_bytes: usize) -> String {
     let omitted = output.len() - a - (output.len() - b);
     format!("{}\n[... output limited to {max_bytes} bytes; {omitted} interior bytes omitted ...]\n{}", &output[..a], &output[b..])
 }
-
-// ---------------------------------------------------------------------------------------------
-// Response parsers (terminus_json_plain_parser.py / terminus_xml_plain_parser.py)
-// ---------------------------------------------------------------------------------------------
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParsedCommand {
@@ -366,7 +358,7 @@ pub mod xml_parser {
 
     const SECTIONS: [&str; 4] = ["analysis", "plan", "commands", "task_complete"];
 
-    // ponytail: an auto-fix appending `</response>` would key on an error `_try_parse` never
+    // An auto-fix appending `</response>` would key on an error `_try_parse` never
     // emits ("Missing </response> closing tag"), so it can't fire and is omitted.
     pub fn parse_response(response: &str) -> ParseResult {
         let mut w = vec![];
@@ -599,10 +591,6 @@ impl ParserKind {
         )
     }
 }
-
-// ---------------------------------------------------------------------------------------------
-// tmux session (tmux_session.py)
-// ---------------------------------------------------------------------------------------------
 
 /// Command execution inside the environment (the agent's `AgentCtx`; mocked in tests).
 #[async_trait::async_trait]
@@ -961,10 +949,6 @@ async fn install_asciinema_with_pip(sh: &dyn Shell) {
     .await;
 }
 
-// ---------------------------------------------------------------------------------------------
-// ATIF trajectory (models/trajectories)
-// ---------------------------------------------------------------------------------------------
-
 #[derive(Serialize, Clone, Debug, Default)]
 struct Step {
     step_id: usize,
@@ -1064,10 +1048,6 @@ fn final_metrics(prompt: i64, completion: i64, cached: i64, cost: f64) -> Value 
     }
     m
 }
-
-// ---------------------------------------------------------------------------------------------
-// Agent
-// ---------------------------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
 struct Command {
@@ -1787,7 +1767,6 @@ Based on the conversation history, please provide a detailed summary covering:
             encountered and how you resolved them.
 4. **Current Status** - Exactly where you are in the task completion process.
 
-
 Be comprehensive and detailed. The next agent needs to understand everything
             that has happened so far in order to continue."
         );
@@ -2066,8 +2045,6 @@ mod tests {
     use std::collections::VecDeque;
     use std::sync::{Arc, Mutex};
 
-    // ----- parsers -----
-
     #[test]
     fn json_parser_basics() {
         let resp = r#"{"analysis": "Need to list files.", "plan": "Run ls.", "commands": [{"keystrokes": "ls -la\n", "duration": 0.1}, {"keystrokes": "cd project\n", "duration": 0.1}], "task_complete": false}"#;
@@ -2182,8 +2159,6 @@ mod tests {
         assert_eq!(xml_parser::salvage_truncated_response("<response><analysis>a</analysis><commands>"), (None, false));
     }
 
-    // ----- prompts and helpers -----
-
     #[test]
     fn prompt_rendering_and_helpers() {
         let p = py_format(JSON_TEMPLATE, &[("instruction", "Do {x}"), ("terminal_state", "$ ")]);
@@ -2208,8 +2183,6 @@ mod tests {
         assert_eq!(parse_skill_frontmatter(sk), Some(("pdf".into(), "Work with PDFs & forms".into())));
         assert_eq!(parse_skill_frontmatter("no frontmatter"), None);
     }
-
-    // ----- mocks -----
 
     #[derive(Default)]
     struct MockShell {
@@ -2318,8 +2291,6 @@ mod tests {
         json!({"analysis": "looking", "plan": "act", "commands": [{"keystrokes": keys, "duration": 0.01}], "task_complete": complete})
             .to_string()
     }
-
-    // ----- episode loop -----
 
     #[tokio::test]
     async fn loop_runs_commands_and_double_confirms_completion() {
@@ -2496,8 +2467,6 @@ mod tests {
         assert!(ctx.metadata.as_ref().unwrap()["summarization_count"].as_i64().unwrap() >= 1);
     }
 
-    // ----- options -----
-
     #[test]
     fn options_validation() {
         let o = Options::parse(
@@ -2542,8 +2511,6 @@ mod tests {
         t.reset_per_run_state();
         assert_eq!(t.session_id, "constructor-session");
     }
-
-    // ----- tmux -----
 
     fn tmux() -> Tmux {
         Tmux {

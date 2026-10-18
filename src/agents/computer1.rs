@@ -56,10 +56,6 @@ fn py_repr(v: &Value) -> String {
     }
 }
 
-// ---------------------------------------------------------------------------------------------
-// ComputerAction + JSON dialect (runtime.py / providers/generic.py)
-// ---------------------------------------------------------------------------------------------
-
 /// A computer action (serialized in full, None included, as ATIF tool-call arguments).
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct Action {
@@ -379,10 +375,6 @@ fn mime_for_path(path: &str) -> &'static str {
         "image/webp"
     }
 }
-
-// ---------------------------------------------------------------------------------------------
-// Desktop runtime (runtime.py)
-// ---------------------------------------------------------------------------------------------
 
 const DISPLAY: &str = ":1";
 const RUNTIME_DIR: &str = "/tmp/computer_1_runtime";
@@ -958,10 +950,6 @@ async fn screenshot_data_url(sh: &dyn Shell, path: &str) -> Result<String> {
     Ok(format!("data:{};base64,{}", mime_for_path(path), r.stdout.trim()))
 }
 
-// ---------------------------------------------------------------------------------------------
-// Chat (Computer1Chat) and compaction helpers (compaction.py)
-// ---------------------------------------------------------------------------------------------
-
 #[derive(Debug, Default)]
 struct CChat {
     messages: Vec<Value>,
@@ -982,7 +970,7 @@ impl CChat {
             self.total_cache_tokens += u.cache_tokens;
             self.total_cost += u.cost_usd;
         }
-        // ponytail: native tool_calls aren't threaded back (the JSON dialect never sends tools).
+        // Native tool_calls aren't threaded back (the JSON dialect never sends tools).
         self.messages.extend(prompt.iter().cloned());
         self.messages.push(json!({"role": "assistant", "content": r.content}));
         Ok(r)
@@ -1059,10 +1047,6 @@ fn last_n_chars(s: &str, n: usize) -> String {
     let count = s.chars().count();
     s.chars().skip(count.saturating_sub(n)).collect()
 }
-
-// ---------------------------------------------------------------------------------------------
-// Agent
-// ---------------------------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
 struct Options {
@@ -1358,8 +1342,6 @@ impl Computer1 {
         format!("{}/{name}", self.env_io_dir)
     }
 
-    // ----- generic JSON dialect prompts -----
-
     fn prompt_text(&self, instruction: &str) -> String {
         let (opt, fields, rule) = if self.enable_bash {
             (
@@ -1397,8 +1379,6 @@ impl Computer1 {
         }
         vec![json!({"role": "user", "content": content})]
     }
-
-    // ----- recorder -----
 
     /// Append an ATIF step (None fields dropped, like `exclude_none`).
     fn push_step(&mut self, mut step: Map<String, Value>) {
@@ -1562,8 +1542,6 @@ impl Computer1 {
         }
     }
 
-    // ----- screenshots / actions -----
-
     async fn capture(&mut self, sh: &dyn Shell, name: &str) -> Result<String> {
         let target = self.io_path(name);
         let p = self.desktop()?.fetch_screenshot(sh, &target).await?;
@@ -1660,8 +1638,6 @@ impl Computer1 {
         Ok(r.content)
     }
 
-    // ----- compaction -----
-
     async fn fresh_prompt_after_compaction(&mut self, sh: &dyn Shell) -> Vec<Value> {
         let text = "Continue from the summary above.";
         if self.desktop.is_none() || !self.enable_images {
@@ -1748,8 +1724,6 @@ impl Computer1 {
         self.llm.call(&p, &self.chat.messages, &Map::new(), None).await.ok().map(|r| r.content)
     }
 
-    // ----- LLM query (`_query_litellm`) -----
-
     /// 3 attempts (not on context overflow / bad request); overflow compacts and recurses (depth <= 2).
     fn query<'a>(
         &'a mut self,
@@ -1815,8 +1789,6 @@ impl Computer1 {
             Err(e) => Err(e.into()),
         }
     }
-
-    // ----- the episode loop -----
 
     async fn run_loop(&mut self, sh: &dyn Shell, ctx: &mut AgentContext, instruction: &str, initial_shot: &str) -> Result<()> {
         let initial_ref = screenshot_data_url(sh, initial_shot).await?;
@@ -2166,8 +2138,6 @@ mod tests {
             "{'status': 'recovered', 'recovered': True, 'x': None}"
         );
     }
-
-    // ----- loop with mocks -----
 
     #[derive(Default)]
     pub(super) struct MockShell {

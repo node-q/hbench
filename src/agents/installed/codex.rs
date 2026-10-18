@@ -1,5 +1,6 @@
 //! Codex CLI, incl. ACP target mode and load_trajectory seeding.
 
+use super::common::parse_jsonl;
 use super::common::{detect_version, installed_dir, opts, parse_bool_env, skills_dir};
 use super::pins;
 use super::{
@@ -283,7 +284,7 @@ fn rollout_timestamp(traj: &Value) -> chrono::DateTime<chrono::FixedOffset> {
         return now();
     };
     chrono::DateTime::parse_from_rfc3339(ts)
-        // ponytail: naive timestamps taken as UTC (Python would use local time).
+        // Naive timestamps taken as UTC (Python would use local time).
         .or_else(|_| chrono::NaiveDateTime::parse_from_str(ts, "%Y-%m-%dT%H:%M:%S%.f").map(|n| n.and_utc().fixed_offset()))
         .unwrap_or_else(|_| now())
 }
@@ -377,7 +378,7 @@ fn latest_session_file(logs_dir: &Path) -> Option<PathBuf> {
 /// Cost: Codex's own `total_cost`/`cost_usd` when present, else the sum of per-API-call LiteLLM
 /// estimates (None if any call is unpriced). `model` is the fallback when no `turn_context` names one.
 pub fn parse_rollout_usage(text: &str, model: Option<&str>) -> Option<AgentContext> {
-    let events: Vec<Value> = text.lines().filter_map(|l| serde_json::from_str(l.trim()).ok()).collect();
+    let events = parse_jsonl(text);
     let model = events.iter().find_map(|e| (e["type"] == "turn_context").then(|| e["payload"]["model"].as_str()).flatten()).or(model);
     // A token_count event closes one API call if the model produced output since the last one.
     let (mut saw_output, mut costs) = (false, vec![]);

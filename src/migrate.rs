@@ -53,7 +53,7 @@ pub fn migrate(input: &Path, output: &Path, overrides: Overrides) -> Result<Vec<
     }
     fs::create_dir_all(&output)?;
     let mut mapped = Vec::new();
-    // ponytail: sorted for determinism; Python iterates in iterdir() (fs) order.
+    // Sorted for determinism; Python iterates in iterdir() (fs) order.
     for task_dir in sorted_entries(&input)? {
         if !task_dir.is_dir() || !task_dir.join("task.yaml").exists() {
             continue;
@@ -115,8 +115,6 @@ fn map_task(src: &Path, target: &Path, ov: &Overrides) -> Result<PathBuf> {
     fs::write(task_dir.join("task.toml"), cfg.to_toml(ov)?)?;
     Ok(task_dir)
 }
-
-// ---------------------------------------------------------------- task.yaml
 
 struct TbConfig {
     instruction: String,
@@ -219,8 +217,6 @@ impl TbConfig {
         Ok(o)
     }
 }
-
-// ---------------------------------------------------------- docker-compose
 
 fn process_docker_compose(src: &Path, env_dir: &Path, task: &str) -> Result<HashSet<String>> {
     let compose_path = src.join("docker-compose.yaml");
@@ -501,8 +497,6 @@ fn write_compose(root: &Mapping, services: &Mapping, main_name: &Value, main: &M
     Ok(())
 }
 
-// ------------------------------------------------------------------- files
-
 fn copy_remaining_files(src: &Path, env_dir: &Path, handled: &HashSet<String>) -> Result<()> {
     for item in walk_files(src)? {
         let rel = item.strip_prefix(src)?;
@@ -566,8 +560,6 @@ fn copy_tree(src: &Path, dst: &Path) -> Result<()> {
     Ok(())
 }
 
-// --------------------------------------------------------- python-isms
-
 /// Python `repr(float)`.
 fn py_float_repr(f: f64) -> String {
     if f.is_nan() {
@@ -606,7 +598,7 @@ fn toml_float(f: f64) -> String {
 }
 
 /// Python `str.isprintable()` for non-ASCII.
-// ponytail: approximates Unicode categories Cc/Cf/Zs/Zl/Zp/Co; exact tables if it ever matters.
+// Approximates Unicode categories Cc/Cf/Zs/Zl/Zp/Co; exact tables if it ever matters.
 fn py_printable(c: char) -> bool {
     !c.is_control()
         && !matches!(c, '\u{a0}' | '\u{ad}' | '\u{1680}' | '\u{2000}'..='\u{200f}' | '\u{2028}'..='\u{202f}'
@@ -733,8 +725,6 @@ fn toml_str(s: &str) -> Result<String> {
     }
     Ok(format!("\"{}\"", parts[0]))
 }
-
-// ------------------------------------------------- PyYAML safe_dump clone
 
 /// `yaml.safe_dump(v, sort_keys=False)`: block style, indent 2, width 80, ASCII only.
 /// Port of PyYAML's Emitter for the node shapes safe_load produces (no anchors/tags).
@@ -909,7 +899,7 @@ impl Emitter {
         }
     }
 
-    // ponytail: only empty collections go flow style (all safe_dump(default_flow_style=False) emits).
+    // Only empty collections go flow style (all safe_dump(default_flow_style=False) emits).
     fn flow_empty(&mut self, open: &str, close: &str) {
         self.write_indicator(open, true, true, false);
         self.write_indicator(close, false, false, false);
@@ -955,7 +945,7 @@ impl Emitter {
         self.out.push(br.unwrap_or('\n'));
     }
 
-    // ponytail: no line-break branch; PyYAML never emits multiline plain scalars.
+    // No line-break branch; PyYAML never emits multiline plain scalars.
     fn write_plain(&mut self, t: &[char], split: bool) {
         if t.is_empty() {
             return;

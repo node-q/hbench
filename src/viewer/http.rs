@@ -165,7 +165,7 @@ pub fn serve(folder: &Path, mode: Option<Mode>, host: &str, ports: (u16, u16)) -
     println!("  Mode: {}", mode.as_str());
     println!("  Server: http://{host}:{port}");
     let app = Arc::new(App::new(folder, mode));
-    // ponytail: fixed worker pool; the SPA fires a handful of parallel requests per page.
+    // Fixed worker pool; the SPA fires a handful of parallel requests per page.
     let workers: Vec<_> = (0..8)
         .map(|_| {
             let (server, app) = (server.clone(), app.clone());

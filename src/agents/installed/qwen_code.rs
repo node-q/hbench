@@ -83,10 +83,8 @@ impl QwenCode {
     }
 }
 
-fn parse_jsonl(path: &Path) -> Vec<Value> {
-    std::fs::read_to_string(path)
-        .map(|t| t.lines().filter_map(|l| serde_json::from_str::<Value>(l.trim()).ok()).filter(Value::is_object).collect())
-        .unwrap_or_default()
+fn read_jsonl(path: &Path) -> Vec<Value> {
+    std::fs::read_to_string(path).map(|t| super::common::parse_jsonl(&t).into_iter().filter(Value::is_object).collect()).unwrap_or_default()
 }
 
 /// Token totals (prompt, completion, cached) the ATIF converter would report;
@@ -141,7 +139,7 @@ fn find_session_jsonl(logs_dir: &Path) -> Option<PathBuf> {
     let mut files = vec![];
     walk(&logs_dir.join("qwen-sessions"), &mut files);
     files.into_iter().max_by_key(|p| {
-        let ts = parse_jsonl(p).iter().filter_map(|e| e["timestamp"].as_str().map(String::from)).max().unwrap_or_default();
+        let ts = read_jsonl(p).iter().filter_map(|e| e["timestamp"].as_str().map(String::from)).max().unwrap_or_default();
         (ts, std::fs::metadata(p).and_then(|m| m.modified()).ok())
     })
 }
@@ -156,13 +154,17 @@ fn subagent_usage(session: &Path) -> (i64, i64, i64) {
         .flatten()
         .flatten()
         .map(|e| e.path())
-        .filter(|p| p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with("agent-") && n.ends_with(".jsonl")))
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("agent-") && Path::new(n).extension().is_some_and(|e| e.eq_ignore_ascii_case("jsonl")))
+        })
         .collect();
     files.sort();
     let mut usage: HashMap<String, (i64, i64, i64)> = HashMap::new();
     let mut parents: HashMap<String, Option<String>> = HashMap::new();
     for f in files {
-        let events = parse_jsonl(&f);
+        let events = read_jsonl(&f);
         if events.is_empty() {
             continue;
         }
@@ -245,7 +247,7 @@ impl Agent for QwenCode {
 
     fn populate_context_post_run(&self, logs_dir: &Path, ctx: &mut AgentContext) {
         let Some(session) = find_session_jsonl(logs_dir) else { return };
-        let events = parse_jsonl(&session);
+        let events = read_jsonl(&session);
         let Ok(Some((i, o, c))) = events_usage(&events) else { return };
         let s = subagent_usage(&session);
         ctx.cost_usd = None;

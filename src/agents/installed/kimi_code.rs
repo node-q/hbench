@@ -152,8 +152,6 @@ impl Agent for KimiCode {
     }
 }
 
-// ---- usage totals (kimi_code_trajectory.build_trajectory's final_metrics) ----
-
 #[derive(Default)]
 struct Step {
     agent: bool,
