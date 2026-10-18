@@ -153,8 +153,6 @@ pub fn task_id(cfg: &TrialConfig) -> Value {
 /// Agent setup tries, all within the setup timeout.
 const SETUP_ATTEMPTS: u32 = 3;
 
-/// Agent errors that are recorded while the verifier still runs (the
-/// AgentTimeoutError + NonZeroAgentExitCodeError family).
 /// Context on an agent phase whose processes could not be stopped: grading then would be unsafe, so the
 /// trial ends there, still reporting the run's own error kind.
 #[derive(Debug)]
@@ -170,6 +168,8 @@ fn unstopped(e: &anyhow::Error) -> bool {
     e.downcast_ref::<Unstopped>().is_some()
 }
 
+/// Agent errors that are recorded while the verifier still runs (the
+/// AgentTimeoutError + NonZeroAgentExitCodeError family).
 pub fn is_agent_run_error(kind: &str) -> bool {
     kind == "AgentTimeoutError"
         || kind == "NonZeroAgentExitCodeError"
