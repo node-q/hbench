@@ -265,6 +265,64 @@ pub fn tail(s: &str, n: usize) -> &str {
     &s[i..]
 }
 
+/// Pull/registry/daemon failures worth another `up`, as opposed to errors in the task's compose setup.
+fn transient_docker_error(stderr: &str) -> bool {
+    let s = stderr.to_ascii_lowercase();
+    [
+        "toomanyrequests",
+        "too many requests",
+        "tls handshake timeout",
+        "connection reset",
+        "i/o timeout",
+        "unexpected eof",
+        "context deadline exceeded",
+        "net/http: request canceled",
+        "temporary failure in name resolution",
+        "503 service unavailable",
+        "502 bad gateway",
+    ]
+    .iter()
+    .any(|p| s.contains(p))
+}
+
+/// Variables the docker CLI (or the ssh it runs for remote contexts) reads itself.
+fn affects_docker_cli(k: &str) -> bool {
+    let k = k.to_ascii_uppercase();
+    ["PATH", "HOME", "USER", "TMPDIR", "SHELL"].contains(&k.as_str())
+        || ["DOCKER_", "COMPOSE_", "BUILDKIT_", "SSH_", "XDG_", "LD_", "DYLD_"].iter().any(|p| k.starts_with(p))
+        || k.ends_with("_PROXY")
+}
+
+/// Bytes of a command's stdout/stderr kept from the start and from the end; the middle of longer
+/// output is dropped so a chatty command can't exhaust memory.
+const OUTPUT_HEAD: usize = 1 << 20;
+const OUTPUT_TAIL: usize = 8 << 20;
+
+async fn read_capped(mut r: impl tokio::io::AsyncRead + Unpin, head_cap: usize, tail_cap: usize) -> std::io::Result<String> {
+    use tokio::io::AsyncReadExt;
+    let (mut head, mut rest, mut dropped) = (Vec::new(), Vec::new(), 0usize);
+    let mut buf = vec![0u8; 64 * 1024];
+    loop {
+        let n = r.read(&mut buf).await?;
+        let k = (head_cap - head.len()).min(n);
+        head.extend_from_slice(&buf[..k]);
+        rest.extend_from_slice(&buf[k..n]);
+        if rest.len() > 2 * tail_cap || (n == 0 && rest.len() > tail_cap) {
+            let d = rest.len() - tail_cap;
+            rest.drain(..d);
+            dropped += d;
+        }
+        if n == 0 {
+            break;
+        }
+    }
+    if dropped > 0 {
+        head.extend_from_slice(format!("\n[hbench: {dropped} bytes of output dropped]\n").as_bytes());
+    }
+    head.extend_from_slice(&rest);
+    Ok(String::from_utf8_lossy(&head).into_owned())
+}
+
 /// Services in task compose files, each with whether it sets `network_mode` and whether it sets `networks`.
 fn compose_services(files: &[PathBuf]) -> Result<BTreeMap<String, (bool, bool)>> {
     let mut out: BTreeMap<String, (bool, bool)> = BTreeMap::new();
@@ -294,11 +352,12 @@ fn own_network_services(files: &[PathBuf]) -> Result<Vec<String>> {
     Ok(compose_services(files)?.into_iter().filter(|(_, (m, n))| !m && *n).map(|(s, _)| s).collect())
 }
 
-/// Whether the daemon's kernel takes the sidecar's nftables ruleset, tried once in a throwaway container.
-async fn nft_support(image: &str) -> bool {
+/// Whether the daemon's kernel takes the sidecar's nftables ruleset, tried in a throwaway container.
+/// Only an answer from the check itself is cached; a docker failure (exit 125+, timeout) is retried next time.
+async fn nft_support(image: &str, log: &TrialLog) -> bool {
     static CACHE: tokio::sync::OnceCell<bool> = tokio::sync::OnceCell::const_new();
-    *CACHE
-        .get_or_init(|| async {
+    CACHE
+        .get_or_try_init(|| async {
             let out = tokio::time::timeout(
                 Duration::from_secs(120),
                 Command::new("docker")
@@ -307,9 +366,28 @@ async fn nft_support(image: &str) -> bool {
                     .output(),
             )
             .await;
-            matches!(out, Ok(Ok(o)) if o.status.success())
+            match out {
+                Ok(Ok(o)) if o.status.code().is_some_and(|c| c < 125) => Ok(o.status.success()),
+                Ok(Ok(o)) => Err(String::from_utf8_lossy(&o.stderr).trim().to_string()),
+                Ok(Err(e)) => Err(e.to_string()),
+                Err(_) => Err("timed out".into()),
+            }
         })
         .await
+        .copied()
+        .unwrap_or_else(|e| {
+            log.line(&format!("nftables check failed ({e}); using the proxy method for this trial"));
+            false
+        })
+}
+
+/// `docker args` with a timeout (killed when it runs out).
+async fn docker_output(args: &[&str], timeout: Duration) -> Result<std::process::Output> {
+    let out = Command::new("docker").args(args).kill_on_drop(true).output();
+    tokio::time::timeout(timeout, out)
+        .await
+        .map_err(|_| anyhow!("`docker {}` timed out after {timeout:?}", args.join(" ")))?
+        .map_err(Into::into)
 }
 
 /// Build (once) the vendored egress sidecar image, content-addressed.
@@ -331,7 +409,7 @@ async fn egress_image(log: &TrialLog) -> Result<String> {
             }
             let hash = crate::task::hex(&sha2::Digest::finalize(h))[..12].to_string();
             let image = format!("hbench-egress-sidecar:{hash}");
-            let exists = Command::new("docker").args(["image", "inspect", &image]).output().await?.status.success();
+            let exists = docker_output(&["image", "inspect", &image], Duration::from_secs(60)).await?.status.success();
             if !exists {
                 let dir = cache_root().join("egress-sidecar").join(&hash);
                 std::fs::create_dir_all(dir.join("bin"))?;
@@ -342,7 +420,7 @@ async fn egress_image(log: &TrialLog) -> Result<String> {
                     std::fs::set_permissions(&p, std::fs::Permissions::from_mode(mode))?;
                 }
                 log.line(&format!("building egress sidecar image {image}"));
-                let out = Command::new("docker").arg("build").arg("-t").arg(&image).arg(&dir).output().await?;
+                let out = docker_output(&["build", "-t", &image, &dir.to_string_lossy()], Duration::from_secs(900)).await?;
                 if !out.status.success() {
                     bail!("building egress sidecar failed: {}", String::from_utf8_lossy(&out.stderr));
                 }
@@ -374,7 +452,9 @@ impl DockerEnv {
             }
             (None, true) => {
                 let name = env_dir.parent().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                let image = sanitize(&format!("hb__{name}-{}", &crate::task::hash_dir(env_dir)?[..12]), true);
+                let dir = env_dir.clone();
+                let hash = tokio::task::spawn_blocking(move || crate::task::hash_dir(&dir)).await??;
+                let image = sanitize(&format!("hb__{name}-{}", &hash[..12]), true);
                 main.insert("build".into(), json!({"context": env_dir}));
                 main.insert("image".into(), json!(image));
                 Some(image)
@@ -409,7 +489,7 @@ impl DockerEnv {
         let restricted = policies.iter().any(|p| p.mode != NetworkMode::Public);
         let image = if restricted { Some(egress_image(&log).await?) } else { None };
         let nft = match &image {
-            Some(i) => nft_support(i).await,
+            Some(i) => nft_support(i, &log).await,
             None => false,
         };
         let egress = choose_method(restricted, nft, std::env::var("HBENCH_EGRESS_METHOD").ok().as_deref())?;
@@ -515,7 +595,10 @@ impl DockerEnv {
     }
 
     async fn run(&self, args: Vec<String>, timeout: Option<Duration>, label: &str, stdin: Option<Vec<u8>>) -> Result<ExecResult> {
-        let mut c = self.compose(&args);
+        self.run_cmd(self.compose(&args), timeout, label, stdin).await
+    }
+
+    async fn run_cmd(&self, mut c: Command, timeout: Option<Duration>, label: &str, stdin: Option<Vec<u8>>) -> Result<ExecResult> {
         c.stdin(if stdin.is_some() { Stdio::piped() } else { Stdio::null() }).stdout(Stdio::piped()).stderr(Stdio::piped());
         self.log.line(&format!("$ {label}"));
         let mut child = c.spawn().context("spawning `docker compose` (is docker installed?)")?;
@@ -524,21 +607,21 @@ impl DockerEnv {
             si.write_all(&data).await?;
             drop(si);
         }
-        let out = match timeout {
-            Some(t) => match tokio::time::timeout(t, child.wait_with_output()).await {
+        let (stdout, stderr) = (child.stdout.take().unwrap(), child.stderr.take().unwrap());
+        let out = async {
+            tokio::try_join!(child.wait(), read_capped(stdout, OUTPUT_HEAD, OUTPUT_TAIL), read_capped(stderr, OUTPUT_HEAD, OUTPUT_TAIL))
+        };
+        let (status, stdout, stderr) = match timeout {
+            Some(t) => match tokio::time::timeout(t, out).await {
                 Ok(r) => r?,
                 Err(_) => {
                     self.log.line(&format!("timed out after {t:?}"));
                     return Err(kind_err("TimeoutError", format!("`{label}` timed out after {t:?}")));
                 }
             },
-            None => child.wait_with_output().await?,
+            None => out.await?,
         };
-        let r = ExecResult {
-            code: out.status.code().unwrap_or(-1),
-            stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
-            stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
-        };
+        let r = ExecResult { code: status.code().unwrap_or(-1), stdout, stderr };
         self.log.line(&format!("exit={} stdout:\n{}stderr:\n{}", r.code, tail(&r.stdout, 20000), tail(&r.stderr, 20000)));
         Ok(r)
     }
@@ -553,12 +636,17 @@ impl DockerEnv {
     }
 
     pub async fn start(&self) -> Result<()> {
-        let started = async {
-            if let Some(image) = &self.build_image {
-                static LOCKS: OnceLock<Mutex<HashMap<String, Arc<tokio::sync::Mutex<bool>>>>> = OnceLock::new();
-                let lock = LOCKS.get_or_init(Default::default).lock().unwrap().entry(image.clone()).or_default().clone();
-                // Serialize builds of one image; later trials in this process reuse it.
-                let mut built = lock.lock().await;
+        // Serialize builds of one image; later trials in this process reuse it. Waiting here for
+        // another trial's build doesn't count against this trial's timeout.
+        static LOCKS: OnceLock<Mutex<HashMap<String, Arc<tokio::sync::Mutex<bool>>>>> = OnceLock::new();
+        let lock =
+            self.build_image.as_ref().map(|i| LOCKS.get_or_init(Default::default).lock().unwrap().entry(i.clone()).or_default().clone());
+        let built = match &lock {
+            Some(l) => Some(l.lock().await),
+            None => None,
+        };
+        let started = async move {
+            if let Some(mut built) = built {
                 if !*built {
                     self.run_ok(sv(&["build"]), None).await?;
                     *built = true;
@@ -567,7 +655,7 @@ impl DockerEnv {
                 self.run_ok(sv(&["build"]), None).await?;
             }
             let _ = self.run(sv(&["down", "--remove-orphans"]), Some(Duration::from_secs(120)), "down (stale)", None).await;
-            self.run_ok(sv(&["up", "--detach", "--wait"]), None).await?;
+            self.up().await?;
             if self.egress == Some(EgressMethod::Proxy) && self.spec.baseline.mode != NetworkMode::Public {
                 self.check_isolated().await?;
             }
@@ -603,6 +691,22 @@ impl DockerEnv {
         Ok(())
     }
 
+    /// `up --detach --wait`, retried when a pull or the daemon fails transiently.
+    async fn up(&self) -> Result<()> {
+        for attempt in 1.. {
+            let r = self.run(sv(&["up", "--detach", "--wait"]), None, "up --detach --wait", None).await?;
+            if r.code == 0 {
+                break;
+            }
+            if attempt == 3 || !transient_docker_error(&r.stderr) {
+                bail!("docker compose up --detach --wait failed (exit {}): {}{}", r.code, tail(&r.stdout, 2000), tail(&r.stderr, 4000));
+            }
+            self.log.line(&format!("transient docker error; retrying `up` (attempt {})", attempt + 1));
+            tokio::time::sleep(Duration::from_secs(10 * attempt)).await;
+        }
+        Ok(())
+    }
+
     /// `bash -c command` in main, with persistent env < `env`. Non-zero exit is not an error.
     pub async fn exec(
         &self,
@@ -628,9 +732,15 @@ impl DockerEnv {
         if let Some(w) = cwd {
             args.extend(sv(&["-w", w]));
         }
-        for (k, v) in &merged {
+        // Values go through docker's own environment (`-e KEY`), not argv where `ps` shows them; except
+        // variables that would change how the docker CLI itself runs.
+        let (by_value, by_name): (BTreeMap<_, _>, BTreeMap<_, _>) = merged.iter().partition(|(k, _)| affects_docker_cli(k));
+        for (k, v) in &by_value {
             args.push("-e".into());
             args.push(format!("{k}={v}"));
+        }
+        for k in by_name.keys() {
+            args.extend(["-e".to_string(), k.to_string()]);
         }
         if let Some(u) = user {
             args.extend(sv(&["-u", u]));
@@ -639,7 +749,9 @@ impl DockerEnv {
         let keys: Vec<&str> = merged.keys().map(String::as_str).collect();
         // Log env keys only: values may be secrets.
         let label = format!("exec user={} env={keys:?}: {}", user.unwrap_or("-"), tail(command, 2000));
-        self.run(args, timeout, &label, None).await
+        let mut c = self.compose(&args);
+        c.envs(by_name);
+        self.run_cmd(c, timeout, &label, None).await
     }
 
     pub async fn exec_root(&self, command: &str, timeout: Option<Duration>) -> Result<ExecResult> {
@@ -784,7 +896,7 @@ impl DockerEnv {
     }
 
     async fn docker(&self, args: &[&str]) -> Result<String> {
-        let out = Command::new("docker").args(args).kill_on_drop(true).output().await?;
+        let out = docker_output(args, Duration::from_secs(60)).await?;
         if !out.status.success() {
             bail!("docker {} failed: {}", args.join(" "), String::from_utf8_lossy(&out.stderr).trim());
         }
@@ -833,8 +945,10 @@ impl DockerEnv {
     pub async fn egress_info(&self) -> Option<EgressInfo> {
         let method = self.egress?;
         let mut denied = vec![];
-        match self.compose(&sv(&["logs", "--no-color", "--no-log-prefix", EGRESS_SERVICE])).output().await {
-            Ok(o) if o.status.success() => denied = parse_denials(&String::from_utf8_lossy(&o.stdout)),
+        // The last 20000 lines: older denials may be missed on a very chatty run.
+        let logs = self.compose(&sv(&["logs", "--no-color", "--no-log-prefix", "--tail", "20000", EGRESS_SERVICE])).output();
+        match tokio::time::timeout(Duration::from_secs(60), logs).await {
+            Ok(Ok(o)) if o.status.success() => denied = parse_denials(&String::from_utf8_lossy(&o.stdout)),
             _ => self.log.line("could not read the egress sidecar's log"),
         }
         if !denied.is_empty() {
@@ -1018,6 +1132,23 @@ mod tests {
         assert_eq!(tail("héllo", 3), "llo");
         assert_eq!(quote("/logs/agent"), "/logs/agent");
         assert_eq!(quote("a b'c"), r"'a b'\''c'");
+    }
+
+    #[tokio::test]
+    async fn caps_command_output() {
+        let data = format!("{}{}{}", "a".repeat(10), "b".repeat(170), "c".repeat(20));
+        let s = read_capped(data.as_bytes(), 10, 20).await.unwrap();
+        assert_eq!(s, format!("{}\n[hbench: 170 bytes of output dropped]\n{}", "a".repeat(10), "c".repeat(20)));
+        assert_eq!(read_capped(&b"short"[..], 10, 20).await.unwrap(), "short");
+    }
+
+    #[test]
+    fn classifies_docker_errors_and_env() {
+        assert!(transient_docker_error("Error response from daemon: toomanyrequests: You have reached your pull rate limit"));
+        assert!(transient_docker_error("net/http: TLS handshake timeout"));
+        assert!(!transient_docker_error("service \"main\" refers to undefined network foo: invalid compose project"));
+        assert!(affects_docker_cli("https_proxy") && affects_docker_cli("DOCKER_HOST") && affects_docker_cli("PATH"));
+        assert!(!affects_docker_cli("OPENAI_API_KEY"));
     }
 
     #[test]
