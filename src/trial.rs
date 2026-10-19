@@ -1366,13 +1366,13 @@ async fn cancellable<T>(mut cancel: watch::Receiver<bool>, fut: impl Future<Outp
     }
 }
 
-/// Move root agent/verifier/artifacts contents into steps/<name>/ (agent copied when the next step resumes).
 /// Whether the steps after this one run.
 enum StepEnd {
     Continue,
     Stop,
 }
 
+/// Move root agent/verifier/artifacts contents into steps/<name>/ (agent copied when the next step resumes).
 fn archive_step(trial_dir: &Path, sdir: &Path, preserve_agent: bool) {
     for d in ["agent", "verifier", "artifacts"] {
         let src = trial_dir.join(d);
