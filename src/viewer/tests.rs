@@ -44,7 +44,7 @@ fn fixture() -> App {
     write(&new.join("a__1/agent/x.txt"), "a\r\nb");
     write(&root.join("2025-01-01__00-00-00/config.json"), "{}");
     write(&root.join("secret.txt"), "top secret");
-    App::new(root.canonicalize().unwrap(), Mode::Jobs)
+    App::new(root.canonicalize().unwrap(), Mode::Jobs, true)
 }
 
 #[test]
@@ -137,6 +137,38 @@ fn path_guards_and_spa() {
     assert!(app.folder.join(job).exists());
     let page = handle(&app, &Req { method: "GET", url: "/jobs/x/trials/y", origin: None, host: None, body: b"" });
     assert!(String::from_utf8(page.body).unwrap().contains(r#"<div id="root">"#));
+}
+
+#[test]
+fn write_routes_need_a_loopback_bind() {
+    let local = fixture();
+    let exposed = App::new(local.folder.clone(), Mode::Jobs, false);
+    let job = "2026-01-02__00-00-00";
+    let delete = |app: &App, origin: Option<&str>, host: &str| {
+        let url = format!("/api/jobs/{job}");
+        handle(app, &Req { method: "DELETE", url: &url, origin, host: Some(host), body: b"" })
+    };
+    for (origin, host) in [(None, "10.0.0.5:8080"), (Some("http://10.0.0.5:8080"), "10.0.0.5:8080"), (None, "127.0.0.1:8080")] {
+        let r = delete(&exposed, origin, host);
+        assert_eq!(r.status, 403, "{origin:?} {host}");
+        assert!(String::from_utf8_lossy(&r.body).contains("read-only"));
+    }
+    let r = handle(&exposed, &Req { method: "POST", url: "/api/run", origin: None, host: Some("10.0.0.5:8080"), body: b"{}" });
+    assert_eq!(r.status, 403);
+    assert!(exposed.folder.join(job).exists());
+    assert_eq!(get(&exposed, &format!("/api/jobs/{job}")).0, 200);
+    assert_eq!(delete(&local, None, "127.0.0.1:8080").status, 200);
+    assert!(!local.folder.join(job).exists());
+}
+
+#[test]
+fn loopback_hosts() {
+    for h in ["127.0.0.1", "127.0.0.2", "::1", "[::1]", "localhost", "LOCALHOST"] {
+        assert!(is_loopback_host(h), "{h}");
+    }
+    for h in ["0.0.0.0", "::", "10.0.0.5", "example.com", ""] {
+        assert!(!is_loopback_host(h), "{h}");
+    }
 }
 
 #[test]

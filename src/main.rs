@@ -104,7 +104,9 @@ enum Cmd {
         /// Port or port range (e.g., 8080 or 8080-8089).
         #[arg(long, default_value = "8080-8089")]
         port: String,
-        /// Host to bind the server to.
+        /// Host to bind the server to. Only on a loopback address (127.0.0.1, ::1, localhost) does the
+        /// viewer start runs and delete jobs; bound to any other address it is read-only, since anyone who
+        /// can reach it could otherwise run hbench with any config.
         #[arg(long, default_value = "127.0.0.1")]
         host: String,
         /// Force task definitions mode.
