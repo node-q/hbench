@@ -1265,9 +1265,9 @@ mod tests {
         let r = |code, stderr: &str| ExecResult { code, stdout: String::new(), stderr: stderr.into() };
         let dial = "command [ssh -l u -T -- h docker system dial-stdio] has exited with exit status 255, ...: stderr=";
         assert!(ssh_not_connected(&r(1, &format!("{dial}kex_exchange_identification: read: Connection reset by peer"))));
-        assert!(ssh_not_connected(&r(1, &format!("{dial}Connection closed by 100.70.90.125 port 22"))));
+        assert!(ssh_not_connected(&r(1, &format!("{dial}Connection closed by 192.0.2.1 port 22"))));
         assert!(ssh_not_connected(&r(1, &format!("{dial}mux_client_request_session: Session open refused by peer"))));
-        assert!(!ssh_not_connected(&r(1, &format!("{dial}Connection to 100.70.90.125 closed by remote host."))));
+        assert!(!ssh_not_connected(&r(1, &format!("{dial}Connection to 192.0.2.1 closed by remote host."))));
         assert!(!ssh_not_connected(&r(1, "bash: line 1: foo: command not found")));
         assert!(!ssh_not_connected(&r(0, &format!("{dial}Connection closed by h port 22"))));
     }

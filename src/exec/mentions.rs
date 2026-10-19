@@ -165,7 +165,7 @@ mod tests {
             ("use e.g. numpy.array or os.path.join", &[]),
             ("born in the U.S. in 1990, i.e. long ago", &[]),
             ("visit example.com or www.google.org", &[]),
-            ("email alexgshaw64@gmail.com please", &[]),
+            ("email author@example.com please", &[]),
             ("call obj.method() and this.props.name", &[]),
             ("Washington D.C. is not a path", &[]),
             ("the amount is 1,234.56 dollars", &[]),
