@@ -109,8 +109,9 @@ tasks: [{path: tests/secrets/echo-secrets}]
 agents: [{name: oracle, env: {AGENT_TOKEN: "$agent_token"}}]
 EOF
 # The watcher stops at a file, not a kill: a killed loop can leave a ps running that then sees the
-# next command. The checker takes the secrets from its environment, off its own command line.
-( until [ -e "$JOBS/argv-watch.stop" ]; do ps -Ao args= | grep -F -e "$host_key" -e "$agent_token" | grep -v -e '^grep ' >> "$JOBS/argv-leaks.txt" || true; sleep 0.1; done ) &
+# next command. It also stops if this script exits first ($$ is the script's pid in the subshell). The
+# checker takes the secrets from its environment, off its own command line.
+( until [ -e "$JOBS/argv-watch.stop" ] || ! kill -0 $$ 2>/dev/null; do ps -Ao args= | grep -F -e "$host_key" -e "$agent_token" | grep -v -e '^grep ' >> "$JOBS/argv-leaks.txt" || true; sleep 0.1; done ) &
 watch_pid=$!
 HB_E2E_API_KEY=$host_key $BIN run -c "$JOBS/secrets.yaml" >/dev/null
 touch "$JOBS/argv-watch.stop"; wait $watch_pid
