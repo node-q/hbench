@@ -14,12 +14,10 @@ env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
 
-# Every job runs on the org's self-hosted pool: GitHub refuses hosted jobs for this
-# organisation over billing. The pool is Linux x64 only with no sudo, so macOS is not
-# covered here; its jobs have a Docker daemon, which the e2e job uses.
+# Every job runs on self-hosted runners. They are Linux x64 only with no sudo, so macOS is
+# not covered here; they have a Docker daemon, which the e2e job uses.
 jobs:
-  # The router runners pick the pool for the jobs below: mothership's while one of
-  # its runners is idle, either pool otherwise (infra's services/gh-runner-mothership).
+  # Picks the runner pool for the jobs below.
   route:
     name: Route
     runs-on: [self-hosted, hpg-route]

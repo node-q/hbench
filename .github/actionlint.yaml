@@ -1,2 +1,2 @@
 self-hosted-runner:
-  labels: [hpg, hpg-route, mothership]
+  labels: [hpg, hpg-route]

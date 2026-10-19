@@ -1,7 +1,7 @@
 name: Setup Rust
 description: >
-  The Rust toolchain pinned in rust-toolchain.toml + cargo cache for the self-hosted pool. starship-hpg-1..4 share one
-  user (runner-hpg), so a shared ~/.rustup gets corrupted by concurrent installs;
+  The Rust toolchain pinned in rust-toolchain.toml + cargo cache for self-hosted runners. Runner instances on one host
+  can share a user, so a shared ~/.rustup gets corrupted by concurrent installs;
   keep rustup/cargo homes in each runner instance's own tool cache instead.
 inputs:
   components:

@@ -19,8 +19,7 @@ env:
   CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: rust-lld
 
 jobs:
-  # The router runners pick the pool for the jobs below: mothership's while one of
-  # its runners is idle, either pool otherwise (infra's services/gh-runner-mothership).
+  # Picks the runner pool for the jobs below.
   route:
     name: Route
     runs-on: [self-hosted, hpg-route]
