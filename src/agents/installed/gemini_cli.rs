@@ -353,9 +353,7 @@ impl Agent for GeminiCli {
 
     async fn run(&mut self, instruction: &str, cx: &AgentCtx<'_>, _ctx: &mut AgentContext, resume: bool) -> Result<()> {
         let instruction = self.args.render_instruction(instruction)?;
-        let Some((_, model)) = self.args.model_name.as_deref().and_then(|m| m.split_once('/')) else {
-            bail!("Model name must be in the format provider/model_name")
-        };
+        let (_, model) = self.args.require_provider_model()?;
         let model = model.rsplit('/').next().unwrap().to_string();
         let oauth = self.oauth_creds_path()?;
         // Gemini CLI ignores --yolo in an untrusted workspace.

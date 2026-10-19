@@ -80,9 +80,7 @@ impl Goose {
     }
 
     fn run_env(&self) -> Result<BTreeMap<String, String>> {
-        let Some((prov, model)) = self.args.model_name.as_deref().and_then(|m| m.split_once('/')) else {
-            bail!("Model name must be in the format provider/model_name")
-        };
+        let (prov, model) = self.args.require_provider_model()?;
         let c = self.connection();
         let prov = c.provider.clone().unwrap_or_else(|| prov.to_string());
         if !["anthropic", "databricks", "google", "openai", "tetrate"].contains(&prov.as_str()) {

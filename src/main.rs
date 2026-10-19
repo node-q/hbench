@@ -9,6 +9,7 @@ mod diff;
 mod env;
 mod exec;
 mod fmt;
+mod fsutil;
 mod integrity;
 mod job;
 mod metrics;

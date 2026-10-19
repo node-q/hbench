@@ -148,15 +148,9 @@ fn stringify(v: &Value) -> String {
     v.as_str().map(str::to_string).unwrap_or_else(|| json_spaced_utf8(v))
 }
 
-fn truthy(v: Option<&Value>) -> bool {
-    match v {
-        None | Some(Value::Null) | Some(Value::Bool(false)) => false,
-        Some(Value::Number(n)) => n.as_f64() != Some(0.0),
-        Some(Value::String(s)) => !s.is_empty(),
-        Some(Value::Array(a)) => !a.is_empty(),
-        Some(Value::Object(o)) => !o.is_empty(),
-        _ => true,
-    }
+/// A field that is present and set ([`crate::fmt::truthy`]).
+fn is_set(v: Option<&Value>) -> bool {
+    v.is_some_and(crate::fmt::truthy)
 }
 
 fn nonempty_str(v: Option<&Value>) -> Option<String> {
@@ -272,20 +266,20 @@ fn format_tool_result(block: &Obj, tool_use_result: Option<&Value>) -> (Option<S
     if let Some(tur) = tool_use_result.and_then(Value::as_object) {
         metadata = Some(Obj::from_iter([("tool_use_result".to_string(), Value::Object(tur.clone()))]));
         let mut chunks = vec![];
-        if truthy(tur.get("stdout")) {
+        if is_set(tur.get("stdout")) {
             chunks.push(format!("[stdout]\n{}", scalar_text(&tur["stdout"])).trim_end().to_string());
         }
-        if truthy(tur.get("stderr")) {
+        if is_set(tur.get("stderr")) {
             chunks.push(format!("[stderr]\n{}", scalar_text(&tur["stderr"])).trim_end().to_string());
         }
-        let exit = if truthy(tur.get("exitCode")) { tur.get("exitCode") } else { tur.get("exit_code") };
+        let exit = if is_set(tur.get("exitCode")) { tur.get("exitCode") } else { tur.get("exit_code") };
         if let Some(e) = exit.filter(|e| !e.is_null() && e.as_i64() != Some(0)) {
             chunks.push(format!("[exit_code] {}", scalar_text(e)));
         }
-        if truthy(tur.get("interrupted")) {
+        if is_set(tur.get("interrupted")) {
             chunks.push(format!("[interrupted] {}", scalar_text(&tur["interrupted"])));
         }
-        if truthy(tur.get("isImage")) {
+        if is_set(tur.get("isImage")) {
             chunks.push(format!("[is_image] {}", scalar_text(&tur["isImage"])));
         }
         let rest: Obj = tur
@@ -314,7 +308,7 @@ fn format_tool_result(block: &Obj, tool_use_result: Option<&Value>) -> (Option<S
 fn identity_extra(ev: &Value) -> Obj {
     let mut m = Obj::new();
     m.insert("is_sidechain".into(), ev.get("isSidechain").cloned().unwrap_or(Value::Bool(false)));
-    if truthy(ev.get("agentId")) {
+    if is_set(ev.get("agentId")) {
         m.insert("agent_id".into(), ev["agentId"].clone());
     }
     m
@@ -323,7 +317,7 @@ fn identity_extra(ev: &Value) -> Obj {
 fn first_event_model(events: &[Value], include_sidechain: bool) -> Option<String> {
     events
         .iter()
-        .filter(|e| include_sidechain || !truthy(e.get("isSidechain")))
+        .filter(|e| include_sidechain || !is_set(e.get("isSidechain")))
         .find_map(|e| nonempty_str(e.get("message").filter(|m| m.is_object()).and_then(|m| m.get("model"))))
 }
 
@@ -461,14 +455,14 @@ pub fn convert_session(session_dir: &Path, logs_dir: &Path) -> Option<Trajectory
                         extra.insert(k.into(), v.clone());
                     }
                 }
-                if truthy(ev.get("id")) {
+                if is_set(ev.get("id")) {
                     extra.insert("id".into(), ev["id"].clone());
                 }
                 extra.extend(identity_extra(ev));
-                if truthy(ev.get("cwd")) {
+                if is_set(ev.get("cwd")) {
                     extra.entry("cwd").or_insert(ev["cwd"].clone());
                 }
-                if truthy(ev.get("userType")) && ev["userType"] != "external" {
+                if is_set(ev.get("userType")) && ev["userType"] != "external" {
                     extra.insert("user_type".into(), ev["userType"].clone());
                 }
                 let model_name = nonempty_str(message.get("model")).or(default_model.clone());
@@ -519,7 +513,7 @@ pub fn convert_session(session_dir: &Path, logs_dir: &Path) -> Option<Trajectory
                             ce.insert(dst.into(), v.clone());
                         }
                     }
-                    if truthy(tb.get("name")) {
+                    if is_set(tb.get("name")) {
                         ce.entry("tool_use_name").or_insert(tb["name"].clone());
                     }
                     calls.push(CallSpec {

@@ -560,10 +560,7 @@ impl Agent for AntigravityCli {
 
     async fn run(&mut self, instruction: &str, cx: &AgentCtx<'_>, _ctx: &mut AgentContext, _resume: bool) -> Result<()> {
         let instruction = self.args.render_instruction(instruction)?;
-        let model = match &self.args.model_name {
-            Some(m) if m.contains('/') => m.rsplit('/').next().unwrap().to_string(),
-            _ => bail!("Model name must be in the format provider/model_name"),
-        };
+        let model = self.args.require_provider_model()?.1.rsplit('/').next().unwrap().to_string();
         let env = self.run_env(&model)?;
         let none = BTreeMap::new();
         if let Some(d) = skills_dir(&self.args) {

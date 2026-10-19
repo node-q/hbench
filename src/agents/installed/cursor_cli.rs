@@ -126,9 +126,7 @@ impl CursorCli {
 
     /// `--model` value; effort goes in Cursor's parameterized form `base[k=v,...,effort=X]`.
     fn model_arg(&self) -> Result<String> {
-        let Some((_, model)) = self.args.model_name.as_deref().and_then(|m| m.split_once('/')) else {
-            bail!("Model name must be in the format provider/model_name")
-        };
+        let (_, model) = self.args.require_provider_model()?;
         let Some(effort) = self.effort()? else { return Ok(model.to_string()) };
         let re = regex::Regex::new(r"^(?s)(?P<base>.+)\[(?P<params>[^\[\]]*)\]$").unwrap();
         let Some(c) = re.captures(model) else { return Ok(format!("{model}[effort={effort}]")) };

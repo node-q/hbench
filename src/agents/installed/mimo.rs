@@ -178,9 +178,8 @@ impl Agent for MiMo {
 
     async fn run(&mut self, instruction: &str, cx: &AgentCtx<'_>, _ctx: &mut AgentContext, resume: bool) -> Result<()> {
         let instruction = self.args.render_instruction(instruction)?;
-        let Some(model) = self.args.model_name.clone().filter(|m| m.contains('/')) else {
-            bail!("Model name must be in the format provider/model_name")
-        };
+        self.args.require_provider_model()?;
+        let model = self.args.model_name.clone().unwrap_or_default();
         let mut env = connection(&self.args, SPEC).env;
         env.insert("MIMOCODE_FAKE_VCS".into(), "git".into());
         env.insert("XDG_DATA_HOME".into(), "/logs/agent/mimo/xdg-data".into());

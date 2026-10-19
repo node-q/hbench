@@ -114,9 +114,7 @@ impl TraeAgent {
 
     /// Validated (provider, model, env, config yaml) for a run.
     fn prepare(&self) -> Result<(BTreeMap<String, String>, String)> {
-        let Some((hp, model)) = self.args.model_name.as_deref().and_then(|m| m.split_once('/')) else {
-            bail!("Model name must be in the format provider/model_name");
-        };
+        let (hp, model) = self.args.require_provider_model()?;
         let access = self.connection();
         let tp = trae_provider(hp).filter(|tp| access.provider.as_deref() == Some(*tp));
         let Some(tp) = tp else {

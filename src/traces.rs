@@ -1,5 +1,6 @@
 //! `hbench traces export`: HF-style trace export, written as JSONL rows (one row per episode).
 
+use crate::fsutil::read_json;
 use anyhow::{Context, Result, bail};
 use serde_json::{Map, Value, json};
 use std::path::{Path, PathBuf};
@@ -13,10 +14,6 @@ pub struct ExportOpts {
     pub sharegpt: bool,
     pub include_instruction: bool,
     pub include_verifier_output: bool,
-}
-
-fn read_json(p: &Path) -> Option<Value> {
-    serde_json::from_str(&std::fs::read_to_string(p).ok()?).ok()
 }
 
 /// The first value that is set: not null, `false`, `""` or zero.

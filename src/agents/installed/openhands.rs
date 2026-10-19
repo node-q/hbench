@@ -7,7 +7,8 @@ use super::{connection, ensure_system_dependencies, exec_agent, exec_root};
 use crate::agents::model_connection::Spec;
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::quote;
-use crate::fmt::value_text;
+use crate::fmt::{truthy, value_text};
+use crate::fsutil::read_json;
 use anyhow::{Result, bail};
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
@@ -77,17 +78,6 @@ fn opt_dict(args: &AgentArgs, agent: &str, k: &str) -> Result<Option<Map<String,
 /// Agent env > host env, empty values kept.
 pub(super) fn raw_env(args: &AgentArgs, k: &str) -> Option<String> {
     args.extra_env.get(k).cloned().or_else(|| std::env::var(k).ok())
-}
-
-fn truthy(v: Option<&Value>) -> bool {
-    match v {
-        None | Some(Value::Null) => false,
-        Some(Value::Bool(b)) => *b,
-        Some(Value::Number(n)) => n.as_f64() != Some(0.0),
-        Some(Value::String(s)) => !s.is_empty(),
-        Some(Value::Array(a)) => !a.is_empty(),
-        Some(Value::Object(o)) => !o.is_empty(),
-    }
 }
 
 pub struct OpenHands {
@@ -216,7 +206,7 @@ impl OpenHands {
         }
         if let Some(mi) = &self.model_info {
             for (k, e) in [("max_input_tokens", "LLM_MAX_INPUT_TOKENS"), ("max_output_tokens", "LLM_MAX_OUTPUT_TOKENS")] {
-                if truthy(mi.get(k)) {
+                if mi.get(k).is_some_and(truthy) {
                     env.insert(e.into(), value_text(&mi[k]));
                 }
             }
@@ -294,10 +284,6 @@ impl OpenHands {
 
 /// (prompt, completion, cached, cost) totals the way ATIF final_metrics computes them.
 type Totals = (i64, i64, i64, f64);
-
-fn read_json(p: &Path) -> Option<Value> {
-    serde_json::from_str(&std::fs::read_to_string(p).ok()?).ok()
-}
 
 fn int(v: &Value, k: &str) -> i64 {
     v.get(k).and_then(Value::as_i64).unwrap_or(0)

@@ -63,9 +63,7 @@ impl Hermes {
 
     /// (env, --provider flag, cli model) for the configured model.
     fn auth(&self) -> Result<(BTreeMap<String, String>, Option<&'static str>, String)> {
-        let Some((provider, model)) = self.args.model_name.as_deref().and_then(|m| m.split_once('/')) else {
-            bail!("Model name must be in the format provider/model_name");
-        };
+        let (provider, model) = self.args.require_provider_model()?;
         let mut env = BTreeMap::from([("HERMES_HOME".to_string(), "/tmp/hermes".to_string()), ("TERMINAL_ENV".into(), "local".into())]);
         let mut flag = None;
         let native = native_provider(provider);
