@@ -29,7 +29,7 @@ jobs:
     steps:
       - name: Pick the runner pool
         id: route
-        uses: node-q/actions/runner-route@4d447ccec339824c49417463313800a2fbbcb210
+        uses: node-q/actions/runner-route@7d4b5974256903c7e7d1736a51564fdbd89655eb
         with:
           token: ${{ secrets.RUNNER_STATUS_TOKEN }}
 
