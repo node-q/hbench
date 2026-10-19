@@ -1306,6 +1306,8 @@ pub fn trial_lock(c: &TrialConfig) -> Value {
     let user_agent = c.user_agent.as_ref();
     drop_nulls(serde_json::json!({
         "schema_version": 2,
+        // The build that ran this trial: a job resumed on another build has trials from both.
+        "hbench": {"version": env!("CARGO_PKG_VERSION")},
         "task": {
             "name": name,
             "version": task.as_ref().and_then(|t| t.config.task.as_ref().and_then(|p| p.version.clone())),
@@ -1531,6 +1533,7 @@ mod tests {
         assert_eq!(lock["prompt_template"]["path"], tpl.to_string_lossy().as_ref());
         assert_eq!(lock["prompt_template"]["digest"], sha256_prefixed(b"Fix it: {{ instruction }}"));
         assert!(trial_lock(&cfg(serde_json::json!({}))).get("prompt_template").is_none());
+        assert_eq!(lock["hbench"]["version"], env!("CARGO_PKG_VERSION"));
     }
 
     #[test]

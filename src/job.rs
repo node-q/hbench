@@ -239,6 +239,15 @@ struct Shared {
     retries: usize,
 }
 
+/// What a job carries over from an earlier run's result.json: its id, and the retries that run
+/// counted, so `n_retries` covers every attempt across `jobs resume`. A new job gets a fresh id.
+fn carried_over(job_dir: &Path) -> (uuid::Uuid, usize) {
+    match std::fs::read_to_string(job_dir.join("result.json")).ok().and_then(|s| serde_json::from_str::<JobResult>(&s).ok()) {
+        Some(prev) => (prev.id, prev.stats.n_retries),
+        None => (uuid::Uuid::new_v4(), 0),
+    }
+}
+
 /// Run (or resume) a job. `filter_error_types`: on resume, rerun trials that failed with these.
 pub async fn run_job(
     cfg: JobConfig,
@@ -248,10 +257,7 @@ pub async fn run_job(
 ) -> Result<JobResult> {
     let job_dir = cfg.job_dir();
     std::fs::create_dir_all(&job_dir)?;
-    let job_id = match std::fs::read_to_string(job_dir.join("result.json")).ok().and_then(|s| serde_json::from_str::<JobResult>(&s).ok()) {
-        Some(prev) => prev.id,
-        None => uuid::Uuid::new_v4(),
-    };
+    let (job_id, prior_retries) = carried_over(&job_dir);
     std::fs::write(job_dir.join("config.json"), serde_json::to_string_pretty(&cfg.config_json())?)?;
     let log = crate::env::TrialLog::create(&job_dir.join("job.log"))?;
     log.line(&format!("job {} started ({} agent config(s))", cfg.job_name, cfg.agents.len()));
@@ -300,6 +306,11 @@ pub async fn run_job(
     let n_total = previous.len() + pending.len();
     if !previous.is_empty() {
         eprintln!("resuming: {} trial(s) already complete, {} to run", previous.len(), pending.len());
+        log.line(&format!(
+            "resuming: {} trial(s) already complete, {} to run, {prior_retries} retries so far",
+            previous.len(),
+            pending.len()
+        ));
     }
     if !cfg.quiet {
         eprintln!("job {}: {} trial(s) to run, concurrency {}", job_dir.display(), pending.len(), cfg.n_concurrent_trials);
@@ -322,7 +333,7 @@ pub async fn run_job(
         n_total_trials: n_total,
         stats: JobStats::default(),
     }));
-    let shared = Arc::new(Mutex::new(Shared { results: previous, running: 0, retries: 0 }));
+    let shared = Arc::new(Mutex::new(Shared { results: previous, running: 0, retries: prior_retries }));
     let metric_cfgs = Arc::new(cfg.metrics.clone());
     let write = {
         let (job_result, shared, path, metric_cfgs) =
@@ -758,6 +769,27 @@ Job  runtime 1h 2m 5s
             serde_json::from_value(serde_json::json!({"task": {"path": "/t/a"}, "trial_name": "a__1", "trials_dir": "/old/j"})).unwrap();
         write_atomic(&cfg.job_dir().join(PLAN_FILE), serde_json::to_string(&[tc]).unwrap()).unwrap();
         assert_eq!(stored_plan(&cfg).unwrap().unwrap()[0].trials_dir, cfg.job_dir());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_resumed_job_keeps_its_id_and_its_retries() {
+        let d = std::env::temp_dir().join(format!("hbench-resume-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&d).unwrap();
+        let (fresh, none) = carried_over(&d);
+        assert_eq!(none, 0);
+        let earlier = JobResult {
+            id: fresh,
+            started_at: Utc::now(),
+            updated_at: None,
+            finished_at: None,
+            n_total_trials: 2,
+            stats: JobStats { n_retries: 30, ..Default::default() },
+        };
+        std::fs::write(d.join("result.json"), serde_json::to_string(&earlier).unwrap()).unwrap();
+        assert_eq!(carried_over(&d), (fresh, 30));
+        std::fs::write(d.join("result.json"), "not json").unwrap();
+        assert_ne!(carried_over(&d).0, fresh);
         let _ = std::fs::remove_dir_all(&d);
     }
 }
