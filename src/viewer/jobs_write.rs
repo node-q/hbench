@@ -6,18 +6,6 @@ use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 
 impl App {
-    pub(super) fn stream_dir(&self, job: &str, trial: &str, req: &Req) -> std::result::Result<PathBuf, Err> {
-        // SSH forwards are loopback-only. The browser must run on this host.
-        if !req.client_loopback {
-            return Err(err(403, "Browser VS Code requires a browser on the hbench viewer host"));
-        }
-        let p = resolve(&self.folder, &format!("{job}/{trial}"));
-        if p.parent().and_then(Path::parent) != Some(self.folder.as_path()) || !p.is_dir() {
-            return Err(err(404, "Trial not found"));
-        }
-        Ok(p)
-    }
-
     pub(super) fn jobs_write(&self, method: &str, segs: &[&str], req: &Req) -> Res {
         let body = || -> std::result::Result<Value, Err> {
             if req.body.is_empty() {
@@ -31,24 +19,6 @@ impl App {
                 let dir = self.existing_job(job)?;
                 std::fs::remove_dir_all(&dir).map_err(|e| err(500, format!("Failed to delete job: {e}")))?;
                 ok_json(json!({"status": "ok", "message": format!("Job '{job}' deleted")}))
-            }
-            ("POST", ["jobs", job, "upload"]) => {
-                let dir = self.existing_job(job)?;
-                if !dir.join("result.json").exists() || !dir.join("config.json").exists() {
-                    return Err(err(
-                        400,
-                        format!("Job '{job}' is missing result.json / config.json — it may still be running or the run was interrupted."),
-                    ));
-                }
-                let b = body()?;
-                match b.get("visibility") {
-                    None | Some(Value::Null) => {}
-                    Some(v) if v == "public" || v == "private" => {}
-                    Some(v) => {
-                        return Err(err(400, format!("Invalid visibility {}; must be 'public', 'private', or omitted.", repr_scalar(v))));
-                    }
-                }
-                Err(err(401, NOT_AUTHENTICATED))
             }
             ("POST", ["jobs", job, "summarize"]) => {
                 let dir = self.existing_job(job)?;
@@ -73,15 +43,6 @@ impl App {
                     return Err(err(500, e));
                 }
                 ok_json(json!({"summary": r["summary"]}))
-            }
-            ("POST", ["jobs", job, "trials", trial, "stream"]) => {
-                self.stream_dir(job, trial, req)?;
-                // hbench has no `--stream` SSH sandboxes, so there is never a valid handle to connect to.
-                Err(err(400, "No valid stream handle. Run a supported environment with --stream."))
-            }
-            ("DELETE", ["jobs", job, "trials", trial, "stream"]) => {
-                let dir = self.stream_dir(job, trial, req)?;
-                ok_json(json!({"state": "disconnected", "available": dir.join(STREAM_HANDLE_NAME).exists()}))
             }
             ("POST", ["run"]) => self.launch(body()?),
             ("POST", ["run", "config.yaml"]) => {

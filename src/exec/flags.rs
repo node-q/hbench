@@ -5,42 +5,6 @@ use anyhow::{Result, anyhow, bail};
 use serde_json::{Map, Value};
 use std::path::{Path, PathBuf};
 
-/// EnvironmentType values (accepted for config parity; hbench only runs docker).
-const ENVIRONMENT_TYPES: &[&str] = &[
-    "docker",
-    "podman",
-    "daytona",
-    "e2b",
-    "modal",
-    "runloop",
-    "langsmith",
-    "ec2",
-    "gke",
-    "ack",
-    "openshift",
-    "novita",
-    "apple-container",
-    "singularity",
-    "islo",
-    "tensorlake",
-    "cwsandbox",
-    "use-computer",
-    "cua-cloud",
-    "blaxel",
-    "opensandbox",
-    "beam",
-    "skypilot",
-    "hf-sandbox",
-    "hyperbrowser",
-    "vercel",
-    "runta",
-    "prime",
-    "kata",
-    "mosaic",
-    "smol",
-    "sail",
-];
-
 pub(super) fn config_from_flags(a: &ExecArgs) -> Result<ExecConfig> {
     let map_instructions = compile_instructions(a.instruction.as_deref(), a.instruction_path.as_deref())?;
     validate_map_task_source(&map_instructions, a.task_template.as_deref())?;
@@ -408,16 +372,10 @@ fn reduce_agent_configs(a: &ExecArgs, map_agents: &[Map<String, Value>]) -> Resu
 fn environment_config(spec: Option<&str>) -> Result<Map<String, Value>> {
     let mut m = Map::new();
     let Some(s) = spec else { return Ok(m) };
-    if s.contains(':') {
-        m.insert("import_path".into(), s.into());
-    } else if ENVIRONMENT_TYPES.contains(&s) {
-        m.insert("type".into(), s.into());
-    } else {
-        bail!(
-            "Invalid value: Unknown environment '{s}'. Valid types: {}. Pass a custom environment as an import path (module.path:ClassName).",
-            ENVIRONMENT_TYPES.join(", ")
-        );
+    if s != "docker" {
+        bail!("Unknown environment '{s}'. Only docker is supported.");
     }
+    m.insert("type".into(), s.into());
     Ok(m)
 }
 

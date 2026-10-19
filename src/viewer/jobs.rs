@@ -77,7 +77,7 @@ impl App {
         Ok(d)
     }
 
-    pub(super) fn jobs_get(&self, segs: &[&str], q: &Query, req: &Req) -> Res {
+    pub(super) fn jobs_get(&self, segs: &[&str], q: &Query) -> Res {
         let step = q.get("step");
         match segs {
             ["jobs"] => {
@@ -157,17 +157,6 @@ impl App {
                     return ok_json(json!({}));
                 }
                 ok_json(read_json(&p).ok_or_else(|| err(500, "Error reading analysis.json"))?)
-            }
-            ["jobs", job, "upload"] => {
-                let dir = self.existing_job(job)?;
-                if !dir.join("result.json").exists() {
-                    return ok_json(json!({"status": "in_progress", "job_id": null, "view_url": null}));
-                }
-                // No hosted hub is reachable: report the signed-out status.
-                ok_json(match job_result(&dir) {
-                    Some(r) => json!({"status": "unauthenticated", "job_id": r["id"], "view_url": null}),
-                    None => json!({"status": "unknown", "job_id": null, "view_url": null}),
-                })
             }
             ["jobs", job, "config"] => {
                 let cfg = (!job.contains('/')).then(|| job_config(&self.folder.join(job))).flatten();
@@ -382,10 +371,6 @@ impl App {
                     "oracle": text(&agent.join("oracle.txt")), "setup": text(&agent.join("setup/stdout.txt")), "commands": commands,
                     "summary": text(&dir.join("analysis.md")), "analysis": read_json(&dir.join("analysis.json")),
                 }))
-            }
-            ["jobs", job, "trials", trial, "stream"] => {
-                let dir = self.stream_dir(job, trial, req)?;
-                ok_json(json!({"state": "disconnected", "available": dir.join(STREAM_HANDLE_NAME).exists()}))
             }
             ["compare"] => {
                 let jobs = q.all("job");

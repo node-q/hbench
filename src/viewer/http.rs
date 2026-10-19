@@ -38,7 +38,6 @@ pub struct Req<'a> {
     pub url: &'a str,
     pub origin: Option<&'a str>,
     pub host: Option<&'a str>,
-    pub client_loopback: bool,
     pub body: &'a [u8],
 }
 
@@ -88,15 +87,6 @@ fn route(app: &App, req: &Req) -> Res {
         if path.starts_with("/assets/") || path.starts_with("/fonts/") {
             return static_file(path).ok_or_else(|| err(404, "Not Found"));
         }
-        if path == "/auth/callback" {
-            let msg = q.get("error").unwrap_or("Hub sign-in is not supported by hbench");
-            return Ok(Resp {
-                status: 400,
-                ctype: "text/html; charset=utf-8".into(),
-                body: format!("<h1>Sign-in failed</h1><p>{}</p>", html_escape(msg)).into_bytes(),
-                headers: vec![],
-            });
-        }
         return static_file(if path == "/favicon.ico" || path == "/favicon.svg" { path } else { "/index.html" })
             .ok_or_else(|| err(404, "Not Found"));
     };
@@ -108,19 +98,11 @@ fn route(app: &App, req: &Req) -> Res {
             ok_json(json!({"folder": app.folder.to_string_lossy(), "mode": app.mode.as_str(), "environments": ENVIRONMENTS}))
         }
         ("GET", ["pricing"]) => pricing(&q.required("model")?),
-        ("GET", ["auth", "status"]) => ok_json(json!({"authenticated": false, "username": null})),
-        ("GET", ["auth", "organizations"]) => Err(err(401, NOT_AUTHENTICATED)),
-        ("GET", ["auth", "login-url"]) => Err(err(501, "Hub sign-in is not supported by hbench.")),
-        ("POST", ["auth", "logout"]) => ok_json(json!({"status": "ok"})),
         ("GET", s) if app.mode == Mode::Tasks => app.tasks_get(s, &q),
-        ("GET", s) => app.jobs_get(s, &q, req),
+        ("GET", s) => app.jobs_get(s, &q),
         (m, s) if app.mode == Mode::Jobs => app.jobs_write(m, s, req),
         _ => Err(err(405, "Method Not Allowed")),
     }
-}
-
-fn html_escape(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
 }
 
 /// Folder-type auto-detection (jobs or tasks).
@@ -178,22 +160,12 @@ pub fn serve(folder: &Path, mode: Option<Mode>, host: &str, ports: (u16, u16)) -
                             .map(|h| h.value.as_str().to_string())
                     };
                     let (origin, host) = (header("origin"), header("host"));
-                    let loopback = rq.remote_addr().is_some_and(|a| a.ip().is_loopback());
                     let method = rq.method().as_str().to_uppercase();
                     let url = rq.url().to_string();
                     let mut body = vec![];
                     let _ = rq.as_reader().read_to_end(&mut body);
-                    let r = handle(
-                        &app,
-                        &Req {
-                            method: &method,
-                            url: &url,
-                            origin: origin.as_deref(),
-                            host: host.as_deref(),
-                            client_loopback: loopback,
-                            body: &body,
-                        },
-                    );
+                    let r =
+                        handle(&app, &Req { method: &method, url: &url, origin: origin.as_deref(), host: host.as_deref(), body: &body });
                     let mut resp = tiny_http::Response::from_data(r.body).with_status_code(r.status);
                     resp.add_header(tiny_http::Header::from_bytes(&b"Content-Type"[..], r.ctype.as_bytes()).unwrap());
                     for (k, v) in &r.headers {

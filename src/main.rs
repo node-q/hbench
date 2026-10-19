@@ -66,12 +66,6 @@ enum Cmd {
         /// Path to dataset.toml or directory containing one.
         #[arg(default_value = ".")]
         path: PathBuf,
-        /// Also update registry tasks to their latest digest (needs a hosted registry; unsupported).
-        #[arg(short = 'u', long)]
-        upgrade: bool,
-        /// Max concurrent registry lookups.
-        #[arg(short = 'c', long, default_value_t = 50)]
-        concurrency: usize,
     },
     /// Registry datasets and dataset manifests.
     #[command(alias = "dataset")]
@@ -104,7 +98,7 @@ enum Cmd {
     View {
         /// Folder containing job directories or task definitions (auto-detected).
         folder: Option<PathBuf>,
-        /// Folder (hbench style). A port or port range here (e.g. `-p 9000`) is taken as `--port`.
+        /// Same as FOLDER. A port or port range here (e.g. `-p 9000`) is taken as `--port`.
         #[arg(short = 'p', long = "path")]
         path: Option<String>,
         /// Port or port range (e.g., 8080 or 8080-8089).
@@ -119,7 +113,7 @@ enum Cmd {
         /// Force jobs mode.
         #[arg(long)]
         jobs: bool,
-        /// Accepted for compatibility; the viewer is prebuilt and embedded.
+        /// Ignored: the viewer is prebuilt and embedded.
         #[arg(long, hide = true)]
         build: bool,
         #[arg(long, hide = true)]
@@ -1327,7 +1321,7 @@ async fn run() -> Result<ExitCode> {
         Cmd::Init(a) => ok(run_init(*a)),
         Cmd::Add(a) | Cmd::Datasets { cmd: DatasetsCmd::Add(a) } => ok(authoring::add(&a.packages, &a.to, a.scan)),
         Cmd::Remove(a) | Cmd::Datasets { cmd: DatasetsCmd::Remove(a) } => ok(authoring::remove(&a.package, &a.from, a.scan)),
-        Cmd::Sync { path, upgrade, concurrency: _ } => ok(authoring::sync(&path, upgrade)),
+        Cmd::Sync { path } => ok(authoring::sync(&path)),
         Cmd::Datasets { cmd: DatasetsCmd::Init { name, output_dir, org, description, with_metric, author } } => {
             let name = authoring::resolve_name(name, org)?;
             ok(authoring::init_dataset(&name, &output_dir, &description, with_metric, &authoring::parse_authors(&author)))

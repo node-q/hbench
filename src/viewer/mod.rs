@@ -1,7 +1,6 @@
 //! `hbench view`: serves hbench's viewer SPA (viewer/, embedded from viewer/dist by build.rs) and its API
 //! over a jobs or tasks folder. Response shapes, ordering, filters, sorting and error codes are kept stable for
-//! the SPA; the hosted hub (auth/upload) and the `--stream` editor need cloud services, so they answer as
-//! when signed out / unavailable.
+//! the SPA.
 
 mod compare;
 mod http;
@@ -28,42 +27,8 @@ use util::*;
 
 pub(crate) use http::{parse_port_range, serve};
 
-const STREAM_HANDLE_NAME: &str = "stream.json";
-const NOT_AUTHENTICATED: &str = "Not authenticated: hub sign-in is not supported by hbench.";
-/// `EnvironmentType` values.
-const ENVIRONMENTS: &[&str] = &[
-    "docker",
-    "podman",
-    "daytona",
-    "e2b",
-    "modal",
-    "runloop",
-    "langsmith",
-    "ec2",
-    "gke",
-    "ack",
-    "openshift",
-    "novita",
-    "apple-container",
-    "singularity",
-    "islo",
-    "tensorlake",
-    "cwsandbox",
-    "use-computer",
-    "cua-cloud",
-    "blaxel",
-    "opensandbox",
-    "beam",
-    "skypilot",
-    "hf-sandbox",
-    "hyperbrowser",
-    "vercel",
-    "runta",
-    "prime",
-    "kata",
-    "mosaic",
-    "smol",
-];
+/// Environment types the launcher offers.
+const ENVIRONMENTS: &[&str] = &["docker"];
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Mode {

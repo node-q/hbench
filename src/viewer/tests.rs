@@ -4,7 +4,7 @@ use serde_json::{Value, json};
 use std::path::Path;
 
 fn get(app: &App, url: &str) -> (u16, Value) {
-    let r = handle(app, &Req { method: "GET", url, origin: None, host: Some("127.0.0.1:8080"), client_loopback: true, body: b"" });
+    let r = handle(app, &Req { method: "GET", url, origin: None, host: Some("127.0.0.1:8080"), body: b"" });
     (r.status, serde_json::from_slice(&r.body).unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&r.body).into_owned())))
 }
 
@@ -130,13 +130,12 @@ fn path_guards_and_spa() {
             url: &format!("/api/jobs/{job}"),
             origin: Some("http://evil.example"),
             host: Some("127.0.0.1:8080"),
-            client_loopback: true,
             body: b"",
         },
     );
     assert_eq!(r.status, 403);
     assert!(app.folder.join(job).exists());
-    let page = handle(&app, &Req { method: "GET", url: "/jobs/x/trials/y", origin: None, host: None, client_loopback: true, body: b"" });
+    let page = handle(&app, &Req { method: "GET", url: "/jobs/x/trials/y", origin: None, host: None, body: b"" });
     assert!(String::from_utf8(page.body).unwrap().contains(r#"<div id="root">"#));
 }
 

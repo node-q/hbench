@@ -130,7 +130,7 @@
     }
   }
 }
-### ["-i", "Write out/report.md", "--job-name", "J", "--tasks-dir", "td", "-e", "daytona", "-n", "8", "-r", "0", "-q", "--jobs-dir", "jobs/"]
+### ["-i", "Write out/report.md", "--job-name", "J", "--tasks-dir", "td", "-n", "8", "-r", "0", "-q", "--jobs-dir", "jobs/"]
 {
   "map": {
     "compile": {
@@ -161,49 +161,14 @@
       "job_name": "J",
       "jobs_dir": "jobs",
       "n_concurrent_trials": 8,
-      "quiet": true,
-      "environment": {
-        "type": "daytona"
-      }
+      "quiet": true
     }
   }
 }
+### ["-i", "Write out/report.md", "--job-name", "J", "--tasks-dir", "td", "-e", "daytona"]
+ERROR Error: Unknown environment 'daytona'. Only docker is supported.
 ### ["-i", "Write out/report.md", "--job-name", "J", "--tasks-dir", "td", "-e", "mymod:Env"]
-{
-  "map": {
-    "compile": {
-      "task_name_prefix": "J",
-      "output_dir": "td",
-      "instructions": [
-        {
-          "text": "Write out/report.md"
-        }
-      ],
-      "artifacts": [
-        "/app/out/report.md"
-      ],
-      "environments": [
-        {}
-      ],
-      "verifiers": [
-        {
-          "auto_verifier": {
-            "required_artifacts": [
-              "/app/out/report.md"
-            ]
-          }
-        }
-      ]
-    },
-    "job": {
-      "job_name": "J",
-      "jobs_dir": "jobs",
-      "environment": {
-        "import_path": "mymod:Env"
-      }
-    }
-  }
-}
+ERROR Error: Unknown environment 'mymod:Env'. Only docker is supported.
 ### ["-i", "no files here", "--job-name", "J", "--tasks-dir", "td"]
 {
   "map": {
@@ -1076,7 +1041,7 @@ ERROR Error: --task-template must contain instruction.md when no --instruction o
     }
   }
 }
-### ["-i", "make a.md", "--job-name", "J", "--tasks-dir", "td", "--reduce-prompt", "combine", "--reduce-agent", "claude-code", "--reduce-job-name", "R", "--reduce-image", "img", "--reduce-workdir", "/r", "--rk", "3", "-a", "codex", "-m", "m1", "-m", "m2", "-n", "2", "-r", "1", "-e", "modal"]
+### ["-i", "make a.md", "--job-name", "J", "--tasks-dir", "td", "--reduce-prompt", "combine", "--reduce-agent", "claude-code", "--reduce-job-name", "R", "--reduce-image", "img", "--reduce-workdir", "/r", "--rk", "3", "-a", "codex", "-m", "m1", "-m", "m2", "-n", "2", "-r", "1", "-e", "docker"]
 {
   "map": {
     "compile": {
@@ -1110,9 +1075,6 @@ ERROR Error: --task-template must contain instruction.md when no --instruction o
       "retry": {
         "max_retries": 1
       },
-      "environment": {
-        "type": "modal"
-      },
       "agents": [
         {
           "name": "codex",
@@ -1143,9 +1105,6 @@ ERROR Error: --task-template must contain instruction.md when no --instruction o
       "n_concurrent_trials": 2,
       "retry": {
         "max_retries": 1
-      },
-      "environment": {
-        "type": "modal"
       },
       "verifier": {
         "disable": true

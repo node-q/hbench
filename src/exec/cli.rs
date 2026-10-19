@@ -51,7 +51,7 @@ pub struct ExecArgs {
     /// Directory to save compiled tasks after task compilation. If omitted, compiled tasks are ephemeral and cleaned up after execution.
     #[arg(long, help_heading = "Task Compilation")]
     pub tasks_dir: Option<String>,
-    /// Execution environment type, e.g. docker or daytona.
+    /// Execution environment type. Only docker is supported.
     #[arg(short = 'e', long = "env", help_heading = "Jobs")]
     pub environment: Option<String>,
     /// Maximum concurrent trials.
@@ -126,12 +126,6 @@ pub struct ExecArgs {
     /// Attempts for the reducer task.
     #[arg(long = "rk", visible_alias = "n-reduce-attempts", value_parser = clap::value_parser!(i64).range(1..), help_heading = "Reduce Job")]
     pub reduce_n_attempts: Option<i64>,
-    /// Job plugin import path (Python plugins; not supported by hbench).
-    #[arg(long = "plugin", help_heading = "Integrations")]
-    pub job_plugin: Vec<String>,
-    /// Plugin kwarg (not supported by hbench).
-    #[arg(long = "pk", visible_alias = "plugin-kwarg", help_heading = "Integrations")]
-    pub plugin_kwargs: Vec<String>,
     /// Print resolved ExecConfig JSON, including auto-inferred artifacts, and exit.
     #[arg(long, help_heading = "Config")]
     pub print_config: bool,
@@ -160,10 +154,6 @@ pub async fn run(a: ExecArgs) -> Result<()> {
 }
 
 pub(super) fn resolve_config(a: &ExecArgs) -> Result<ExecConfig> {
-    if !a.job_plugin.is_empty() || !a.plugin_kwargs.is_empty() {
-        // Job plugins are external code; add a Rust hook if one is ever needed.
-        bail!("--plugin/--pk load Python job plugins, which hbench does not support.");
-    }
     match &a.config {
         Some(p) => {
             reject_config_flag_mix(a)?;

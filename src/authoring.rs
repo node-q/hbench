@@ -820,7 +820,7 @@ fn resolve_manifest_path(target: &Path) -> Result<PathBuf> {
     Ok(path)
 }
 
-fn hub_unsupported(what: &str) -> anyhow::Error {
+fn not_local(what: &str) -> anyhow::Error {
     anyhow!("'{what}' is not a local path; resolving registered packages requires a hosted package registry, which hbench does not support")
 }
 
@@ -1062,7 +1062,7 @@ fn resolve_package(pkg: &str, scan: bool) -> Result<Resolved> {
             println!("Error: '{pkg}' is not a local path and not in org/name format.");
             return Ok(Resolved::default());
         }
-        return Err(hub_unsupported(pkg));
+        return Err(not_local(pkg));
     }
     if p.is_file() {
         let fname = p.file_name().unwrap().to_string_lossy();
@@ -1181,7 +1181,7 @@ fn names_to_remove(package: &str, scan: bool, m: &Manifest) -> Result<Vec<String
     if m.tasks.iter().any(|t| t.name == package) {
         return Ok(vec![package.to_string()]);
     }
-    Err(hub_unsupported(package))
+    Err(not_local(package))
 }
 
 /// `hbench remove`.
@@ -1271,7 +1271,7 @@ pub fn sync_dataset(dataset_dir: &Path) -> Result<Vec<Change>> {
 }
 
 /// `hbench sync`.
-pub fn sync(path: &Path, upgrade: bool) -> Result<()> {
+pub fn sync(path: &Path) -> Result<()> {
     let resolved = path.canonicalize().map_err(|_| anyhow!("{} is not a valid path.", path.display()))?;
     let (dataset_dir, manifest_path) = if resolved.is_file() && resolved.file_name().is_some_and(|n| n == "dataset.toml") {
         (resolved.parent().unwrap().to_path_buf(), resolved.clone())
@@ -1284,12 +1284,6 @@ pub fn sync(path: &Path, upgrade: bool) -> Result<()> {
         bail!("{} not found.", manifest_path.display());
     }
     let changes = sync_dataset(&dataset_dir)?;
-    if upgrade {
-        // No hosted-registry client; registry-only tasks keep their digests, as on a failed lookup.
-        for c in changes.iter().filter(|c| c.source == "skipped") {
-            println!("Warning: registry lookup failed for {}: hosted package registries are not supported by hbench", c.name);
-        }
-    }
     let rows: Vec<[String; 5]> = changes
         .iter()
         .map(|c| {

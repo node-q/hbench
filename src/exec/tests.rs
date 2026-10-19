@@ -271,6 +271,9 @@ fn job_config_feeds_existing_runner() {
     assert_eq!(cfg.agents[0].env["K"], "V");
     assert_eq!(cfg.tasks[0].path.as_deref(), Some(Path::new("/t/a")));
     assert!(!cfg.verifier.disable);
-    let daytona = resolve_config(&args(&["-i", "x", "-e", "daytona", "--tasks-dir", "td"])).unwrap();
-    assert!(job_config(&daytona.map.job, &[PathBuf::from("/t/a")]).is_err());
+    let e = resolve_config(&args(&["-i", "x", "-e", "daytona", "--tasks-dir", "td"])).unwrap_err().to_string();
+    assert!(e.contains("Only docker is supported"), "{e}");
+    let mut other = resolve_config(&args(&["-i", "x", "--tasks-dir", "td"])).unwrap();
+    other.map.job.environment.insert("type".into(), "daytona".into());
+    assert!(job_config(&other.map.job, &[PathBuf::from("/t/a")]).is_err());
 }
