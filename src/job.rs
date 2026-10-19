@@ -109,7 +109,7 @@ pub fn compute_stats(
             s.cost_usd = Some(s.cost_usd.unwrap_or(0.0) + v);
         }
     }
-    let default_mean = [crate::config::MetricConfig { kind: "mean".into(), kwargs: Default::default() }];
+    let default_mean = [crate::config::MetricConfig::default()];
     let cfgs: &[crate::config::MetricConfig] = if metric_cfgs.is_empty() { &default_mean } else { metric_cfgs };
     for (key, rs) in groups {
         let rewards: Vec<Option<&crate::trial::Rewards>> = rs.iter().map(|r| r.reward()).collect();
@@ -117,7 +117,7 @@ pub fn compute_stats(
         for m in cfgs {
             match metrics::compute(m, &rewards) {
                 Ok(v) => e.metrics.push(v),
-                Err(err) => eprintln!("metric {} failed: {err:#}", m.kind),
+                Err(err) => eprintln!("metric {} failed: {err:#}", m.kind.as_str()),
             }
         }
         e.pass_at_k = metrics::pass_at_k(&rs);
@@ -175,9 +175,10 @@ const PLAN_FILE: &str = "trials.json";
 fn stored_plan(cfg: &JobConfig) -> Result<Option<Vec<TrialConfig>>> {
     let job_dir = cfg.job_dir();
     let Ok(s) = std::fs::read_to_string(job_dir.join(PLAN_FILE)) else {
-        let regrade = std::fs::read_dir(&job_dir)?
-            .flatten()
-            .any(|e| std::fs::read_to_string(e.path().join("config.json")).is_ok_and(|s| s.contains("\"source_trial\"")));
+        let regrade = std::fs::read_dir(&job_dir)?.flatten().any(|e| {
+            let config = std::fs::read_to_string(e.path().join("config.json")).ok();
+            config.and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok()).is_some_and(|c| !c["source_trial"].is_null())
+        });
         if regrade || !cfg.source_jobs.is_empty() {
             bail!(
                 "{} is a regrade/--diff job without a stored trial plan ({PLAN_FILE}); it cannot be resumed, start it again instead",

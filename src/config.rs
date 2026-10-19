@@ -317,15 +317,36 @@ pub struct DatasetConfig {
     pub n_tasks: Option<usize>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct MetricConfig {
-    #[serde(rename = "type", default = "mean")]
-    pub kind: String,
+    #[serde(rename = "type", default)]
+    pub kind: MetricKind,
     #[serde(default)]
     pub kwargs: BTreeMap<String, Value>,
 }
-fn mean() -> String {
-    "mean".into()
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum MetricKind {
+    #[default]
+    Mean,
+    Sum,
+    Min,
+    Max,
+    /// `uv run` on the script in `kwargs.script_path`.
+    UvScript,
+}
+
+impl MetricKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            MetricKind::Mean => "mean",
+            MetricKind::Sum => "sum",
+            MetricKind::Min => "min",
+            MetricKind::Max => "max",
+            MetricKind::UvScript => "uv-script",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -392,13 +413,32 @@ impl RetryConfig {
 /// Regrade source: re-verify a recorded trial's outputs.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SourceTrial {
-    pub action: String,
+    pub action: SourceTrialAction,
     #[serde(rename = "type")]
-    pub kind: String,
+    pub kind: SourceTrialKind,
     #[serde(default)]
     pub trial_id: Option<String>,
     #[serde(default)]
     pub path: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum SourceTrialAction {
+    Regrade,
+}
+
+/// Where the source trial is: a trial dir on this host.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum SourceTrialKind {
+    Local,
+}
+
+impl SourceTrial {
+    pub fn regrade_local(trial_id: String, path: PathBuf) -> SourceTrial {
+        SourceTrial { action: SourceTrialAction::Regrade, kind: SourceTrialKind::Local, trial_id: Some(trial_id), path: Some(path) }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -439,6 +479,30 @@ pub struct TrialConfig {
 }
 
 impl TrialConfig {
+    /// A trial of `task` with every other setting at its default.
+    pub fn new(task: TaskRef, trial_name: String, trials_dir: PathBuf) -> TrialConfig {
+        TrialConfig {
+            task,
+            trial_name,
+            trials_dir,
+            install_only: false,
+            timeout_multiplier: one(),
+            agent_timeout_multiplier: None,
+            verifier_timeout_multiplier: None,
+            agent_setup_timeout_multiplier: None,
+            environment_build_timeout_multiplier: None,
+            agent: AgentConfig::default(),
+            user_agent: None,
+            environment: EnvConfig::default(),
+            verifier: VerifierRunConfig::default(),
+            artifacts: vec![],
+            extra_instruction_paths: vec![],
+            extra_instructions: vec![],
+            job_id: None,
+            source_trial: None,
+        }
+    }
+
     pub fn multiplier(&self, specific: Option<f64>) -> f64 {
         specific.unwrap_or(self.timeout_multiplier)
     }
@@ -587,11 +651,6 @@ impl JobConfig {
                 _ => {}
             }
         }
-        for m in &self.metrics {
-            if !["mean", "sum", "min", "max", "uv-script"].contains(&m.kind.as_str()) {
-                bail!("Unsupported metric type: {}", m.kind);
-            }
-        }
         for a in &self.artifacts {
             a.spec().validate()?;
         }
@@ -643,8 +702,7 @@ impl TrialConfig {
     /// config.json as written by the job runner (fields at their default omitted).
     pub fn config_json(&self) -> Value {
         let mut v = serde_json::to_value(self).unwrap_or_default();
-        let d: TrialConfig = serde_json::from_value(serde_json::json!({"task": {}, "trial_name": "", "trials_dir": "trials"}))
-            .expect("default trial config");
+        let d = TrialConfig::new(TaskRef::default(), String::new(), "trials".into());
         drop_defaults(&mut v, &serde_json::to_value(d).unwrap_or_default());
         v
     }
@@ -716,7 +774,7 @@ mod tests {
         assert_eq!(c.agents[0].name(), "claude-code");
         assert_eq!(c.agents[0].kwargs["max_turns"], 5);
         assert_eq!(c.datasets[0].task_names.as_ref().unwrap()[0], "hello-*");
-        assert_eq!(c.metrics[0].kind, "sum");
+        assert_eq!(c.metrics[0].kind, MetricKind::Sum);
         assert_eq!(c.artifacts.len(), 2);
         std::fs::write(&p, "agents:\n  - name: a\n    n_concurrent: 9\n").unwrap();
         assert!(JobConfig::load(&p).is_err());
@@ -802,6 +860,16 @@ mod tests {
             j2.config_json(),
             serde_json::json!({"job_name": "j", "n_attempts": 3, "agents": [{"name": "claude-code", "model_name": "m"}]})
         );
+    }
+
+    #[test]
+    fn new_trial_configs_match_deserialized_defaults() {
+        let parsed: TrialConfig =
+            serde_json::from_value(serde_json::json!({"task": {"path": "/t/a"}, "trial_name": "a__1", "trials_dir": "j"})).unwrap();
+        let new = TrialConfig::new(TaskRef::local("/t/a".into(), None), "a__1".into(), "j".into());
+        assert_eq!(serde_json::to_value(new).unwrap(), serde_json::to_value(parsed).unwrap());
+        let regrade = serde_json::to_value(SourceTrial::regrade_local("id".into(), "/j/a__1".into())).unwrap();
+        assert_eq!(regrade, serde_json::json!({"action": "regrade", "type": "local", "trial_id": "id", "path": "/j/a__1"}));
     }
 
     #[test]

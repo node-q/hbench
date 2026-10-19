@@ -249,12 +249,12 @@ enum TracesCmd {
         /// Only look at the given dir, not its subdirectories.
         #[arg(long)]
         no_recursive: bool,
-        /// all | last
-        #[arg(long, default_value = "all")]
-        episodes: String,
+        /// Episodes per trial to export.
+        #[arg(long, value_enum, default_value_t = traces::Episodes::All)]
+        episodes: traces::Episodes,
         /// Keep only successful or failed trials.
-        #[arg(long, value_parser = ["success", "failure", "all"])]
-        filter: Option<String>,
+        #[arg(long, value_enum, default_value_t = traces::TrialFilter::All)]
+        filter: traces::TrialFilter,
         /// Also emit a ShareGPT `conversations_sharegpt` column.
         #[arg(long)]
         sharegpt: bool,
@@ -1190,17 +1190,9 @@ async fn run() -> Result<ExitCode> {
                 let Some(dir) = by_name.get(&r.task_name) else { continue };
                 let tref = TaskRef { path: Some(dir.clone()), source: r.source.clone(), ..Default::default() };
                 trials.push(TrialConfig {
-                    task: tref.clone(),
-                    trial_name: job::trial_name(&tref),
-                    trials_dir: cfg.job_dir(),
                     agent: r.config.agent.clone(),
-                    source_trial: Some(SourceTrial {
-                        action: "regrade".into(),
-                        kind: "local".into(),
-                        trial_id: Some(r.id.to_string()),
-                        path: Some(e.path()),
-                    }),
-                    ..serde_json::from_value(serde_json::json!({"task": {"path": dir}, "trial_name": "x", "trials_dir": "x"}))?
+                    source_trial: Some(SourceTrial::regrade_local(r.id.to_string(), e.path())),
+                    ..TrialConfig::new(tref.clone(), job::trial_name(&tref), cfg.job_dir())
                 });
             }
             if trials.is_empty() {
@@ -1219,12 +1211,14 @@ async fn run() -> Result<ExitCode> {
                     let p = path.context("pass -p <task dir> or -c <trial.yaml>")?;
                     let p = p.canonicalize().with_context(|| format!("path {}", p.display()))?;
                     let tref = TaskRef::local(p, None);
-                    let mut a = AgentConfig { name: Some(agent), model_name: model, ..Default::default() };
-                    a.kwargs = agent_kwargs.iter().map(|(k, v)| (k.clone(), kwarg_value(v))).collect();
-                    a.env = agent_env.into_iter().collect();
-                    serde_json::from_value(
-                        serde_json::json!({"task": tref, "trial_name": job::trial_name(&tref), "trials_dir": trials_dir, "agent": a}),
-                    )?
+                    let agent = AgentConfig {
+                        name: Some(agent),
+                        model_name: model,
+                        kwargs: agent_kwargs.iter().map(|(k, v)| (k.clone(), kwarg_value(v))).collect(),
+                        env: agent_env.into_iter().collect(),
+                        ..Default::default()
+                    };
+                    TrialConfig { agent, ..TrialConfig::new(tref.clone(), job::trial_name(&tref), trials_dir) }
                 }
             };
             if tc.trial_name.is_empty() {
@@ -1483,7 +1477,7 @@ async fn run() -> Result<ExitCode> {
             let o = traces::ExportOpts {
                 recursive: !no_recursive,
                 episodes,
-                success_filter: filter.filter(|f| f != "all"),
+                filter,
                 sharegpt,
                 include_instruction: instruction_metadata,
                 include_verifier_output: verifier_metadata,
