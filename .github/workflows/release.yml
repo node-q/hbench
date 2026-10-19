@@ -1,8 +1,11 @@
 name: Release
 
 # Bump `version` in Cargo.toml, commit, then: git tag vX.Y.Z && git push origin vX.Y.Z
-# This publishes the Linux binaries; then run scripts/release-macos.sh vX.Y.Z on a Mac
-# (the self-hosted pool is Linux-only and macOS builds need Apple's SDK).
+#
+# The build jobs run the tests and build every binary on GitHub-hosted runners, with no
+# secrets and a read-only token, and attest each archive's build provenance. Only the
+# publish job can write: it creates this repo's release and, for stable tags, mirrors it
+# to node-q/hbench-releases, which `curl -fsSL https://nodeq.tech/install.sh | sh` reads.
 on:
   push:
     tags: ["v[0-9]+.[0-9]+.[0-9]+*"]
@@ -12,44 +15,45 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  TARGETS: x86_64-unknown-linux-musl aarch64-unknown-linux-musl
-  # Every dependency is pure Rust on Linux, so rust-lld links static musl binaries
-  # for both arches without musl-tools or a cross gcc (the runner has no sudo).
-  CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: rust-lld
-  CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: rust-lld
 
 jobs:
-  # Picks the runner pool for the jobs below.
-  route:
-    name: Route
-    runs-on: [self-hosted, hpg-route]
-    timeout-minutes: 2
-    outputs:
-      labels: ${{ steps.route.outputs.labels }}
-    steps:
-      - name: Pick the runner pool
-        id: route
-        uses: node-q/actions/runner-route@7d4b5974256903c7e7d1736a51564fdbd89655eb
-        with:
-          token: ${{ secrets.RUNNER_STATUS_TOKEN }}
-
-  release:
-    name: Build & Publish Release
-    needs: route
-    runs-on: ${{ fromJSON(needs.route.outputs.labels) }}
+  build:
+    name: Build (${{ matrix.os }})
+    strategy:
+      matrix:
+        include:
+          - os: Linux
+            runner: ubuntu-24.04
+            targets: x86_64-unknown-linux-musl aarch64-unknown-linux-musl
+          - os: macOS
+            runner: macos-15
+            targets: aarch64-apple-darwin x86_64-apple-darwin
+    runs-on: ${{ matrix.runner }}
     permissions:
-      contents: write
+      contents: read
+      id-token: write
+      attestations: write
+    env:
+      TARGETS: ${{ matrix.targets }}
+      # Every dependency is pure Rust on Linux, so rust-lld links static musl binaries
+      # for both arches without musl-tools or a cross gcc.
+      CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: rust-lld
+      CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: rust-lld
+      # macOS tar: no AppleDouble (._*) files or extended attributes in the archives.
+      COPYFILE_DISABLE: "1"
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Verify tag matches Cargo.toml version
         run: |
           v=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
           [ "v$v" = "$GITHUB_REF_NAME" ] || { echo "::error::tag $GITHUB_REF_NAME != Cargo.toml version v$v"; exit 1; }
       - name: Set up Rust toolchain
         uses: ./.github/actions/setup-rust
-        with:
-          targets: x86_64-unknown-linux-musl,aarch64-unknown-linux-musl
+      - name: Add the build targets
+        run: for t in $TARGETS; do rustup target add "$t"; done
       - name: Run unit tests
         run: cargo test --locked
       - name: Build release binaries
@@ -68,28 +72,55 @@ jobs:
             cp "target/$target/release/hbench" README.md LICENSE "dist/$name/"
             tar -C dist -czf "dist/$name.tar.gz" "$name"
           done
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/*.tar.gz
+      - name: Upload archives
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist-${{ matrix.os }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish
+    needs: build
+    runs-on: ubuntu-24.04
+    # HBENCH_RELEASES_TOKEN (fine-grained, Contents: write on node-q/hbench-releases only)
+    # is a secret of this environment, which only v* tags can deploy to.
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - name: Download archives
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: dist-*
+          merge-multiple: true
+          path: dist
       - name: Generate checksums
         working-directory: dist
-        run: sha256sum -- *.tar.gz > SHA256SUMS
+        run: sha256sum -- *.tar.gz | tee SHA256SUMS
       - name: Publish GitHub release
-        uses: softprops/action-gh-release@v3
-        with:
-          name: hbench ${{ github.ref_name }}
-          generate_release_notes: true
-          prerelease: ${{ contains(github.ref_name, '-') }}
-          fail_on_unmatched_files: true
-          files: |
-            dist/*.tar.gz
-            dist/SHA256SUMS
-      - name: Mirror to the public hbench-releases repo
-        # HBENCH_RELEASES_TOKEN: fine-grained PAT, Contents: write on node-q/hbench-releases only.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PRERELEASE: ${{ contains(github.ref_name, '-') }}
+        run: |
+          flags=(--verify-tag --title "hbench $GITHUB_REF_NAME" --generate-notes)
+          [ "$PRERELEASE" = true ] && flags+=(--prerelease)
+          gh release create "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" "${flags[@]}" dist/*.tar.gz dist/SHA256SUMS
+      - name: Mirror to node-q/hbench-releases
         if: ${{ !contains(github.ref_name, '-') }}
         env:
           GH_TOKEN: ${{ secrets.HBENCH_RELEASES_TOKEN }}
         run: |
-          [ -n "$GH_TOKEN" ] || { echo "::warning::HBENCH_RELEASES_TOKEN not set; not mirroring"; exit 0; }
+          [ -n "$GH_TOKEN" ] || { echo "::error::HBENCH_RELEASES_TOKEN is not set in the release environment"; exit 1; }
           repo=node-q/hbench-releases
-          notes="hbench $GITHUB_REF_NAME. Install: curl -fsSL https://nodeq.tech/install.sh | sh"
-          gh release view "$GITHUB_REF_NAME" -R "$repo" >/dev/null 2>&1 ||
-            gh release create "$GITHUB_REF_NAME" -R "$repo" --title "hbench $GITHUB_REF_NAME" --notes "$notes"
-          gh release upload "$GITHUB_REF_NAME" -R "$repo" dist/*.tar.gz dist/SHA256SUMS --clobber
+          notes="hbench $GITHUB_REF_NAME. Notes: https://github.com/$GITHUB_REPOSITORY/releases/tag/$GITHUB_REF_NAME. Install: curl -fsSL https://nodeq.tech/install.sh | sh"
+          if gh release view "$GITHUB_REF_NAME" -R "$repo" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" -R "$repo" dist/*.tar.gz dist/SHA256SUMS --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" -R "$repo" --title "hbench $GITHUB_REF_NAME" --notes "$notes" dist/*.tar.gz dist/SHA256SUMS
+          fi

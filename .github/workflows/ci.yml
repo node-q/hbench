@@ -6,6 +6,9 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -14,30 +17,17 @@ env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
 
-# Every job runs on self-hosted runners. They are Linux x64 only with no sudo, so macOS is
-# not covered here; they have a Docker daemon, which the e2e job uses.
+# GitHub-hosted runners. Linux runs the full suite, including the e2e job against a real
+# Docker daemon; macOS builds and runs the unit tests, since releases ship macOS binaries.
 jobs:
-  # Picks the runner pool for the jobs below.
-  route:
-    name: Route
-    runs-on: [self-hosted, hpg-route]
-    timeout-minutes: 2
-    outputs:
-      labels: ${{ steps.route.outputs.labels }}
-    steps:
-      - name: Pick the runner pool
-        id: route
-        uses: node-q/actions/runner-route@7d4b5974256903c7e7d1736a51564fdbd89655eb
-        with:
-          token: ${{ secrets.RUNNER_STATUS_TOKEN }}
-
   test:
     name: Build & Test
-    needs: route
-    runs-on: ${{ fromJSON(needs.route.outputs.labels) }}
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Set up Rust toolchain
         uses: ./.github/actions/setup-rust
       - name: Build all targets
@@ -45,13 +35,27 @@ jobs:
       - name: Run unit tests
         run: cargo test --locked
 
-  lint:
-    name: Lint
-    needs: route
-    runs-on: ${{ fromJSON(needs.route.outputs.labels) }}
+  test-macos:
+    name: Build & Test (macOS)
+    runs-on: macos-15
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Rust toolchain
+        uses: ./.github/actions/setup-rust
+      - name: Run unit tests
+        run: cargo test --locked
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Set up Rust toolchain
         uses: ./.github/actions/setup-rust
         with:
@@ -66,10 +70,12 @@ jobs:
   audit:
     # RustSec advisories for Cargo.lock.
     name: Security Audit
-    runs-on: [self-hosted, linux, x64, hpg]
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Set up Rust toolchain
         uses: ./.github/actions/setup-rust
       - name: Install cargo-audit
@@ -82,16 +88,17 @@ jobs:
   viewer:
     # viewer/dist is committed and embedded by build.rs, so it must match viewer/src.
     name: Viewer Bundle
-    needs: route
-    runs-on: ${{ fromJSON(needs.route.outputs.labels) }}
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: viewer
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Set up Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
           cache: npm
@@ -109,12 +116,13 @@ jobs:
     # The integrity guarantees (stopping the agent at timeout, the hidden-test scrub, the egress allowlist)
     # only show against a real daemon.
     name: E2E
-    needs: route
-    runs-on: ${{ fromJSON(needs.route.outputs.labels) }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Set up Rust toolchain
         uses: ./.github/actions/setup-rust
       - name: Run the e2e suite
