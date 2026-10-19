@@ -2,11 +2,9 @@
 # Install hbench into HBENCH_INSTALL_DIR (default ~/.local/bin).
 #   curl -fsSL https://nodeq.tech/install.sh | sh
 # HBENCH_VERSION=vX.Y.Z pins a release; the default is the latest release of
-# node-q/hbench-releases. If that download fails, it falls back to the releases of the
-# node-q/hbench source repo.
+# node-q/hbench-releases, where node-q/hbench's release workflow publishes every stable tag.
 set -eu
-RELEASES_REPO=node-q/hbench-releases
-SOURCE_REPO=node-q/hbench
+REPO=node-q/hbench-releases
 # nodeq.tech/install.sh fills this in with the version Harness Playground's arenas use.
 DEFAULT_VERSION=
 DIR=${HBENCH_INSTALL_DIR:-$HOME/.local/bin}
@@ -22,20 +20,12 @@ esac
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-# download REPO: fetch the release archive and its SHA256SUMS from REPO into $tmp.
-download() {
-  # /releases/latest redirects to /releases/tag/<tag>; reading the redirect avoids the API rate limit.
-  tag=${HBENCH_VERSION:-${DEFAULT_VERSION:-$(curl -fsSLI -o /dev/null -w '%{url_effective}' "https://github.com/$1/releases/latest" | sed 's|.*/||')}}
-  case "$tag" in v*) ;; *) return 1 ;; esac
-  for f in "hbench-$tag-$target.tar.gz" SHA256SUMS; do
-    curl -fsSL -o "$tmp/$f" "https://github.com/$1/releases/download/$tag/$f" || return 1
-  done
-}
-
-if ! download "$RELEASES_REPO"; then
-  echo "download from $RELEASES_REPO failed; trying $SOURCE_REPO" >&2
-  download "$SOURCE_REPO" || { echo "could not download hbench ${HBENCH_VERSION:-$DEFAULT_VERSION}" >&2; exit 1; }
-fi
+# /releases/latest redirects to /releases/tag/<tag>; reading the redirect avoids the API rate limit.
+tag=${HBENCH_VERSION:-${DEFAULT_VERSION:-$(curl -fsSLI -o /dev/null -w '%{url_effective}' "https://github.com/$REPO/releases/latest" | sed 's|.*/||')}}
+case "$tag" in v*) ;; *) echo "could not find the latest hbench release of $REPO" >&2; exit 1 ;; esac
+for f in "hbench-$tag-$target.tar.gz" SHA256SUMS; do
+  curl -fsSL -o "$tmp/$f" "https://github.com/$REPO/releases/download/$tag/$f" || { echo "could not download $f of hbench $tag from $REPO" >&2; exit 1; }
+done
 
 cd "$tmp"
 grep " hbench-$tag-$target.tar.gz\$" SHA256SUMS > sum || { echo "SHA256SUMS of $tag has no entry for hbench-$tag-$target.tar.gz" >&2; exit 1; }

@@ -19,8 +19,7 @@ curl -fsSL https://nodeq.tech/install.sh | sh
 Release binaries are published to [node-q/hbench-releases](https://github.com/node-q/hbench-releases); the script
 downloads from there and checks `SHA256SUMS`. `HBENCH_VERSION=vX.Y.Z` pins a release (nodeq.tech defaults to the
 version Harness Playground's arenas use; [`scripts/install.sh`](scripts/install.sh) on its own defaults to the latest),
-and `HBENCH_INSTALL_DIR` overrides `~/.local/bin`. If that download fails, the script falls back to the releases of
-[node-q/hbench](https://github.com/node-q/hbench), the source repo.
+and `HBENCH_INSTALL_DIR` overrides `~/.local/bin`.
 
 Or build from source:
 
