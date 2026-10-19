@@ -1,6 +1,6 @@
 //! Cline CLI.
 
-use super::common::{installed_dir, nvm_install_script, skills_dir};
+use super::common::{installed_dir, nvm_install_script, quoted_or_not_set, skills_dir};
 use super::pins;
 use super::{exec_agent, exec_root};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
@@ -281,7 +281,7 @@ impl ClineCli {
             bail!("Instruction is empty before invoking cline");
         }
         let Some((provider, model)) = self.args.model_name.as_deref().and_then(|m| m.split_once(':')) else {
-            bail!("model_name must be in format 'provider:model-id', got: '{}'", self.args.model_name.as_deref().unwrap_or("None"));
+            bail!("model_name must be in format 'provider:model-id', got: {}", quoted_or_not_set(self.args.model_name.as_deref()));
         };
         let provider_env = match provider {
             "anthropic" => Some("ANTHROPIC_API_KEY"),

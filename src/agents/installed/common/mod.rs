@@ -116,6 +116,11 @@ pub fn deep_merge_maps(base: &mut Map<String, Value>, over: &Map<String, Value>)
 }
 
 /// JSON values of the lines that parse; others are skipped.
+/// `'value'`, or `(not set)` when there is none, for error messages.
+pub fn quoted_or_not_set(v: Option<&str>) -> String {
+    v.map_or_else(|| "(not set)".into(), |v| format!("'{v}'"))
+}
+
 pub fn parse_jsonl(text: &str) -> Vec<Value> {
     text.lines().filter_map(|l| serde_json::from_str(l.trim()).ok()).collect()
 }

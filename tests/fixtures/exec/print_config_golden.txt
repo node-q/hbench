@@ -354,7 +354,7 @@ ERROR Error: Unknown environment 'mymod:Env'. Only docker is supported.
     }
   }
 }
-### ["-i", "x", "-a", "claude-code", "-m", "m1", "-m", "m2", "--ak", "k=1", "--ak", "s= str ", "--ak", "b=True", "--ak", "n=None", "--ak", "j={\"x\": [1, 2.5]}", "--agent-kwarg", "f=1.0", "--ae", "Z=1", "--agent-env", "A= b ", "--job-name", "J", "--tasks-dir", "td", "-k", "3"]
+### ["-i", "x", "-a", "claude-code", "-m", "m1", "-m", "m2", "--ak", "k=1", "--ak", "s= str ", "--ak", "b=true", "--ak", "n=null", "--ak", "j={\"x\": [1, 2.5]}", "--agent-kwarg", "f=1.0", "--ae", "Z=1", "--agent-env", "A= b ", "--job-name", "J", "--tasks-dir", "td", "-k", "3"]
 {
   "map": {
     "compile": {

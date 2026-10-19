@@ -336,13 +336,10 @@ impl App {
     }
 }
 
-/// Searchable text of a metadata value: strings as-is, `True`/`False`/`None` literals, lists as quoted items.
+/// Searchable text of a metadata value: strings as-is, anything else as JSON.
 fn search_text(v: &Value) -> String {
     match v {
         Value::String(x) => x.clone(),
-        Value::Bool(b) => if *b { "True" } else { "False" }.into(),
-        Value::Null => "None".into(),
-        Value::Array(a) => format!("[{}]", a.iter().map(repr_scalar).collect::<Vec<_>>().join(", ")),
         x => x.to_string(),
     }
 }

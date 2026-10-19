@@ -154,11 +154,12 @@ impl MiniSweAgent {
                     instruction += &format!(
                         "- {}: stdio transport, command: {} {}\n",
                         s.name,
-                        s.command.as_deref().unwrap_or("None"),
+                        s.command.as_deref().unwrap_or("(not set)"),
                         s.args.join(" ")
                     );
                 } else {
-                    instruction += &format!("- {}: {} transport, url: {}\n", s.name, s.transport(), s.url.as_deref().unwrap_or("None"));
+                    instruction +=
+                        &format!("- {}: {} transport, url: {}\n", s.name, s.transport(), s.url.as_deref().unwrap_or("(not set)"));
                 }
             }
         }

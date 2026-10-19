@@ -811,7 +811,7 @@ fn summary_table(title: &str, first_col: &str, rows: &[SummaryRow]) -> String {
     let mut out = vec![render_table(title, &[first_col, "Pass", "Fail", "N/A", "Cost ($)"], &table_rows)];
     for (name, _, _, err) in rows {
         if let Some(e) = err {
-            out.push(format!("❌ {}: {}", name.unwrap_or("None"), e.lines().next().unwrap_or("")));
+            out.push(format!("❌ {}: {}", name.unwrap_or("(unnamed)"), e.lines().next().unwrap_or("")));
         }
     }
     let costs: Vec<f64> = rows.iter().filter_map(|r| r.2).collect();
@@ -840,7 +840,7 @@ pub async fn analyze_command(a: AnalyzeArgs) -> Result<()> {
     println!("\n🔍 Analyzing trial(s)...");
     let (results, job_dir) = run_analyze(&a, filter).await.unwrap_or_else(|e| fail(e));
     if let [r] = results.as_slice() {
-        let name = r.trial_name.as_deref().unwrap_or("None");
+        let name = r.trial_name.as_deref().unwrap_or("(unnamed)");
         if let Some(e) = &r.error {
             println!("❌ {name}: {e}");
         } else {
@@ -871,7 +871,7 @@ pub async fn check_command(a: CheckArgs) -> Result<()> {
     println!("\n🔎 Checking task quality...");
     let (results, job_dir) = run_checks(&a).await.unwrap_or_else(|e| fail(e));
     if let [r] = results.as_slice() {
-        let name = r.task_name.as_deref().unwrap_or("None");
+        let name = r.task_name.as_deref().unwrap_or("(unnamed)");
         if let Some(e) = &r.error {
             println!("❌ {name}: {e}");
         } else {

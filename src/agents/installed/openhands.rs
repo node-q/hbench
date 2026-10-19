@@ -1,7 +1,7 @@
 //! OpenHands installed agent.
 
 use super::common::opts::lax_bool;
-use super::common::{installed_dir, uv_install};
+use super::common::{installed_dir, quoted_or_not_set, uv_install};
 use super::pins;
 use super::{connection, ensure_system_dependencies, exec_agent, exec_root};
 use crate::agents::model_connection::Spec;
@@ -195,7 +195,7 @@ impl OpenHands {
             if !hosted_vllm {
                 bail!(
                     "No API key found for model {}. Please set LLM_API_KEY or the provider's API key variable.",
-                    self.args.model_name.as_deref().map(|m| format!("'{m}'")).unwrap_or_else(|| "None".into())
+                    quoted_or_not_set(self.args.model_name.as_deref())
                 );
             }
             env.insert("LLM_API_KEY".into(), "dummy-key-for-local-vllm".into());
@@ -254,7 +254,7 @@ impl OpenHands {
         }
         let (mut sse, mut shttp, mut stdio) = (vec![], vec![], vec![]);
         for s in &self.args.mcp_servers {
-            let url = s.url.as_deref().unwrap_or("None");
+            let url = s.url.as_deref().unwrap_or_default();
             match s.transport() {
                 "sse" => sse.push(format!("{{url = \"{url}\"}}")),
                 "streamable-http" => shttp.push(format!("{{url = \"{url}\"}}")),
@@ -263,7 +263,7 @@ impl OpenHands {
                     stdio.push(format!(
                         "{{name = \"{}\", command = \"{}\", args = [{a}]}}",
                         s.name,
-                        s.command.as_deref().unwrap_or("None")
+                        s.command.as_deref().unwrap_or_default()
                     ));
                 }
                 _ => {}

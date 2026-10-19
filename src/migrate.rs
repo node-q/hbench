@@ -368,7 +368,9 @@ fn dockerfile_additions(svc: &Mapping) -> Vec<String> {
         }
         Some(Value::Mapping(m)) => {
             for (k, v) in m {
-                let s = format!("{}={}", yaml_text(k), yaml_text(v));
+                // `KEY:` with no value takes the variable from the shell running compose; a Dockerfile has no such shell.
+                let value = if v.is_null() { String::new() } else { yaml_text(v) };
+                let s = format!("{}={value}", yaml_text(k));
                 if s != TBENCH_DEFAULT_ENV {
                     add.push(format!("ENV {s}"));
                 }
@@ -637,12 +639,12 @@ fn str_literal(s: &str) -> String {
     o
 }
 
-/// Display text of a YAML value: strings as-is, `None`/`True`/`False` literals, collections in literal form.
+/// Display text of a YAML value: strings as-is, `null`/`true`/`false`, collections in literal form.
 fn yaml_text(v: &Value) -> String {
     match v {
         Value::String(s) => s.clone(),
-        Value::Null => "None".into(),
-        Value::Bool(b) => if *b { "True" } else { "False" }.into(),
+        Value::Null => "null".into(),
+        Value::Bool(b) => b.to_string(),
         Value::Number(n) if n.is_f64() => float_repr(n.as_f64().unwrap()),
         Value::Number(n) => n.to_string(),
         Value::Sequence(s) => format!("[{}]", s.iter().map(yaml_literal).collect::<Vec<_>>().join(", ")),
@@ -928,7 +930,7 @@ junior_time_estimate_min: 7.5
         assert_eq!(
             read(t.join("environment/Dockerfile")),
             "FROM --platform=linux/amd64 ubuntu:22.04\nRUN apt-get update\n\n# Mapped from docker-compose.yaml\n\
-             ENV TEST_DIR=/tests\nENV MY_VAR=hello\nENV NUM=5\nENV FLAG=True\nENV EMPTY=None\nENV FLT=1.5\n\
+             ENV TEST_DIR=/tests\nENV MY_VAR=hello\nENV NUM=5\nENV FLAG=true\nENV EMPTY=\nENV FLT=1.5\n\
              EXPOSE 80\nEXPOSE 443\nENTRYPOINT [\"python\", \"-c\", \"print('\\u00e9')\"]\n"
         );
         assert!(read(t.join("task.toml")).contains("author_name = \"O'Brien \\\\ \\\"q\\\" é\"\n"));

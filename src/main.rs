@@ -1442,7 +1442,7 @@ async fn run() -> Result<ExitCode> {
             Ok(ExitCode::SUCCESS)
         }
         Cmd::Agents { cmd: Some(AgentsCmd::Schema { name, json }) } => {
-            let Some(s) = schemas::agent(&name) else { bail!("Agent '{name}' does not declare an options_model") };
+            let Some(s) = schemas::agent(&name) else { bail!("Agent '{name}' has no options schema") };
             if json {
                 println!("{s}");
             } else {
