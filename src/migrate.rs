@@ -142,35 +142,35 @@ impl TbConfig {
             match (m.get(k), d) {
                 (None, Some(d)) => Ok(d.to_string()),
                 (Some(Value::String(s)), _) => Ok(s.clone()),
-                (None, None) => bail!("task.yaml: {k}: Field required"),
-                _ => bail!("task.yaml: {k}: Input should be a valid string"),
+                (None, None) => bail!("task.yaml: {k}: required"),
+                _ => bail!("task.yaml: {k}: must be a string"),
             }
         };
         let f = |k: &str| -> Result<Option<f64>> {
             match m.get(k) {
                 None | Some(Value::Null) => Ok(None),
                 Some(Value::Number(n)) => Ok(n.as_f64()),
-                Some(Value::String(s)) => s.trim().parse().map(Some).map_err(|_| anyhow!("task.yaml: {k}: Input should be a valid number")),
-                _ => bail!("task.yaml: {k}: Input should be a valid number"),
+                Some(Value::String(s)) => s.trim().parse().map(Some).map_err(|_| anyhow!("task.yaml: {k}: must be a number")),
+                _ => bail!("task.yaml: {k}: must be a number"),
             }
         };
         let req = |k: &str, d: f64| -> Result<f64> {
             if matches!(m.get(k), Some(Value::Null)) {
-                bail!("task.yaml: {k}: Input should be a valid number");
+                bail!("task.yaml: {k}: must be a number");
             }
             Ok(f(k)?.unwrap_or(d))
         };
         let difficulty = s("difficulty", Some("unknown"))?;
         if !["easy", "medium", "hard", "unknown"].contains(&difficulty.as_str()) {
-            bail!("task.yaml: difficulty: Input should be 'easy', 'medium', 'hard' or 'unknown'");
+            bail!("task.yaml: difficulty: must be 'easy', 'medium', 'hard' or 'unknown'");
         }
         let tags = match m.get("tags") {
             None => vec![],
             Some(Value::Sequence(items)) => items
                 .iter()
-                .map(|t| t.as_str().map(String::from).ok_or_else(|| anyhow!("task.yaml: tags: Input should be a valid string")))
+                .map(|t| t.as_str().map(String::from).ok_or_else(|| anyhow!("task.yaml: tags: must be a string")))
                 .collect::<Result<_>>()?,
-            _ => bail!("task.yaml: tags: Input should be a valid list"),
+            _ => bail!("task.yaml: tags: must be a list"),
         };
         Ok(Self {
             instruction: s("instruction", None)?,
@@ -304,7 +304,7 @@ fn can_collapse_to_dockerfile(root: &Mapping, services: &Mapping) -> Result<bool
         return Ok(false);
     }
     let Some(svc) = services.values().next().and_then(Value::as_mapping) else {
-        bail!("'NoneType' object has no attribute 'items'");
+        bail!("compose service must be a mapping");
     };
     for (k, v) in svc {
         let k = yaml_text(k);
@@ -317,13 +317,13 @@ fn can_collapse_to_dockerfile(root: &Mapping, services: &Mapping) -> Result<bool
             let ok = match v {
                 Value::Sequence(items) => {
                     if items.iter().any(|i| matches!(i, Value::Mapping(_) | Value::Sequence(_))) {
-                        bail!("unhashable type: 'dict'");
+                        bail!("volumes: entries must be strings");
                     }
                     items.iter().all(default)
                 }
                 Value::String(s) => s.is_empty(),
                 Value::Mapping(m) => m.keys().all(default),
-                _ => bail!("volumes: object is not iterable"),
+                _ => bail!("volumes: must be a list or a mapping"),
             };
             if !ok {
                 return Ok(false);
@@ -517,7 +517,10 @@ fn copy_remaining_files(src: &Path, env_dir: &Path, handled: &HashSet<String>) -
 
 /// A file as UTF-8 text with `\r\n` and `\r` line endings normalized to `\n`.
 fn read_text(p: &Path) -> Result<String> {
-    let s = fs::read_to_string(p).with_context(|| format!("[Errno 2] No such file or directory: '{}'", p.display()))?;
+    let s = fs::read_to_string(p).map_err(|e| match e.kind() {
+        std::io::ErrorKind::NotFound => anyhow!("no such file: {}", p.display()),
+        _ => anyhow!("reading {}: {e}", p.display()),
+    })?;
     Ok(s.replace("\r\n", "\n").replace('\r', "\n"))
 }
 

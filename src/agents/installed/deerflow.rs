@@ -54,9 +54,7 @@ fn kw_flag(args: &AgentArgs, k: &str, default: bool) -> Result<bool> {
     match args.kwargs.get(k) {
         None | Some(Value::Null) => Ok(default),
         Some(Value::String(s)) if matches!(s.trim().to_lowercase().as_str(), "on" | "off") => Ok(s.trim().eq_ignore_ascii_case("on")),
-        Some(_) => {
-            args.kw_bool(k).ok_or_else(|| anyhow::anyhow!("Invalid kwargs for agent 'deerflow':\n  {k}: Input should be a valid boolean"))
-        }
+        Some(_) => args.kw_bool(k).ok_or_else(|| anyhow::anyhow!("Invalid kwargs for agent 'deerflow':\n  {k}: must be a boolean")),
     }
 }
 
@@ -106,7 +104,7 @@ impl DeerFlow {
             Some(_) => bail!("Invalid value for 'config': expected a local file path or JSON object"),
         };
         if args.kwargs.contains_key("disable_web_search") && kw_flag(&args, "disable_web_search", false).is_err() {
-            bail!("Invalid kwargs for agent 'deerflow':\n  disable_web_search: Input should be a valid boolean");
+            bail!("Invalid kwargs for agent 'deerflow':\n  disable_web_search: must be a boolean");
         }
         Ok(DeerFlow {
             repo_url: args.kw("repo_url").unwrap_or_else(|| DEERFLOW_REPO.into()),

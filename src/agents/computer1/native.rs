@@ -27,11 +27,9 @@ fn coerce_int(v: &Value) -> Result<i64, String> {
         Value::Number(n) => n
             .as_i64()
             .or_else(|| n.as_f64().filter(|f| f.is_finite()).map(|f| f.trunc() as i64))
-            .ok_or_else(|| "cannot convert float infinity to integer".into()),
-        Value::String(s) => {
-            s.trim().replace('_', "").parse::<i64>().map_err(|_| format!("invalid literal for int() with base 10: {}", quote_repr(s)))
-        }
-        other => Err(format!("int() argument must be a string, a bytes-like object or a real number, not '{}'", type_name(other))),
+            .ok_or_else(|| "integer out of range".into()),
+        Value::String(s) => s.trim().replace('_', "").parse::<i64>().map_err(|_| format!("invalid integer: {}", quote_repr(s))),
+        other => Err(format!("expected an integer, got {}", type_name(other))),
     }
 }
 
@@ -40,8 +38,8 @@ fn coerce_float(v: &Value) -> Result<f64, String> {
     match v {
         Value::Bool(b) => Ok(*b as i64 as f64),
         Value::Number(n) => Ok(n.as_f64().unwrap_or(0.0)),
-        Value::String(s) => s.trim().parse::<f64>().map_err(|_| format!("could not convert string to float: {}", quote_repr(s))),
-        other => Err(format!("float() argument must be a string or a real number, not '{}'", type_name(other))),
+        Value::String(s) => s.trim().parse::<f64>().map_err(|_| format!("invalid number: {}", quote_repr(s))),
+        other => Err(format!("expected a number, got {}", type_name(other))),
     }
 }
 
@@ -759,9 +757,7 @@ impl Native {
             Kind::Gemini => {
                 // genai.Client(vertexai=False): always the Gemini Developer API with an API key.
                 let Some(key) = get("GOOGLE_API_KEY").or_else(|| get("GEMINI_API_KEY")) else {
-                    bail!(
-                        "Missing key inputs argument! To use the Google AI API, provide (`api_key`) arguments (GOOGLE_API_KEY or GEMINI_API_KEY) for computer-1's 'gemini' provider"
-                    )
+                    bail!("computer-1's 'gemini' provider needs an API key: set GOOGLE_API_KEY or GEMINI_API_KEY")
                 };
                 let base = get("GOOGLE_GEMINI_BASE_URL").unwrap_or_else(|| "https://generativelanguage.googleapis.com".into());
                 Http {
@@ -922,7 +918,7 @@ impl Native {
         match d.get("decision").and_then(Value::as_str) {
             Some("blocked") => bail!("Gemini blocked the requested computer action: {explanation}"),
             Some("require_confirmation") if !self.auto_ack_safety => {
-                bail!("Gemini Computer Use requires safety confirmation. Pass gemini_auto_ack_safety=True for an unattended run.")
+                bail!("Gemini Computer Use requires safety confirmation. Set gemini_auto_ack_safety=true for an unattended run.")
             }
             _ => Ok(()),
         }
@@ -1420,10 +1416,7 @@ mod tests {
         assert_eq!(t(json!({"action": "key", "text": "ctrl+ l"})).unwrap().unwrap().keys, Some(vec!["ctrl".into(), "l".into()]));
         let a = t(json!({"action": "hold_key", "text": "shift", "duration": 2})).unwrap().unwrap();
         assert_eq!((a.keys, a.duration), (Some(vec!["shift".to_string()]), Some(2.0)));
-        assert_eq!(
-            t(json!({"action": "left_click", "coordinate": ["bad", 1]})).unwrap_err(),
-            "invalid literal for int() with base 10: 'bad'"
-        );
+        assert_eq!(t(json!({"action": "left_click", "coordinate": ["bad", 1]})).unwrap_err(), "invalid integer: 'bad'");
         assert_eq!(t(json!({"action": "missing"})).unwrap(), None);
         // Larger desktops reverse Anthropic's downscale.
         let a = translate_anthropic(json!({"action": "left_click", "coordinate": [784, 400]}).as_object().unwrap(), 2048, 700)
@@ -1475,7 +1468,7 @@ mod tests {
         assert_eq!((a.kind.as_str(), a.duration_seconds), ("sleep", Some(3.0)));
         let a = t("drag_and_drop", json!({"start_x": 1, "start_y": 2, "end_x": 3, "end_y": 4})).unwrap().unwrap();
         assert_eq!((a.x, a.end_y), (Some(1), Some(4)));
-        assert_eq!(t("click", json!({"x": "invalid", "y": 30})).unwrap_err(), "invalid literal for int() with base 10: 'invalid'");
+        assert_eq!(t("click", json!({"x": "invalid", "y": 30})).unwrap_err(), "invalid integer: 'invalid'");
         assert_eq!(t("take_screenshot", json!({})).unwrap().unwrap().kind, "screenshot");
         assert_eq!(t("unknown", json!({})).unwrap(), None);
     }

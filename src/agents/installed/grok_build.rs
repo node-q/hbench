@@ -52,7 +52,7 @@ fn parse_bool(v: &Value, name: &str) -> Result<bool> {
     match v {
         Value::Bool(b) => Ok(*b),
         Value::String(s) => parse_bool_env_value(s, name),
-        _ => bail!("Invalid value for '{name}': expected bool"),
+        _ => bail!("Invalid value for '{name}': expected a boolean"),
     }
 }
 
@@ -61,7 +61,7 @@ impl GrokBuild {
         let grok_config = match args.kwargs.get("grok_config") {
             None | Some(Value::Null) => None,
             Some(Value::Object(o)) => Some(o.clone()),
-            Some(_) => bail!("Invalid grok_config: expected a dict of config.toml sections"),
+            Some(_) => bail!("Invalid grok_config: expected an object of config.toml sections"),
         };
         let disable_web_search =
             args.kwargs.get("disable_web_search").map(|v| parse_bool(v, "disable_web_search")).transpose()?.unwrap_or(true);
@@ -300,7 +300,7 @@ fn cli_flags(args: &AgentArgs) -> Result<String> {
     let opt = |k: &str, env: &str| if args.kwargs.contains_key(k) { args.kw(k) } else { args.get_env(env) };
     let mut f = vec![];
     if let Some(v) = opt("max_turns", "GROK_BUILD_MAX_TURNS") {
-        let n: i64 = v.trim().parse().map_err(|_| anyhow!("Invalid value for 'max_turns': cannot parse '{v}' as int"))?;
+        let n: i64 = v.trim().parse().map_err(|_| anyhow!("Invalid value for 'max_turns': cannot parse '{v}' as an integer"))?;
         f.push(format!("--max-turns {n}"));
     }
     if let Some(v) = opt("reasoning_effort", "GROK_BUILD_REASONING_EFFORT") {

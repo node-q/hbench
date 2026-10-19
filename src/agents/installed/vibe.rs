@@ -115,8 +115,8 @@ impl Vibe {
             match &v {
                 Value::Number(n) if n.as_i64().is_some() => Ok(n.as_i64()),
                 Value::Number(n) if n.as_f64().is_some_and(|f| f.fract() == 0.0) => Ok(n.as_f64().map(|f| f as i64)),
-                Value::String(s) => s.trim().parse().map(Some).map_err(|_| bad(k, "Input should be a valid integer")),
-                _ => Err(bad(k, "Input should be a valid integer")),
+                Value::String(s) => s.trim().parse().map(Some).map_err(|_| bad(k, "must be an integer")),
+                _ => Err(bad(k, "must be an integer")),
             }
         };
         let string = |k: &str| -> Result<Option<String>> {
@@ -124,14 +124,14 @@ impl Vibe {
                 None | Some(Value::Null) => Ok(None),
                 Some(Value::String(s)) => Ok(Some(s.clone())),
                 Some(Value::Number(n)) => Ok(Some(n.to_string())),
-                Some(_) => Err(bad(k, "Input should be a valid string")),
+                Some(_) => Err(bad(k, "must be a string")),
             }
         };
         let temperature = match args.kwargs.get("temperature") {
             None => 0.2,
             Some(Value::Number(n)) => n.as_f64().unwrap(),
-            Some(Value::String(s)) => s.trim().parse().map_err(|_| bad("temperature", "Input should be a valid number"))?,
-            Some(_) => bail!(bad("temperature", "Input should be a valid number")),
+            Some(Value::String(s)) => s.trim().parse().map_err(|_| bad("temperature", "must be a number"))?,
+            Some(_) => bail!(bad("temperature", "must be a number")),
         };
         let max_price = match args.kwargs.contains_key("max_price") {
             true => string("max_price")?,

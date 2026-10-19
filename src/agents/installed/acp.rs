@@ -627,7 +627,7 @@ impl Acp {
         let kw = |k: &str| args.kwargs.get(k).filter(|v| !v.is_null());
         let permission_mode = args.kw("permission_mode").unwrap_or_else(|| "allow".into());
         if !["allow", "deny"].contains(&permission_mode.as_str()) {
-            bail!("Invalid kwargs for agent 'acp':\n  permission_mode: Input should be 'allow' or 'deny'");
+            bail!("Invalid kwargs for agent 'acp':\n  permission_mode: must be 'allow' or 'deny'");
         }
         let registry_inputs = ["registry_spec", "registry_entry", "registry_entry_path"].iter().filter(|k| kw(k).is_some()).count();
         if registry_inputs > 1 {

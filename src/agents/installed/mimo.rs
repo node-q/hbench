@@ -23,10 +23,10 @@ pub fn create(args: AgentArgs) -> Result<AgentBox> {
     let mimo_config = match args.kwargs.get("mimo_config") {
         None | Some(Value::Null) => json!({}),
         Some(v @ Value::Object(_)) => v.clone(),
-        Some(_) => bail!("Invalid kwargs for agent 'mimo':\n  mimo_config: Input should be a valid dictionary"),
+        Some(_) => bail!("Invalid kwargs for agent 'mimo':\n  mimo_config: must be an object"),
     };
     if args.kwargs.contains_key("disable_web_search") && args.kw_bool("disable_web_search").is_none() {
-        bail!("Invalid kwargs for agent 'mimo':\n  disable_web_search: Input should be a valid boolean");
+        bail!("Invalid kwargs for agent 'mimo':\n  disable_web_search: must be a boolean");
     }
     Ok(Box::new(MiMo { version: args.version_kw(), args, mimo_config }))
 }

@@ -36,16 +36,16 @@ pub(super) fn opt_str(args: &AgentArgs, agent: &str, k: &str) -> Result<Option<S
         None => Ok(None),
         Some(Value::String(s)) => Ok(Some(s.clone())),
         Some(Value::Number(n)) => Ok(Some(n.to_string())),
-        Some(_) => Err(invalid(agent, k, "Input should be a valid string")),
+        Some(_) => Err(invalid(agent, k, "must be a string")),
     }
 }
 
 pub(super) fn opt_bool(args: &AgentArgs, agent: &str, k: &str) -> Result<Option<bool>> {
-    get(args, k).map(|v| lax_bool(v).ok_or_else(|| invalid(agent, k, "Input should be a valid boolean"))).transpose()
+    get(args, k).map(|v| lax_bool(v).ok_or_else(|| invalid(agent, k, "must be a boolean"))).transpose()
 }
 
 pub(super) fn opt_int(args: &AgentArgs, agent: &str, k: &str) -> Result<Option<i64>> {
-    let err = || invalid(agent, k, "Input should be a valid integer");
+    let err = || invalid(agent, k, "must be an integer");
     match get(args, k) {
         None => Ok(None),
         Some(Value::Number(n)) => {
@@ -57,7 +57,7 @@ pub(super) fn opt_int(args: &AgentArgs, agent: &str, k: &str) -> Result<Option<i
 }
 
 pub(super) fn opt_f64(args: &AgentArgs, agent: &str, k: &str) -> Result<Option<f64>> {
-    let err = || invalid(agent, k, "Input should be a valid number");
+    let err = || invalid(agent, k, "must be a number");
     match get(args, k) {
         None => Ok(None),
         Some(Value::Number(n)) => n.as_f64().map(Some).ok_or_else(err),
@@ -70,7 +70,7 @@ fn opt_dict(args: &AgentArgs, agent: &str, k: &str) -> Result<Option<Map<String,
     match get(args, k) {
         None => Ok(None),
         Some(Value::Object(o)) => Ok(Some(o.clone())),
-        Some(_) => Err(invalid(agent, k, "Input should be a valid dictionary")),
+        Some(_) => Err(invalid(agent, k, "must be an object")),
     }
 }
 
@@ -137,7 +137,7 @@ impl OpenHands {
         let trajectory_config = opt_dict(&args, N, "trajectory_config")?;
         let raw_content = match trajectory_config.as_ref().and_then(|t| t.get("raw_content")).filter(|v| !v.is_null()) {
             None => false,
-            Some(v) => lax_bool(v).ok_or_else(|| invalid(N, "trajectory_config.raw_content", "Input should be a valid boolean"))?,
+            Some(v) => lax_bool(v).ok_or_else(|| invalid(N, "trajectory_config.raw_content", "must be a boolean"))?,
         };
         if raw_content && !disable_tool_calls {
             bail!(

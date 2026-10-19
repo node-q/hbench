@@ -122,7 +122,7 @@ pub fn parse_jsonl(text: &str) -> Vec<Value> {
 
 pub fn parse_bool_env_value(v: &str, name: &str) -> Result<bool> {
     opts::lax_bool(&Value::String(v.into()))
-        .ok_or_else(|| anyhow!("Invalid value for '{name}': cannot parse '{v}' as bool (expected true/false/1/0/yes/no)"))
+        .ok_or_else(|| anyhow!("Invalid value for '{name}': cannot parse '{v}' as a boolean (expected true/false/1/0/yes/no)"))
 }
 
 /// An unset variable is false.

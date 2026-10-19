@@ -11,8 +11,7 @@ impl App {
             if req.body.is_empty() {
                 return Ok(Value::Null);
             }
-            serde_json::from_slice(req.body)
-                .map_err(|e| (422, json!([{"type": "json_invalid", "loc": ["body", 0], "msg": format!("JSON decode error: {e}")}])))
+            serde_json::from_slice(req.body).map_err(|e| err(422, format!("request body is not valid JSON: {e}")))
         };
         match (method, segs) {
             ("DELETE", ["jobs", job]) => {

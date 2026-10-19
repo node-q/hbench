@@ -121,7 +121,7 @@ pub fn create(args: AgentArgs) -> Result<AgentBox> {
 
 /// Integer kwarg: ints, integral floats, numeric strings.
 fn int_opt(args: &AgentArgs, k: &str, default: i64) -> Result<i64> {
-    let bad = || anyhow!("Invalid kwargs for agent 'eve':\n  {k}: Input should be a valid integer");
+    let bad = || anyhow!("Invalid kwargs for agent 'eve':\n  {k}: must be an integer");
     match args.kwargs.get(k) {
         None | Some(Value::Null) => Ok(default),
         Some(Value::Number(n)) => n.as_i64().or_else(|| n.as_f64().filter(|f| f.fract() == 0.0).map(|f| f as i64)).ok_or_else(bad),

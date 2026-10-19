@@ -70,7 +70,7 @@ impl ClaudeCode {
         }
         f.push(format!("--permission-mode={permission}"));
         if let Some(v) = self.opt("max_turns", Some("CLAUDE_CODE_MAX_TURNS")) {
-            let n: i64 = v.parse().map_err(|_| anyhow::anyhow!("Invalid value for 'max_turns': cannot parse '{v}' as int"))?;
+            let n: i64 = v.parse().map_err(|_| anyhow::anyhow!("Invalid value for 'max_turns': cannot parse '{v}' as an integer"))?;
             f.push(format!("--max-turns {n}"));
         }
         if let Some(v) = self.opt("reasoning_effort", Some("CLAUDE_CODE_EFFORT_LEVEL")) {

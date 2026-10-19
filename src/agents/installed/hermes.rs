@@ -47,11 +47,7 @@ impl Hermes {
     fn new(args: AgentArgs) -> Result<Hermes> {
         let max_turns = args
             .kw("max_turns")
-            .map(|v| {
-                v.trim()
-                    .parse::<i64>()
-                    .map_err(|_| anyhow!("Invalid kwargs for agent 'hermes':\n  max_turns: Input should be a valid integer"))
-            })
+            .map(|v| v.trim().parse::<i64>().map_err(|_| anyhow!("Invalid kwargs for agent 'hermes':\n  max_turns: must be an integer")))
             .transpose()?;
         Ok(Hermes {
             version: args.version_kw(),

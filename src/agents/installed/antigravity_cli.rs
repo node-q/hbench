@@ -120,7 +120,7 @@ impl AntigravityCli {
             None | Some(Value::Null) => None,
             Some(_) => Some(
                 args.kw_bool("sandbox")
-                    .ok_or_else(|| anyhow!("Invalid kwargs for agent 'antigravity-cli':\n  sandbox: Input should be a valid boolean"))?,
+                    .ok_or_else(|| anyhow!("Invalid kwargs for agent 'antigravity-cli':\n  sandbox: must be a boolean"))?,
             ),
         };
         let reasoning_effort = args.kw("reasoning_effort");

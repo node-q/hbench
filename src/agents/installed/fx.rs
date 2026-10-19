@@ -60,10 +60,8 @@ impl Fx {
             None => args.extra_env.get("FX_MAX_AGENT_STEPS").cloned().or_else(|| std::env::var("FX_MAX_AGENT_STEPS").ok()),
         };
         if let Some(s) = steps {
-            let n: i64 = s
-                .trim()
-                .parse()
-                .map_err(|_| anyhow!("Invalid kwargs for agent '{name}':\n  max_agent_steps: Input should be a valid integer"))?;
+            let n: i64 =
+                s.trim().parse().map_err(|_| anyhow!("Invalid kwargs for agent '{name}':\n  max_agent_steps: must be an integer"))?;
             option_env.insert("FX_MAX_AGENT_STEPS".into(), n.to_string());
         }
         if dev {

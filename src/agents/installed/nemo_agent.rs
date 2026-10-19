@@ -97,11 +97,11 @@ impl NemoAgent {
         let opt = |k: &str, env: &str| if args.kwargs.contains_key(k) { args.kw(k) } else { args.get_env(env) };
         let llm_type = opt("llm_type", "NVIDIA_NAT_LLM_TYPE").unwrap_or_else(|| "nim".into());
         if !LLM_TYPES.contains(&llm_type.as_str()) {
-            bail!("Invalid kwargs for agent 'nemo-agent':\n  llm_type: Input should be {}", LLM_TYPES.map(|t| format!("'{t}'")).join(", "));
+            bail!("Invalid kwargs for agent 'nemo-agent':\n  llm_type: must be {}", LLM_TYPES.map(|t| format!("'{t}'")).join(", "));
         }
         let log_level = opt("verbose", "NVIDIA_NAT_LOG_LEVEL").unwrap_or_else(|| "warning".into());
         if !LOG_LEVELS.contains(&log_level.as_str()) {
-            bail!("Invalid kwargs for agent 'nemo-agent':\n  verbose: Input should be 'debug', 'info', 'warning' or 'error'");
+            bail!("Invalid kwargs for agent 'nemo-agent':\n  verbose: must be 'debug', 'info', 'warning' or 'error'");
         }
         Ok(NemoAgent {
             config_file: opt("config_file", "NVIDIA_NAT_CONFIG_FILE"),

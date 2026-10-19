@@ -183,13 +183,13 @@ impl LangGraph {
             match args.kwargs.get(k) {
                 None | Some(Value::Null) => Ok(json!({})),
                 Some(v @ Value::Object(_)) => Ok(v.clone()),
-                Some(_) => bail!("Invalid kwargs for agent 'langgraph':\n  {k}: Input should be a valid dictionary"),
+                Some(_) => bail!("Invalid kwargs for agent 'langgraph':\n  {k}: must be an object"),
             }
         };
         let dependency_overrides = match args.kwargs.get("dependency_overrides") {
             None | Some(Value::Null) => None,
             Some(Value::Array(a)) if a.iter().all(Value::is_string) => Some(a.iter().map(|v| v.as_str().unwrap().to_string()).collect()),
-            Some(_) => bail!("Invalid kwargs for agent 'langgraph':\n  dependency_overrides: Input should be a valid list of strings"),
+            Some(_) => bail!("Invalid kwargs for agent 'langgraph':\n  dependency_overrides: must be a list of strings"),
         };
         let raw = args.kw("project_path").map(PathBuf::from).unwrap_or(std::env::current_dir()?);
         let raw = match raw.strip_prefix("~") {

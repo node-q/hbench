@@ -42,7 +42,7 @@ fn dump_sections(o: &Map<String, Value>, sup: &str) -> Result<(String, Sections)
             Value::Object(m) => retdict.push((q, m.clone())),
             Value::Array(items) if items.iter().any(Value::is_object) => {
                 for a in items {
-                    let Value::Object(a) = a else { bail!("TypeError: cannot dump mixed table/value array {key:?} to TOML") };
+                    let Value::Object(a) = a else { bail!("cannot write {key:?} to TOML: the array mixes tables and other values") };
                     let mut arraytabstr = String::from("\n");
                     arraystr.push_str(&format!("[[{sup}{q}]]\n"));
                     let (s, mut d) = dump_sections(a, &format!("{sup}{q}"))?;

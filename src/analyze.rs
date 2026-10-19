@@ -199,11 +199,11 @@ struct Report<'a, T> {
 
 /// Validate `checks` against the rubric (all criteria present, valid outcomes), in rubric order.
 fn parse_checks(v: &Value, r: &Rubric) -> Result<Checks, String> {
-    let obj = v.as_object().ok_or("checks: input should be an object")?;
+    let obj = v.as_object().ok_or("checks: must be an object")?;
     r.criteria
         .iter()
         .map(|c| {
-            let raw = obj.get(&c.name).ok_or_else(|| format!("{}: field required", c.name))?;
+            let raw = obj.get(&c.name).ok_or_else(|| format!("{}: missing", c.name))?;
             let check: Check = serde_json::from_value(raw.clone()).map_err(|e| format!("{}: {e}", c.name))?;
             Ok((c.name.clone(), check))
         })
@@ -239,7 +239,7 @@ fn extract_result(r: &TrialResult, trial_dir: &Path, t: &Template) -> Result<(Va
 
 fn extract_analyze_result(r: &TrialResult, trial_dir: &Path, rubric: &Rubric) -> Result<AnalyzeReportResult, String> {
     let (v, cost_usd) = extract_result(r, trial_dir, &ANALYZE)?;
-    let summary = v.get("summary").and_then(Value::as_str).ok_or("summary: input should be a valid string")?;
+    let summary = v.get("summary").and_then(Value::as_str).ok_or("summary: must be a string")?;
     let checks = parse_checks(v.get("checks").unwrap_or(&Value::Null), rubric)?;
     Ok(AnalyzeReportResult { summary: Some(summary.into()), checks, cost_usd, ..Default::default() })
 }

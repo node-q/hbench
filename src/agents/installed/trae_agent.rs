@@ -30,7 +30,7 @@ fn trae_provider(p: &str) -> Option<&'static str> {
 
 /// Integer kwarg: ints, bools, integral floats or numeric strings.
 pub(crate) fn opt_int(k: &str, v: &Value) -> Result<i64> {
-    let bad = || anyhow!("Invalid kwargs for agent: {k}: Input should be a valid integer");
+    let bad = || anyhow!("Invalid kwargs for agent: {k}: must be an integer");
     match v {
         Value::Bool(b) => Ok(*b as i64),
         Value::Number(n) => n.as_i64().or_else(|| n.as_f64().filter(|f| f.fract() == 0.0).map(|f| f as i64)).ok_or_else(bad),
@@ -44,7 +44,7 @@ pub(crate) fn opt_str(k: &str, v: &Value) -> Result<String> {
     match v {
         Value::String(s) => Ok(s.clone()),
         Value::Number(n) => Ok(n.to_string()),
-        _ => bail!("Invalid kwargs for agent: {k}: Input should be a valid string"),
+        _ => bail!("Invalid kwargs for agent: {k}: must be a string"),
     }
 }
 
@@ -85,7 +85,7 @@ impl TraeAgent {
     }
 
     fn config_yaml(&self, provider: &str, model: &str, api_key: &str, base_url: Option<&str>) -> Result<String> {
-        let float = |k: &str, v: &str| v.trim().parse::<f64>().map_err(|_| anyhow!("could not convert string to float: '{v}' ({k})"));
+        let float = |k: &str, v: &str| v.trim().parse::<f64>().map_err(|_| anyhow!("{k}: invalid number '{v}'"));
         let mut prov = json!({"api_key": api_key, "provider": provider});
         if let Some(u) = base_url.filter(|u| !u.is_empty()) {
             prov["base_url"] = json!(u);

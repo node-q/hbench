@@ -18,7 +18,7 @@ pub fn create(args: AgentArgs) -> Result<AgentBox> {
     let overlay = match args.kwargs.get("opencode_config") {
         None | Some(Value::Null) => serde_json::Map::new(),
         Some(Value::Object(o)) => o.clone(),
-        Some(_) => bail!("Invalid kwargs for agent 'opencode':\n  opencode_config: Input should be a valid dictionary"),
+        Some(_) => bail!("Invalid kwargs for agent 'opencode':\n  opencode_config: must be an object"),
     };
     let a = OpenCode { version: args.version_kw(), args, overlay };
     a.cli_flags()?;

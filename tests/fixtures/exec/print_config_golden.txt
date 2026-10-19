@@ -1400,7 +1400,7 @@ ERROR Error: --scan requires at least one --path.
 ### ["-i", "x", "--reward-artifact", "s.json", "--disable-verification"]
 ERROR Error: --reward-artifact cannot be used with --disable-verification.
 ### ["-i", "x", "--ri", "y"]
-ERROR Error: 1 validation error for ExecConfig Value error, reduce requires map.compile.artifacts so prior map artifacts can be used as implicit reducer inputs.
+ERROR Error: reduce requires map.compile.artifacts so prior map artifacts can be used as implicit reducer inputs.
 ### ["-i", "x", "-c", "{ROOT}/cfg.yaml"]
 ERROR Error: --config cannot be combined with flags mode options.
 ### ["-c", "{ROOT}/cfg.yaml", "-q"]
@@ -1414,9 +1414,9 @@ ERROR Error: Invalid env var format: bad. Expected KEY=VALUE
 ### ["-i", "x", "-a", "a", "--ak", "bad"]
 ERROR Error: Invalid kwarg format: bad. Expected key=value
 ### ["-i", "", "--job-name", "J", "--tasks-dir", "td"]
-ERROR Error: 1 validation error for CompileInstruction text String should have at least 1 character
+ERROR Error: instruction text must not be empty
 ### ["-i", "x", "-k", "0", "--job-name", "J", "--tasks-dir", "td"]
-ERROR Error: 1 validation error for ExecJobConfig n_attempts Input should be greater than or equal to 1
+ERROR Error: n_attempts must be at least 1
 ### ["-c", "{ROOT}/cfg.yaml"]
 {
   "map": {
@@ -1555,6 +1555,6 @@ ERROR Error: 1 validation error for ExecJobConfig n_attempts Input should be gre
   }
 }
 ### ["-c", "{ROOT}/cfg_noart.yaml"]
-ERROR Error: 1 validation error for ExecConfig Value error, reduce requires map.compile.artifacts so prior map artifacts can be used as implicit reducer inputs.
+ERROR Error: reduce requires map.compile.artifacts so prior map artifacts can be used as implicit reducer inputs.
 ### ["-c", "{ROOT}/cfg.ini"]
 ERROR Error: Unsupported exec config file format: .ini. Use .yaml, .yml, .json, or .toml.

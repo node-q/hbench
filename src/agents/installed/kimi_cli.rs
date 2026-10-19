@@ -28,7 +28,7 @@ fn provider_config(provider: &str) -> Option<(&'static str, &'static str, &'stat
         _ => return None,
     })
 }
-const PROVIDERS: &str = "['anthropic', 'gemini', 'google', 'kimi', 'moonshot', 'openai', 'openrouter']";
+const PROVIDERS: &str = "anthropic, gemini, google, kimi, moonshot, openai, openrouter";
 
 /// `json.loads(s, strict=False)`: raw control characters are allowed inside strings.
 pub(super) fn loads_lenient(s: &str) -> Option<Value> {
@@ -68,11 +68,11 @@ impl KimiCli {
     fn new(args: AgentArgs) -> Result<KimiCli> {
         for k in ["api_key", "base_url"] {
             if args.kwargs.get(k).is_some_and(|v| !(v.is_null() || v.is_string() || v.is_number())) {
-                bail!("Invalid kwargs for agent 'kimi-cli':\n  {k}: Input should be a valid string");
+                bail!("Invalid kwargs for agent 'kimi-cli':\n  {k}: must be a string");
             }
         }
         if args.kwargs.get("model_info").is_some_and(|v| !(v.is_null() || v.is_object())) {
-            bail!("Invalid kwargs for agent 'kimi-cli':\n  model_info: Input should be a valid dictionary");
+            bail!("Invalid kwargs for agent 'kimi-cli':\n  model_info: must be an object");
         }
         let mut a = KimiCli { version: args.version_kw(), args, max_context_size: DEFAULT_MAX_CONTEXT_SIZE };
         a.max_context_size = a.resolve_max_context_size();

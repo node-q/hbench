@@ -37,10 +37,10 @@ impl CompileInstruction {
     }
     pub(super) fn validate(&self) -> Result<()> {
         if self.text.as_deref() == Some("") {
-            bail!("1 validation error for CompileInstruction\ntext\n  String should have at least 1 character");
+            bail!("instruction text must not be empty");
         }
         if self.text.is_none() == self.path.is_none() {
-            bail!("1 validation error for CompileInstruction\n  Value error, Exactly one of text or path is required.");
+            bail!("an instruction needs exactly one of text or path");
         }
         Ok(())
     }
@@ -185,7 +185,7 @@ impl CompileConfig {
         }
         for e in &self.environments {
             if e.path.is_some() && !e.paths.is_empty() {
-                bail!("1 validation error for CompileEnvironment\n  Value error, path and paths are mutually exclusive.");
+                bail!("an environment takes path or paths, not both");
             }
         }
         for v in &self.verifiers {
@@ -197,7 +197,7 @@ impl CompileConfig {
 
 fn validate_verifier(v: &CompileVerifier) -> Result<()> {
     if v.path.is_none() == v.auto_verifier.is_none() {
-        bail!("1 validation error for CompileVerifier\n  Value error, Exactly one of path or auto_verifier is required.");
+        bail!("a verifier needs exactly one of path or auto_verifier");
     }
     Ok(())
 }
@@ -249,7 +249,7 @@ impl ExecJobConfig {
     pub(super) fn validate(&self) -> Result<()> {
         for (k, v) in [("n_attempts", self.n_attempts), ("n_concurrent_trials", self.n_concurrent_trials)] {
             if v < 1 {
-                bail!("1 validation error for ExecJobConfig\n{k}\n  Input should be greater than or equal to 1");
+                bail!("{k} must be at least 1");
             }
         }
         crate::config::strict_value::<RetryConfig>(Value::Object(self.retry.clone())).context("retry")?;
@@ -352,7 +352,7 @@ impl ExecConfig {
         self.map.job.validate()?;
         if let Some(r) = &self.reduce {
             if r.task.task_name.is_empty() {
-                bail!("1 validation error for ExecReduceTaskConfig\ntask_name\n  String should have at least 1 character");
+                bail!("reduce task_name must not be empty");
             }
             r.task.instruction.validate()?;
             validate_artifacts(&r.task.artifacts)?;
@@ -361,9 +361,7 @@ impl ExecConfig {
             }
             r.job.validate()?;
             if self.map.compile.artifacts.is_empty() {
-                bail!(
-                    "1 validation error for ExecConfig\n  Value error, reduce requires map.compile.artifacts so prior map artifacts can be used as implicit reducer inputs."
-                );
+                bail!("reduce requires map.compile.artifacts so prior map artifacts can be used as implicit reducer inputs.");
             }
         }
         Ok(())

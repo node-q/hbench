@@ -74,7 +74,7 @@ fn dump_str(s: &str) -> Result<String> {
         parts[0] = parts[0].replace("\\\\", "\\");
         let p: Vec<char> = parts[0].chars().collect();
         if p.is_empty() || parts.len() < 2 {
-            bail!("toml encoder: list index out of range");
+            bail!("cannot write {s:?} as a TOML string");
         }
         let mut i = p.len() - 1;
         let mut joinx = p[i] != '\\';
@@ -155,7 +155,7 @@ fn qkey(k: &str) -> Result<String> {
 }
 
 fn dump_sections(o: &Value, sup: &str) -> Result<(String, Map<String, Value>)> {
-    let Value::Object(o) = o else { bail!("toml encoder: object is not iterable") };
+    let Value::Object(o) = o else { bail!("cannot write a non-table value as a TOML section") };
     let sup = if !sup.is_empty() && !sup.ends_with('.') { format!("{sup}.") } else { sup.to_string() };
     let (mut retstr, mut arraystr, mut retdict) = (String::new(), String::new(), Map::new());
     for (section, val) in o {
@@ -949,7 +949,7 @@ pub fn init_task(name: &str, output_dir: &Path, o: &TaskOpts) -> Result<PathBuf>
     write_new(&task_dir.join("task.toml"), &canary(&toml_text, CANARY))?;
     write_new(&task_dir.join("README.md"), &format!("# {name}\n"))?;
     if task_dir.join("environment").exists() {
-        bail!("[Errno 17] File exists: '{}'", task_dir.join("environment").display());
+        bail!("already exists: {}", task_dir.join("environment").display());
     }
     write_new(&task_dir.join("environment/Dockerfile"), &canary(T_DOCKERFILE, CANARY))?;
     for d in &content_dirs {

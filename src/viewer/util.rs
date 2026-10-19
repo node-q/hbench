@@ -64,32 +64,20 @@ impl Query {
     pub(super) fn all(&self, k: &str) -> Vec<String> {
         self.0.iter().filter(|(x, _)| x == k).map(|(_, v)| v.clone()).collect()
     }
-    /// FastAPI `int = Query(default, ge=.., le=..)` validation, with its 422 detail shape.
+    /// Integer query parameter `k` (`default` when absent), optionally bounded; violations are 422s.
     pub(super) fn int(&self, k: &str, default: i64, ge: Option<i64>, le: Option<i64>) -> std::result::Result<i64, Err> {
         let Some(raw) = self.get(k) else { return Ok(default) };
-        let detail = |t: &str, msg: String, ctx: Option<Value>| {
-            let mut d = json!({"type": t, "loc": ["query", k], "msg": msg, "input": raw});
-            if let Some(c) = ctx {
-                d["ctx"] = c;
-            }
-            (422, json!([d]))
-        };
-        let n: i64 = raw
-            .trim()
-            .parse()
-            .map_err(|_| detail("int_parsing", "Input should be a valid integer, unable to parse string as an integer".into(), None))?;
+        let n: i64 = raw.trim().parse().map_err(|_| err(422, format!("query parameter {k}: must be an integer")))?;
         if let Some(g) = ge.filter(|g| n < *g) {
-            return Err(detail("greater_than_equal", format!("Input should be greater than or equal to {g}"), Some(json!({"ge": g}))));
+            return Err(err(422, format!("query parameter {k}: must be at least {g}")));
         }
         if let Some(l) = le.filter(|l| n > *l) {
-            return Err(detail("less_than_equal", format!("Input should be less than or equal to {l}"), Some(json!({"le": l}))));
+            return Err(err(422, format!("query parameter {k}: must be at most {l}")));
         }
         Ok(n)
     }
     pub(super) fn required(&self, k: &str) -> std::result::Result<String, Err> {
-        self.get(k)
-            .map(String::from)
-            .ok_or_else(|| (422, json!([{"type": "missing", "loc": ["query", k], "msg": "Field required", "input": null}])))
+        self.get(k).map(String::from).ok_or_else(|| err(422, format!("query parameter {k}: required")))
     }
 }
 

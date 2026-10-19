@@ -1121,7 +1121,7 @@ impl Options {
         let use_responses = kw.boolean("use_responses_api", false);
         kw.finish(NAME)?;
         if use_responses {
-            bail!("computer-1 use_responses_api is not supported by hbench's port (its generic harness always uses chat completions)");
+            bail!("computer-1 does not support use_responses_api: its generic harness always uses chat completions");
         }
         Ok(o)
     }

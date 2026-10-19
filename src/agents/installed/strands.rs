@@ -109,7 +109,7 @@ impl Strands {
             match args.kwargs.get(k) {
                 None | Some(Value::Null) => Ok(json!({})),
                 Some(v @ Value::Object(_)) => validate_json(v, k).map(|_| v.clone()),
-                Some(_) => bail!("Invalid kwargs for agent 'strands':\n  {k}: Input should be a valid dictionary"),
+                Some(_) => bail!("Invalid kwargs for agent 'strands':\n  {k}: must be an object"),
             }
         };
         let factory_path = match args.kw("factory_path") {

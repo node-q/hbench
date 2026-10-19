@@ -25,7 +25,7 @@ pub fn string(a: &AgentArgs, k: &str, fallback: Option<&str>) -> Result<Option<S
 
 pub fn int(a: &AgentArgs, k: &str, fallback: Option<&str>) -> Result<Option<i64>> {
     let err = |v: &Value| {
-        anyhow!("Invalid value for '{k}': cannot parse '{}' as int", v.as_str().map(String::from).unwrap_or_else(|| v.to_string()))
+        anyhow!("Invalid value for '{k}': cannot parse '{}' as an integer", v.as_str().map(String::from).unwrap_or_else(|| v.to_string()))
     };
     Ok(match raw(a, k, fallback) {
         None => None,
@@ -41,7 +41,7 @@ pub fn float(a: &AgentArgs, k: &str, fallback: Option<&str>) -> Result<Option<f6
     Ok(match raw(a, k, fallback) {
         None => None,
         Some(Value::Number(n)) => n.as_f64(),
-        Some(Value::String(s)) => Some(s.trim().parse().map_err(|_| anyhow!("Invalid value for '{k}': cannot parse '{s}' as float"))?),
+        Some(Value::String(s)) => Some(s.trim().parse().map_err(|_| anyhow!("Invalid value for '{k}': cannot parse '{s}' as a number"))?),
         Some(v) => bail!("Invalid value for '{k}': expected a number, got {v}"),
     })
 }
@@ -92,6 +92,6 @@ pub fn kw_int(args: &AgentArgs, k: &str) -> Result<Option<i64>> {
         None | Some(Value::Null) => Ok(None),
         Some(Value::Number(n)) if n.is_i64() => Ok(n.as_i64()),
         Some(Value::String(s)) if s.trim().parse::<i64>().is_ok() => Ok(s.trim().parse().ok()),
-        Some(_) => bail!("Invalid value for '{k}': expected int"),
+        Some(_) => bail!("Invalid value for '{k}': expected an integer"),
     }
 }

@@ -30,9 +30,7 @@ pub fn create(args: AgentArgs) -> Result<AgentBox> {
     if let Some(r) = &reasoning_effort
         && !EFFORTS.contains(&r.as_str())
     {
-        bail!(
-            "Invalid kwargs for agent 'code-puppy':\n  reasoning_effort: Input should be 'minimal', 'low', 'medium', 'high', 'xhigh' or 'max'"
-        );
+        bail!("Invalid kwargs for agent 'code-puppy':\n  reasoning_effort: must be 'minimal', 'low', 'medium', 'high', 'xhigh' or 'max'");
     }
     Ok(Box::new(CodePuppy { version: args.version_kw(), base_url: args.kw("base_url"), reasoning_effort, args }))
 }

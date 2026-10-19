@@ -37,11 +37,11 @@ impl OpenClaw {
         let config_overlay = match args.kwargs.get("openclaw_config") {
             None | Some(Value::Null) => json!({}),
             Some(v @ Value::Object(_)) => v.clone(),
-            Some(_) => bail!("Invalid kwargs for agent 'openclaw':\n  openclaw_config: Input should be a valid dictionary"),
+            Some(_) => bail!("Invalid kwargs for agent 'openclaw':\n  openclaw_config: must be an object"),
         };
         for k in ["disable_web_search", "session_to_trajectory"] {
             if args.kwargs.get(k).is_some_and(|v| !v.is_null()) && args.kw_bool(k).is_none() {
-                bail!("Invalid kwargs for agent 'openclaw':\n  {k}: Input should be a valid boolean");
+                bail!("Invalid kwargs for agent 'openclaw':\n  {k}: must be a boolean");
             }
         }
         let failover_retries = kw_int(&args, "failover_retries")?;
@@ -228,9 +228,7 @@ impl Agent for OpenClaw {
         let instruction = self.args.render_instruction(instruction)?;
         let Some(provider) = self.provider().map(String::from) else { bail!("Model name must be in the format provider/model_name") };
         if !SUPPORTED_PROVIDERS.contains(&provider.as_str()) {
-            bail!(
-                "Unsupported provider '{provider}'. Supported providers: ['anthropic', 'nvidia', 'openai']. Subclass OpenClaw and extend `_SUPPORTED_PROVIDERS` to add more."
-            );
+            bail!("Unsupported provider '{provider}'. Supported providers: anthropic, nvidia, openai.");
         }
         let prefix = provider.to_uppercase().replace('-', "_");
         let mut env = BTreeMap::new();

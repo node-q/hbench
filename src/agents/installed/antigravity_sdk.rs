@@ -77,7 +77,7 @@ impl AntigravitySdk {
     pub fn new(args: AgentArgs) -> Result<AntigravitySdk> {
         let load_skills = match args.kwargs.get("load_skills") {
             None => true,
-            Some(_) => args.kw_bool("load_skills").ok_or_else(|| anyhow!("Invalid value for 'load_skills': expected bool"))?,
+            Some(_) => args.kw_bool("load_skills").ok_or_else(|| anyhow!("Invalid value for 'load_skills': expected a boolean"))?,
         };
         let skill_paths = match args.kwargs.get("skill_paths") {
             None | Some(Value::Null) => None,

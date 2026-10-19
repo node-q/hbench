@@ -330,7 +330,7 @@ pub mod json_parser {
     }
 
     fn fix_incomplete_json(response: &str, error: &str) -> Option<String> {
-        if !["Invalid JSON", "Expecting", "Unterminated", "No valid JSON found"].iter().any(|p| error.contains(p)) {
+        if !["Invalid JSON", "No valid JSON found"].iter().any(|p| error.contains(p)) {
             return None;
         }
         let missing = response.matches('{').count() as i64 - response.matches('}').count() as i64;
@@ -750,7 +750,7 @@ impl<'a> Kw<'a> {
         self.m.get(k).filter(|v| !v.is_null())
     }
     fn bad<T>(&mut self, k: &str, what: &str) -> Option<T> {
-        self.errors.push(format!("{k}: Input should be a valid {what}"));
+        self.errors.push(format!("{k}: must be {what}"));
         None
     }
     pub(crate) fn int(&mut self, k: &str) -> Option<i64> {
@@ -761,7 +761,7 @@ impl<'a> Kw<'a> {
             Value::Bool(b) => Some(i64::from(*b)),
             _ => None,
         };
-        r.or_else(|| self.bad(k, "integer"))
+        r.or_else(|| self.bad(k, "an integer"))
     }
     pub(crate) fn float(&mut self, k: &str) -> Option<f64> {
         let r = match self.get(k)? {
@@ -769,23 +769,23 @@ impl<'a> Kw<'a> {
             Value::String(s) => s.trim().parse().ok(),
             _ => None,
         };
-        r.or_else(|| self.bad(k, "number"))
+        r.or_else(|| self.bad(k, "a number"))
     }
     pub(crate) fn boolean(&mut self, k: &str, default: bool) -> bool {
         let Some(v) = self.get(k) else { return default };
-        crate::agents::installed::common::opts::lax_bool(v).or_else(|| self.bad(k, "boolean")).unwrap_or(default)
+        crate::agents::installed::common::opts::lax_bool(v).or_else(|| self.bad(k, "a boolean")).unwrap_or(default)
     }
     pub(crate) fn string(&mut self, k: &str) -> Option<String> {
         match self.get(k)? {
             Value::String(s) => Some(s.clone()),
             Value::Number(n) => Some(n.to_string()),
-            _ => self.bad(k, "string"),
+            _ => self.bad(k, "a string"),
         }
     }
     pub(crate) fn object(&mut self, k: &str) -> Option<Map<String, Value>> {
         match self.get(k)? {
             Value::Object(o) => Some(o.clone()),
-            _ => self.bad(k, "dictionary"),
+            _ => self.bad(k, "an object"),
         }
     }
 }
@@ -800,15 +800,14 @@ impl Options {
         if let Some(e) = &reasoning_effort
             && !["none", "minimal", "low", "medium", "high", "xhigh", "max", "default"].contains(&e.as_str())
         {
-            kw.errors
-                .push("reasoning_effort: Input should be 'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max' or 'default'".into());
+            kw.errors.push("reasoning_effort: must be 'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max' or 'default'".into());
         }
         let tc = kw.object("trajectory_config").unwrap_or_default();
         let session_id_headers = match kw.get("session_id_headers").cloned() {
             None => vec![],
             Some(Value::Array(a)) if a.iter().all(Value::is_string) => a.iter().map(|v| v.as_str().unwrap().to_string()).collect(),
             Some(_) => {
-                kw.errors.push("session_id_headers: Input should be a valid list".into());
+                kw.errors.push("session_id_headers: must be a list".into());
                 vec![]
             }
         };
@@ -845,7 +844,7 @@ impl Options {
             "tinker" => {
                 bail!("llm_backend 'tinker' needs the Tinker Python SDK, which hbench (Rust) can't load; use the default 'litellm' backend")
             }
-            other => bail!("Unknown llm_backend: {other:?}. Supported backends: ['litellm', 'tinker']"),
+            other => bail!("Unknown llm_backend: {other:?}. Supported backends: litellm, tinker"),
         }
         let header = re(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$");
         if let Some(h) = o.session_id_headers.iter().find(|h| !header.is_match(h)) {
@@ -2128,7 +2127,7 @@ mod tests {
         let o = Options::parse(&serde_json::from_value(json!({"max_turns": 3, "max_episodes": 9, "episodes": 7})).unwrap()).unwrap();
         assert_eq!(o.max_episodes, Some(3));
         let err = |v: Value| Options::parse(&serde_json::from_value(v).unwrap()).unwrap_err().to_string();
-        assert!(err(json!({"max_turns": "lots"})).contains("max_turns: Input should be a valid integer"));
+        assert!(err(json!({"max_turns": "lots"})).contains("max_turns: must be an integer"));
         assert!(err(json!({"parser_name": "yaml"})).contains("Unknown parser_name: yaml"));
         assert!(err(json!({"reasoning_effort": "huge"})).contains("reasoning_effort"));
         assert!(err(json!({"session_id_headers": ["Invalid Header"]})).contains("Invalid HTTP header name"));

@@ -4,6 +4,7 @@ use super::common::installed_dir;
 use super::{ensure_system_dependencies, exec_agent, parse_version};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::quote;
+use crate::fmt::type_name;
 use anyhow::{Result, bail};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -21,18 +22,6 @@ pub struct CortexCode {
 
 pub fn create(args: AgentArgs) -> Result<AgentBox> {
     Ok(Box::new(CortexCode::new(args)?))
-}
-
-fn type_name(v: &Value) -> &'static str {
-    match v {
-        Value::Bool(_) => "bool",
-        Value::Number(n) if n.is_f64() => "float",
-        Value::Number(_) => "int",
-        Value::String(_) => "str",
-        Value::Array(_) => "list",
-        Value::Object(_) => "dict",
-        Value::Null => "NoneType",
-    }
 }
 
 /// Lists verbatim; strings split on commas when present, else whitespace.
@@ -81,9 +70,9 @@ impl CortexCode {
         let cli_mode = cli_mode(args.kwargs.get("cli_mode"))?;
         let dws = match args.kwargs.get("disable_web_search") {
             None | Some(Value::Null) => false,
-            Some(_) => args.kw_bool("disable_web_search").ok_or_else(|| {
-                anyhow::anyhow!("Invalid kwargs for agent 'cortex-code':\n  disable_web_search: Input should be a valid boolean")
-            })?,
+            Some(_) => args
+                .kw_bool("disable_web_search")
+                .ok_or_else(|| anyhow::anyhow!("Invalid kwargs for agent 'cortex-code':\n  disable_web_search: must be a boolean"))?,
         };
         if dws {
             disallowed_tools.extend(["web_search".into(), "web_fetch".into()]);

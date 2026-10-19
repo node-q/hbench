@@ -55,11 +55,11 @@ impl OpenHandsSdk {
                     .map(|v| match v {
                         Value::String(s) => Ok(s.clone()),
                         Value::Number(n) => Ok(n.to_string()),
-                        _ => bail!("Invalid kwargs for agent '{N}':\n  skill_paths: Input should be a valid string"),
+                        _ => bail!("Invalid kwargs for agent '{N}':\n  skill_paths: must be a string"),
                     })
                     .collect::<Result<Vec<_>>>()?,
             ),
-            Some(_) => bail!("Invalid kwargs for agent '{N}':\n  skill_paths: Input should be a valid list"),
+            Some(_) => bail!("Invalid kwargs for agent '{N}':\n  skill_paths: must be a list"),
         };
         Ok(OpenHandsSdk {
             version: opt_str(&args, N, "version")?,

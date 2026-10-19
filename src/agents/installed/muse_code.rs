@@ -83,7 +83,7 @@ impl MuseCode {
             f.push(format!("--reasoning-effort {}", quote(&v)));
         }
         if let Some(v) = self.opt("max_model_steps", "MUSE_CODE_MAX_MODEL_STEPS") {
-            let n: i64 = v.trim().parse().map_err(|_| anyhow!("Invalid value for 'max_model_steps': cannot parse '{v}' as int"))?;
+            let n: i64 = v.trim().parse().map_err(|_| anyhow!("Invalid value for 'max_model_steps': cannot parse '{v}' as an integer"))?;
             if n <= 0 {
                 bail!("Invalid value for 'max_model_steps': must be greater than 0");
             }

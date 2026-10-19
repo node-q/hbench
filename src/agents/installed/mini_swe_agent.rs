@@ -30,7 +30,7 @@ pub(crate) fn opt_str(args: &AgentArgs, agent: &str, k: &str) -> Result<Option<S
         None | Some(Value::Null) => Ok(None),
         Some(Value::String(s)) => Ok(Some(s.clone())),
         Some(Value::Number(n)) => Ok(Some(n.to_string())),
-        Some(_) => bail!("Invalid kwargs for agent '{agent}':\n  {k}: Input should be a valid string"),
+        Some(_) => bail!("Invalid kwargs for agent '{agent}':\n  {k}: must be a string"),
     }
 }
 
@@ -77,14 +77,14 @@ impl MiniSweAgent {
             Some(v) => match v.as_i64().filter(|_| v.is_i64() || v.is_u64()) {
                 Some(n) if n <= 0 => bail!("Invalid value for 'max_tokens': must be greater than 0"),
                 Some(n) => Some(n),
-                None => bail!("Invalid value for 'max_tokens': expected int"),
+                None => bail!("Invalid value for 'max_tokens': expected an integer"),
             },
         };
         let config = args.kwargs.get("config").filter(|v| !v.is_null());
         if let Some(c) = config
             && !c.is_object()
         {
-            bail!("Invalid value for 'config': expected a mapping, got {}", type_name(c));
+            bail!("Invalid value for 'config': expected an object, got {}", type_name(c));
         }
         let config_file = opt_str(&args, N, "config_file")?;
         if config.is_some() && config_file.is_some() {
@@ -111,7 +111,7 @@ impl MiniSweAgent {
                     None => ("litellm_model_registry", r.unwrap().clone()),
                 };
                 if !v.is_object() {
-                    bail!("Invalid value for '{source}': expected a mapping, got {}", type_name(&v));
+                    bail!("Invalid value for '{source}': expected an object, got {}", type_name(&v));
                 }
                 Some(serde_json::to_string_pretty(&v)?)
             }
@@ -389,17 +389,17 @@ pub(crate) mod tests {
     fn validation() {
         let err = |kw: Value| agent(kw, &[], None).err().map(|e| e.to_string()).unwrap_or_default();
         assert!(err(json!({"max_tokens": 0})).contains("greater than 0"));
-        assert!(err(json!({"max_tokens": "5"})).contains("expected int"));
-        assert!(err(json!({"config": "agent: {}"})).contains("expected a mapping, got str"));
+        assert!(err(json!({"max_tokens": "5"})).contains("expected an integer"));
+        assert!(err(json!({"config": "agent: {}"})).contains("expected an object, got string"));
         assert!(err(json!({"config": {}, "config_file": "/x.yaml"})).contains("mutually exclusive"));
-        assert!(err(json!({"litellm_model_registry": "{}"})).contains("expected a mapping, got str"));
+        assert!(err(json!({"litellm_model_registry": "{}"})).contains("expected an object, got string"));
         assert!(err(json!({"litellm_model_registry": {}, "litellm_model_registry_file": "/r.json"})).contains("mutually exclusive"));
         assert!(err(json!({"session_id_headers": ["bad header"]})).contains("Invalid HTTP header name"));
         let f = std::env::temp_dir().join(format!("reg-{}.json", uuid::Uuid::new_v4()));
         std::fs::write(&f, "[1, 2, 3]").unwrap();
         assert!(
             err(json!({"litellm_model_registry_file": f.to_str().unwrap()}))
-                .contains("'litellm_model_registry_file': expected a mapping, got list")
+                .contains("'litellm_model_registry_file': expected an object, got array")
         );
     }
 

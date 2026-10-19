@@ -546,7 +546,7 @@ impl JobConfig {
         let mut pools: BTreeMap<String, Option<usize>> = BTreeMap::new();
         for a in &self.agents {
             if a.import_path.is_some() {
-                bail!("agent import_path (Python agents) is not supported; use a built-in agent name");
+                bail!("agent import_path is not supported; use a built-in agent name");
             }
             normalize_hosts(&a.extra_allowed_hosts)?;
             if let Some(n) = a.n_concurrent

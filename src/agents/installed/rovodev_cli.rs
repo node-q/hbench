@@ -18,7 +18,7 @@ pub fn create(args: AgentArgs) -> Result<AgentBox> {
     if let Some(v) = args.kw("max_thinking_tokens") {
         v.trim()
             .parse::<i64>()
-            .map_err(|_| anyhow!("Invalid kwargs for agent 'rovodev-cli':\n  max_thinking_tokens: Input should be a valid integer"))?;
+            .map_err(|_| anyhow!("Invalid kwargs for agent 'rovodev-cli':\n  max_thinking_tokens: must be an integer"))?;
     }
     Ok(Box::new(RovodevCli { version: args.version_kw(), args }))
 }

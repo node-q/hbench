@@ -53,7 +53,7 @@ impl Pi {
         if let Some(t) = &thinking
             && !THINKING.contains(&t.as_str())
         {
-            bail!("Invalid kwargs for agent 'pi':\n  thinking: Input should be {}", THINKING.map(|t| format!("'{t}'")).join(", "));
+            bail!("Invalid kwargs for agent 'pi':\n  thinking: must be {}", THINKING.map(|t| format!("'{t}'")).join(", "));
         }
         let model_api = match args.kwargs.get("model_api") {
             None | Some(Value::Null) => None,
@@ -62,7 +62,7 @@ impl Pi {
         };
         let max_turns = kw_int(&args, "max_turns")?;
         if max_turns.is_some_and(|n| n < 1) {
-            bail!("Invalid kwargs for agent 'pi':\n  max_turns: Input should be greater than or equal to 1");
+            bail!("Invalid kwargs for agent 'pi':\n  max_turns: must be at least 1");
         }
         Ok(Pi { version: args.version_kw(), args, thinking, model_api, max_turns, session_usage_start: HashMap::new() })
     }

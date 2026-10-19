@@ -20,7 +20,7 @@ pub(super) fn slugify(v: &str) -> String {
 /// `shutil.copytree` (follows symlinks); `dst` must not exist.
 pub(super) fn copy_tree(src: &Path, dst: &Path) -> Result<()> {
     if dst.exists() {
-        bail!("[Errno 17] File exists: '{}'", dst.display());
+        bail!("already exists: {}", dst.display());
     }
     std::fs::create_dir_all(dst)?;
     for e in std::fs::read_dir(src)? {

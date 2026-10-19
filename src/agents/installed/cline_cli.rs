@@ -91,7 +91,7 @@ impl ClineCli {
             bail!("Pass only one of 'thinking' or 'reasoning_effort' for cline-cli.");
         }
         if let Some(r) = reasoning {
-            let Value::String(s) = &r else { bail!("Invalid value for 'reasoning_effort': expected str for enum") };
+            let Value::String(s) = &r else { bail!("Invalid value for 'reasoning_effort': expected a string") };
             let n = s.trim().to_lowercase();
             if !THINKING.contains(&n.as_str()) {
                 bail!("Invalid value for 'reasoning_effort': '{s}'. Valid values: high, low, medium, none, xhigh");
@@ -102,7 +102,7 @@ impl ClineCli {
         if let Some(t) = thinking {
             match t.as_str() {
                 Some(s) if THINKING.contains(&s) => f.push(format!("--thinking {s}")),
-                _ => bail!("Invalid kwargs for agent 'cline-cli':\n  thinking: Input should be 'none', 'low', 'medium', 'high' or 'xhigh'"),
+                _ => bail!("Invalid kwargs for agent 'cline-cli':\n  thinking: must be 'none', 'low', 'medium', 'high' or 'xhigh'"),
             }
         }
         if let Some(v) = pick(&["max_consecutive_mistakes", "max-consecutive-mistakes"]) {
@@ -111,7 +111,7 @@ impl ClineCli {
                 Value::String(s) => s.trim().parse().ok(),
                 _ => None,
             }
-            .ok_or_else(|| anyhow!("Invalid kwargs for agent 'cline-cli':\n  max_consecutive_mistakes: Input should be a valid integer"))?;
+            .ok_or_else(|| anyhow!("Invalid kwargs for agent 'cline-cli':\n  max_consecutive_mistakes: must be an integer"))?;
             if n < 0 {
                 bail!("Invalid value for 'max_consecutive_mistakes': {n}. Must be >= 0.");
             }

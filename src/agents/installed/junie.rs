@@ -62,8 +62,7 @@ pub fn create(args: AgentArgs) -> Result<AgentBox> {
 fn opt_bool(args: &AgentArgs, k: &str, default: bool) -> Result<bool> {
     match args.kwargs.get(k) {
         None => Ok(default),
-        Some(v) => super::common::opts::lax_bool(v)
-            .ok_or_else(|| anyhow!("Invalid kwargs for agent 'junie':\n  {k}: Input should be a valid boolean")),
+        Some(v) => super::common::opts::lax_bool(v).ok_or_else(|| anyhow!("Invalid kwargs for agent 'junie':\n  {k}: must be a boolean")),
     }
 }
 
@@ -88,10 +87,7 @@ impl Junie {
         };
         let mut f = vec![];
         if let Some(v) = args.kw("timeout_ms") {
-            let n: i64 = v
-                .trim()
-                .parse()
-                .map_err(|_| anyhow!("Invalid kwargs for agent 'junie':\n  timeout_ms: Input should be a valid integer"))?;
+            let n: i64 = v.trim().parse().map_err(|_| anyhow!("Invalid kwargs for agent 'junie':\n  timeout_ms: must be an integer"))?;
             f.push(format!("--timeout {n}"));
         }
         if let Some(v) = args.kw("guidelines_filename") {
@@ -99,7 +95,7 @@ impl Junie {
         }
         if let Some(v) = args.kw("output_format") {
             if !["text", "json"].contains(&v.as_str()) {
-                bail!("Invalid kwargs for agent 'junie':\n  output_format: Input should be 'text' or 'json'");
+                bail!("Invalid kwargs for agent 'junie':\n  output_format: must be 'text' or 'json'");
             }
             f.push(format!("--output-format {v}"));
         }

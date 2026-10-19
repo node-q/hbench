@@ -60,16 +60,16 @@ pub fn value_text(v: &Value) -> String {
     }
 }
 
-/// Type name of a JSON value for error messages (`NoneType`, `bool`, `int`, `float`, `str`, `list`, `dict`).
+/// JSON type name of a value for error messages (`null`, `boolean`, `integer`, `number`, `string`, `array`, `object`).
 pub fn type_name(v: &Value) -> &'static str {
     match v {
-        Value::Null => "NoneType",
-        Value::Bool(_) => "bool",
-        Value::Number(n) if n.is_f64() => "float",
-        Value::Number(_) => "int",
-        Value::String(_) => "str",
-        Value::Array(_) => "list",
-        Value::Object(_) => "dict",
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(n) if n.is_f64() => "number",
+        Value::Number(_) => "integer",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
     }
 }
 
