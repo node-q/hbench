@@ -6,10 +6,9 @@ A fast, single-binary benchmark runner for coding-agent harnesses, written in Ru
 40+ agents, grades them with task verifiers, and reports rewards, pass@k, tokens and cost. A task is a directory with
 a `task.toml`, an environment, tests and a solution (see [Task format](#task-format)).
 
-Registry datasets such as terminal-bench come from node-q's dataset registry by default:
-`https://raw.githubusercontent.com/node-q/hbench-datasets/main/registry.json`, in the public
-[node-q/hbench-datasets](https://github.com/node-q/hbench-datasets) repo. `--registry-url` (or `--registry-path` for a
-local `registry.json`) overrides it.
+hbench has no default dataset registry. To run a named dataset (`-d name@version`), point it at a `registry.json`
+with `--registry-url`, or at a local one with `--registry-path` (in a job config, the dataset's `registry_url` or
+`registry_path`). Local task directories (`-p`) need neither.
 
 Install the latest release (Linux/macOS, x86_64/arm64):
 

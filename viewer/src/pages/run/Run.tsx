@@ -227,9 +227,9 @@ function SourceSection({ draft, up, serverError }: { draft: Draft; up: Up; serve
             <Text label="Exclude tasks" value={ds.exclude_task_names} onChange={(v) => up((d) => void (d.dataset.exclude_task_names = v))} placeholder="slow_*" mono help="Applied after include." />
             <Num label="Max tasks" value={ds.n_tasks} onChange={(v) => up((d) => void (d.dataset.n_tasks = v))} placeholder="all" error={numError(ds.n_tasks, { int: true, min: 1 })} help="Blank = every task." />
           </div>
-          <Section title="Registry & download" summary={[ds.registry_url, ds.registry_path, ds.download_dir].filter(Boolean).join(" · ") || "node-q's registry (node-q/hbench-datasets)"}>
+          <Section title="Registry & download" summary={[ds.registry_url, ds.registry_path, ds.download_dir].filter(Boolean).join(" · ") || "none set: a named dataset needs a registry"}>
             <div className="run-row">
-              <Text label="Registry URL" value={ds.registry_url} onChange={(v) => up((d) => void (d.dataset.registry_url = v))} placeholder="https://…/registry.json" mono help="Blank = node-q's registry (node-q/hbench-datasets)." />
+              <Text label="Registry URL" value={ds.registry_url} onChange={(v) => up((d) => void (d.dataset.registry_url = v))} placeholder="https://…/registry.json" mono help="A registry.json URL. A named dataset needs this or a registry path." />
               <Text label="Registry path" value={ds.registry_path} onChange={(v) => up((d) => void (d.dataset.registry_path = v))} placeholder="./registry.json" mono help="A local registry.json instead of a URL." />
             </div>
             <Text label="Download dir" value={ds.download_dir} onChange={(v) => up((d) => void (d.dataset.download_dir = v))} placeholder="~/.cache/…" mono help="Blank = the default cache." />

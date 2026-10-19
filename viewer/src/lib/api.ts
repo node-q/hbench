@@ -9,7 +9,7 @@ export class ApiError extends Error {
   }
 }
 
-/** FastAPI-style `{detail}`: a string, or a list of validation errors. */
+/** An error body's `{detail}`: a string, or a list of validation errors. */
 function detailOf(body: any, status: number): string {
   const d = body?.detail;
   if (typeof d === "string") return d;
@@ -77,7 +77,7 @@ export interface Resource<T> {
   reload: () => void;
 }
 
-// ponytail: tiny in-memory cache so back/forward navigation renders instantly; no eviction (a session views few URLs).
+// A tiny in-memory cache so back/forward navigation renders instantly; no eviction (a session views few URLs).
 const cache = new Map<string, unknown>();
 
 /**
