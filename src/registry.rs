@@ -96,18 +96,27 @@ pub fn filter_names<T>(items: Vec<T>, name: impl Fn(&T) -> String, d: &DatasetCo
     Ok(v)
 }
 
-/// Resolve a dataset config into task refs (local dirs, or git refs from a registry).
+fn check_runnable(task_dir: &Path, disable_verification: bool) -> Result<()> {
+    let task = Task::load(task_dir)?;
+    if !disable_verification {
+        task.validate_tests()?;
+    }
+    Ok(())
+}
+
+/// Resolve a dataset config into task refs (local dirs, or git refs from a registry). A local dataset's
+/// tasks are its subdirectories with a task.toml; a selected task that fails to load is an error.
 pub fn dataset_tasks(d: &DatasetConfig, disable_verification: bool) -> Result<Vec<TaskRef>> {
     if let Some(p) = &d.path {
         let p = p.canonicalize().with_context(|| format!("dataset path {}", p.display()))?;
         let source = p.file_name().map(|n| n.to_string_lossy().into_owned());
-        let mut dirs: Vec<PathBuf> = std::fs::read_dir(&p)?.filter_map(|e| e.ok().map(|e| e.path())).collect();
+        let mut dirs: Vec<PathBuf> =
+            std::fs::read_dir(&p)?.filter_map(|e| e.ok().map(|e| e.path())).filter(|t| Task::is_task_dir(t)).collect();
         dirs.sort();
-        // Silently skip dirs that aren't runnable tasks.
-        dirs.retain(|t| {
-            t.join("environment").is_dir() && Task::load(t).is_ok_and(|task| disable_verification || task.validate_tests().is_ok())
-        });
         let dirs = filter_names(dirs, |t| t.file_name().unwrap().to_string_lossy().into_owned(), d)?;
+        for t in &dirs {
+            check_runnable(t, disable_verification).with_context(|| format!("task {} in dataset {}", t.display(), p.display()))?;
+        }
         return Ok(dirs.into_iter().map(|t| TaskRef { path: Some(t), source: source.clone(), ..Default::default() }).collect());
     }
     let name = d.name.as_deref().context("dataset needs path or name")?;
@@ -267,6 +276,32 @@ mod tests {
         assert_eq!(tasks.len(), 1);
         assert_eq!(tasks[0].git_url.as_deref(), Some("https://example.com/t.git"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn local_datasets_report_broken_tasks() {
+        let root = std::env::temp_dir().join(format!("hbench-reg-{}", uuid::Uuid::new_v4()));
+        let task = |name: &str, files: &[&str]| {
+            for f in files {
+                let p = root.join(name).join(f);
+                std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+                std::fs::write(p, "").unwrap();
+            }
+        };
+        let runnable = ["task.toml", "instruction.md", "environment/Dockerfile", "tests/test.sh"];
+        task("good", &runnable);
+        task("no-tests", &runnable[..3]);
+        task("docs", &["README.md"]);
+        let names = |d: &DatasetConfig, disable_verification: bool| -> anyhow::Result<Vec<String>> {
+            Ok(super::dataset_tasks(d, disable_verification)?.iter().map(|t| t.display_name()).collect())
+        };
+        let all = DatasetConfig { path: Some(root.clone()), ..Default::default() };
+        let err = format!("{:#}", names(&all, false).unwrap_err());
+        assert!(err.contains("no-tests") && err.contains("does not contain tests/test.sh"), "{err}");
+        assert_eq!(names(&all, true).unwrap(), ["good", "no-tests"]);
+        let without_broken = DatasetConfig { exclude_task_names: Some(vec!["no-tests".into()]), ..all };
+        assert_eq!(names(&without_broken, false).unwrap(), ["good"]);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

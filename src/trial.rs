@@ -1005,19 +1005,13 @@ impl Trial {
         Ok(parts.join("\n\n"))
     }
 
+    /// A step that fails outright (not just its agent run or verifier) ends the trial with that error;
+    /// the step results so far, the failed one included, are kept.
     async fn run_multi_step(&mut self) -> Result<()> {
         let task = self.task.clone();
         let steps = task.steps();
-        let total = steps.len();
         let mut results: Vec<StepResult> = vec![];
         for (i, step) in steps.iter().enumerate() {
-            let index = i + 1;
-            let resume = self.cfg.agent.resume_trajectory && index > 1;
-            let next_resumes = self.cfg.agent.resume_trajectory && index < total;
-            let sdir = self.dir.join("steps").join(&step.name);
-            for d in ["agent", "verifier", "artifacts"] {
-                std::fs::create_dir_all(sdir.join(d))?;
-            }
             let mut sr = StepResult {
                 step_name: step.name.clone(),
                 agent_result: None,
@@ -1026,72 +1020,18 @@ impl Trial {
                 agent_execution: None,
                 verifier: None,
             };
-
-            if let Err(e) = self.prepare_step(step, resume).await {
-                self.log.line(&format!("step {} preparation failed: {e:#}", step.name));
-                sr.exception_info = Some(ExceptionInfo::from(&e));
-                archive_step(&self.dir, &sdir, false);
-                results.push(sr);
-                break;
+            let outcome = self.run_step(step, i + 1, steps.len(), &mut sr).await;
+            if let Err(e) = &outcome {
+                sr.exception_info.get_or_insert_with(|| ExceptionInfo::from(e));
             }
-            let instruction = self.instruction(Some(step))?;
-            let (mut ctx, timing, r) = self.agent_phase(&instruction, Some(step), resume).await;
-            sr.agent_execution = Some(timing);
-            let unverifiable = r.as_ref().err().is_some_and(unstopped);
-            if let Err(e) = r {
-                sr.exception_info = Some(ExceptionInfo::from(&e));
-            }
-            self.sync_agent_output(&mut ctx).await;
-            sr.agent_result = Some(ctx);
-            if unverifiable {
-                self.log.line(&format!("step {}: the agent's processes could not be stopped; not verifying", step.name));
-                archive_step(&self.dir, &sdir, false);
-                results.push(sr);
-                break;
-            }
-
-            let mode = task.verifier_mode(Some(step));
-            let last = index == total;
-            let separate_last = mode == VerifierMode::Separate && last;
-            if let Err(e) = self.collect_artifacts(&sdir.join("artifacts"), Some(step), separate_last).await {
-                self.log.line(&format!("artifact collection failed: {e:#}"));
-            }
-            if separate_last {
-                self.stop_env().await;
-            }
-            if !self.cfg.verifier.disable {
-                let t = TimingInfo::start();
-                if mode == VerifierMode::Shared {
-                    self.env().empty_dirs(&["/logs/verifier"], true).await?;
-                    self.env().empty_dirs(&["/tests"], false).await?;
-                    self.shared_verifier_dirty = true;
-                }
-                match self.verify(Some(step), &sdir.join("artifacts")).await {
-                    Ok(r) => sr.verifier_result = Some(VerifierResult { rewards: Some(r) }),
-                    Err(e) => {
-                        if sr.exception_info.is_none() {
-                            sr.exception_info = Some(ExceptionInfo::from(&e));
-                        }
-                    }
-                }
-                sr.verifier = Some(t.finish());
-                if mode == VerifierMode::Shared {
-                    self.resync_convention_artifacts(&sdir.join("artifacts")).await;
-                }
-            }
-            archive_step(&self.dir, &sdir, next_resumes);
-            // Archiving empties the trial's artifacts dir; do the same to /logs/artifacts in the container.
-            if !self.env_stopped
-                && let Err(e) = self.env().empty_dirs(&[crate::task::CONVENTION_ARTIFACTS], true).await
-            {
-                self.log.line(&format!("clearing /logs/artifacts failed: {e:#}"));
-            }
-            let stop = (sr.exception_info.is_some() && sr.verifier_result.is_none())
-                || (!self.cfg.verifier.disable && min_reward_failure(sr.verifier_result.as_ref(), step.min_reward.as_ref()));
             results.push(sr);
-            if stop {
-                self.log.line(&format!("step {} failed its gate; aborting remaining steps", step.name));
-                break;
+            match outcome {
+                Ok(StepEnd::Continue) => {}
+                Ok(StepEnd::Stop) => break,
+                Err(e) => {
+                    self.result.step_results = Some(results);
+                    return Err(e);
+                }
             }
         }
         self.result.verifier_result = match task.config.multi_step_reward_strategy {
@@ -1100,6 +1040,82 @@ impl Trial {
         };
         self.result.step_results = Some(results);
         Ok(())
+    }
+
+    /// Runs step `index` (1-based) of `total`, recording its results in `sr`.
+    async fn run_step(&mut self, step: &StepConfig, index: usize, total: usize, sr: &mut StepResult) -> Result<StepEnd> {
+        let task = self.task.clone();
+        let resume = self.cfg.agent.resume_trajectory && index > 1;
+        let next_resumes = self.cfg.agent.resume_trajectory && index < total;
+        let sdir = self.dir.join("steps").join(&step.name);
+        for d in ["agent", "verifier", "artifacts"] {
+            std::fs::create_dir_all(sdir.join(d))?;
+        }
+
+        if let Err(e) = self.prepare_step(step, resume).await {
+            self.log.line(&format!("step {} preparation failed: {e:#}", step.name));
+            sr.exception_info = Some(ExceptionInfo::from(&e));
+            archive_step(&self.dir, &sdir, false);
+            return Ok(StepEnd::Stop);
+        }
+        let instruction = self.instruction(Some(step))?;
+        let (mut ctx, timing, r) = self.agent_phase(&instruction, Some(step), resume).await;
+        sr.agent_execution = Some(timing);
+        let unverifiable = r.as_ref().err().is_some_and(unstopped);
+        if let Err(e) = r {
+            sr.exception_info = Some(ExceptionInfo::from(&e));
+        }
+        self.sync_agent_output(&mut ctx).await;
+        sr.agent_result = Some(ctx);
+        if unverifiable {
+            self.log.line(&format!("step {}: the agent's processes could not be stopped; not verifying", step.name));
+            archive_step(&self.dir, &sdir, false);
+            return Ok(StepEnd::Stop);
+        }
+
+        let mode = task.verifier_mode(Some(step));
+        let last = index == total;
+        let separate_last = mode == VerifierMode::Separate && last;
+        if let Err(e) = self.collect_artifacts(&sdir.join("artifacts"), Some(step), separate_last).await {
+            self.log.line(&format!("artifact collection failed: {e:#}"));
+        }
+        if separate_last {
+            self.stop_env().await;
+        }
+        if !self.cfg.verifier.disable {
+            let t = TimingInfo::start();
+            if mode == VerifierMode::Shared {
+                self.env().empty_dirs(&["/logs/verifier"], true).await?;
+                self.env().empty_dirs(&["/tests"], false).await?;
+                self.shared_verifier_dirty = true;
+            }
+            match self.verify(Some(step), &sdir.join("artifacts")).await {
+                Ok(r) => sr.verifier_result = Some(VerifierResult { rewards: Some(r) }),
+                Err(e) => {
+                    if sr.exception_info.is_none() {
+                        sr.exception_info = Some(ExceptionInfo::from(&e));
+                    }
+                }
+            }
+            sr.verifier = Some(t.finish());
+            if mode == VerifierMode::Shared {
+                self.resync_convention_artifacts(&sdir.join("artifacts")).await;
+            }
+        }
+        archive_step(&self.dir, &sdir, next_resumes);
+        // Archiving empties the trial's artifacts dir; do the same to /logs/artifacts in the container.
+        if !self.env_stopped
+            && let Err(e) = self.env().empty_dirs(&[crate::task::CONVENTION_ARTIFACTS], true).await
+        {
+            self.log.line(&format!("clearing /logs/artifacts failed: {e:#}"));
+        }
+        let stop = (sr.exception_info.is_some() && sr.verifier_result.is_none())
+            || (!self.cfg.verifier.disable && min_reward_failure(sr.verifier_result.as_ref(), step.min_reward.as_ref()));
+        if stop {
+            self.log.line(&format!("step {} failed its gate; aborting remaining steps", step.name));
+            return Ok(StepEnd::Stop);
+        }
+        Ok(StepEnd::Continue)
     }
 
     async fn prepare_step(&mut self, step: &StepConfig, resume: bool) -> Result<()> {
@@ -1351,6 +1367,12 @@ async fn cancellable<T>(mut cancel: watch::Receiver<bool>, fut: impl Future<Outp
 }
 
 /// Move root agent/verifier/artifacts contents into steps/<name>/ (agent copied when the next step resumes).
+/// Whether the steps after this one run.
+enum StepEnd {
+    Continue,
+    Stop,
+}
+
 fn archive_step(trial_dir: &Path, sdir: &Path, preserve_agent: bool) {
     for d in ["agent", "verifier", "artifacts"] {
         let src = trial_dir.join(d);

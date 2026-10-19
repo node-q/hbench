@@ -442,6 +442,23 @@ impl TrialConfig {
     pub fn multiplier(&self, specific: Option<f64>) -> f64 {
         specific.unwrap_or(self.timeout_multiplier)
     }
+
+    /// Load a YAML or JSON trial config, refusing unknown keys as job configs do.
+    pub fn load(path: &Path) -> Result<TrialConfig> {
+        strict_value(read_config(path)?).with_context(|| format!("invalid trial config {}", path.display()))
+    }
+}
+
+/// A YAML or JSON config file as a value, legacy keys rewritten ([`migrate_legacy`]).
+fn read_config(path: &Path) -> Result<Value> {
+    let raw = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    let mut v: Value = if path.extension().is_some_and(|e| e == "json") {
+        serde_json::from_str(&raw)?
+    } else {
+        serde_yaml_ng::from_str(&raw).with_context(|| format!("parsing {}", path.display()))?
+    };
+    migrate_legacy(&mut v);
+    Ok(v)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -521,14 +538,7 @@ impl JobConfig {
 
     /// Load a YAML or JSON job config (incl. legacy `orchestrator:`).
     pub fn load(path: &Path) -> Result<JobConfig> {
-        let raw = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-        let mut v: Value = if path.extension().is_some_and(|e| e == "json") {
-            serde_json::from_str(&raw)?
-        } else {
-            serde_yaml_ng::from_str(&raw).with_context(|| format!("parsing {}", path.display()))?
-        };
-        migrate_legacy(&mut v);
-        let cfg: JobConfig = strict_value(v).with_context(|| format!("invalid job config {}", path.display()))?;
+        let cfg: JobConfig = strict_value(read_config(path)?).with_context(|| format!("invalid job config {}", path.display()))?;
         cfg.validate()?;
         Ok(cfg)
     }
@@ -756,6 +766,16 @@ mod tests {
         assert_eq!(ok.n_concurrent_trials, 2);
         assert_eq!(ok.environment.mounts.as_ref().map(Vec::len), Some(1));
         assert_eq!(ok.datasets[0].registry_url.as_deref(), Some("https://r/registry.json"));
+    }
+
+    #[test]
+    fn trial_configs_refuse_unknown_keys() {
+        let p = std::env::temp_dir().join(format!("hbench-trial-{}.yaml", uuid::Uuid::new_v4()));
+        std::fs::write(&p, "task: {path: /t/a}\ntrial_name: a__1\ntrials_dir: trials\nagent: {name: nop, modle_name: m}\n").unwrap();
+        assert!(format!("{:#}", TrialConfig::load(&p).unwrap_err()).contains("unknown key agent.modle_name"));
+        std::fs::write(&p, "task: {path: /t/a}\ntrial_name: a__1\ntrials_dir: trials\nenvironment: {mounts_json: []}\n").unwrap();
+        assert_eq!(TrialConfig::load(&p).unwrap().environment.mounts, Some(vec![]));
+        let _ = std::fs::remove_file(&p);
     }
 
     #[test]
