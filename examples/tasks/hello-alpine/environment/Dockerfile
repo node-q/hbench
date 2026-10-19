@@ -1,6 +1,6 @@
 FROM alpine:3.22
 
-# bash is required by the docker environment
+# hbench runs commands in the container with bash, which Alpine does not ship.
 RUN apk add --no-cache bash
 
 WORKDIR /app

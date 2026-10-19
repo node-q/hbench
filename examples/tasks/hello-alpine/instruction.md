@@ -1,2 +1,1 @@
-Create a file called hello.txt with "Hello, world!" as the content.
-
+Write the line `Hello, world!` to a new file, `/app/hello.txt`.

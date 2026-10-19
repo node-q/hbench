@@ -1,4 +1,4 @@
 FROM ubuntu:24.04
 
-# Intentionally no WORKDIR — the task.toml workdir config should set it.
+# No WORKDIR here on purpose: task.toml's [environment].workdir has to set it.
 RUN mkdir -p /custom-workdir

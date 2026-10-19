@@ -1,22 +1,20 @@
-schema_version = "1.1"
+schema_version = "1.4"
 
 [task]
 name = "hbench/hello-alpine"
-description = ""
-authors = []
-keywords = []
+version = "1.0.0"
+description = "Write a greeting to a file on an Alpine image."
 
 [metadata]
-author_name = "Alex Shaw"
-author_email = "alexgshaw64@gmail.com"
+author_name = "hbench"
 difficulty = "easy"
 category = "programming"
-tags = [ "trivial", "alpine",]
-
-[verifier]
-timeout_sec = 120.0
+tags = ["trivial", "alpine"]
 
 [agent]
+timeout_sec = 120.0
+
+[verifier]
 timeout_sec = 120.0
 
 [environment]
@@ -24,11 +22,3 @@ build_timeout_sec = 600.0
 cpus = 1
 memory_mb = 2048
 storage_mb = 10240
-gpus = 0
-mcp_servers = []
-
-[verifier.env]
-
-[environment.env]
-
-[solution.env]

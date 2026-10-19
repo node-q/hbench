@@ -3,20 +3,18 @@ schema_version = "1.4"
 [task]
 name = "hbench/hello-world"
 version = "1.0.0"
-authors = []
-keywords = []
+description = "Write a greeting to a file."
 
 [metadata]
-author_name = "Alex Shaw"
-author_email = "alexgshaw64@gmail.com"
+author_name = "hbench"
 difficulty = "easy"
 category = "programming"
-tags = [ "trivial",]
-
-[verifier]
-timeout_sec = 120.0
+tags = ["trivial"]
 
 [agent]
+timeout_sec = 120.0
+
+[verifier]
 timeout_sec = 120.0
 
 [environment]
@@ -24,9 +22,3 @@ build_timeout_sec = 600.0
 cpus = 1
 memory_mb = 2048
 storage_mb = 10240
-gpus = 0
-mcp_servers = []
-
-[verifier.env]
-
-[solution.env]

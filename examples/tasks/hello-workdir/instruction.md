@@ -1,1 +1,1 @@
-Run `pwd` and write its output to a file called `workdir.txt` in the current directory.
+Write the output of `pwd` to a file named `workdir.txt` in the current directory.
