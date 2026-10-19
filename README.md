@@ -227,8 +227,9 @@ npm run dev                                    # hot reload; proxies /api to `hb
   and scrubbed from the job), and checks for leaked containers.
 - `scripts/install-matrix.sh`: installs every installed agent into a real container (`install_only`).
 
-CI (`.github/workflows/ci.yml`) runs on self-hosted Linux runners: build + `cargo test`, clippy, `cargo audit`, a check
-that the committed `viewer/dist` matches `viewer/src`, and `scripts/e2e.sh`.
+CI (`.github/workflows/ci.yml`) runs on GitHub-hosted runners: build + `cargo test` on Linux and macOS, `cargo fmt
+--check` and clippy, `cargo audit`, a check that the committed `viewer/dist` matches `viewer/src`, and `scripts/e2e.sh`
+against a real Docker daemon.
 
 ## Releases
 
@@ -240,14 +241,11 @@ a matching tag:
 git tag v0.2.0 && git push origin v0.2.0
 ```
 
-`.github/workflows/release.yml` checks the tag against `Cargo.toml`, runs the tests, builds static x86_64/aarch64 Linux
-binaries, and publishes a GitHub release with `.tar.gz` archives, `SHA256SUMS`, and generated notes. Tags with a suffix
-(`v0.2.0-rc.1`) are published as prereleases; other releases are also published to node-q/hbench-releases. The runners
-are Linux-only, so add the macOS binaries from a Mac with the tag checked out:
-
-```bash
-scripts/release-macos.sh v0.2.0
-```
+`.github/workflows/release.yml` checks the tag against `Cargo.toml` and, on GitHub-hosted runners, runs the tests and
+builds static x86_64/aarch64 Linux (musl) and x86_64/arm64 macOS binaries. Each `.tar.gz` gets a build provenance
+attestation; check one with `gh attestation verify hbench-v0.2.0-<target>.tar.gz -R node-q/hbench`. A separate publish
+job, in the `release` environment, creates the GitHub release with the archives, `SHA256SUMS` and generated notes. Tags
+with a suffix (`v0.2.0-rc.1`) are published as prereleases; other releases are also published to node-q/hbench-releases.
 
 ## License
 

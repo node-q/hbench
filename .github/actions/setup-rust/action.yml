@@ -1,8 +1,5 @@
 name: Setup Rust
-description: >
-  The Rust toolchain pinned in rust-toolchain.toml + cargo cache for self-hosted runners. Runner instances on one host
-  can share a user, so a shared ~/.rustup gets corrupted by concurrent installs;
-  keep rustup/cargo homes in each runner instance's own tool cache instead.
+description: The Rust toolchain pinned in rust-toolchain.toml, plus the cargo cache.
 inputs:
   components:
     description: Comma-separated rustup components (e.g. clippy)
@@ -13,11 +10,6 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: Isolate rustup and cargo homes per runner instance
-      shell: bash
-      run: |
-        echo "RUSTUP_HOME=$RUNNER_TOOL_CACHE/rustup" >> "$GITHUB_ENV"
-        echo "CARGO_HOME=$RUNNER_TOOL_CACHE/cargo" >> "$GITHUB_ENV"
     - name: Read pinned toolchain
       id: pin
       shell: bash
@@ -29,4 +21,4 @@ runs:
         components: ${{ inputs.components }}
         targets: ${{ inputs.targets }}
     - name: Restore cargo cache
-      uses: Swatinem/rust-cache@v2
+      uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
