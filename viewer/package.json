@@ -1,7 +1,11 @@
 {
   "name": "hbench-viewer",
   "private": true,
+  "license": "Apache-2.0",
   "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",

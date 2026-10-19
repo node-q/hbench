@@ -227,9 +227,9 @@ function SourceSection({ draft, up, serverError }: { draft: Draft; up: Up; serve
             <Text label="Exclude tasks" value={ds.exclude_task_names} onChange={(v) => up((d) => void (d.dataset.exclude_task_names = v))} placeholder="slow_*" mono help="Applied after include." />
             <Num label="Max tasks" value={ds.n_tasks} onChange={(v) => up((d) => void (d.dataset.n_tasks = v))} placeholder="all" error={numError(ds.n_tasks, { int: true, min: 1 })} help="Blank = every task." />
           </div>
-          <Section title="Registry & download" summary={[ds.registry_url, ds.registry_path, ds.download_dir].filter(Boolean).join(" · ") || "default registry"}>
+          <Section title="Registry & download" summary={[ds.registry_url, ds.registry_path, ds.download_dir].filter(Boolean).join(" · ") || "node-q's registry (node-q/hbench-datasets)"}>
             <div className="run-row">
-              <Text label="Registry URL" value={ds.registry_url} onChange={(v) => up((d) => void (d.dataset.registry_url = v))} placeholder="https://…/registry.json" mono />
+              <Text label="Registry URL" value={ds.registry_url} onChange={(v) => up((d) => void (d.dataset.registry_url = v))} placeholder="https://…/registry.json" mono help="Blank = node-q's registry (node-q/hbench-datasets)." />
               <Text label="Registry path" value={ds.registry_path} onChange={(v) => up((d) => void (d.dataset.registry_path = v))} placeholder="./registry.json" mono help="A local registry.json instead of a URL." />
             </div>
             <Text label="Download dir" value={ds.download_dir} onChange={(v) => up((d) => void (d.dataset.download_dir = v))} placeholder="~/.cache/…" mono help="Blank = the default cache." />
@@ -322,7 +322,7 @@ function EnvSection({ draft, up, opts }: { draft: Draft; up: Up; opts: RunOption
   const policies = opts.resource_modes.length ? opts.resource_modes : ["auto"];
   return (
     <Section title="Environment & resources" summary={summary}>
-      <Select label="Environment" value={e.type} onChange={(v) => up((d) => void (d.env.type = v))} options={opts.environments} help={e.type === "docker" ? "Sandbox each trial in a Docker container." : <span className="run-warn">hbench runs docker only; this type fails validation.</span>} />
+      <Select label="Environment" value={e.type} onChange={(v) => up((d) => void (d.env.type = v))} options={e.type === "docker" ? ["docker"] : ["docker", e.type]} help={e.type === "docker" ? "Sandbox each trial in a Docker container." : <span className="run-warn">hbench runs docker only; this type fails validation.</span>} />
       <div className="run-checks">
         <Check label="Force rebuild the image" checked={e.force_build} onChange={(v) => up((d) => void (d.env.force_build = v))} />
         <Check label="Delete the environment after each trial" checked={e.delete} onChange={(v) => up((d) => void (d.env.delete = v))} />
