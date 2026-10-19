@@ -11,7 +11,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-pub const DEFAULT_REGISTRY_URL: &str = "https://raw.githubusercontent.com/node-q/hbench-datasets/main/registry.json";
+/// There is no default registry: registry datasets name one with `--registry-url` / `--registry-path`
+/// (or a dataset's `registry_url` / `registry_path` in a job config).
+pub const NO_REGISTRY: &str = "no dataset registry configured: pass --registry-url or --registry-path (in a job config, set the dataset's registry_url or registry_path)";
 
 #[derive(Debug, Deserialize)]
 pub struct Dataset {
@@ -32,11 +34,12 @@ pub struct RegistryTask {
     pub path: String,
 }
 
+/// The datasets of the registry at `path` (preferred) or `url`; an error when neither is given.
 pub fn load(url: Option<&str>, path: Option<&Path>) -> Result<Vec<Dataset>> {
-    let raw = match path {
-        Some(p) => std::fs::read_to_string(p).with_context(|| format!("reading {}", p.display()))?,
-        None => {
-            let url = url.unwrap_or(DEFAULT_REGISTRY_URL);
+    let raw = match (path, url.filter(|u| !u.trim().is_empty())) {
+        (Some(p), _) => std::fs::read_to_string(p).with_context(|| format!("reading {}", p.display()))?,
+        (None, None) => bail!(NO_REGISTRY),
+        (None, Some(url)) => {
             // Curl instead of an HTTP client crate.
             let out = Command::new("curl").args(["-fsSL", "--max-time", "60", url]).output().context("running curl")?;
             if !out.status.success() {
@@ -242,6 +245,30 @@ pub fn download(tasks: &[TaskRef]) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use crate::config::DatasetConfig;
+
+    #[test]
+    fn registry_datasets_need_a_registry() {
+        let e = super::load(None, None).unwrap_err().to_string();
+        assert!(e.starts_with("no dataset registry configured: pass --registry-url or --registry-path"), "{e}");
+        assert_eq!(super::load(Some(" "), None).unwrap_err().to_string(), super::NO_REGISTRY);
+        let named = DatasetConfig { name: Some("terminal-bench".into()), version: Some("2.0".into()), ..Default::default() };
+        assert_eq!(super::dataset_tasks(&named, false).unwrap_err().to_string(), super::NO_REGISTRY);
+        // With a local registry.json the same reference resolves.
+        let dir = std::env::temp_dir().join(format!("hbench-reg-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let reg = dir.join("registry.json");
+        std::fs::write(
+            &reg,
+            r#"[{"name": "terminal-bench", "version": "2.0", "tasks": [{"name": "hello", "git_url": "https://example.com/t.git", "git_commit_id": "abc", "path": "tasks/hello"}]}]"#,
+        )
+        .unwrap();
+        let tasks = super::dataset_tasks(&DatasetConfig { registry_path: Some(reg), ..named }, false).unwrap();
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].git_url.as_deref(), Some("https://example.com/t.git"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn failed_fetch_leaves_no_cache() {
         let root = std::env::temp_dir().join(format!("hbench-reg-{}", uuid::Uuid::new_v4()));

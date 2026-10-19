@@ -401,9 +401,9 @@ enum TrialsCmd {
 
 #[derive(Subcommand)]
 enum DatasetsCmd {
-    /// List datasets in the registry.
+    /// List datasets in a registry (--registry-url or --registry-path).
     List(RegistryArgs),
-    /// Download a registry dataset's tasks into the cache (or --output-dir).
+    /// Download a registry dataset's tasks into the cache (or --output-dir); needs --registry-url or --registry-path.
     Download {
         /// Dataset, name[@version].
         dataset: String,
@@ -538,10 +538,10 @@ enum TasksCmd {
 
 #[derive(Args)]
 struct RegistryArgs {
-    /// Registry URL (registry.json).
+    /// Dataset registry URL (a registry.json). There is no default: registry datasets need this or --registry-path.
     #[arg(long)]
     registry_url: Option<String>,
-    /// Local registry.json instead of --registry-url.
+    /// Local dataset registry file (a registry.json), used instead of --registry-url.
     #[arg(long)]
     registry_path: Option<PathBuf>,
 }
@@ -554,7 +554,7 @@ struct RunArgs {
     /// Local task dir, or a dir of task dirs.
     #[arg(short = 'p', long = "path", help_heading = "Selection")]
     path: Option<PathBuf>,
-    /// Registry dataset, name[@version].
+    /// Registry dataset, name[@version]. Needs --registry-url or --registry-path.
     #[arg(short = 'd', long = "dataset", help_heading = "Selection")]
     dataset: Option<String>,
     #[command(flatten, next_help_heading = "Selection")]

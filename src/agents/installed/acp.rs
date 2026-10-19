@@ -28,8 +28,6 @@ const PYTHON_INSTALL_DIR: &str = "/opt/hbench-acp-python";
 const UV_INSTALL_DIR: &str = "/opt/hbench-acp-tools";
 const BINARY_INSTALL_DIR: &str = "/opt/hbench-acp-agent";
 const SOURCE_TOKEN_ENV: &str = "HBENCH_ACP_SOURCE_GIT_TOKEN";
-/// Older name, still honoured on the host.
-const LEGACY_SOURCE_TOKEN_ENV: &str = "HBENCH_ACP_SOURCE_GIT_TOKEN";
 const MAX_SOURCE_FILES: usize = 10_000;
 const MAX_SOURCE_BYTES: u64 = 100 * 1024 * 1024;
 const MAX_MANIFEST_BYTES: usize = 64 * 1024;
@@ -533,11 +531,7 @@ const SCOPED_GIT_ENV_VARS: &[&str] = &[
 
 async fn run_git(args: &[&str], cwd: Option<&Path>, extra_env: &BTreeMap<String, String>) -> Result<String> {
     let mut c = tokio::process::Command::new("git");
-    c.args(args)
-        .env_remove(SOURCE_TOKEN_ENV)
-        .env_remove(LEGACY_SOURCE_TOKEN_ENV)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .env("GIT_LFS_SKIP_SMUDGE", "1");
+    c.args(args).env_remove(SOURCE_TOKEN_ENV).env("GIT_TERMINAL_PROMPT", "0").env("GIT_LFS_SKIP_SMUDGE", "1");
     if let Some(d) = cwd {
         c.current_dir(d);
     }
@@ -564,11 +558,7 @@ async fn fetch_source(source: &AcpSource, checkout: &Path) -> Result<String> {
     let askpass = std::env::temp_dir().join(format!("hbench-acp-askpass-{}", uuid::Uuid::new_v4().simple()));
     std::fs::create_dir_all(&askpass)?;
     let r = async {
-        let fetch_env = source_askpass_env(
-            &askpass,
-            &source.repo_url,
-            std::env::var(SOURCE_TOKEN_ENV).or_else(|_| std::env::var(LEGACY_SOURCE_TOKEN_ENV)).ok(),
-        )?;
+        let fetch_env = source_askpass_env(&askpass, &source.repo_url, std::env::var(SOURCE_TOKEN_ENV).ok())?;
         let none = BTreeMap::new();
         run_git(&["init", "--quiet", &checkout.to_string_lossy()], None, &none).await?;
         run_git(&["remote", "add", "origin", "--", &source.repo_url], Some(checkout), &none).await?;

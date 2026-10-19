@@ -60,10 +60,9 @@ pub fn validate_base_url(url: &str, get_env: &dyn Fn(&str) -> Option<String>) ->
         }
     }
     if scheme == "http" {
-        // The HBENCH_ name is the older spelling, still honoured.
-        let set = |k: &str| get_env(k).filter(|a| !a.trim().is_empty()).map(|a| (k.to_string(), a));
-        let ok = match set("HBENCH_ALLOW_INSECURE_MODEL_BASE_URL").or_else(|| set("HBENCH_ALLOW_INSECURE_MODEL_BASE_URL")) {
-            Some((k, a)) => parse_bool_env_value(&a, &k)?,
+        const ALLOW: &str = "HBENCH_ALLOW_INSECURE_MODEL_BASE_URL";
+        let ok = match get_env(ALLOW).filter(|a| !a.trim().is_empty()) {
+            Some(a) => parse_bool_env_value(&a, ALLOW)?,
             None => false,
         };
         if !ok {

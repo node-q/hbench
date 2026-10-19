@@ -212,7 +212,6 @@ impl DeerFlow {
             config["tools"] = tools;
         }
         // Our model entry is authoritative; other user models (and extra keys on ours) survive.
-        // An entry under the older `hbench-model` name is adopted as ours.
         let models = match &config["models"] {
             Value::Null => vec![],
             Value::Array(a) if a.iter().all(Value::is_object) => a.clone(),
@@ -221,7 +220,7 @@ impl DeerFlow {
         let mut preserved = vec![];
         let mut ours: Option<Value> = None;
         for m in models {
-            if m["name"] == MODEL_NAME || m["name"] == "hbench-model" {
+            if m["name"] == MODEL_NAME {
                 ours.get_or_insert(m);
             } else {
                 preserved.push(m);

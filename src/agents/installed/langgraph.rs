@@ -404,8 +404,7 @@ impl LangGraph {
         }
         let lookup = |k: &str| self.args.extra_env.get(k).cloned().or_else(|| std::env::var(k).ok());
         for k in FORWARDED_ENV_VARS {
-            // Parent-trace vars also accept their older HBENCH_* spelling on the host.
-            if let Some(v) = lookup(k).or_else(|| k.strip_prefix("HBENCH_").and_then(|rest| lookup(&format!("HBENCH_{rest}")))) {
+            if let Some(v) = lookup(k) {
                 env.entry(k.into()).or_insert(v);
             }
         }
