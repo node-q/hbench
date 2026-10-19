@@ -5,7 +5,8 @@ use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Map, Value, json};
 use std::path::{Path, PathBuf};
 
-/// `re.sub(r"[^A-Za-z0-9_.-]+", "-", v.strip().lower()).strip("-")`; may be empty.
+/// Trimmed, lowercased `v` with each run of characters outside `[A-Za-z0-9_.-]` replaced by `-`, and
+/// leading/trailing `-` removed; may be empty.
 pub(super) fn slug(v: &str) -> String {
     static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     let re = RE.get_or_init(|| regex::Regex::new(r"[^A-Za-z0-9_.-]+").unwrap());
@@ -17,7 +18,7 @@ pub(super) fn slugify(v: &str) -> String {
     if s.is_empty() { "task".into() } else { s }
 }
 
-/// `shutil.copytree` (follows symlinks); `dst` must not exist.
+/// Recursive copy (follows symlinks); `dst` must not exist.
 pub(super) fn copy_tree(src: &Path, dst: &Path) -> Result<()> {
     if dst.exists() {
         bail!("already exists: {}", dst.display());
@@ -266,7 +267,7 @@ fn write_task_config(cfg: &CompileConfig, dir: &Path, environment: Option<&Compi
                 if let Some(w) = &e.workdir {
                     env.insert("workdir".into(), w.clone().into());
                 }
-                // model_copy(update=...) keeps field order.
+                // Re-normalized so the fields keep their schema order.
                 *env = env_cfg(env);
             }
         }

@@ -19,7 +19,7 @@ fn tmp(tag: &str) -> PathBuf {
     d
 }
 
-/// Writes `{"files": {rel: content}}`; `*.sh` get 0755 like the oracle.
+/// Writes `{"files": {rel: content}}`; `*.sh` get 0755, everything else 0644.
 fn write_fixture(spec: &Value, root: &Path) {
     for (rel, content) in spec["files"].as_object().unwrap() {
         let p = root.join(rel);
@@ -29,7 +29,7 @@ fn write_fixture(spec: &Value, root: &Path) {
 }
 
 #[test]
-fn artifact_inference_matches_reference() {
+fn artifact_inference() {
     let p = "Write result.json, reports/summary.txt, /tmp/output.PNG, ../out/data.csv, docs/README.md, and .env.local.";
     assert_eq!(
         infer_artifacts_from_prompt(p, "/app"),
@@ -97,7 +97,7 @@ fn default_job_names_and_temp_task_dir() {
     assert_eq!(c.reduce.unwrap().task.output_dir.0, out);
 }
 
-/// Dump a task dir the way the oracle script does.
+/// A task dir as golden-file lines: `DIR` / `== path mode` headers, file text, known assets by name.
 fn dump_tree(dir: &Path, out: &mut Vec<String>) {
     use std::os::unix::fs::PermissionsExt;
     let assets = [

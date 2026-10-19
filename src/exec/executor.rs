@@ -50,7 +50,7 @@ async fn execute(cfg: &ExecConfig) -> Result<(Phase, Option<Phase>)> {
     let map_dirs = compile(&cfg.map.compile)?;
     let map_job = job_config(&cfg.map.job, &map_dirs)?;
     crate::env::preflight().await?;
-    // ponytail: force-quit cleanup covers the map job's trials; the reduce job is one trial.
+    // Force-quit cleanup covers the map job's trials; the reduce job is one trial.
     let map_dir = std::path::absolute(map_job.job_dir())?;
     let rx = crate::cancel_on_signal(move || crate::trial_names(std::slice::from_ref(&map_dir)));
     let map = run_phase(map_job, map_dirs, &rx).await?;

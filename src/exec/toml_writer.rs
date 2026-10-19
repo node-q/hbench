@@ -1,5 +1,5 @@
-//! TOML writer for task.toml, producing the layout of the `toml` 0.10 encoder (inline arrays with
-//! trailing commas, `[a.b]` sections after scalar keys, `\x` escapes rewritten to `\u00`).
+//! TOML writer for task.toml in hbench's fixed layout (inline arrays with trailing commas, `[a.b]`
+//! sections after scalar keys, `\x` escapes rewritten to `\u00`).
 
 use anyhow::{Result, bail};
 use serde_json::{Map, Value};
@@ -182,7 +182,7 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    /// Encoder edge cases (expected outputs captured from toml 0.10.2).
+    /// Writer edge cases.
     #[test]
     fn toml_encoder_edge_cases() {
         assert_eq!(dump_str("q\"'\\ \t\n\u{1}é中"), "\"q\\\"'\\ \\t\\nx01é中\"");

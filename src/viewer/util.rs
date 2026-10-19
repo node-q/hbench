@@ -81,7 +81,7 @@ impl Query {
     }
 }
 
-/// `Path.read_text()`: strict UTF-8 with universal-newline translation. `Ok(None)` if missing.
+/// A file as strict UTF-8 text with `\r\n` and `\r` translated to `\n`. `Ok(None)` if missing.
 pub(super) fn read_text(p: &Path) -> std::io::Result<Option<String>> {
     if !p.exists() {
         return Ok(None);
@@ -154,7 +154,7 @@ fn norm_dt(v: &Value) -> Value {
     }
 }
 
-/// Normalize every `*_at` datetime in a dumped model (TrialResult/JobResult timings, exception `occurred_at`).
+/// Normalize every `*_at` datetime in a serialized result (TrialResult/JobResult timings, exception `occurred_at`).
 pub(super) fn norm_dts(v: &mut Value) {
     match v {
         Value::Object(m) => {
@@ -171,10 +171,10 @@ pub(super) fn norm_dts(v: &mut Value) {
     }
 }
 
-/// `datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)`.
+/// The file's modification time in UTC, rounded to microseconds.
 pub(super) fn mtime_dt(p: &Path) -> Option<DateTime<Utc>> {
     let d = p.metadata().ok()?.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?;
-    let t = d.as_secs() as f64 + 1e-9 * d.subsec_nanos() as f64; // st_mtime
+    let t = d.as_secs() as f64 + 1e-9 * d.subsec_nanos() as f64; // seconds since the epoch
     let (mut sec, frac) = (t.trunc() as i64, t.fract());
     let mut us = (frac * 1e6).round_ties_even() as i64;
     if us >= 1_000_000 {
@@ -184,7 +184,7 @@ pub(super) fn mtime_dt(p: &Path) -> Option<DateTime<Utc>> {
     DateTime::from_timestamp(sec, (us * 1000) as u32)
 }
 
-/// `Path.as_uri()` for an absolute path.
+/// `file://` URI of an absolute path (percent-encoded except unreserved characters and `/`).
 pub(super) fn as_uri(p: &Path) -> String {
     let mut out = String::from("file://");
     for b in p.to_string_lossy().bytes() {
@@ -201,14 +201,14 @@ pub(super) fn name_of(p: &Path) -> String {
     p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
 }
 
-/// `sorted(dir.iterdir())` names.
+/// The entries of `dir`, sorted by name.
 pub(super) fn sorted_entries(dir: &Path) -> Vec<PathBuf> {
     let mut v: Vec<PathBuf> = std::fs::read_dir(dir).map(|rd| rd.flatten().map(|e| e.path()).collect()).unwrap_or_default();
     v.sort_by_key(|p| name_of(p));
     v
 }
 
-/// `(base / rel).resolve()` without requiring existence: symlinks resolved where the path exists, `..` lexically.
+/// `base/rel` made canonical without requiring existence: symlinks resolved where the path exists, `..` lexically.
 pub(super) fn resolve(base: &Path, rel: &str) -> PathBuf {
     let joined = base.join(rel);
     if let Ok(c) = joined.canonicalize() {
@@ -232,7 +232,7 @@ pub(super) fn resolve(base: &Path, rel: &str) -> PathBuf {
     out
 }
 
-/// `parent in child.parents`.
+/// Whether `child` is strictly inside `parent`.
 pub(super) fn strictly_under(child: &Path, parent: &Path) -> bool {
     child != parent && child.starts_with(parent)
 }
@@ -257,7 +257,7 @@ pub(super) fn paginate(items: Vec<Value>, page: i64, page_size: i64) -> Value {
     json!({"items": page_items, "total": total, "page": page, "page_size": page_size, "total_pages": total_pages})
 }
 
-/// `Counter` -> sorted `[FilterOption]`.
+/// Value counts -> sorted `[{value, count}]` filter options.
 pub(super) fn filter_options(counts: BTreeMap<String, i64>) -> Value {
     Value::Array(counts.into_iter().map(|(v, c)| json!({"value": v, "count": c})).collect())
 }
@@ -281,7 +281,7 @@ fn format_size(n: u64) -> String {
     }
 }
 
-/// FileResponse (media) or PlainTextResponse with size caps and errors.
+/// A file as a media response or as plain text, with size caps and errors.
 pub(super) fn serve_file(full: &Path) -> Res {
     if !full.exists() {
         return Err(err(404, "File not found"));
@@ -316,7 +316,7 @@ fn file_info(path: String, p: &Path, is_dir: bool) -> Value {
     json!({"path": path, "name": name_of(p), "is_dir": is_dir, "size": if is_dir { Value::Null } else { p.metadata().map(|m| m.len()).unwrap_or(0).into() }})
 }
 
-/// Recursive listing in `sorted(iterdir())` order; `with_dirs` false = files only (artifacts).
+/// Recursive listing, entries sorted by name; `with_dirs` false = files only (artifacts).
 pub(super) fn scan_dir(dir: &Path, base: &str, with_dirs: bool, skip_top_manifest: bool, out: &mut Vec<Value>) {
     for item in sorted_entries(dir) {
         let name = name_of(&item);

@@ -30,7 +30,7 @@ fn get<'a>(args: &'a AgentArgs, k: &str) -> Option<&'a Value> {
     args.kwargs.get(k).filter(|v| !v.is_null())
 }
 
-/// `str | None` with `coerce_numbers_to_str`.
+/// Optional string kwarg; numbers are accepted as their text.
 pub(super) fn opt_str(args: &AgentArgs, agent: &str, k: &str) -> Result<Option<String>> {
     match get(args, k) {
         None => Ok(None),
@@ -94,7 +94,7 @@ pub struct OpenHands {
     args: AgentArgs,
     version: Option<String>,
     raw_content: bool,
-    /// Compiled `Env(...)` option annotations.
+    /// Env vars set from options.
     option_env: BTreeMap<String, String>,
     api_base: Option<String>,
     model_info: Option<Map<String, Value>>,
@@ -239,7 +239,7 @@ impl OpenHands {
         ] {
             env.insert(k.into(), v.into());
         }
-        // `_get_env_prefixed("OPENHANDS_")`: host env, then agent env (wins).
+        // OPENHANDS_* vars with the prefix stripped: host env, then agent env (wins).
         let host = std::env::vars().filter(|(k, _)| k.starts_with("OPENHANDS_"));
         let extra = self.args.extra_env.iter().filter(|(k, _)| k.starts_with("OPENHANDS_")).map(|(k, v)| (k.clone(), v.clone()));
         for (k, v) in host.chain(extra) {

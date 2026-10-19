@@ -125,7 +125,7 @@ pub struct CompileConfig {
     pub instructions: Vec<CompileInstruction>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task_template: Option<NormPath>,
-    /// `str | ArtifactConfig` entries.
+    /// Artifact entries: a path string or an artifact object.
     #[serde(default, skip_serializing_if = "Vec::is_empty", serialize_with = "ser_artifacts")]
     pub artifacts: Vec<Value>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -150,7 +150,7 @@ impl Default for CompileConfig {
     }
 }
 
-/// ArtifactConfig dumped with `exclude_defaults`.
+/// Artifact objects written without their default-valued fields.
 fn ser_artifacts<S: serde::Serializer>(a: &[Value], s: S) -> Result<S::Ok, S::Error> {
     let v: Vec<Value> = a
         .iter()

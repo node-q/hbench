@@ -1,13 +1,13 @@
-//! Model loading: validate result/config JSON and re-dump it in canonical form.
+//! Model loading: validate result/config JSON and re-serialize it in canonical form.
 
 use super::*;
 use serde_json::{Map, Value, json};
 use std::path::{Path, PathBuf};
 
-/// A job config validated and dumped in full (every field, defaults filled).
+/// A job config validated and written out in full (every field, defaults filled).
 pub(super) fn job_config_value(raw: Value) -> Option<Value> {
     let mut raw = raw;
-    // scanner._normalize_viewer_job_config: numeric dataset refs -> strings.
+    // Numeric dataset versions/refs (e.g. `version: 1.0` in YAML) become strings.
     if let Some(ds) = raw.get_mut("datasets").and_then(Value::as_array_mut) {
         for d in ds.iter_mut().filter_map(Value::as_object_mut) {
             for k in ["version", "ref"] {
@@ -90,7 +90,7 @@ pub(super) fn job_stats(s: &Value) -> Value {
     })
 }
 
-/// A trial result that validates as a `TrialResult` (required fields present); the file is its dump.
+/// A trial result that parses as a `TrialResult` (required fields present), returned as written.
 pub(super) fn trial_result(trial_dir: &Path) -> Option<Value> {
     let mut r = read_json_object(&trial_dir.join("result.json"))?;
     norm_dts(&mut r);
@@ -131,7 +131,7 @@ pub(super) fn reasoning_effort(config: &Value) -> Option<String> {
     config["agent"]["kwargs"].get("reasoning_effort").and_then(s).filter(|x| !x.is_empty()).map(String::from)
 }
 
-/// `model_info_from_model_name`: (provider, name).
+/// `provider/name` -> (provider, name); a bare name has no provider.
 pub(super) fn split_model(model: Option<&str>) -> Option<(Option<String>, String)> {
     let m = model.filter(|m| !m.is_empty())?;
     Some(match m.split_once('/') {
@@ -144,7 +144,7 @@ pub(super) fn task_name_from_config(task: &Value) -> String {
     if let Some(n) = task.get("name").and_then(s).filter(|n| !n.is_empty()) {
         return n.into();
     }
-    // LocalTaskId/GitTaskId.get_name(): the path's (resolved, for local tasks) final component.
+    // Otherwise the task path's final component (resolved first, for local tasks).
     let p = PathBuf::from(task.get("path").and_then(s).unwrap_or_default());
     let p = if task.get("git_url").is_some_and(truthy) {
         p
@@ -154,7 +154,7 @@ pub(super) fn task_name_from_config(task: &Value) -> String {
     name_of(&p)
 }
 
-/// `TrialResult.compute_token_cost_totals()`.
+/// (input, cache, output, cost) totals of a trial result: its agent result, else the sum over its steps.
 pub(super) fn token_totals(r: &Value) -> (Option<i64>, Option<i64>, Option<i64>, Option<f64>) {
     let ctxs: Vec<&Value> = if r.get("agent_result").is_some_and(|a| !a.is_null()) {
         vec![&r["agent_result"]]
@@ -181,7 +181,7 @@ pub(super) fn numeric_rewards(rewards: &Value) -> Vec<(String, f64)> {
         .unwrap_or_default()
 }
 
-/// `evals_from_rewards`: one `{key: {metrics: [{key: value}]}}` per numeric reward, `reward` first.
+/// One `{key: {metrics: [{key: value}]}}` per numeric reward, `reward` first.
 pub(super) fn evals_from_rewards(rewards: Vec<(String, f64)>) -> Value {
     let mut numeric = rewards;
     numeric.sort_by(|a, b| (a.0 != "reward", &a.0).cmp(&(b.0 != "reward", &b.0)));

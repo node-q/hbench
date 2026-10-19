@@ -39,7 +39,7 @@ fn prune(v: Value, default: &Value) -> Map<String, Value> {
         .collect()
 }
 
-/// Round-trip through hbench's type (reference field order, float coercion, env templating), then
+/// Round-trip through hbench's type (its field order, float coercion, env templating), then
 /// restore the caller's key order for free-form maps.
 fn canonical<T: serde::de::DeserializeOwned + Serialize + Default>(raw: &Map<String, Value>) -> Value {
     let mut v = serde_json::from_value::<T>(Value::Object(raw.clone())).ok().and_then(|t| serde_json::to_value(t).ok()).unwrap_or_default();
@@ -64,7 +64,7 @@ fn default_value<T: Serialize + Default>() -> Value {
 
 fn agent_print(raw: &Map<String, Value>) -> Value {
     let mut m = prune(canonical::<AgentConfig>(raw), &default_value::<AgentConfig>());
-    // The field default for `name` is None; the validator fills "oracle", so it always shows.
+    // An unset `name` means the oracle agent, so the name always shows.
     let name = if raw.get("import_path").is_some_and(|v| !v.is_null()) && raw.get("name").is_none_or(Value::is_null) {
         None
     } else {
@@ -79,8 +79,8 @@ fn agent_print(raw: &Map<String, Value>) -> Value {
     Value::Object(out)
 }
 
-/// The field default for `type` is None; the validator fills "docker" unless an
-/// import_path is set, so `type` shows whenever the environment differs from the default.
+/// An unset `type` means docker unless an import_path is set, so `type` shows whenever the
+/// environment differs from the default.
 fn env_print(raw: &Map<String, Value>) -> Map<String, Value> {
     let mut m = prune(canonical::<EnvConfig>(raw), &default_value::<EnvConfig>());
     m.shift_remove("type");

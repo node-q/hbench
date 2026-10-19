@@ -276,7 +276,7 @@ impl Vibe {
         let mut servers = vec![];
         for s in &self.args.mcp_servers {
             let t = s.transport();
-            let none = || "None".to_string(); // Python str(None)
+            let none = || "None".to_string(); // a missing command or url is written as the text "None"
             servers.push(match t {
                 "stdio" => vec![
                     ("name", toml_str(&s.name)),

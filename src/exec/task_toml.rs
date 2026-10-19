@@ -35,7 +35,7 @@ fn reorder_value(v: &mut Value, de: &toml::de::DeValue<'_>) {
     }
 }
 
-/// Builds one config section as JSON in field order, None fields omitted.
+/// Builds one config section as JSON in field order, unset fields omitted.
 struct Model<'a> {
     inp: &'a Map<String, Value>,
     out: Map<String, Value>,
@@ -108,7 +108,7 @@ fn obj(v: &Value) -> Map<String, Value> {
     v.as_object().cloned().unwrap_or_default()
 }
 
-/// task.toml data validated and dumped as JSON (defaults filled, None values omitted).
+/// task.toml data validated and written as JSON (defaults filled, unset values omitted).
 pub(super) fn normalized_task_config(raw: &Map<String, Value>) -> Map<String, Value> {
     let mut raw = raw.clone();
     if let Some(v) = raw.shift_remove("version") {
@@ -254,7 +254,7 @@ fn step_cfg(m: &Map<String, Value>) -> Map<String, Value> {
     out
 }
 
-/// `str | ArtifactConfig` dumped in json mode (None dropped).
+/// An artifact entry as JSON: a path string as-is, an object with its unset fields dropped.
 pub(super) fn artifact_value(v: &Value) -> Value {
     match v {
         Value::Object(m) => Value::Object(Model::new(m).opt("source").opt("destination").val("exclude", json!([])).opt("service").done()),

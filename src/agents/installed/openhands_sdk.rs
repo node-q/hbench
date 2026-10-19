@@ -101,7 +101,7 @@ impl OpenHandsSdk {
         env.insert("AGENT_LOGS_DIR".into(), "/logs/agent".into());
         env.insert("TRAJECTORY_PATH".into(), "/logs/agent/trajectory.json".into());
         env.insert("LOAD_SKILLS".into(), (if self.load_skills { "1" } else { "0" }).into());
-        // `skill_paths or DEFAULT`: an empty list falls back to the defaults too.
+        // An unset or empty skill_paths falls back to the defaults.
         let mut paths: Vec<String> = match &self.skill_paths {
             Some(p) if !p.is_empty() => p.clone(),
             _ => DEFAULT_SKILL_PATHS.iter().map(|s| s.to_string()).collect(),
@@ -117,7 +117,7 @@ impl OpenHandsSdk {
         }
         env.insert("SKILL_PATHS".into(), paths.join(":"));
         if !self.args.mcp_servers.is_empty() {
-            // Compact JSON; the runner only json.loads it.
+            // Compact JSON; the runner only parses it.
             let list: Vec<Value> = self
                 .args
                 .mcp_servers
@@ -162,7 +162,7 @@ pub fn parse_trajectory_metrics(text: &str) -> Option<AgentContext> {
     if !fm.is_object() && !fm.is_null() {
         return None;
     }
-    // `.get(k, 0)`: missing -> 0, explicit null -> None.
+    // A missing key counts 0; an explicit null leaves the total unset.
     let n = |k: &str| match fm.get(k) {
         None => Some(0),
         Some(x) => x.as_i64(),

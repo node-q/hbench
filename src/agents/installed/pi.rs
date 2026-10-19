@@ -21,7 +21,7 @@ const MCP_ADAPTER_EXTENSION: &str = "/tmp/hbench-pi-mcp-adapter/node_modules/pi-
 const THINKING: [&str; 7] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 const SESSION_DIR: &str = "/logs/agent/pi/sessions";
 
-/// Dotted numeric release (`packaging.Version` subset), zero-padded for comparison.
+/// Dotted numeric release (up to four parts, optional leading `v`), zero-padded for comparison.
 fn version(s: &str) -> Option<[u64; 4]> {
     let mut out = [0u64; 4];
     let parts: Vec<&str> = s.trim().trim_start_matches('v').split('.').collect();

@@ -32,7 +32,7 @@ pub struct Aider {
 }
 
 impl Aider {
-    /// AiderOptions -> CLI flags (field order).
+    /// The aider options as CLI flags, in schema order.
     fn cli_flags(&self) -> Result<String> {
         let a = &self.args;
         let mut f = vec![];

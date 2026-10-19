@@ -346,7 +346,7 @@ pub trait Llm: Send + Sync {
         approx_tokens(messages)
     }
     /// One chat-completions request over raw (possibly multimodal) messages (transient errors retried):
-    /// computer-1's `Computer1Chat` path. Default: `call` with the last message as the prompt.
+    /// computer-1's chat path. Default: `call` with the last message as the prompt.
     async fn complete(&self, messages: Vec<Value>, kw: &Map<String, Value>) -> Result<LlmResponse, LlmError> {
         let (last, history) = messages.split_last().map(|(l, h)| (content_text(&l["content"]), h.to_vec())).unwrap_or_default();
         self.call(&last, &history, kw, None).await

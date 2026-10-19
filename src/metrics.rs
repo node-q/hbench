@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 pub type MetricOut = BTreeMap<String, serde_json::Value>;
 
-/// Aggregate reward dicts: missing rewards count as 0; one key => {name: x}, else per key.
+/// Aggregate reward objects: missing rewards count as 0; one key => {name: x}, else per key.
 fn aggregate(rewards: &[Option<&Rewards>], name: &str, f: fn(&[f64]) -> f64) -> MetricOut {
     let keys: BTreeSet<&String> = rewards.iter().flatten().flat_map(|r| r.keys()).collect();
     let val = |r: &Option<&Rewards>, k: Option<&str>| -> f64 {
@@ -36,7 +36,7 @@ pub fn compute(m: &MetricConfig, rewards: &[Option<&Rewards>]) -> Result<MetricO
     })
 }
 
-/// `uv run <script> -i rewards.jsonl -o metric.json` (one JSON reward dict or null per line).
+/// `uv run <script> -i rewards.jsonl -o metric.json` (one JSON reward object or null per line).
 fn uv_script(m: &MetricConfig, rewards: &[Option<&Rewards>]) -> Result<MetricOut> {
     let script = m.kwargs.get("script_path").and_then(|v| v.as_str()).context("uv-script metric needs kwargs.script_path")?;
     if !std::path::Path::new(script).exists() {

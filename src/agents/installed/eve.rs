@@ -134,7 +134,7 @@ fn is_ignored(name: &str) -> bool {
     IGNORE_NAMES.contains(&name) || (name.starts_with(".env") && !ENV_EXAMPLE_NAMES.contains(&name))
 }
 
-/// shutil.copytree with Eve's ignore rule applied at every level.
+/// Recursive copy with Eve's ignore rule applied at every level.
 fn copy_tree(src: &Path, dst: &Path) -> Result<()> {
     std::fs::create_dir_all(dst)?;
     for e in std::fs::read_dir(src)? {

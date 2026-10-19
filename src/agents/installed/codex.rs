@@ -116,7 +116,7 @@ impl Codex {
             .then(|| format!("{{{}}}", items.iter().map(|(k, v)| format!("{}: {v}", json!(k))).collect::<Vec<_>>().join(", ")))
     }
 
-    /// CodexOptions -> CLI flags.
+    /// The codex options as CLI flags.
     fn cli_flags(&self) -> Result<String> {
         let a = &self.args;
         let mut f = vec![];

@@ -27,7 +27,7 @@ use util::*;
 
 pub(crate) use http::{parse_port_range, serve};
 
-/// Environment types the launcher offers.
+/// Environment types the launcher offers (hbench runs docker only).
 const ENVIRONMENTS: &[&str] = &["docker"];
 
 #[derive(Clone, Copy, PartialEq, Debug)]

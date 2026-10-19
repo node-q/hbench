@@ -61,7 +61,7 @@ impl ClaudeCode {
         self.args.kw(kw).or_else(|| fallback_env.and_then(|e| self.args.get_env(e)))
     }
 
-    /// ClaudeCodeOptions -> CLI flags.
+    /// The claude-code options as CLI flags.
     fn cli_flags(&self) -> Result<String> {
         let mut f = vec![];
         let permission = self.args.kw("permission_mode").unwrap_or_else(|| "bypassPermissions".into());

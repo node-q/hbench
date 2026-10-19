@@ -17,7 +17,7 @@ const N: &str = "swe-agent";
 const SPEC: Spec = Spec { default_provider: None, api_key_envs: &[], base_url_envs: &[], passthrough: true };
 const REPO_URL: &str = "https://github.com/SWE-agent/SWE-agent.git";
 const REPO_PATH: &str = "/opt/sweagent-repo";
-/// Options with a `Cli` annotation, in model field order.
+/// Options passed as SWE-agent CLI flags, in schema order.
 const CLI: &[(&str, &str)] = &[
     ("per_instance_cost_limit", "--agent.model.per_instance_cost_limit"),
     ("total_cost_limit", "--agent.model.total_cost_limit"),
@@ -60,7 +60,7 @@ impl SweAgent {
                 opts.insert(*k, v);
             }
         }
-        // completion_kwargs: dict/list -> json.dumps, blank -> None, env fallback when omitted.
+        // completion_kwargs: an object or list is sent as JSON, blank means unset, env fallback when omitted.
         let completion_kwargs = match args.kwargs.get("completion_kwargs") {
             None => args.extra_env.get("SWEAGENT_COMPLETION_KWARGS").cloned().or_else(|| std::env::var("SWEAGENT_COMPLETION_KWARGS").ok()),
             Some(v @ (Value::Object(_) | Value::Array(_))) => Some(json_spaced(v)),
@@ -127,7 +127,7 @@ PY\n",
         (effective.into(), cmd)
     }
 
-    /// `_get_env(a, b)`: per source (agent env, then host), first present name.
+    /// The first of `names` that is set in the agent env, else the first set in the host env.
     fn env_any(&self, names: &[&str]) -> Option<String> {
         names.iter().find_map(|n| self.args.extra_env.get(*n).cloned()).or_else(|| names.iter().find_map(|n| std::env::var(n).ok()))
     }
@@ -208,7 +208,7 @@ PY\n",
             "set -euo pipefail\nset +u\n. /etc/profile.d/testbed-conda.sh || true\nset -u\n{download}{reasoning_cmd}{write_instruction}{} 2>&1 | stdbuf -oL tee /logs/agent/swe-agent.txt\n",
             parts.join(" ")
         );
-        // Cli(sensitive=True): completion_kwargs must not leak into logged commands.
+        // completion_kwargs is sensitive: it must not leak into logged commands.
         let redacted = completion_kwargs.iter().filter(|s| !s.is_empty()).fold(cmd.clone(), |c, s| c.replace(s.as_str(), "****"));
         Ok((cmd, redacted, env))
     }

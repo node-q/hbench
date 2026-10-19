@@ -96,7 +96,7 @@ fn file_mention_pattern() -> Node {
     ])
 }
 
-/// `FILE_MENTION_PATTERN.finditer(text)` group 1 values.
+/// Every file path the mention pattern finds in `text`, in order.
 pub fn file_mentions(text: &str) -> Vec<String> {
     let s: Vec<char> = text.chars().collect();
     let pat = file_mention_pattern();

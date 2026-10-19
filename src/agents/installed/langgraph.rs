@@ -122,7 +122,7 @@ fn select_graph(config: &Value, name: Option<&str>) -> Result<(String, String)> 
     Ok((name, path))
 }
 
-/// `posixpath.normpath` for absolute paths.
+/// Lexical normalization of an absolute path (`.` and empty segments dropped, `..` applied).
 fn normpath(p: &str) -> String {
     let mut parts: Vec<&str> = vec![];
     for seg in p.split('/') {

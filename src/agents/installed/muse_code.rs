@@ -20,7 +20,7 @@ const LOGS: &str = "/logs/agent";
 const OUTPUT_FILENAME: &str = "muse-code.jsonl";
 const STDERR_FILENAME: &str = "muse-code.stderr.log";
 pub const MANIFEST: &str = "muse-session.json";
-// /tmp/hbench-muse/{environment_logs_dir.name}
+// /tmp/hbench-muse/<name of the agent logs dir>
 const RUNTIME_DIR: &str = "/tmp/hbench-muse/agent";
 const EFFORTS: &[&str] = &["minimal", "low", "medium", "high", "xhigh", "ultra"];
 
@@ -73,7 +73,7 @@ impl MuseCode {
         self.opt("base_url", "MUSE_CODE_BASE_URL")
     }
 
-    /// MuseCodeOptions -> CLI flags (field order: reasoning_effort, max_model_steps, base_url).
+    /// The muse-code options as CLI flags (reasoning_effort, max_model_steps, base_url).
     fn cli_flags(&self) -> Result<String> {
         let mut f = vec![];
         if let Some(v) = self.opt("reasoning_effort", "MUSE_CODE_REASONING_EFFORT") {

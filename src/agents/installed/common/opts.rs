@@ -69,7 +69,7 @@ pub fn lax_bool(v: &Value) -> Option<bool> {
     }
 }
 
-/// `Literal[...]` field: exact string match.
+/// One of `choices`, matched exactly.
 pub fn choice(a: &AgentArgs, k: &str, fallback: Option<&str>, choices: &[&str]) -> Result<Option<String>> {
     match raw(a, k, fallback) {
         None => Ok(None),

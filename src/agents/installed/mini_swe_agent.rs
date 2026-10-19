@@ -24,7 +24,7 @@ const TRAJECTORY_PATH: &str = "/logs/agent/mini-swe-agent.trajectory.json";
 const ENV_PRELUDE: &str =
     "if [ -f \"$HOME/.local/bin/env\" ]; then . \"$HOME/.local/bin/env\"; else export PATH=\"$HOME/.local/bin:$PATH\"; fi; ";
 
-/// Optional string kwarg; numbers are accepted as their text. Explicit null = opt-out (None).| None` with coerce_numbers_to_str. Explicit null = opt-out (None).
+/// Optional string kwarg; numbers are accepted as their text. Explicit null = opt-out (None).
 pub(crate) fn opt_str(args: &AgentArgs, agent: &str, k: &str) -> Result<Option<String>> {
     match args.kwargs.get(k) {
         None | Some(Value::Null) => Ok(None),

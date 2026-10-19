@@ -142,7 +142,7 @@ impl AntigravityCli {
             }
         }
 
-        // _sanitize_auth_extra_env: empty auth values mean unset; GOOGLE_API_KEY renamed to GEMINI_API_KEY.
+        // Empty auth values mean unset; GOOGLE_API_KEY is renamed to GEMINI_API_KEY.
         let env = &mut args.extra_env;
         env.retain(|k, v| !v.is_empty() || !(AUTH_NAMES.contains(&k.as_str()) || k.starts_with("AGY_CLI_")));
         if let Some(alias) = env.remove("GOOGLE_API_KEY") {

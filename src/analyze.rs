@@ -100,19 +100,19 @@ fn object_schema(title: &str, props: Vec<(String, Value)>) -> Map<String, Value>
 }
 
 fn criteria_props(r: &Rubric) -> Vec<(String, Value)> {
-    r.criteria.iter().map(|c| (c.name.clone(), json!({"$ref": "#/$defs/QualityCheckModel"}))).collect()
+    r.criteria.iter().map(|c| (c.name.clone(), json!({"$ref": "#/$defs/CriterionCheck"}))).collect()
 }
 
 /// `$defs` first, then the root object's keys.
-fn with_defs(mut defs: Vec<(&str, Value)>, root: Map<String, Value>, uses_check_model: bool) -> Value {
-    if uses_check_model {
+fn with_defs(mut defs: Vec<(&str, Value)>, root: Map<String, Value>, uses_criterion_check: bool) -> Value {
+    if uses_criterion_check {
         defs.push(("CheckOutcome", json!({"enum": ["pass", "fail", "not_applicable"], "title": "CheckOutcome", "type": "string"})));
         defs.push((
-            "QualityCheckModel",
+            "CriterionCheck",
             json!({
                 "properties": {"explanation": {"title": "Explanation", "type": "string"}, "outcome": {"$ref": "#/$defs/CheckOutcome"}},
                 "required": ["explanation", "outcome"],
-                "title": "QualityCheckModel",
+                "title": "CriterionCheck",
                 "type": "object"
             }),
         ));
@@ -126,22 +126,22 @@ fn with_defs(mut defs: Vec<(&str, Value)>, root: Map<String, Value>, uses_check_
     Value::Object(o)
 }
 
-/// JSON schema of the `QualityCheckResponse` (check output).
+/// JSON schema of the check output (`CheckResult`).
 pub fn check_schema(r: &Rubric) -> Value {
-    with_defs(vec![], object_schema("QualityCheckResponse", criteria_props(r)), !r.criteria.is_empty())
+    with_defs(vec![], object_schema("CheckResult", criteria_props(r)), !r.criteria.is_empty())
 }
 
-/// JSON schema of the `AnalyzeResultResponse` (summary + checks).
+/// JSON schema of the analyze output (`AnalysisResult`: summary + checks).
 pub fn analyze_schema(r: &Rubric) -> Value {
-    let checks = object_schema("AnalyzeResultChecks", criteria_props(r));
+    let checks = object_schema("AnalysisChecks", criteria_props(r));
     let root = object_schema(
-        "AnalyzeResultResponse",
+        "AnalysisResult",
         vec![
             ("summary".into(), json!({"title": "Summary", "type": "string"})),
-            ("checks".into(), json!({"$ref": "#/$defs/AnalyzeResultChecks"})),
+            ("checks".into(), json!({"$ref": "#/$defs/AnalysisChecks"})),
         ],
     );
-    with_defs(vec![("AnalyzeResultChecks", Value::Object(checks))], root, !r.criteria.is_empty())
+    with_defs(vec![("AnalysisChecks", Value::Object(checks))], root, !r.criteria.is_empty())
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
@@ -152,7 +152,7 @@ pub enum Outcome {
     NotApplicable,
 }
 
-/// One criterion's outcome and explanation (QualityCheckModel).
+/// One criterion's outcome and explanation.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Check {
     pub explanation: String,
@@ -171,7 +171,7 @@ fn ser_checks<S: serde::Serializer>(c: &Checks, s: S) -> Result<S::Ok, S::Error>
     m.end()
 }
 
-/// One trial's analysis in a report (AnalyzeReportResult).
+/// One trial's analysis in a report.
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct AnalyzeReportResult {
     pub trial_name: Option<String>,
@@ -182,7 +182,7 @@ pub struct AnalyzeReportResult {
     pub error: Option<String>,
 }
 
-/// One task's check in a report (QualityCheckResult).
+/// One task's check in a report.
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct QualityCheckResult {
     #[serde(serialize_with = "ser_checks")]
@@ -249,7 +249,7 @@ fn extract_check_result(r: &TrialResult, trial_dir: &Path, rubric: &Rubric) -> R
     Ok(QualityCheckResult { checks: parse_checks(&v, rubric)?, cost_usd, ..Default::default() })
 }
 
-/// Write analysis.json (AnalyzeResult) into the analyzed trial dir.
+/// Write analysis.json into the analyzed trial dir.
 fn write_analysis_json(trial_dir: &Path, r: &AnalyzeReportResult) -> Result<()> {
     #[derive(Serialize)]
     struct AnalyzeResult<'a> {
@@ -335,8 +335,8 @@ fn extract_task_dir(trial_dir: &Path) -> Option<PathBuf> {
     Some(crate::registry::local_path(&t))
 }
 
-/// Whether `dir` is a valid task: task.toml + environment/, loadable config, a test script.
-// Hbench's Task::load also wants instruction.md and an environment definition.
+/// Whether `dir` is a valid task: task.toml + environment/, a config `Task::load` accepts (which also
+/// needs instruction.md and an environment definition), and a test script.
 pub fn is_valid_task_dir(p: &Path) -> bool {
     p.join("task.toml").is_file() && p.join("environment").is_dir() && Task::load(p).and_then(|t| t.validate_tests()).is_ok()
 }
@@ -369,7 +369,7 @@ pub fn resolve_task_dirs(path: &Path, include: &[String], exclude: &[String], n_
     Ok(dirs)
 }
 
-/// shutil.copytree(src, dst, ignore=ignore_patterns(*ignore)): names ignored at every level.
+/// Recursive copy that skips entries named in `ignore` at every level.
 fn copy_tree(src: &Path, dst: &Path, ignore: &[&str]) -> Result<()> {
     std::fs::create_dir_all(dst)?;
     for e in std::fs::read_dir(src)? {
@@ -407,7 +407,7 @@ pub fn build_file_tree(dir: &Path) -> String {
     if lines.is_empty() { "No files found".into() } else { lines.join("\n") }
 }
 
-/// Substitutes `{name}` fields (missing -> ""; any `.attr`, `[i]`, `!conv` or `:spec` suffix ignored), `{{`/`}}` escapes;
+/// Substitutes `{name}` fields (missing -> ""; any `.attr`, `[i]`, `!x` or `:spec` suffix after the name is ignored), `{{`/`}}` escapes;
 /// unbalanced braces are an error.
 pub fn render_template(t: &str, vars: &[(&str, &str)]) -> Result<String> {
     let mut out = String::new();
@@ -961,19 +961,18 @@ mod tests {
 
     #[test]
     fn schemas_match_golden() {
-        // Golden schemas for the analysis output models.
+        // Golden schemas for the analysis output.
         let defs = r##""CheckOutcome": {"enum": ["pass", "fail", "not_applicable"], "title": "CheckOutcome", "type": "string"},
-            "QualityCheckModel": {"properties": {"explanation": {"title": "Explanation", "type": "string"}, "outcome": {"$ref": "#/$defs/CheckOutcome"}},
-                "required": ["explanation", "outcome"], "title": "QualityCheckModel", "type": "object"}"##;
-        let props = r##""properties": {"reward_hacking": {"$ref": "#/$defs/QualityCheckModel"}, "task_specification": {"$ref": "#/$defs/QualityCheckModel"}},
+            "CriterionCheck": {"properties": {"explanation": {"title": "Explanation", "type": "string"}, "outcome": {"$ref": "#/$defs/CheckOutcome"}},
+                "required": ["explanation", "outcome"], "title": "CriterionCheck", "type": "object"}"##;
+        let props = r##""properties": {"reward_hacking": {"$ref": "#/$defs/CriterionCheck"}, "task_specification": {"$ref": "#/$defs/CriterionCheck"}},
             "required": ["reward_hacking", "task_specification"]"##;
         let check: Value =
-            serde_json::from_str(&format!(r##"{{"$defs": {{{defs}}}, {props}, "title": "QualityCheckResponse", "type": "object"}}"##))
-                .unwrap();
+            serde_json::from_str(&format!(r##"{{"$defs": {{{defs}}}, {props}, "title": "CheckResult", "type": "object"}}"##)).unwrap();
         let analyze: Value = serde_json::from_str(&format!(
-            r##"{{"$defs": {{"AnalyzeResultChecks": {{{props}, "title": "AnalyzeResultChecks", "type": "object"}}, {defs}}},
-               "properties": {{"summary": {{"title": "Summary", "type": "string"}}, "checks": {{"$ref": "#/$defs/AnalyzeResultChecks"}}}},
-               "required": ["summary", "checks"], "title": "AnalyzeResultResponse", "type": "object"}}"##
+            r##"{{"$defs": {{"AnalysisChecks": {{{props}, "title": "AnalysisChecks", "type": "object"}}, {defs}}},
+               "properties": {{"summary": {{"title": "Summary", "type": "string"}}, "checks": {{"$ref": "#/$defs/AnalysisChecks"}}}},
+               "required": ["summary", "checks"], "title": "AnalysisResult", "type": "object"}}"##
         ))
         .unwrap();
         let r = default_rubric();
@@ -981,7 +980,7 @@ mod tests {
         assert_eq!(check_schema(&r).to_string(), check.to_string());
         assert_eq!(analyze_schema(&r).to_string(), analyze.to_string());
         let empty = Rubric { criteria: vec![] };
-        assert_eq!(check_schema(&empty), json!({"properties": {}, "title": "QualityCheckResponse", "type": "object"}));
+        assert_eq!(check_schema(&empty), json!({"properties": {}, "title": "CheckResult", "type": "object"}));
     }
 
     #[test]

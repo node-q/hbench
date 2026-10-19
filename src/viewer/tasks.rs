@@ -5,8 +5,8 @@ use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-/// task.toml validated and dumped as JSON, driven by the exported TaskConfig schema:
-/// properties in field order, defaults (incl. default factories) filled, legacy fields migrated.
+/// task.toml validated and written as JSON, driven by the vendored task.toml schema:
+/// properties in schema order, defaults (explicit or implied by the property's type) filled, legacy fields migrated.
 pub(super) fn task_config_dump(toml_text: &str) -> Option<Value> {
     let mut data: Value = serde_json::to_value(toml::from_str::<toml::Table>(toml_text).ok()?).ok()?;
     let o = data.as_object_mut()?;
@@ -47,7 +47,7 @@ fn deref<'a>(schema: &'a Value, root: &'a Value) -> &'a Value {
 fn dump_model(data: &Value, model: &Value, root: &Value) -> Option<Value> {
     let mut data = data.clone();
     if let Some(o) = data.as_object_mut() {
-        // EnvironmentConfig._migrate_legacy_resource_fields
+        // Legacy `memory` / `storage` size strings ("2G") become `memory_mb` / `storage_mb`.
         for (old, new) in [("memory", "memory_mb"), ("storage", "storage_mb")] {
             if model["properties"].get(new).is_some()
                 && let Some(Value::String(size)) = o.remove(old)
@@ -62,7 +62,7 @@ fn dump_model(data: &Value, model: &Value, root: &Value) -> Option<Value> {
     let mut out = Map::new();
     for (k, prop) in model["properties"].as_object()? {
         if k == "allow_internet" {
-            continue; // Field(exclude=True)
+            continue; // read for the legacy migration above, never written out
         }
         let v = match data.get(k) {
             Some(v) => dump_value(v, prop, root)?,
@@ -73,7 +73,8 @@ fn dump_model(data: &Value, model: &Value, root: &Value) -> Option<Value> {
     Some(Value::Object(out))
 }
 
-/// Default-factory value for a schema property without an explicit `default`.
+/// The implied default of a schema property without an explicit `default`: a nested object's own
+/// defaults, else `[]` / `{}` by type, else null.
 fn default_for(prop: &Value, root: &Value) -> Value {
     let p = deref(prop, root);
     if p.get("properties").is_some() {

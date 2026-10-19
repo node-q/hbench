@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 const RESOURCE_MODES: &[&str] = &["auto", "limit", "request", "guarantee", "ignore"];
 
 impl App {
-    /// `JobScanner.list_jobs()`: every subdirectory, newest (reverse-sorted) first.
+    /// Every subdirectory of the jobs folder, newest (reverse-sorted by name) first.
     pub(super) fn list_jobs(&self) -> Vec<String> {
         let mut v: Vec<String> = sorted_entries(&self.folder).into_iter().filter(|p| p.is_dir()).map(|p| name_of(&p)).collect();
         v.reverse();
@@ -111,7 +111,7 @@ impl App {
                         })
                         .collect();
                     if let Some(cutoff) = cutoffs.into_iter().min() {
-                        // `started_at.replace(tzinfo=None) >= cutoff`: the timestamp's own wall clock vs local now.
+                        // Compare the timestamp's own wall-clock time (offset dropped) with local now.
                         let wall = |t: &str| {
                             DateTime::parse_from_rfc3339(t)
                                 .map(|d| d.naive_local())
@@ -432,7 +432,7 @@ impl App {
     }
 }
 
-/// `partial_trial_result_from_config`: an in-progress trial (config.json, no result.json).
+/// A placeholder result for an in-progress trial (config.json, no result.json).
 fn partial_trial_result(trial_name: &str, dir: &Path, cfg: &crate::config::TrialConfig) -> Value {
     let c = serde_json::to_value(cfg).unwrap_or_default();
     let mi = split_model(cfg.agent.model_name.as_deref());

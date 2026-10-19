@@ -119,7 +119,7 @@ fn write_entry(p: &Value, path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// urllib's `quote(s, safe="")`.
+/// Percent-encode every byte except unreserved characters (`A-Z a-z 0-9 _ . - ~`); `/` is encoded too.
 fn url_quote(s: &str) -> String {
     s.bytes()
         .map(|b| if b.is_ascii_alphanumeric() || b"_.-~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") })

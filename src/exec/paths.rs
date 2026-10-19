@@ -28,7 +28,8 @@ pub(super) fn posix_normalize(s: &str) -> String {
     if joined.is_empty() { ".".into() } else { joined }
 }
 
-/// `posixpath.normpath`.
+/// Lexical POSIX normalization (`a/./b/../c` -> `a/c`), keeping leading `..` on relative paths and a
+/// leading `//`.
 pub(super) fn normpath(p: &str) -> String {
     if p.is_empty() {
         return ".".into();
@@ -81,7 +82,7 @@ pub(super) fn temp_root() -> PathBuf {
     PathBuf::from(posix_normalize(&std::env::temp_dir().to_string_lossy()))
 }
 
-/// `Path(p).expanduser().resolve()` (non-strict).
+/// `p` with `~` expanded, made absolute and normalized, with symlinks resolved as far as the path exists.
 pub(super) fn resolve(p: &str) -> PathBuf {
     let p = PathBuf::from(expanduser(p));
     let abs = if p.is_absolute() { p } else { std::env::current_dir().unwrap_or_default().join(p) };

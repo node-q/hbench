@@ -38,7 +38,7 @@ pub fn create(args: AgentArgs) -> Result<AgentBox> {
     Ok(Box::new(ClineCli::new(args)?))
 }
 
-/// Timeout seconds: positive integer from int/integral float/str.
+/// Timeout seconds: a positive integer, from an integer, integral float or numeric string.
 fn parse_positive_int(v: &Value, field: &str) -> Result<i64> {
     let err = || anyhow!("Invalid {field} value: '{}'. Must be a positive integer.", value_text(v));
     let n = match v {
@@ -61,7 +61,7 @@ fn parse_positive_int(v: &Value, field: &str) -> Result<i64> {
     Ok(n)
 }
 
-/// Non-negative float seconds from int/float/str.
+/// Non-negative seconds, from a number or numeric string.
 fn parse_nonneg_f64(v: &Value, field: &str, rule: &str) -> Result<f64> {
     let err = || anyhow!("Invalid {field} value: '{}'. {rule}", value_text(v));
     let f = match v {

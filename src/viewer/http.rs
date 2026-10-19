@@ -17,7 +17,7 @@ pub struct Resp {
     pub headers: Vec<(&'static str, String)>,
 }
 
-/// (status, FastAPI `detail`).
+/// (status, `detail` of the JSON error body).
 pub(super) type Err = (u16, Value);
 pub(super) type Res = std::result::Result<Resp, Err>;
 

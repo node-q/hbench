@@ -1,7 +1,7 @@
 //! computer-1's native computer-use providers and their step / self-driving loops.
 //!
 //! - `anthropic` / `bedrock`: Claude's `computer_2025xxxx` tool over the Messages API (beta).
-//!   Bedrock is the same body re-shaped like `AnthropicBedrock` and signed with AWS SigV4.
+//!   Bedrock sends the same body re-shaped for its invoke endpoint, signed with AWS SigV4.
 //! - `gemini`: Gemini Computer Use through the Interactions API (`previous_interaction_id` chain).
 //! - `openai`: the GA `computer` tool through the Responses API; drives its own loop.
 //!
@@ -76,7 +76,7 @@ fn media_type_for_data_url(r: &str) -> &str {
 pub(super) const ANTHROPIC_SCALED: &str = "anthropic_scaled";
 pub(super) const NORMALIZED: &str = "normalized_completion";
 
-/// `anthropic_scale_coordinates`: undo Anthropic's internal screenshot downscale.
+/// Undo Anthropic's internal screenshot downscale: model coordinates -> desktop pixels.
 pub(super) fn anthropic_scale(x: i64, y: i64, w: i64, h: i64) -> (i64, i64) {
     let (long, total) = (w.max(h) as f64, (w * h) as f64);
     let les = if long > 1568.0 { 1568.0 / long } else { 1.0 };
@@ -85,13 +85,13 @@ pub(super) fn anthropic_scale(x: i64, y: i64, w: i64, h: i64) -> (i64, i64) {
     if scale >= 1.0 { (x, y) } else { ((x as f64 / scale) as i64, (y as f64 / scale) as i64) }
 }
 
-/// `scale_normalized_coordinate`: 0..999 grid -> desktop pixels (round half to even).
+/// 0..999 grid -> desktop pixels (round half to even).
 fn scale_normalized(x: i64, y: i64, w: i64, h: i64) -> (i64, i64) {
     let s = |v: i64, d: i64| ((v as f64 * (d - 1) as f64 / 999.0).round_ties_even() as i64).clamp(0, d - 1);
     (s(x, w), s(y, h))
 }
 
-/// `normalize_completion_action`.
+/// Scale an action given on the normalized 0..999 grid to desktop pixels; other actions pass through.
 pub(super) fn normalize_action(a: &Action, w: i64, h: i64) -> Action {
     let mut a = a.clone();
     if a.source != NORMALIZED {
@@ -114,7 +114,7 @@ pub(super) fn normalize_action(a: &Action, w: i64, h: i64) -> Action {
     a
 }
 
-/// `translate_anthropic_action`: Ok(None) = unknown action.
+/// An Anthropic `computer` tool input as an action. Ok(None) = unknown action.
 pub(super) fn translate_anthropic(d: &Map<String, Value>, w: i64, h: i64) -> Result<Option<Action>, String> {
     let action = d.get("action").map(text_of).unwrap_or_default();
     if action == "screenshot" || action == "cursor_position" {
@@ -216,7 +216,7 @@ pub(super) fn translate_anthropic(d: &Map<String, Value>, w: i64, h: i64) -> Res
     Ok(Some(a))
 }
 
-/// `translate_openai_action`: coordinates are already desktop pixels. None = skip.
+/// An OpenAI `computer` action as an action; coordinates are already desktop pixels. None = skip.
 pub(super) fn translate_openai(a: &Value) -> Option<Action> {
     let kind = a.get("type").filter(|v| truthy(v)).map(text_of).unwrap_or_default();
     let coord = |k: &str| a.get(k).filter(|v| truthy(v)).map_or(0, |v| coerce_int(v).unwrap_or(0));
@@ -301,7 +301,7 @@ pub(super) fn translate_openai(a: &Value) -> Option<Action> {
     })
 }
 
-/// `gemini_function_call_to_computer_action`: Ok(None) = unknown function.
+/// A Gemini Computer Use function call as an action. Ok(None) = unknown function.
 pub(super) fn translate_gemini(name: &str, d: &Map<String, Value>) -> Result<Option<Action>, String> {
     let int = |k: &str| d.get(k).map_or(Ok(0), coerce_int);
     let mk = |kind: &str, source: &'static str| {
@@ -384,7 +384,7 @@ pub(super) fn translate_gemini(name: &str, d: &Map<String, Value>) -> Result<Opt
     Ok(Some(a))
 }
 
-/// `NativeToolCall`.
+/// One tool call from a native provider response, with its translated action or the reason it has none.
 #[derive(Debug, Clone)]
 pub(super) struct NativeCall {
     pub call_id: String,
@@ -394,7 +394,7 @@ pub(super) struct NativeCall {
     pub error: Option<String>,
 }
 
-/// `NativeModelStep`: one API response, all its calls, usage counted once.
+/// One API response: all its calls, usage counted once.
 #[derive(Debug, Clone, Default)]
 pub(super) struct NativeStep {
     pub calls: Vec<NativeCall>,
@@ -404,7 +404,7 @@ pub(super) struct NativeStep {
     pub is_terminal: bool,
 }
 
-/// `ToolExecutionResult`.
+/// The outcome of executing one tool call.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct ExecResult {
     pub call_id: String,
@@ -421,7 +421,7 @@ impl ExecResult {
     }
 }
 
-/// `make_step`.
+/// A step from parsed calls; fails unless every call has a unique, non-empty id.
 fn make_step(
     calls: Vec<NativeCall>,
     message: String,
@@ -444,7 +444,7 @@ fn validate_results(step: &NativeStep, results: &[ExecResult]) -> Result<()> {
     Ok(())
 }
 
-/// `usage_from_any`.
+/// Token usage from a response's usage object (chat-completions, Responses or Messages field names).
 pub(super) fn usage_from_any(u: &Value) -> Option<Usage> {
     let g = |k: &str| u.get(k).filter(|v| !v.is_null());
     let prompt = g("prompt_tokens").or(g("input_tokens"));
@@ -467,7 +467,7 @@ pub(super) fn usage_from_any(u: &Value) -> Option<Usage> {
     })
 }
 
-/// `metrics_from_llm_response` (native turns are never priced).
+/// ATIF step metrics for a native turn (native turns are never priced).
 pub(super) fn native_metrics(u: Option<&Usage>) -> Value {
     let mut m = Map::new();
     if let Some(u) = u {
@@ -595,7 +595,7 @@ fn hmac_sha256(key: &[u8], msg: &[u8]) -> Vec<u8> {
     Sha256::new().chain_update(pad(0x5c)).chain_update(inner).finalize().to_vec()
 }
 
-/// RFC 3986 encoding of a URL path, '/' kept (botocore's `quote(path, safe='/~')`).
+/// RFC 3986 encoding of a URL path: unreserved characters and '/' kept, everything else percent-encoded.
 fn uri_encode_path(p: &str) -> String {
     p.bytes()
         .map(|b| if b.is_ascii_alphanumeric() || b"-_.~/".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") })
@@ -649,7 +649,7 @@ depend on a changed screen. Use zoom_region when a click target is too small to
 locate confidently, and wait for its image before choosing coordinates. Finish
 with a text response when the task is complete.";
 
-/// `cua_protocol_for_model`: (beta, tool type). Only Sonnet 4.5 / Haiku 4.5 keep the legacy tool.
+/// (beta, tool type) for a model. Only Sonnet 4.5 / Haiku 4.5 keep the legacy tool.
 pub(super) fn cua_protocol(model: &str) -> (&'static str, &'static str) {
     let l = model.to_lowercase();
     if ["claude-sonnet-4-5", "claude-haiku-4-5"].iter().any(|p| l.contains(p)) {
@@ -737,7 +737,7 @@ impl Native {
                 Http { sdk: Sdk::Stainless, url: format!("{}/v1/messages?beta=true", base.trim_end_matches('/')), headers, aws: None }
             }
             Kind::Bedrock => {
-                // AnthropicBedrock(aws_region=aws_region_name or "us-east-1"): AWS_REGION is not consulted.
+                // The region is `aws_region_name`, else us-east-1; AWS_REGION is not consulted.
                 let region = aws_region.unwrap_or("us-east-1").to_string();
                 let (Some(key_id), Some(secret)) = (get("AWS_ACCESS_KEY_ID"), get("AWS_SECRET_ACCESS_KEY")) else {
                     bail!(
@@ -755,7 +755,7 @@ impl Native {
                 }
             }
             Kind::Gemini => {
-                // genai.Client(vertexai=False): always the Gemini Developer API with an API key.
+                // Always the Gemini Developer API with an API key (never Vertex AI).
                 let Some(key) = get("GOOGLE_API_KEY").or_else(|| get("GEMINI_API_KEY")) else {
                     bail!("computer-1's 'gemini' provider needs an API key: set GOOGLE_API_KEY or GEMINI_API_KEY")
                 };
@@ -1087,7 +1087,7 @@ impl Computer1 {
         }
     }
 
-    /// `record_native_step`: one API turn, all its calls, individually matched outcomes.
+    /// Record one API turn as an ATIF step: all its calls, each matched to its own outcome.
     fn record_native_step(&mut self, step: &NativeStep, results: &[ExecResult]) {
         let model = self.native.as_ref().map_or_else(|| self.model_name.clone(), |n| n.model.clone());
         let obs: Vec<Value> = results
@@ -1273,7 +1273,7 @@ impl Computer1 {
 }
 
 impl super::Desktop {
-    /// Base64 data-url of the most recent capture as PNG (`latest_png_data_url`).
+    /// Base64 data-url of the most recent capture as PNG.
     pub(super) async fn latest_png_data_url(&self, sh: &dyn Shell) -> Result<String> {
         let png = format!("{SCREENSHOT_DIR}/latest.png");
         let out = self

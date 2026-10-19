@@ -83,8 +83,8 @@ pub fn rates(m: &Map<String, Value>, prompt: i64) -> Rates {
     r
 }
 
-/// `cost_per_token(model, prompt_tokens, completion_tokens, cache_creation_input_tokens,
-/// cache_read_input_tokens)` -> (prompt_cost, completion_cost). `prompt_tokens` includes cached tokens.
+/// (prompt_cost, completion_cost) of one request to `model`. `prompt` includes the cache-write
+/// (`cache_creation`) and cache-read (`cache_read`) tokens, which are priced at their own rates.
 pub fn cost_per_token(model: &str, prompt: i64, completion: i64, cache_creation: i64, cache_read: i64) -> Option<(f64, f64)> {
     Some(rates(model_cost(model)?, prompt).cost(prompt, completion, cache_creation, cache_read))
 }

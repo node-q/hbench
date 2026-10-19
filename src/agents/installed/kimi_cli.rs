@@ -30,7 +30,7 @@ fn provider_config(provider: &str) -> Option<(&'static str, &'static str, &'stat
 }
 const PROVIDERS: &str = "anthropic, gemini, google, kimi, moonshot, openai, openrouter";
 
-/// `json.loads(s, strict=False)`: raw control characters are allowed inside strings.
+/// Lenient JSON: raw control characters are allowed inside strings.
 pub(super) fn loads_lenient(s: &str) -> Option<Value> {
     if let Ok(v) = serde_json::from_str(s) {
         return Some(v);

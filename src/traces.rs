@@ -1,5 +1,4 @@
-//! `hbench traces export`: HF-style trace export,
-//! written as JSONL rows (one row per episode) instead of a `datasets.Dataset`.
+//! `hbench traces export`: HF-style trace export, written as JSONL rows (one row per episode).
 
 use anyhow::{Context, Result, bail};
 use serde_json::{Map, Value, json};
@@ -126,7 +125,7 @@ fn trial_is_success(trial_dir: &Path) -> Option<bool> {
         return Some(v.parse::<f64>().is_ok_and(|f| f > 0.0));
     }
     let r = load_result(trial_dir)?;
-    // Reads `verifier_result.reward` (not `.rewards`) to keep the export format, so this is effectively always false.
+    // result.json stores `verifier_result.rewards`, so this fallback on `verifier_result.reward` is effectively always false.
     Some(r["verifier_result"]["reward"].as_f64().is_some_and(|f| f > 0.0))
 }
 

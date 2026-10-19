@@ -604,8 +604,8 @@ fn auto_adds_new_task_to_sibling_dataset() {
 }
 
 #[test]
-fn uiri_toml_quirks() {
-    // Outputs observed from toml 0.10.2 `toml.dumps({"k": s})`.
+fn toml_string_layout() {
+    // Fixed outputs of the TOML string writer, including its `\x` rewriting.
     for (s, want) in [
         ("a\x01", "\"ax01\""),
         ("a\\x01", "\"a\\x01\""),
@@ -624,7 +624,7 @@ fn uiri_toml_quirks() {
 }
 
 #[test]
-fn rejects_hub_refs_and_bad_input() {
+fn rejects_registry_refs_and_bad_input() {
     let d = tmp();
     init_dataset("acme/ds", &d, "", false, &[]).unwrap();
     assert!(init_dataset("acme/ds", &d, "", false, &[]).is_err());

@@ -68,7 +68,7 @@ fn analyze_scalar(s: &[char]) -> Analysis {
             line_breaks = true;
         }
         if !(ch == '\n' || (' '..='~').contains(&ch)) {
-            special = true; // allow_unicode=False: every non-ASCII char is special
+            special = true; // ASCII-only output: every non-ASCII char is special
         }
         if ch == ' ' {
             lead_space |= i == 0;
@@ -178,7 +178,7 @@ impl Emitter {
         }
     }
 
-    // Only empty collections go flow style (all safe_dump(default_flow_style=False) emits).
+    // Only empty collections are written in flow style (`[]`, `{}`); everything else is block style.
     fn flow_empty(&mut self, open: &str, close: &str) {
         self.write_indicator(open, true, true, false);
         self.write_indicator(close, false, false, false);

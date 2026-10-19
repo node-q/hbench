@@ -307,7 +307,7 @@ pub mod json_parser {
             let Some(k) = k.as_str() else { return Err(format!("Command {n} 'keystrokes' must be a string")) };
             let duration = match o.get("duration") {
                 Some(Value::Number(d)) => d.as_f64().unwrap_or(1.0),
-                Some(Value::Bool(b)) => f64::from(u8::from(*b)), // Python bools are ints
+                Some(Value::Bool(b)) => f64::from(u8::from(*b)), // a bool counts as 0 or 1
                 Some(_) => {
                     w.push(format!("Command {n}: Invalid duration value, using default 1.0"));
                     1.0
@@ -699,7 +699,7 @@ struct SubagentMetrics {
     cost: f64,
 }
 
-/// Terminus2Options (kwargs).
+/// Terminus-2 options (from kwargs).
 #[derive(Debug, Clone)]
 struct Options {
     max_episodes: Option<i64>,
@@ -984,7 +984,7 @@ impl Terminus2 {
     }
 
     /// Mirror usage and metadata into the context after every LLM call: a timed-out run is
-    /// cancelled (no `finally` in Rust), so the context must already be current.
+    /// cancelled by dropping its future, so no cleanup runs and the context must already be current.
     fn sync_context(&self, ctx: &mut AgentContext) {
         let (i, o, c, cost) = self.totals();
         ctx.n_input_tokens = Some(i);

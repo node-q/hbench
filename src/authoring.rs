@@ -1,8 +1,8 @@
 //! Local authoring commands with byte-exact file output:
 //! `init` (task + dataset), `tasks init`, `datasets init`, `add`, `remove`, `sync`.
 //!
-//! Generated TOML is written in the layout of the `toml` 0.10.2 encoder (its string escaping and
-//! float formatting included), and task digests hash the packaged file list and contents.
+//! Generated TOML keeps one fixed layout (see `toml_dumps`: section order, string escaping and float
+//! formatting), so output is stable across releases; task digests hash the packaged file list and contents.
 
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Map, Value, json};
@@ -58,7 +58,8 @@ fn is_printable(c: char) -> bool {
         | 0xfff9..=0xfffb | 0xe0001 | 0xe0020..=0xe007f | 0xf0000..)
 }
 
-/// `toml.encoder._dump_str`, including its `\x` mangling.
+/// A TOML basic string in hbench's fixed layout, including its lossy rewriting of `\xNN` escapes
+/// (see the `toml_string_layout` test); some strings that start with such an escape are an error.
 fn dump_str(s: &str) -> Result<String> {
     let r = str_literal(s);
     let single = r.starts_with('\'');
@@ -199,7 +200,8 @@ fn dump_sections(o: &Value, sup: &str) -> Result<(String, Map<String, Value>)> {
     Ok((retstr + &arraystr, retdict))
 }
 
-/// `toml.dumps` (uiri toml 0.10.2).
+/// A TOML document in hbench's fixed layout: each table's scalar keys first, then its arrays of
+/// tables, then its sub-tables.
 pub fn toml_dumps(o: &Value) -> Result<String> {
     let (mut retval, mut sections) = dump_sections(o, "")?;
     while !sections.is_empty() {
@@ -481,7 +483,7 @@ pub fn task_toml(t: &TaskToml) -> Result<String> {
     Ok(kept.join("\n\n") + "\n")
 }
 
-/// pathspec 1.1 "gitignore" (GitIgnoreBasicPattern) → (regex, include).
+/// One gitignore pattern line → (regex, include); `!` patterns re-include.
 fn gitignore_regex(line: &str) -> Option<(regex::Regex, bool)> {
     let mut p = if line.ends_with("\\ ") { line } else { line.trim_end() };
     if p.is_empty() || p.starts_with('#') {
@@ -1229,7 +1231,7 @@ fn local_task_index(dataset_dir: &Path) -> Result<Vec<(String, PathBuf)>> {
     Ok(idx)
 }
 
-/// `sync_dataset`: recompute local file and task digests; writes the manifest back.
+/// Recompute local file and task digests; writes the manifest back.
 pub fn sync_dataset(dataset_dir: &Path) -> Result<Vec<Change>> {
     let manifest_path = dataset_dir.join("dataset.toml");
     if !manifest_path.exists() {

@@ -1,7 +1,6 @@
 //! Terminal-Bench (v1) -> task migration (`tasks migrate`).
-//! Output is deterministic and byte-stable: task.toml is written in the layout of the `toml` 0.10
-//! encoder, and docker-compose files in block-style YAML (indent 2, width 80, ASCII-only, keys in
-//! source order).
+//! Output is deterministic and byte-stable: task.toml is written in hbench's fixed TOML layout, and
+//! docker-compose files in block-style YAML (indent 2, width 80, ASCII-only, keys in source order).
 
 use anyhow::{Context, Result, anyhow, bail};
 use regex::Regex;
@@ -553,7 +552,7 @@ fn walk_files(dir: &Path) -> Result<Vec<PathBuf>> {
     Ok(out)
 }
 
-/// shutil.copytree(src, dst, dirs_exist_ok=True) (symlinks followed).
+/// Recursive copy into `dst`, which may already exist (symlinks followed).
 fn copy_tree(src: &Path, dst: &Path) -> Result<()> {
     fs::create_dir_all(dst)?;
     for p in sorted_entries(src)? {
@@ -704,7 +703,7 @@ fn yaml_json(v: &Value) -> String {
     }
 }
 
-/// A TOML basic string as the `toml` 0.10 encoder writes it, including its `\x` -> `\u00` rewriting.
+/// A TOML basic string in hbench's fixed layout, including its `\x` -> `\u00` rewriting.
 fn toml_str(s: &str) -> Result<String> {
     let r = str_literal(s);
     let single = r.starts_with('\'');

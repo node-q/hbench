@@ -109,7 +109,7 @@ fn templatize<S: serde::Serializer>(env: &BTreeMap<String, String>, s: S) -> Res
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct AgentConfig {
-    /// None means oracle (filled by the validator), serialized as "oracle".
+    /// None means oracle, serialized as "oracle".
     #[serde(serialize_with = "ser_agent_name")]
     pub name: Option<String>,
     pub import_path: Option<String>,
@@ -187,7 +187,7 @@ pub struct BridgeConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct EnvConfig {
-    /// None means docker (filled by the validator), serialized as "docker".
+    /// None means docker, serialized as "docker".
     #[serde(rename = "type", serialize_with = "ser_env_type")]
     pub kind: Option<String>,
     pub import_path: Option<String>,

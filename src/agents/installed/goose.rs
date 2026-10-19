@@ -35,7 +35,7 @@ impl Goose {
         Ok(opts::int(&self.args, "max_turns", None)?.map(|n| format!("--max-turns {n}")).unwrap_or_default())
     }
 
-    /// GooseOptions `Env(...)` fields.
+    /// Env vars set from goose options.
     fn option_env(&self) -> Result<BTreeMap<String, String>> {
         let a = &self.args;
         let mut env = BTreeMap::new();
@@ -200,7 +200,7 @@ pub fn parse_goose_usage(text: &str) -> Option<AgentContext> {
     })
 }
 
-/// `exec_as_agent(..., timeout_sec=10)`.
+/// `set -o pipefail; cmd` as the agent user with a 10s timeout; non-zero exit -> classified error.
 async fn exec_agent_10s(cx: &AgentCtx<'_>, cmd: &str, env: &BTreeMap<String, String>) -> Result<()> {
     let r = cx.exec(&format!("set -o pipefail; {cmd}"), env, Some(Duration::from_secs(10))).await?;
     if r.code != 0 {

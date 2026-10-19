@@ -224,7 +224,7 @@ enum SweepsCmd {
         /// Attempts per task in each sweep.
         #[arg(long, default_value_t = 2)]
         trials_per_task: usize,
-        /// Generic hint passed to agents as kwargs.hint.
+        /// Generic hint passed to agents as the `hint` kwarg.
         #[arg(long)]
         hint: Option<String>,
         /// JSON object {task_name: hint}; runs one job per task.
@@ -879,7 +879,7 @@ fn preflight_agents(cfg: &JobConfig) -> Result<()> {
 /// Credential env vars an agent accepts, any one of which is enough (API keys, OAuth tokens,
 /// Bedrock/Vertex switches, custom endpoints). None = not decidable up front, so not checked.
 fn auth_envs(agent: &str) -> Option<&'static [&'static str]> {
-    // ponytail: only agents with a fixed provider; passthrough agents depend on the model/endpoint.
+    // Only agents with a fixed provider; passthrough agents depend on the model/endpoint.
     Some(match agent {
         "claude-code" => &[
             "ANTHROPIC_API_KEY",

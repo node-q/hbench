@@ -33,7 +33,7 @@ pub struct Fx {
     version: Option<String>,
     reasoning_effort: Option<String>,
     permission_mode: String,
-    /// FxOptions/FxDevOptions `Env(...)` fields, compiled.
+    /// Env vars set from fx / fx-dev options.
     option_env: BTreeMap<String, String>,
 }
 
@@ -53,7 +53,7 @@ impl Fx {
             bail!("Invalid value for 'permission_mode': '{permission_mode}'. Valid values: ask, auto, yolo");
         }
         let mut option_env = BTreeMap::new();
-        // max_agent_steps: Env("FX_MAX_AGENT_STEPS", fallback="FX_MAX_AGENT_STEPS"), an int.
+        // max_agent_steps: an integer, sent as FX_MAX_AGENT_STEPS; when unset, FX_MAX_AGENT_STEPS from the agent or host env.
         let steps = match args.kwargs.get("max_agent_steps") {
             Some(Value::Null) => None,
             Some(_) => args.kw("max_agent_steps"),

@@ -1,4 +1,4 @@
-//! Vendored JSON schemas (task.toml, trial config, each agent's options model) under assets/schemas.
+//! Vendored JSON schemas (task.toml, trial config, each agent's options) under assets/schemas.
 
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};

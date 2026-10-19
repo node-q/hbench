@@ -570,7 +570,7 @@ fn bash_inline(script: &str) -> String {
     format!("bash -lc {}", quote(script))
 }
 
-/// Owns the in-environment desktop and executes actions (`Computer1Session`).
+/// Owns the in-environment desktop and executes actions.
 struct Desktop {
     geo: Geometry,
     agent_dir: String,
@@ -2033,7 +2033,7 @@ mod tests {
         assert!(parse_response("{\"action\": {\"type\": \"fly\"}}").warning.contains("Unknown action type: 'fly'"));
         let s = parse_step("{\"action\": 3}");
         assert!(s.needs_retry && s.feedback == "ERROR: Field 'action' must be an object");
-        // Every ComputerAction field is recorded, unset ones as null.
+        // Every `Action` field is recorded, unset ones as null.
         let args = serde_json::to_value(Action::new("wait")).unwrap();
         assert_eq!(
             (args["type"].clone(), args["source"].clone(), args["x"].clone()),

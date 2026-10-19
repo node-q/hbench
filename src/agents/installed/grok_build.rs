@@ -295,7 +295,7 @@ exit "${{STATUS:-1}}"
     }
 }
 
-/// GrokBuildOptions Cli fields -> flags (with env fallbacks).
+/// grok-build options as CLI flags (with env fallbacks).
 fn cli_flags(args: &AgentArgs) -> Result<String> {
     let opt = |k: &str, env: &str| if args.kwargs.contains_key(k) { args.kw(k) } else { args.get_env(env) };
     let mut f = vec![];
@@ -319,7 +319,7 @@ fn classify_grok(output: &str) -> &'static str {
     super::classify_ordered(output, p, &[])
 }
 
-/// GrokUsage buckets: (input, output, cache_read, cache_creation, reasoning). None if malformed.
+/// grok usage buckets: (input, output, cache_read, cache_creation, reasoning). None if malformed.
 type Usage = [i64; 5];
 
 fn parse_usage(v: &Value) -> Option<Usage> {

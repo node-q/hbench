@@ -287,7 +287,9 @@ impl Tmux {
         Ok(true)
     }
 
-    /// New output since the last call (quirky prefix matching kept as is), else the screen.
+    /// New output since the last call, else the screen. When the previous buffer is found in the current
+    /// one, the cut point is the character offset of the previous buffer's last line counted from the start
+    /// of the current buffer, not from the match.
     pub async fn get_incremental_output(&mut self, sh: &dyn Shell) -> Result<String> {
         let current = self.capture_pane(sh, true).await?;
         let Some(prev) = self.previous_buffer.replace(current.clone()) else {

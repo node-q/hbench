@@ -26,7 +26,7 @@ const EVENTS_PATH: &str = "/logs/agent/strands-events.jsonl";
 const ANTHROPIC_MODEL_PROVIDER: &str = "strands.models.anthropic.AnthropicModel";
 const IGNORE: [&str; 6] = [".git", ".venv", "__pycache__", ".pytest_cache", ".ruff_cache", ".env"];
 
-/// PEP 440 subset normalization (`str(Version(v))` for common release/pre/post/dev forms).
+/// Normalized PEP 440 version text for the common release/pre/post/dev forms.
 fn normalize_version(v: &str) -> Result<String> {
     let re =
         Regex::new(r"^v?(\d+(?:\.\d+)*)(?:[-_.]?(a|b|rc|alpha|beta|c)[-_.]?(\d*))?(?:[-_.]?post[-_.]?(\d*))?(?:[-_.]?dev[-_.]?(\d*))?$")
@@ -53,7 +53,7 @@ fn normalize_version(v: &str) -> Result<String> {
     Ok(out)
 }
 
-/// Kwarg dicts must be plain JSON (numbers are finite by construction).
+/// Kwarg objects must be plain JSON (numbers are finite by construction).
 fn validate_json(v: &Value, path: &str) -> Result<()> {
     match v {
         Value::Object(o) => o.iter().try_for_each(|(k, c)| validate_json(c, &format!("{path}.{k}"))),
