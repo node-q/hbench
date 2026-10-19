@@ -46,9 +46,9 @@ pub enum LlmError {
     ContextLength(String),
     /// The response hit the output token limit (finish_reason == "length").
     OutputLength { msg: String, truncated: String },
-    /// Anything else; `kind` is the provider exception type name (`RateLimitError`, `APIConnectionError`, ...). `retry_after`: `Some` for
-    /// transient failures (network, 408/409/429/5xx), holding the server's Retry-After (zero if none).
-    Api { kind: &'static str, msg: String, retry_after: Option<Duration> },
+    /// Anything else (`ApiRateLimit`, `NetworkConnection`, ...). `retry_after`: `Some` for transient
+    /// failures (network, 408/409/429/5xx), holding the server's Retry-After (zero if none).
+    Api { kind: ErrorKind, msg: String, retry_after: Option<Duration> },
 }
 
 impl std::fmt::Display for LlmError {
@@ -63,9 +63,9 @@ impl std::error::Error for LlmError {}
 impl LlmError {
     pub fn kind(&self) -> ErrorKind {
         match self {
-            LlmError::ContextLength(_) => ErrorKind::ContextLengthExceeded,
-            LlmError::OutputLength { .. } => ErrorKind::OutputLengthExceeded,
-            LlmError::Api { kind, .. } => ErrorKind::from(*kind),
+            LlmError::ContextLength(_) => ErrorKind::ContextWindowExceeded,
+            LlmError::OutputLength { .. } => ErrorKind::OutputTokenExceeded,
+            LlmError::Api { kind, .. } => kind.clone(),
         }
     }
     /// `Some(server hint)` if the request may be retried.
@@ -82,12 +82,12 @@ impl LlmError {
 }
 
 /// A non-retryable API error.
-pub fn api_err(kind: &'static str, msg: impl Into<String>) -> LlmError {
+pub fn api_err(kind: ErrorKind, msg: impl Into<String>) -> LlmError {
     LlmError::Api { kind, msg: msg.into(), retry_after: None }
 }
 
 /// A transient (retryable) error; `retry_after` is the server's hint, zero if none.
-fn transient_err(kind: &'static str, msg: impl Into<String>, retry_after: Duration) -> LlmError {
+fn transient_err(kind: ErrorKind, msg: impl Into<String>, retry_after: Duration) -> LlmError {
     LlmError::Api { kind, msg: msg.into(), retry_after: Some(retry_after) }
 }
 
@@ -468,25 +468,28 @@ pub fn is_context_length_error(text: &str) -> bool {
     .any(|p| t.contains(p))
 }
 
-/// The provider exception type for an HTTP error status. Transient statuses (408/409/429/5xx)
-/// are retryable and carry the server's Retry-After (`retry_after`, zero if none).
+/// The exception type for a provider's HTTP error status, named as the installed agents' errors are.
+pub fn http_status_kind(status: u16) -> ErrorKind {
+    match status {
+        400 | 422 => ErrorKind::ApiBadRequest,
+        401 | 403 => ErrorKind::AgentAuthentication,
+        404 => ErrorKind::ModelNotFound,
+        408 => ErrorKind::ApiResponseStalled,
+        429 => ErrorKind::ApiRateLimit,
+        502..=504 | 529 => ErrorKind::ApiOverloaded,
+        s if s >= 500 => ErrorKind::ApiInternalServer,
+        _ => ErrorKind::UnknownApi,
+    }
+}
+
+/// The error for an HTTP error status. Transient statuses (408/409/429/5xx) are retryable and
+/// carry the server's Retry-After (`retry_after`, zero if none).
 pub fn classify_http(status: u16, body: &str, retry_after: Duration) -> LlmError {
     let msg = format!("HTTP {status}: {}", tail(body, 4000));
     if matches!(status, 400 | 413) && is_context_length_error(body) {
         return LlmError::ContextLength(msg);
     }
-    let kind = match status {
-        400 => "BadRequestError",
-        401 => "AuthenticationError",
-        403 => "PermissionDeniedError",
-        404 => "NotFoundError",
-        408 => "Timeout",
-        422 => "UnprocessableEntityError",
-        429 => "RateLimitError",
-        503 => "ServiceUnavailableError",
-        s if s >= 500 => "InternalServerError",
-        _ => "APIError",
-    };
+    let kind = http_status_kind(status);
     if matches!(status, 408 | 409 | 429) || status >= 500 { transient_err(kind, msg, retry_after) } else { api_err(kind, msg) }
 }
 
@@ -638,8 +641,9 @@ fn ints(v: &Value) -> Option<Vec<i64>> {
 
 /// Chat-completions response -> LlmResponse.
 pub fn parse_chat(v: &Value, info: Option<&ModelInfo>, model: &str, rollout: bool) -> Result<LlmResponse, LlmError> {
-    let choice =
-        v["choices"].get(0).ok_or_else(|| api_err("APIError", format!("response has no choices: {}", tail(&v.to_string(), 2000))))?;
+    let choice = v["choices"]
+        .get(0)
+        .ok_or_else(|| api_err(ErrorKind::UnknownApi, format!("response has no choices: {}", tail(&v.to_string(), 2000))))?;
     let msg = &choice["message"];
     let content = content_text(&msg["content"]);
     let reasoning = msg["reasoning_content"].as_str().or(msg["reasoning"].as_str()).map(String::from);
@@ -680,8 +684,9 @@ pub fn parse_chat(v: &Value, info: Option<&ModelInfo>, model: &str, rollout: boo
 
 /// Anthropic Messages response -> LlmResponse (usage in chat-completions terms).
 pub fn parse_anthropic(v: &Value, info: Option<&ModelInfo>, model: &str) -> Result<LlmResponse, LlmError> {
-    let blocks =
-        v["content"].as_array().ok_or_else(|| api_err("APIError", format!("unexpected response: {}", tail(&v.to_string(), 2000))))?;
+    let blocks = v["content"]
+        .as_array()
+        .ok_or_else(|| api_err(ErrorKind::UnknownApi, format!("unexpected response: {}", tail(&v.to_string(), 2000))))?;
     let text: String = blocks.iter().filter(|b| b["type"] == "text").filter_map(|b| b["text"].as_str()).collect();
     let thinking: String = blocks.iter().filter(|b| b["type"] == "thinking").filter_map(|b| b["thinking"].as_str()).collect();
     if v["stop_reason"] == "max_tokens" {
@@ -900,7 +905,7 @@ impl ChatClient {
         let mut p = self.params(add_anthropic_caching(messages, model), kw);
         let v = match send(&self.ep.url, &self.request(p.clone())).await {
             // Providers that reject return_token_ids / session_id in extra_body: retry without them.
-            Err(e @ LlmError::Api { kind: "BadRequestError", .. })
+            Err(e @ LlmError::Api { kind: ErrorKind::ApiBadRequest, .. })
                 if e.to_string().contains("Unrecognized request argument") && p.contains_key("extra_body") =>
             {
                 let msg = e.to_string();
@@ -974,7 +979,7 @@ pub async fn send(url: &str, req: &Request) -> Result<Value, LlmError> {
     if !(200..300).contains(&status) {
         return Err(classify_http(status, &body, retry_after.unwrap_or_default()));
     }
-    serde_json::from_str(&body).map_err(|e| api_err("APIError", format!("invalid JSON from {url}: {e}: {}", tail(&body, 1000))))
+    serde_json::from_str(&body).map_err(|e| api_err(ErrorKind::UnknownApi, format!("invalid JSON from {url}: {e}: {}", tail(&body, 1000))))
 }
 
 /// Removes the file when dropped, so a cancelled request leaves no prompt behind.
@@ -1006,11 +1011,11 @@ fn parse_retry_after(headers: &str) -> Option<Duration> {
 }
 
 /// POST JSON; returns (HTTP status, body, Retry-After). Only transport failures are errors
-/// (kind `Timeout` or `APIConnectionError`, both retryable).
+/// (`ApiResponseStalled` for a timeout, else `NetworkConnection`; both retryable).
 pub async fn send_raw(url: &str, req: &Request) -> Result<(u16, String, Option<Duration>), LlmError> {
     let body = TempFile(
         crate::env::private_temp_file("hbench-llm", &serde_json::to_vec(&req.body).unwrap_or_default())
-            .map_err(|e| api_err("APIConnectionError", format!("writing request body: {e:#}")))?,
+            .map_err(|e| api_err(ErrorKind::NetworkConnection, format!("writing request body: {e:#}")))?,
     );
     let hdrs = TempFile(body.0.with_extension("headers"));
     // No low-speed abort: non-streaming responses are legitimately silent for many minutes.
@@ -1039,10 +1044,11 @@ pub async fn send_raw(url: &str, req: &Request) -> Result<(u16, String, Option<D
         child.wait_with_output().await
     }
     .await
-    .map_err(|e| api_err("APIConnectionError", format!("running curl: {e}")))?;
+    .map_err(|e| api_err(ErrorKind::NetworkConnection, format!("running curl: {e}")))?;
     let stdout = String::from_utf8_lossy(&out.stdout);
     if !out.status.success() {
-        let kind = if out.status.code() == Some(28) { "Timeout" } else { "APIConnectionError" };
+        const CURL_TIMED_OUT: i32 = 28;
+        let kind = if out.status.code() == Some(CURL_TIMED_OUT) { ErrorKind::ApiResponseStalled } else { ErrorKind::NetworkConnection };
         return Err(transient_err(kind, format!("{url}: {}", String::from_utf8_lossy(&out.stderr).trim()), Duration::ZERO));
     }
     let retry_after = std::fs::read_to_string(&hdrs.0).ok().and_then(|h| parse_retry_after(&h));
@@ -1355,10 +1361,13 @@ mod tests {
             classify_http(400, "This model's maximum context length is 8192 tokens", Duration::ZERO),
             LlmError::ContextLength(_)
         ));
-        assert_eq!(classify_http(429, "slow down", Duration::ZERO).kind(), "RateLimitError");
-        assert_eq!(classify_http(529, "overloaded", Duration::ZERO).kind(), "InternalServerError");
+        assert_eq!(classify_http(429, "slow down", Duration::ZERO).kind(), "ApiRateLimitError");
+        assert_eq!(classify_http(529, "overloaded", Duration::ZERO).kind(), "ApiOverloadedError");
+        assert_eq!(classify_http(500, "", Duration::ZERO).kind(), "ApiInternalServerError");
+        assert_eq!(classify_http(404, "no such model", Duration::ZERO).kind(), "ModelNotFoundError");
+        assert_eq!(classify_http(400, "bad", Duration::ZERO).kind(), "ApiBadRequestError");
         let auth = classify_http(401, "invalid x-api-key", Duration::ZERO);
-        assert_eq!(auth.kind(), "AuthenticationError");
+        assert_eq!(auth.kind(), "AgentAuthenticationError");
         assert!(auth.retry_after().is_none() && LlmError::ContextLength(String::new()).retry_after().is_none());
         for s in [408, 409, 429, 500, 503, 529] {
             assert_eq!(classify_http(s, "", Duration::ZERO).retry_after(), Some(Duration::ZERO), "{s}");
@@ -1379,7 +1388,7 @@ mod tests {
         let d = backoff(3, 2.0, 60.0, Duration::ZERO);
         assert!(d > Duration::from_secs(5) && d <= Duration::from_secs(8));
         assert!(backoff(20, 2.0, 60.0, Duration::ZERO) <= Duration::from_secs(60));
-        assert_eq!(crate::env::error_kind(&classify_http(429, "", Duration::ZERO).into_anyhow()), "RateLimitError");
+        assert_eq!(crate::env::error_kind(&classify_http(429, "", Duration::ZERO).into_anyhow()), "ApiRateLimitError");
     }
 
     #[test]
@@ -1439,7 +1448,7 @@ mod tests {
         let l = llm(cfg, &[("OPENAI_API_KEY", "sk-\"q\\")]);
         // 401 is not retried; the 429 is, after its Retry-After.
         let e = l.call("x", &[], &Map::new(), None).await.unwrap_err();
-        assert_eq!(e.kind(), "AuthenticationError");
+        assert_eq!(e.kind(), "AgentAuthenticationError");
         let r = l.call("he said \"hi\" \\ ok", &[], &Map::new(), None).await.unwrap();
         assert_eq!(r.content, "/v1/chat/completions|Bearer sk-\"q\\|he said \"hi\" \\ ok");
         assert_eq!((r.model_name.as_deref(), r.usage.unwrap().prompt_tokens), (Some("gpt-4o-x"), 3));
@@ -1450,7 +1459,7 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert_eq!(e.kind(), "APIConnectionError"); // server gone
+        assert_eq!(e.kind(), "NetworkConnectionError"); // server gone
     }
 
     struct Fixed(&'static str);

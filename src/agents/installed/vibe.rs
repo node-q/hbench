@@ -4,7 +4,7 @@ use super::common::{installed_dir, skills_dir, uv_install};
 use super::pins;
 use super::{ensure_system_dependencies, exec_agent, exec_error};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
-use crate::env::{kind_err, quote};
+use crate::env::{ErrorKind, kind_err, quote};
 use crate::fmt::{float_with_point, truthy};
 use anyhow::{Result, anyhow, bail};
 use regex::Regex;
@@ -76,25 +76,25 @@ fn to_toml(scalars: &[(&str, String)], tables: &[(&str, Vec<TomlTable>)]) -> Str
     lines.join("\n") + "\n"
 }
 
-fn vibe_patterns() -> &'static [(Regex, &'static str)] {
-    static P: OnceLock<Vec<(Regex, &'static str)>> = OnceLock::new();
+fn vibe_patterns() -> &'static [(Regex, ErrorKind)] {
+    static P: OnceLock<Vec<(Regex, ErrorKind)>> = OnceLock::new();
     P.get_or_init(|| {
         [
-            (r"price limit exceeded: \$", "ApiUsageLimitError"),
-            (r"turn limit of \d+ reached", "ApiUsageLimitError"),
-            (r"token limit exceeded: [\d,]+ > [\d,]+", "ApiUsageLimitError"),
-            (r"read ?timeout", "ApiConnectionError"),
-            (r"connect(?:ion)? ?(?:error|timeout|reset|aborted)", "ApiConnectionError"),
-            (r"network error", "ApiConnectionError"),
+            (r"price limit exceeded: \$", ErrorKind::ApiUsageLimit),
+            (r"turn limit of \d+ reached", ErrorKind::ApiUsageLimit),
+            (r"token limit exceeded: [\d,]+ > [\d,]+", ErrorKind::ApiUsageLimit),
+            (r"read ?timeout", ErrorKind::ApiConnection),
+            (r"connect(?:ion)? ?(?:error|timeout|reset|aborted)", ErrorKind::ApiConnection),
+            (r"network error", ErrorKind::ApiConnection),
         ]
         .iter()
-        .map(|(p, k)| (Regex::new(&format!("(?i){p}")).unwrap(), *k))
+        .map(|(p, k)| (Regex::new(&format!("(?i){p}")).unwrap(), k.clone()))
         .collect()
     })
 }
 
 /// Base ERROR_PATTERNS + Vibe's, last match wins.
-fn vibe_classify(output: &str) -> &'static str {
+fn vibe_classify(output: &str) -> ErrorKind {
     super::classify_with(output, vibe_patterns())
 }
 

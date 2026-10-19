@@ -9,7 +9,7 @@ use super::{classify, connection, ensure_system_dependencies, exec_agent, upload
 use crate::agents::model_connection::Spec;
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx, pricing};
 use crate::atif;
-use crate::env::{kind_err, quote};
+use crate::env::{ErrorKind, kind_err, quote};
 use anyhow::{Result, bail};
 use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
@@ -136,16 +136,16 @@ fn events(text: &str) -> Vec<Value> {
 }
 
 /// Error type for a failed run: the provider status on the last errored `turn_end`, else output patterns.
-pub fn failure_kind(output: &str) -> &'static str {
+pub fn failure_kind(output: &str) -> ErrorKind {
     let reason = events(output).into_iter().rev().find(|e| e["type"] == "status" && e["phase"] == "turn_end").map(|e| e["reason"].clone());
     if let Some(r) = reason.filter(|r| r["kind"] == "error") {
         let err = &r["error"];
         match (err["status"].as_i64(), err["code"].as_str()) {
-            (Some(401 | 403), _) | (_, Some("AUTH")) => return "AgentAuthenticationError",
-            (Some(402), _) => return "ApiUsageLimitError",
-            (Some(429), _) => return "ApiRateLimitError",
-            (Some(500), _) => return "ApiInternalServerError",
-            (Some(502..=504), _) => return "ApiOverloadedError",
+            (Some(401 | 403), _) | (_, Some("AUTH")) => return ErrorKind::AgentAuthentication,
+            (Some(402), _) => return ErrorKind::ApiUsageLimit,
+            (Some(429), _) => return ErrorKind::ApiRateLimit,
+            (Some(500), _) => return ErrorKind::ApiInternalServer,
+            (Some(502..=504), _) => return ErrorKind::ApiOverloaded,
             _ => return classify(err["message"].as_str().unwrap_or_default()),
         }
     }

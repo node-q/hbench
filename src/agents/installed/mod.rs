@@ -47,7 +47,7 @@ pub mod vibe;
 
 use super::model_connection::{self, Resolved, Spec};
 use super::{AgentArgs, AgentBox, AgentCtx};
-use crate::env::{ExecResult, kind_err, quote, tail};
+use crate::env::{ErrorKind, ExecResult, kind_err, quote, tail};
 use anyhow::{Result, bail};
 use common::NVM_LOAD;
 use regex::Regex;
@@ -252,85 +252,85 @@ pub async fn ensure_system_dependencies(cx: &AgentCtx<'_>, deps: &[&str]) -> Res
 }
 
 /// Error patterns: the match furthest toward the end of the output wins.
-fn error_patterns() -> &'static [(Regex, &'static str)] {
-    static P: OnceLock<Vec<(Regex, &'static str)>> = OnceLock::new();
+fn error_patterns() -> &'static [(Regex, ErrorKind)] {
+    static P: OnceLock<Vec<(Regex, ErrorKind)>> = OnceLock::new();
     P.get_or_init(|| {
-        let raw: &[(&str, &str)] = &[
-            (r"rate.?limit", "ApiRateLimitError"),
-            (r"too many requests", "ApiRateLimitError"),
-            (r"specified API usage limits", "ApiUsageLimitError"),
-            (r"You've hit your usage limit", "ApiUsageLimitError"),
-            (r"You have an unpaid invoice", "ApiUsageLimitError"),
-            (r"Quota exceeded.", "ApiUsageLimitError"),
-            (r"You have no credits remaining", "ApiUsageLimitError"),
-            (r"Free tier users do not have access|Upgrade to paid credits", "ApiUsageLimitError"),
-            (r"Budget has been exceeded![\s\S]{0,300}?Max\s+budget:", "ApiUsageLimitError"),
-            (r"API Error: 500 Internal server error", "ApiInternalServerError"),
-            (r"API Error: Server error mid-response", "ApiInternalServerError"),
-            (r"RetriableError: \[internal\] Error", "ApiInternalServerError"),
-            (r"API Error: Overloaded", "ApiOverloadedError"),
-            (r"ServiceUnavailableError", "ApiOverloadedError"),
-            (r"Selected model is at capacity\. Please try a different model\.", "ApiOverloadedError"),
-            (r"API Error: (?:Connection closed|Connection lost) mid-response", "ApiConnectionClosedError"),
-            (r"API Error: Connection to the API was lost", "ApiConnectionClosedError"),
-            (r"API Error: stream closed before completion", "ApiConnectionClosedError"),
-            (r"API Error: (?:Response stalled mid-stream|Stream idle timeout)", "ApiResponseStalledError"),
-            (r"response exceeded .+ output token maximum", "OutputTokenExceededError"),
-            (r"input token count exceeds the maximum number of tokens|prompt is too long: \d+ tokens > \d+ maximum", "ContextWindowExceededError"),
-            (r"Not logged in", "AgentAuthenticationError"),
+        let raw: &[(&str, ErrorKind)] = &[
+            (r"rate.?limit", ErrorKind::ApiRateLimit),
+            (r"too many requests", ErrorKind::ApiRateLimit),
+            (r"specified API usage limits", ErrorKind::ApiUsageLimit),
+            (r"You've hit your usage limit", ErrorKind::ApiUsageLimit),
+            (r"You have an unpaid invoice", ErrorKind::ApiUsageLimit),
+            (r"Quota exceeded.", ErrorKind::ApiUsageLimit),
+            (r"You have no credits remaining", ErrorKind::ApiUsageLimit),
+            (r"Free tier users do not have access|Upgrade to paid credits", ErrorKind::ApiUsageLimit),
+            (r"Budget has been exceeded![\s\S]{0,300}?Max\s+budget:", ErrorKind::ApiUsageLimit),
+            (r"API Error: 500 Internal server error", ErrorKind::ApiInternalServer),
+            (r"API Error: Server error mid-response", ErrorKind::ApiInternalServer),
+            (r"RetriableError: \[internal\] Error", ErrorKind::ApiInternalServer),
+            (r"API Error: Overloaded", ErrorKind::ApiOverloaded),
+            (r"ServiceUnavailableError", ErrorKind::ApiOverloaded),
+            (r"Selected model is at capacity\. Please try a different model\.", ErrorKind::ApiOverloaded),
+            (r"API Error: (?:Connection closed|Connection lost) mid-response", ErrorKind::ApiConnectionClosed),
+            (r"API Error: Connection to the API was lost", ErrorKind::ApiConnectionClosed),
+            (r"API Error: stream closed before completion", ErrorKind::ApiConnectionClosed),
+            (r"API Error: (?:Response stalled mid-stream|Stream idle timeout)", ErrorKind::ApiResponseStalled),
+            (r"response exceeded .+ output token maximum", ErrorKind::OutputTokenExceeded),
+            (r"input token count exceeds the maximum number of tokens|prompt is too long: \d+ tokens > \d+ maximum", ErrorKind::ContextWindowExceeded),
+            (r"Not logged in", ErrorKind::AgentAuthentication),
             (
                 r"\binvalid_api_key\b|Invalid API key\b|API key is invalid\b|Incorrect API key provided\b|unexpected status 401 Unauthorized\b",
-                "AgentAuthenticationError",
+                ErrorKind::AgentAuthentication,
             ),
-            (r#"could not read Username for ['"]https://github\.com"#, "AgentAuthenticationError"),
-            (r"Cannot use this model", "ModelNotFoundError"),
+            (r#"could not read Username for ['"]https://github\.com"#, ErrorKind::AgentAuthentication),
+            (r"Cannot use this model", ErrorKind::ModelNotFound),
             (
                 r"\blitellm\.UnsupportedParamsError\b|does not support parameters:\s*\[[^\]]*\],\s*for\s+model=|Unsupported parameter: '[\w.]+'[\s\S]{0,300}?\bunsupported_parameter\b|_map_reasoning_effort_to_thinking_level\b[\s\S]{0,300}?Invalid reasoning effort",
-                "UnsupportedModelParametersError",
+                ErrorKind::UnsupportedModelParameters,
             ),
-            (r"\blitellm\.NotFoundError\b", "ModelNotFoundError"),
-            (r#"Invalid proxy server token passed|\btoken_not_found_in_db\b|"turn\.failed"[^\n]{0,60}?unexpected status 403\b"#, "AgentAuthenticationError"),
-            (r#""turn\.failed"[^\n]{0,60}?unexpected status 500\b"#, "ApiInternalServerError"),
-            (r#""turn\.failed"[^\n]{0,60}?unexpected status 50[234]\b"#, "ApiOverloadedError"),
-            (r"Provider Error We.re having trouble finding the resource you requested", "ApiProviderResourceNotFoundError"),
+            (r"\blitellm\.NotFoundError\b", ErrorKind::ModelNotFound),
+            (r#"Invalid proxy server token passed|\btoken_not_found_in_db\b|"turn\.failed"[^\n]{0,60}?unexpected status 403\b"#, ErrorKind::AgentAuthentication),
+            (r#""turn\.failed"[^\n]{0,60}?unexpected status 500\b"#, ErrorKind::ApiInternalServer),
+            (r#""turn\.failed"[^\n]{0,60}?unexpected status 50[234]\b"#, ErrorKind::ApiOverloaded),
+            (r"Provider Error We.re having trouble finding the resource you requested", ErrorKind::ApiProviderResourceNotFound),
             (
                 r#"safety measures that flagged|Cyber Verification Program|flagged for possible cybersecurity risk|Trusted Access for Cyber|chatgpt\.com/cyber|This request was blocked by our safety systems\.|API Error: [^\r\n]{1,80} can.t help with this\. Start a new session to continue\.|Output blocked by content filtering policy|violate our Usage Policy|https://www\.anthropic\.com/legal/aup|triggered cyber-related safeguards|model_refusal_no_fallback|ContentFilterError|blocked by the provider.s content filter|"reason"\s*:\s*"content-filter""#,
-                "AgentSafetyRefusalError",
+                ErrorKind::AgentSafetyRefusal,
             ),
-            (r"API Error", "UnknownApiError"),
-            (r"Error when talking to Gemini API\s+Full report available at:", "UnknownApiError"),
-            (r"SSL_ERROR_SYSCALL", "NetworkConnectionError"),
-            (r"SSL_connect", "NetworkConnectionError"),
-            (r"Could not resolve host", "NetworkConnectionError"),
-            (r"Fatal: Could not connect to the release server to download the manifest", "NetworkConnectionError"),
-            (r"Connection refused", "NetworkConnectionError"),
-            (r"Connection timed out", "NetworkConnectionError"),
-            (r"Request timed out", "NetworkConnectionError"),
-            (r"No route to host", "NetworkConnectionError"),
-            (r"curl: \(\d+\)", "NetworkConnectionError"),
+            (r"API Error", ErrorKind::UnknownApi),
+            (r"Error when talking to Gemini API\s+Full report available at:", ErrorKind::UnknownApi),
+            (r"SSL_ERROR_SYSCALL", ErrorKind::NetworkConnection),
+            (r"SSL_connect", ErrorKind::NetworkConnection),
+            (r"Could not resolve host", ErrorKind::NetworkConnection),
+            (r"Fatal: Could not connect to the release server to download the manifest", ErrorKind::NetworkConnection),
+            (r"Connection refused", ErrorKind::NetworkConnection),
+            (r"Connection timed out", ErrorKind::NetworkConnection),
+            (r"Request timed out", ErrorKind::NetworkConnection),
+            (r"No route to host", ErrorKind::NetworkConnection),
+            (r"curl: \(\d+\)", ErrorKind::NetworkConnection),
         ];
-        raw.iter().map(|(p, k)| (Regex::new(&format!("(?i){p}")).unwrap(), *k)).collect()
+        raw.iter().map(|(p, k)| (Regex::new(&format!("(?i){p}")).unwrap(), k.clone())).collect()
     })
 }
 
-/// Classify failed command output into an error type name.
-pub fn classify(output: &str) -> &'static str {
+/// The error type of a failed command's output.
+pub fn classify(output: &str) -> ErrorKind {
     classify_with(output, &[])
 }
 
 /// `classify` with agent-specific patterns appended after the base list:
 /// last match end wins, earlier pattern wins ties.
-pub fn classify_with(output: &str, extra: &[(Regex, &'static str)]) -> &'static str {
+pub fn classify_with(output: &str, extra: &[(Regex, ErrorKind)]) -> ErrorKind {
     classify_ordered(output, &[], extra)
 }
 
 /// Agent patterns placed `before` and/or `after` the base list; same last-match/tie rules.
-pub fn classify_ordered(output: &str, before: &[(Regex, &'static str)], after: &[(Regex, &'static str)]) -> &'static str {
+pub fn classify_ordered(output: &str, before: &[(Regex, ErrorKind)], after: &[(Regex, ErrorKind)]) -> ErrorKind {
     // A soft Claude divert continues the run; don't call it a safety refusal.
     let skip_asr = output.contains("model_refusal_fallback") && !output.contains("model_refusal_no_fallback");
-    let mut best: Option<(usize, &'static str)> = None;
+    let mut best: Option<(usize, &ErrorKind)> = None;
     for (re, kind) in before.iter().chain(error_patterns().iter()).chain(after.iter()) {
-        if skip_asr && *kind == "AgentSafetyRefusalError" {
+        if skip_asr && *kind == ErrorKind::AgentSafetyRefusal {
             continue;
         }
         for m in re.find_iter(output) {
@@ -339,7 +339,7 @@ pub fn classify_ordered(output: &str, before: &[(Regex, &'static str)], after: &
             }
         }
     }
-    best.map(|(_, k)| k).unwrap_or("NonZeroAgentExitCodeError")
+    best.map_or(ErrorKind::NonZeroAgentExitCode, |(_, k)| k.clone())
 }
 
 /// Keep only JSONL events `keep` accepts (non-JSON lines kept), so tool output can't match patterns.

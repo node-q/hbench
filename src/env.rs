@@ -19,7 +19,8 @@ use tokio::process::Command;
 macro_rules! error_kinds {
     ($($variant:ident => $name:literal,)*) => {
         /// Exception type of a failed trial step, as written to result.json and matched by the retry
-        /// include/exclude lists. Names hbench doesn't raise itself (agent- or provider-reported) are `Other`.
+        /// include/exclude lists. Every agent reports its failures with these names; `Other` holds names
+        /// read back from files (retry lists, older results) that hbench no longer raises.
         #[derive(Debug, Clone, PartialEq, Eq)]
         pub enum ErrorKind {
             $($variant,)*
@@ -65,8 +66,15 @@ error_kinds! {
     NetworkConnection => "NetworkConnectionError",
     ContextWindowExceeded => "ContextWindowExceededError",
     OutputTokenExceeded => "OutputTokenExceededError",
-    ContextLengthExceeded => "ContextLengthExceededError",
-    OutputLengthExceeded => "OutputLengthExceededError",
+    ApiBadRequest => "ApiBadRequestError",
+    ApiRateLimit => "ApiRateLimitError",
+    ApiUsageLimit => "ApiUsageLimitError",
+    ApiOverloaded => "ApiOverloadedError",
+    ApiInternalServer => "ApiInternalServerError",
+    ApiConnection => "ApiConnectionError",
+    ApiConnectionClosed => "ApiConnectionClosedError",
+    ApiResponseStalled => "ApiResponseStalledError",
+    ApiProviderResourceNotFound => "ApiProviderResourceNotFoundError",
     UnknownApi => "UnknownApiError",
     AddTestsDir => "AddTestsDirError",
     DownloadVerifierDir => "DownloadVerifierDirError",
@@ -82,19 +90,44 @@ impl ErrorKind {
     /// exit and classified agent/API failure family).
     pub fn is_agent_run_error(&self) -> bool {
         use ErrorKind::*;
-        matches!(
-            self,
+        match self {
             AgentTimeout
-                | NonZeroAgentExitCode
-                | AgentAuthentication
-                | ModelNotFound
-                | UnsupportedModelParameters
-                | NetworkConnection
-                | OutputTokenExceeded
-                | ContextWindowExceeded
-                | UnknownApi
-                | AgentSafetyRefusal
-        ) || matches!(self, Other(s) if s.starts_with("Api"))
+            | NonZeroAgentExitCode
+            | AgentAuthentication
+            | AgentSafetyRefusal
+            | ModelNotFound
+            | UnsupportedModelParameters
+            | NetworkConnection
+            | ContextWindowExceeded
+            | OutputTokenExceeded
+            | ApiBadRequest
+            | ApiRateLimit
+            | ApiUsageLimit
+            | ApiOverloaded
+            | ApiInternalServer
+            | ApiConnection
+            | ApiConnectionClosed
+            | ApiResponseStalled
+            | ApiProviderResourceNotFound
+            | UnknownApi => true,
+            Runtime
+            | Timeout
+            | Cancelled
+            | Environment
+            | EnvironmentStart
+            | EnvironmentStartTimeout
+            | Healthcheck
+            | AgentSetup
+            | AgentSetupTimeout
+            | AddTestsDir
+            | DownloadVerifierDir
+            | VerifierTimeout
+            | VerifierOutputParse
+            | RewardFileEmpty
+            | RewardFileNotFound
+            | Regrade
+            | Other(_) => false,
+        }
     }
 }
 
@@ -129,8 +162,8 @@ impl std::fmt::Display for KindError {
 }
 impl std::error::Error for KindError {}
 
-pub fn kind_err(kind: impl Into<ErrorKind>, msg: impl Into<String>) -> anyhow::Error {
-    KindError { kind: kind.into(), msg: msg.into() }.into()
+pub fn kind_err(kind: ErrorKind, msg: impl Into<String>) -> anyhow::Error {
+    KindError { kind, msg: msg.into() }.into()
 }
 
 /// The exception type of `e`: the first `KindError` in its chain, else `RuntimeError`.
@@ -1326,7 +1359,9 @@ mod tests {
             assert_eq!(ErrorKind::from(s).as_str(), s);
         }
         assert_eq!(ErrorKind::from("AgentTimeoutError"), ErrorKind::AgentTimeout);
-        assert!(ErrorKind::from("ApiRateLimitError").is_agent_run_error() && !ErrorKind::Runtime.is_agent_run_error());
+        assert_eq!(ErrorKind::from("ApiRateLimitError"), ErrorKind::ApiRateLimit);
+        assert!(ErrorKind::ApiRateLimit.is_agent_run_error() && ErrorKind::ContextWindowExceeded.is_agent_run_error());
+        assert!(!ErrorKind::Runtime.is_agent_run_error() && !ErrorKind::from("RateLimitError").is_agent_run_error());
         assert_eq!(error_kind(&anyhow!("plain")), ErrorKind::Runtime);
     }
     #[test]

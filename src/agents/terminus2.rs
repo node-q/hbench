@@ -2058,7 +2058,7 @@ mod tests {
         let llm = MockLlm::new(vec![Err(LlmError::ContextLength("too long".into()))]);
         let (mut t, _) = agent(json!({"enable_summarize": false}), &llm);
         let e = t.run_with("task", &MockShell::default(), &mut AgentContext::default()).await.unwrap_err();
-        assert_eq!(crate::env::error_kind(&e), "ContextLengthExceededError");
+        assert_eq!(crate::env::error_kind(&e), "ContextWindowExceededError");
         assert_eq!(llm.prompts().len(), 1); // not retried
     }
 
@@ -2076,7 +2076,7 @@ mod tests {
         let llm = MockLlm::new((0..=MAX_OUTPUT_LENGTH_RETRIES + 1).map(|_| cut()).collect());
         let (mut t, _) = agent(json!({}), &llm);
         let e = t.run_with("task", &MockShell::default(), &mut AgentContext::default()).await.unwrap_err();
-        assert_eq!(crate::env::error_kind(&e), "OutputLengthExceededError");
+        assert_eq!(crate::env::error_kind(&e), "OutputTokenExceededError");
         assert_eq!(llm.prompts().len(), MAX_OUTPUT_LENGTH_RETRIES + 1);
 
         let llm = MockLlm::new(vec![
