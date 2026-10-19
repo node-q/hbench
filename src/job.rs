@@ -427,6 +427,8 @@ pub async fn run_job(
         log.line("job cancelled");
     }
     write();
+    // A secret first seen in a later trial may also be in an earlier one's files, and in job.log.
+    crate::redact::scrub_dir(&job_dir);
     let jr = locked(&job_result).clone();
     Ok(jr)
 }

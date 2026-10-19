@@ -13,6 +13,7 @@ mod integrity;
 mod job;
 mod metrics;
 mod migrate;
+mod redact;
 mod registry;
 mod regrade;
 mod schemas;
@@ -1089,6 +1090,7 @@ async fn main() -> ExitCode {
 }
 
 async fn run() -> Result<ExitCode> {
+    redact::register_host_env();
     let ok = |r: Result<()>| r.map(|_| ExitCode::SUCCESS);
     match Cli::parse().cmd {
         Cmd::Exec(a) => ok(exec::run(*a).await),

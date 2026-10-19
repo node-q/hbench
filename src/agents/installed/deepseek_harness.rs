@@ -22,6 +22,13 @@ const SPEC: Spec = Spec {
     base_url_envs: &["DEEPSEEK_BASE_URL"],
     passthrough: false,
 };
+/// `anthropic/<id>` runs through dsh's bundled pi-ai adapter, which speaks native Anthropic Messages.
+const ANTHROPIC: Spec = Spec {
+    default_provider: Some("anthropic"),
+    api_key_envs: &["ANTHROPIC_API_KEY"],
+    base_url_envs: &["ANTHROPIC_BASE_URL"],
+    passthrough: false,
+};
 const EFFORTS: [&str; 4] = ["off", "low", "high", "max"];
 /// dsh's own default route (`agent-default-model` in the shipped profile).
 const DEFAULT_MODEL: &str = "deepseek-flash";
@@ -65,10 +72,13 @@ impl DeepSeekHarness {
     fn route(&self) -> Result<Option<String>> {
         let Some(m) = self.args.model_name.as_deref() else { return Ok(None) };
         match m.split_once('/') {
-            Some(("deepseek", id)) if !id.is_empty() => Ok(Some(id.to_string())),
+            Some(("deepseek" | "anthropic", id)) if !id.is_empty() => Ok(Some(id.to_string())),
             None if !m.is_empty() => Ok(Some(m.to_string())),
-            _ => bail!("{NAME} only serves DeepSeek models: use deepseek/<model>, e.g. deepseek/deepseek-v4-flash"),
+            _ => bail!("{NAME} serves DeepSeek and Anthropic models: use deepseek/<model> or anthropic/<model>"),
         }
+    }
+    fn anthropic(&self) -> bool {
+        self.args.model_name.as_deref().is_some_and(|m| m.starts_with("anthropic/"))
     }
     fn effort(&self) -> Result<Option<String>> {
         opts::choice(&self.args, "reasoning_effort", None, &EFFORTS)
@@ -80,16 +90,25 @@ impl DeepSeekHarness {
         if model.is_none() && effort.is_none() {
             return Ok(None);
         }
-        let mut cfg = json!({"provider": "deepseek-official", "model": model.as_deref().unwrap_or(DEFAULT_MODEL)});
+        let provider = if self.anthropic() { "anthropic" } else { "deepseek-official" };
+        let mut cfg = json!({"provider": provider, "model": model.as_deref().unwrap_or(DEFAULT_MODEL)});
         if let Some(e) = effort {
             cfg["reasoningEffort"] = json!(e);
         }
+        let mut patch = vec![json!({"id": "agent-default-model", "config": cfg})];
+        if self.anthropic() {
+            let mut route = json!({"apiKeyEnv": "ANTHROPIC_API_KEY"});
+            if let Some(u) = connection(&self.args, ANTHROPIC).configured_base_url {
+                route["baseURL"] = json!(u);
+            }
+            patch.push(json!({"id": "llm-pi-ai", "config": {"providers": {"anthropic": route}}}));
+        }
         // JSON is valid YAML.
-        Ok(Some(serde_json::to_string_pretty(&json!([{"id": "agent-default-model", "config": cfg}]))?))
+        Ok(Some(serde_json::to_string_pretty(&patch)?))
     }
 
     fn env(&self) -> BTreeMap<String, String> {
-        let mut env = connection(&self.args, SPEC).env;
+        let mut env = connection(&self.args, if self.anthropic() { ANTHROPIC } else { SPEC }).env;
         // Headless runs can't answer approval prompts; the container is the sandbox.
         env.insert("DSH_PERMISSION_MODE".into(), "danger-full-access".into());
         env
@@ -158,7 +177,8 @@ fn usage(e: &Value) -> Option<(i64, i64, i64, i64)> {
 }
 
 fn cost(model: &str, (p, c, read, write): (i64, i64, i64, i64)) -> Option<f64> {
-    pricing::cost_per_token(&format!("deepseek/{model}"), p, c, write, read).map(|(a, b)| a + b)
+    let key = pricing::pricing_key(&format!("deepseek/{model}"))?;
+    pricing::cost_per_token(&key, p, c, write, read).map(|(a, b)| a + b)
 }
 
 /// One session log (`dsh-sessions/<id>.jsonl`) -> ATIF, counting only events at or after `since_ms`.
@@ -370,6 +390,12 @@ mod tests {
         assert!(agent(json!({}), None).unwrap().patch().unwrap().is_none());
         assert_eq!(agent(json!({"reasoning_effort": "low"}), None).unwrap().patch().unwrap().unwrap().matches(DEFAULT_MODEL).count(), 1);
         assert!(agent(json!({}), Some("openai/gpt-5")).is_err());
+        let args = common::test_args(json!({}), &[("ANTHROPIC_API_KEY", "ak")], Some("anthropic/claude-x"));
+        let c = DeepSeekHarness { version: None, args, session_id: None };
+        let p: Value = serde_json::from_str(&c.patch().unwrap().unwrap()).unwrap();
+        assert_eq!(p[0]["config"], json!({"provider": "anthropic", "model": "claude-x"}));
+        assert_eq!(p[1], json!({"id": "llm-pi-ai", "config": {"providers": {"anthropic": {"apiKeyEnv": "ANTHROPIC_API_KEY"}}}}));
+        assert_eq!(c.env()["ANTHROPIC_API_KEY"], "ak");
         assert!(agent(json!({"reasoning_effort": "medium"}), None).is_err());
         let env = a.env();
         assert_eq!((env["DEEPSEEK_API_KEY"].as_str(), env["DSH_PERMISSION_MODE"].as_str()), ("k", "danger-full-access"));

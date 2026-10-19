@@ -1008,11 +1008,11 @@ fn parse_retry_after(headers: &str) -> Option<Duration> {
 /// POST JSON; returns (HTTP status, body, Retry-After). Only transport failures are errors
 /// (kind `Timeout` or `APIConnectionError`, both retryable).
 pub async fn send_raw(url: &str, req: &Request) -> Result<(u16, String, Option<Duration>), LlmError> {
-    let id = uuid::Uuid::new_v4().simple();
-    let body = TempFile(std::env::temp_dir().join(format!("hbench-llm-{id}.json")));
-    let hdrs = TempFile(std::env::temp_dir().join(format!("hbench-llm-{id}.headers")));
-    std::fs::write(&body.0, serde_json::to_vec(&req.body).unwrap_or_default())
-        .map_err(|e| api_err("APIConnectionError", format!("writing request body: {e}")))?;
+    let body = TempFile(
+        crate::env::private_temp_file("hbench-llm", &serde_json::to_vec(&req.body).unwrap_or_default())
+            .map_err(|e| api_err("APIConnectionError", format!("writing request body: {e:#}")))?,
+    );
+    let hdrs = TempFile(body.0.with_extension("headers"));
     // No low-speed abort: non-streaming responses are legitimately silent for many minutes.
     // TCP keepalive catches dead peers instead.
     let mut cfg = format!(

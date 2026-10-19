@@ -90,8 +90,8 @@ pub async fn installed_setup(
 
 /// Upload a bundled script (root-owned, mode from the temp file).
 pub async fn upload_asset(cx: &AgentCtx<'_>, content: &str, path: &str) -> Result<()> {
-    let local = std::env::temp_dir().join(format!("hbench-asset-{}", uuid::Uuid::new_v4().simple()));
-    std::fs::write(&local, content)?;
+    // Assets include auth files, so the host copy is private to this user.
+    let local = crate::env::private_temp_file("hbench-asset", content.as_bytes())?;
     let r = cx.env.upload_file(&local, path).await;
     let _ = std::fs::remove_file(&local);
     r

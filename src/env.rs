@@ -138,6 +138,35 @@ pub fn error_kind(e: &anyhow::Error) -> ErrorKind {
     e.chain().find_map(|c| c.downcast_ref::<KindError>()).map_or(ErrorKind::Runtime, |k| k.kind.clone())
 }
 
+/// Reads `KEY=value` records and then the command, each NUL-terminated, from stdin; exports the
+/// records, closes stdin and runs the command. Secrets and commands then never appear on a command
+/// line, where any local user could read them with `ps` or /proc, on the host or in the container.
+/// Works the same on rootless Docker and Docker Desktop, since only `docker compose exec`'s stdin is used.
+const EXEC_FROM_STDIN: &str = r#"while IFS= read -r -d '' __hb && [ -n "$__hb" ]; do export -- "$__hb"; done; IFS= read -r -d '' __hb_cmd; unset __hb; exec </dev/null; eval "$__hb_cmd""#;
+
+/// The stdin [`EXEC_FROM_STDIN`] reads: env records, an empty record, then the command.
+fn exec_stdin(env: &BTreeMap<String, String>, command: &str) -> Vec<u8> {
+    let mut b = Vec::new();
+    for (k, v) in env {
+        b.extend_from_slice(format!("{k}={v}\0").as_bytes());
+    }
+    b.push(0);
+    b.extend_from_slice(command.as_bytes());
+    b.push(0);
+    b
+}
+
+/// Write `content` to a new file in the host's temp dir that only this user can read (mode 600).
+pub fn private_temp_file(prefix: &str, content: &[u8]) -> Result<std::path::PathBuf> {
+    let path = std::env::temp_dir().join(format!("{prefix}-{}", uuid::Uuid::new_v4().simple()));
+    let mut o = std::fs::OpenOptions::new();
+    o.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut o, 0o600);
+    o.open(&path)?.write_all(content)?;
+    Ok(path)
+}
+
 /// Append-only per-trial log (trial.log).
 pub struct TrialLog(Mutex<std::fs::File>);
 impl TrialLog {
@@ -147,7 +176,7 @@ impl TrialLog {
     }
     pub fn line(&self, s: &str) {
         let ts = chrono::Utc::now().format("%H:%M:%S%.3f");
-        let _ = writeln!(self.0.lock().unwrap(), "[{ts}] {s}");
+        let _ = writeln!(self.0.lock().unwrap(), "[{ts}] {}", crate::redact::text(s));
     }
 }
 
@@ -396,14 +425,6 @@ fn transient_docker_error(stderr: &str) -> bool {
     ]
     .iter()
     .any(|p| s.contains(p))
-}
-
-/// Variables the docker CLI (or the ssh it runs for remote contexts) reads itself.
-fn affects_docker_cli(k: &str) -> bool {
-    let k = k.to_ascii_uppercase();
-    ["PATH", "HOME", "USER", "TMPDIR", "SHELL"].contains(&k.as_str())
-        || ["DOCKER_", "COMPOSE_", "BUILDKIT_", "SSH_", "XDG_", "LD_", "DYLD_"].iter().any(|p| k.starts_with(p))
-        || k.ends_with("_PROXY")
 }
 
 /// Bytes of a command's stdout/stderr kept from the start and from the end; the middle of longer
@@ -685,6 +706,7 @@ impl DockerEnv {
             "DOCKER_CONFIG".into(),
             std::env::var("DOCKER_CONFIG").unwrap_or_else(|_| cache_home().join(".docker").display().to_string()),
         );
+        crate::redact::register_env(&compose_env);
         Ok(DockerEnv { spec, files, compose_env, build_image, egress, egress_services, log })
     }
 
@@ -854,30 +876,19 @@ impl DockerEnv {
     ) -> Result<ExecResult> {
         let mut merged = self.spec.persistent_env.clone();
         merged.extend(env.clone());
+        crate::redact::register_env(&merged);
         let mut args = sv(&["exec", "-T"]);
         if let Some(w) = cwd {
             args.extend(sv(&["-w", w]));
         }
-        // Values go through docker's own environment (`-e KEY`), not argv where `ps` shows them; except
-        // variables that would change how the docker CLI itself runs.
-        let (by_value, by_name): (BTreeMap<_, _>, BTreeMap<_, _>) = merged.iter().partition(|(k, _)| affects_docker_cli(k));
-        for (k, v) in &by_value {
-            args.push("-e".into());
-            args.push(format!("{k}={v}"));
-        }
-        for k in by_name.keys() {
-            args.extend(["-e".to_string(), k.to_string()]);
-        }
         if let Some(u) = user {
             args.extend(sv(&["-u", u]));
         }
-        args.extend(sv(&["main", "bash", "-c", command]));
+        args.extend(sv(&["main", "bash", "-c", EXEC_FROM_STDIN]));
         let keys: Vec<&str> = merged.keys().map(String::as_str).collect();
         // Log env keys only: values may be secrets.
         let label = format!("exec user={} env={keys:?}: {}", user.unwrap_or("-"), tail(command, 2000));
-        let mut c = self.compose(&args);
-        c.envs(by_name);
-        self.run_cmd(c, timeout, &label, None).await
+        self.run(args, timeout, &label, Some(exec_stdin(&merged, command))).await
     }
 
     pub async fn exec_root(&self, command: &str, timeout: Option<Duration>) -> Result<ExecResult> {
@@ -1262,6 +1273,53 @@ mod tests {
     }
 
     use super::*;
+
+    /// What `docker compose exec ... main bash -c EXEC_FROM_STDIN` runs, with the same stdin.
+    fn run_from_stdin(env: &[(&str, &str)], command: &str) -> (i32, String) {
+        use std::io::Write as _;
+        let env: BTreeMap<String, String> = env.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+        let mut c = std::process::Command::new("bash")
+            .args(["-c", EXEC_FROM_STDIN])
+            .env_clear()
+            .env("PATH", std::env::var("PATH").unwrap())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        c.stdin.take().unwrap().write_all(&exec_stdin(&env, command)).unwrap();
+        let out = c.wait_with_output().unwrap();
+        (out.status.code().unwrap(), String::from_utf8(out.stdout).unwrap())
+    }
+
+    #[test]
+    fn exec_passes_env_and_command_on_stdin() {
+        let tricky = "sk-a=b 'c' \"d\" $(echo pwned) `e`\nline2\\";
+        let (code, out) = run_from_stdin(
+            &[("API_KEY", tricky), ("EMPTY", ""), ("PATH", &std::env::var("PATH").unwrap())],
+            "printf '%s|' \"$API_KEY\" \"${EMPTY-unset}\" \"$0\" \"$#\"; env | grep -c '^__hb' || true; cat; set -o pipefail; false | true; exit 7",
+        );
+        assert_eq!(code, 7);
+        assert_eq!(out, format!("{tricky}||bash|0|0\n"));
+        assert_eq!(run_from_stdin(&[], "echo ok").1, "ok\n");
+    }
+
+    #[test]
+    fn exec_keeps_secrets_off_the_command_line() {
+        let env = BTreeMap::from([("OPENAI_API_KEY".to_string(), "sk-live-123456789".to_string())]);
+        let input = exec_stdin(&env, "echo sk-live-123456789");
+        assert!(!EXEC_FROM_STDIN.contains("sk-live"));
+        assert_eq!(input, b"OPENAI_API_KEY=sk-live-123456789\0\0echo sk-live-123456789\0");
+    }
+
+    #[test]
+    fn private_temp_files_are_mode_600() {
+        let p = private_temp_file("hbench-test-private", b"secret").unwrap();
+        #[cfg(unix)]
+        assert_eq!(std::os::unix::fs::PermissionsExt::mode(&std::fs::metadata(&p).unwrap().permissions()) & 0o777, 0o600);
+        assert_eq!(std::fs::read(&p).unwrap(), b"secret");
+        std::fs::remove_file(p).unwrap();
+    }
+
     #[test]
     fn error_kind_names_round_trip() {
         for s in ["AgentTimeoutError", "CancelledError", "RateLimitError", "ApiUsageLimitError"] {
@@ -1294,8 +1352,6 @@ mod tests {
         assert!(transient_docker_error("Error response from daemon: toomanyrequests: You have reached your pull rate limit"));
         assert!(transient_docker_error("net/http: TLS handshake timeout"));
         assert!(!transient_docker_error("service \"main\" refers to undefined network foo: invalid compose project"));
-        assert!(affects_docker_cli("https_proxy") && affects_docker_cli("DOCKER_HOST") && affects_docker_cli("PATH"));
-        assert!(!affects_docker_cli("OPENAI_API_KEY"));
     }
 
     #[test]

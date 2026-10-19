@@ -80,20 +80,22 @@ pub fn parse_registry_spec(spec: &str) -> Result<(String, Option<String>)> {
 /// GET a JSON document with GitHub headers (30s timeout), via host curl.
 pub fn fetch_json(url: &str) -> Result<Value> {
     use std::io::Write;
-    use std::process::Stdio;
-    // Headers go through a curl config on stdin so the token never shows in the process list.
-    let mut cfg = String::from("header = \"Accept: application/vnd.github+json\"\nheader = \"User-Agent: hbench-acp-registry\"\n");
+    let mut c = std::process::Command::new("curl");
+    c.args(["-fsSL", "--max-time", "30", "-H", "Accept: application/vnd.github+json", "-H", "User-Agent: hbench-acp-registry"]);
+    // The token goes in a config read from stdin, so it is not on curl's command line.
+    let mut cfg = String::new();
     if let Some(t) = std::env::var("GITHUB_TOKEN").ok().filter(|t| !t.is_empty()) {
-        cfg += &format!("header = \"Authorization: Bearer {}\"\n", t.replace('\\', "\\\\").replace('"', "\\\""));
+        cfg = format!("header = \"Authorization: Bearer {}\"\n", t.replace('\\', "\\\\").replace('"', "\\\""));
     }
-    let mut child = std::process::Command::new("curl")
-        .args(["-fsSL", "--max-time", "30", "-K", "-", url])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+    let mut child = c
+        .args(["-K", "-"])
+        .arg(url)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
         .spawn()
         .context("running curl")?;
-    child.stdin.take().unwrap().write_all(cfg.as_bytes()).context("running curl")?;
+    child.stdin.take().unwrap().write_all(cfg.as_bytes())?;
     let out = child.wait_with_output().context("running curl")?;
     if !out.status.success() {
         bail!("Failed to fetch {url}: {}", String::from_utf8_lossy(&out.stderr).trim());
