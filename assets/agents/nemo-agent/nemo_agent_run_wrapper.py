@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Modified by the hbench authors.
 """Run a NeMo Agent Toolkit workflow headless and print its answer as plain text.
 
 `nat run` renders through Rich, which drops text when stdout is not a TTY, so the

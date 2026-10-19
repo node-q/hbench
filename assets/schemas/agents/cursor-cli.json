@@ -4,13 +4,13 @@
       "additionalProperties": {
         "$ref": "#/$defs/CursorTokenPricing"
       },
-      "description": "Model-slug → per-million USD rates map for the ``pricing`` kwarg.",
+      "description": "Map of model slug → per-million-token USD rates, for the `pricing` option.",
       "title": "CursorModelPricingMap",
       "type": "object"
     },
     "CursorTokenPricing": {
       "additionalProperties": false,
-      "description": "Per-million-token USD rates for cost estimation.\n\nPass via ``--ak pricing='...'`` or ``agents[].kwargs.pricing``.\n``cache_read`` / ``cache_write`` default to ``input`` when omitted.",
+      "description": "Per-million-token USD rates for cost estimation.\n\nPass via `--ak pricing='...'` or `agents[].kwargs.pricing`. `cache_read` and `cache_write` default to `input` when omitted.",
       "properties": {
         "input": {
           "description": "USD per 1M input tokens",

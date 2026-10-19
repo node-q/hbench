@@ -1,3 +1,4 @@
+# Modified by the hbench authors.
 """Runs one LangGraph (Python) graph on a task instruction inside the task container.
 
 Invoked by hbench's `langgraph` agent. Writes the raw final state (--result-path),

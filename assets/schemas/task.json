@@ -55,7 +55,7 @@
             }
           ],
           "default": null,
-          "description": "Username or UID to run the agent as. None uses the environment's default USER (e.g., root).",
+          "description": "Username or UID to run the agent as. Unset uses the environment's default USER (e.g. root).",
           "title": "User"
         }
       },
@@ -98,7 +98,7 @@
             }
           ],
           "default": null,
-          "description": "Docker Compose service to collect this artifact from. None or 'main' targets the agent's container. Any other value requires a compose-capable environment provider and an absolute source path.",
+          "description": "Docker Compose service to collect this artifact from. Unset or 'main' targets the agent's container; any other service needs an absolute source path.",
           "title": "Service"
         }
       },
@@ -109,7 +109,7 @@
       "type": "object"
     },
     "Author": {
-      "description": "Author information for a package or dataset.",
+      "description": "An author of a task or dataset.",
       "properties": {
         "name": {
           "description": "Author name",
@@ -174,13 +174,13 @@
             }
           ],
           "default": null,
-          "description": "A pre-built Docker image to use for the environment. When set, environment/Dockerfile is optional for supported environment types.",
+          "description": "A pre-built Docker image to use for the environment. When set, environment/Dockerfile is optional.",
           "title": "Docker Image"
         },
         "os": {
           "$ref": "#/$defs/TaskOS",
           "default": "linux",
-          "description": "Target operating system for the task's container. Defaults to 'linux' for back-compat. Set to 'windows' to target Windows containers (requires Docker Desktop in Windows container mode on a Windows host)."
+          "description": "Target operating system for the task's container. Defaults to 'linux'. hbench runs Linux containers only and rejects 'windows' tasks."
         },
         "cpus": {
           "anyOf": [
@@ -243,7 +243,7 @@
             }
           ],
           "default": null,
-          "description": "List of acceptable GPU types (e.g., ['H100', 'A100', 'T4']). None means any GPU type is acceptable.",
+          "description": "Acceptable GPU types (e.g. ['H100', 'A100', 'T4']). Unset means any GPU type.",
           "title": "Gpu Types"
         },
         "tpu": {
@@ -256,7 +256,7 @@
             }
           ],
           "default": null,
-          "description": "TPU slice specification (type + topology). When set, the environment requests a TPU node matching this spec."
+          "description": "TPU slice (type and topology). hbench's Docker environment does not attach TPUs."
         },
         "mcp_servers": {
           "items": {
@@ -321,7 +321,7 @@
             }
           ],
           "default": null,
-          "description": "Deprecated compatibility field. Use [environment].network_mode instead.",
+          "description": "Deprecated. Use [environment].network_mode instead.",
           "title": "Allow Internet"
         }
       },
@@ -448,10 +448,10 @@
       "type": "string"
     },
     "PackageInfo": {
-      "description": "Package metadata for the [task] section of task.toml.\n\nThis section identifies the package in the registry with a unique name.",
+      "description": "The [task] section of task.toml: the task's unique name and its descriptive metadata.",
       "properties": {
         "name": {
-          "description": "Package name in org/name format (e.g., 'hbench/hello-world')",
+          "description": "Task name in org/name format (e.g. 'hbench/hello-world').",
           "title": "Name",
           "type": "string"
         },
@@ -466,17 +466,17 @@
             }
           ],
           "default": null,
-          "description": "Task package version. Usually semantic, but any non-empty string is accepted.",
+          "description": "Task version. Usually semantic, but any non-empty string is accepted.",
           "title": "Version"
         },
         "description": {
           "default": "",
-          "description": "Human-readable description of the task",
+          "description": "Human-readable description of the task.",
           "title": "Description",
           "type": "string"
         },
         "authors": {
-          "description": "List of package authors",
+          "description": "Task authors.",
           "items": {
             "$ref": "#/$defs/Author"
           },
@@ -484,7 +484,7 @@
           "type": "array"
         },
         "keywords": {
-          "description": "Keywords for search and categorization",
+          "description": "Keywords for search and categorization.",
           "items": {
             "type": "string"
           },
@@ -587,16 +587,16 @@
       "type": "string"
     },
     "TpuSpec": {
-      "description": "Specification for a TPU slice attached to an environment.\n\nThe (type, topology) pair fully determines the GKE node pool the pod\nlands on *and* the per-pod TPU chip count, so there is no separate\nuser-facing chip-count field \u2014 it is derived via chip_count.",
+      "description": "A TPU slice for the environment: an accelerator type and a topology, which together also fix the chip count. hbench's Docker environment does not attach TPUs.",
       "properties": {
         "type": {
-          "description": "TPU accelerator type. Accepts either a user-friendly alias (e.g., 'v6e', 'trillium', 'v4') or a canonical GKE label (e.g., 'tpu-v6e-slice', 'tpu7x').",
+          "description": "TPU accelerator type: an alias (e.g. 'v6e', 'trillium', 'v4') or a full accelerator label (e.g. 'tpu-v6e-slice', 'tpu7x').",
           "minLength": 1,
           "title": "Type",
           "type": "string"
         },
         "topology": {
-          "description": "TPU topology as 'NxM' or 'NxMxK' (e.g., '2x4', '2x2x1').",
+          "description": "TPU topology as 'NxM' or 'NxMxK' (e.g. '2x4', '2x2x1').",
           "title": "Topology",
           "type": "string"
         }
@@ -641,7 +641,7 @@
             }
           ],
           "default": null,
-          "description": "Username or UID to run the command as. None uses the service container's default user.",
+          "description": "Username or UID to run the command as. Unset uses the service container's default user.",
           "title": "User"
         }
       },
@@ -706,7 +706,7 @@
             }
           ],
           "default": null,
-          "description": "Username or UID to run the verifier as. None uses the environment's default USER (e.g., root).",
+          "description": "Username or UID to run the verifier as. Unset uses the environment's default USER (e.g. root).",
           "title": "User"
         },
         "environment_mode": {
@@ -771,7 +771,7 @@
         }
       ],
       "default": null,
-      "description": "Package information for the task, parsed from the [task] section of task.toml."
+      "description": "The task's name and metadata, from the [task] section of task.toml."
     },
     "metadata": {
       "additionalProperties": true,

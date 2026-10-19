@@ -2,7 +2,7 @@
   "$defs": {
     "AcpAgentSource": {
       "additionalProperties": false,
-      "description": "Config-supplied git source for a sandboxed ACP agent.\n\nTravels through ``agent.kwargs.source`` like any other agent option. The\nagent fetches the repository itself with the local user's git credentials.\nA full commit SHA pins the source for reproducible runs; mutable branch and\ntag refs are allowed for local development, resolved at fetch time, and may\nproduce different source across runs. Hosted deployments should supply an\nindependently verified, immutable source checkout. Repository code is never\nimported or executed on the manager.",
+      "description": "Git source for a sandboxed ACP agent, given as the agent option `source` (`agent.kwargs.source`).\n\nThe agent fetches the repository itself with the local user's git credentials. A full commit SHA pins the source for reproducible runs; branch and tag refs are allowed for local development, are resolved at fetch time, and may give different source across runs. Hosted deployments should supply an independently verified, immutable source checkout. hbench never imports or runs the repository's code on the host.",
       "properties": {
         "repo_url": {
           "title": "Repo Url",

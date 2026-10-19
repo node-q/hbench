@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Modified by the hbench authors.
 """hbench driver for the OpenHands SDK: solve one instruction, then dump an ATIF trajectory.
 
 Configured through env (LLM_*, LOAD_SKILLS, SKILL_PATHS, MCP_SERVERS_JSON, MAX_ITERATIONS, LITELLM_EXTRA_BODY).

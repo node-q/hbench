@@ -1,7 +1,7 @@
 {
   "$defs": {
     "LLMBackend": {
-      "description": "Enum for available LLM backends.",
+      "description": "LLM backend.",
       "enum": [
         "litellm",
         "tinker"
@@ -11,7 +11,7 @@
     },
     "TrajectoryConfig": {
       "additionalProperties": false,
-      "description": "Configuration options for trajectory recording and formatting.\n\nAttributes:\n    raw_content: If True, dump raw LLM responses into trajectory without\n        parsing into tool_calls. Useful for SFT data export. (default: False)\n    linear_history: If True, split trajectory into separate files when context\n        summarization occurs, ensuring each trajectory represents a continuous linear\n        history sent to the LLM. When False, keep all steps from the main agent\n        in a single trajectory file despite chat history resets. (default: False)",
+      "description": "How the trajectory is recorded. raw_content (default false): write raw LLM responses into the trajectory without parsing them into tool_calls, e.g. for SFT data export. linear_history (default false): start a new trajectory file whenever context summarization occurs, so each file is one continuous history sent to the LLM; when false, every step of the main agent stays in one file across chat history resets.",
       "properties": {
         "raw_content": {
           "title": "Raw Content",

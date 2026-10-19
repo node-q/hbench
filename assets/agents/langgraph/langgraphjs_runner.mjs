@@ -1,3 +1,4 @@
+// Modified by the hbench authors.
 // Runs one LangGraph.js graph on a task instruction inside the task container.
 // Invoked by hbench's `langgraph` agent; writes the final state, the answer text and an
 // answer/token-usage summary. Same CLI as langgraph_runner.py plus --runner-tools-dir,

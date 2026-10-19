@@ -1,3 +1,4 @@
+# Modified by the hbench authors.
 """Host-side dspy.RLM driver for hbench's dspy-rlm agent.
 
 hbench starts this with `python3 -c` and speaks newline-delimited JSON with it: the

@@ -1,3 +1,4 @@
+# Modified by the hbench authors.
 """Run a user-supplied Strands agent factory inside the task container.
 
 hbench uploads a JSON config and the instruction, then calls

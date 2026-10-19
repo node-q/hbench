@@ -1,4 +1,5 @@
 #!/bin/sh
+# Modified by the hbench authors.
 set -eu
 
 # ALLOWLIST, GOST_PORT, and GOST_MARK must stay in sync with the literals in

@@ -1,3 +1,4 @@
+# Modified by the hbench authors.
 """hbench entrypoint for DeerFlow inside the task container.
 
 Reads the instruction from stdin, streams DeerFlow events to stdout as NDJSON and

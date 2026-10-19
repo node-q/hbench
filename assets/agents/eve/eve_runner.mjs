@@ -1,3 +1,4 @@
+// Modified by the hbench authors.
 // hbench driver for an Eve app: boots `eve start`, sends the instruction over Eve's
 // session API, then writes the event log and a result summary under the logs dir.
 import { spawn } from "node:child_process";

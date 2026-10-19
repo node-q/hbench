@@ -1,3 +1,4 @@
+# Modified by the hbench authors.
 # Run in the container via `python3 -c`: copy OpenClaw's session transcript next to its log.
 # The CLI's --json envelope is the trailing JSON object in openclaw.txt; it names the session file.
 import json

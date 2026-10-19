@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Modified by the hbench authors.
 """Drive one prompt through an ACP agent and leave a record for hbench.
 
 The agent is started via the launcher script and spoken to over stdio. Every

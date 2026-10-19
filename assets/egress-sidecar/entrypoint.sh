@@ -1,9 +1,10 @@
 #!/bin/sh
+# Modified by the hbench authors.
 set -eu
 
 # GOST_CONFIG/ALLOWLIST/NFTABLES_RULESET_NAME must stay in sync with gost.yaml
-# and bin/network-policy; READY_FILE with the healthcheck in
-# docker-compose-egress-control.yaml.
+# and bin/network-policy; READY_FILE with EGRESS_READY in src/env.rs, which the
+# sidecar's compose healthcheck waits for.
 GOST_CONFIG=/opt/egress-sidecar/gost.yaml
 ALLOWLIST=/opt/egress-sidecar/allowlist.txt
 NFTABLES_RULESET_NAME=gost_egress

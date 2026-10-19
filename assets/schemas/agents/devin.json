@@ -1,6 +1,6 @@
 {
   "additionalProperties": false,
-  "description": "Shared kwargs accepted by ``BaseInstalledAgent``.",
+  "description": "Options every installed agent accepts.",
   "properties": {
     "version": {
       "anyOf": [

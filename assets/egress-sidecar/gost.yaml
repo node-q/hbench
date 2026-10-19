@@ -1,3 +1,4 @@
+# Modified by the hbench authors.
 # addr, so_mark, and file.path must stay in sync with the constants in
 # bin/network-policy (GOST_PORT, GOST_MARK, ALLOWLIST) and src/env.rs
 # (PROXY_PORT); the `reload` interval must stay below RELOAD_WAIT there.

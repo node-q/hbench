@@ -1,4 +1,5 @@
 #!/usr/bin/env -S uv run --script
+# Modified by the hbench authors.
 #
 # /// script
 # requires-python = ">=3.12"

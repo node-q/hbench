@@ -24,7 +24,8 @@
             }
           ],
           "default": null,
-          "title": "Import Path"
+          "description": "Not supported: hbench runs only its built-in agents and rejects a config that sets this. Leave unset.",
+          "title": "Custom Implementation"
         },
         "model_name": {
           "anyOf": [
@@ -49,7 +50,7 @@
             }
           ],
           "default": null,
-          "description": "Per-agent cap on concurrent agent.run() phases. Must not exceed the job's n_concurrent_trials and is usually useful only when lower. When omitted, agent execution is only limited by n_concurrent_trials.",
+          "description": "Per-agent cap on concurrent agent phases. Must not exceed the job's n_concurrent_trials and is usually useful only when lower. When omitted, agent phases are only limited by n_concurrent_trials.",
           "title": "N Concurrent"
         },
         "concurrency_group": {
@@ -66,7 +67,7 @@
           "title": "Concurrency Group"
         },
         "skills": {
-          "description": "Skill directories or source strings (git URLs, org/name[@ref] shorthand, or local paths). Job.create() / Trial.create() resolve any non-local entries to cached directories in-place.",
+          "description": "Local skill directories, uploaded into the agent's container. hbench does not fetch git or registry skills.",
           "items": {
             "anyOf": [
               {
@@ -137,7 +138,7 @@
           "title": "Load Trajectory"
         },
         "extra_allowed_hosts": {
-          "description": "Run-specific hostnames or IP addresses merged into the effective agent phase allowlist during agent.run() only.",
+          "description": "Run-specific hostnames or IP addresses merged into the agent phase's allowlist, for the agent phase only.",
           "items": {
             "type": "string"
           },
@@ -219,7 +220,7 @@
             }
           ],
           "default": null,
-          "description": "Docker Compose service to collect this artifact from. None or 'main' targets the agent's container. Any other value requires a compose-capable environment provider and an absolute source path.",
+          "description": "Docker Compose service to collect this artifact from. Unset or 'main' targets the agent's container; any other service needs an absolute source path.",
           "title": "Service"
         }
       },
@@ -289,7 +290,8 @@
             }
           ],
           "default": null,
-          "title": "Import Path"
+          "description": "Not supported: hbench runs only its built-in Docker environment. Leave unset.",
+          "title": "Custom Implementation"
         },
         "force_build": {
           "default": false,
@@ -417,7 +419,7 @@
           "type": "object"
         },
         "extra_allowed_hosts": {
-          "description": "Run-specific hostnames or IP addresses merged into the [environment] network baseline at agent env start.",
+          "description": "Run-specific hostnames or IP addresses merged into the [environment] network baseline when the agent environment starts.",
           "items": {
             "type": "string"
           },
@@ -429,39 +431,9 @@
       "type": "object"
     },
     "EnvironmentType": {
+      "description": "Environment type. hbench runs Docker environments only.",
       "enum": [
-        "docker",
-        "podman",
-        "daytona",
-        "e2b",
-        "modal",
-        "runloop",
-        "langsmith",
-        "ec2",
-        "gke",
-        "ack",
-        "openshift",
-        "novita",
-        "apple-container",
-        "singularity",
-        "islo",
-        "tensorlake",
-        "cwsandbox",
-        "use-computer",
-        "cua-cloud",
-        "blaxel",
-        "opensandbox",
-        "beam",
-        "skypilot",
-        "hf-sandbox",
-        "hyperbrowser",
-        "vercel",
-        "runta",
-        "prime",
-        "kata",
-        "mosaic",
-        "smol",
-        "sail"
+        "docker"
       ],
       "title": "EnvironmentType",
       "type": "string"
@@ -614,7 +586,7 @@
       "type": "object"
     },
     "SourceTrialConfig": {
-      "description": "A source trial this trial derives from.\n\n``action`` names the derivation and must be stated explicitly; only\n``regrade`` exists today. A ``hub`` source records only the hub trial\nUUID (the bytes are downloaded or read from the local cache); a\n``local`` source records the trial directory path plus its UUID when\nknown.",
+      "description": "A source trial this trial derives from.\n\n`action` names the derivation and must be set explicitly; `regrade` is the only one. The source is a `local` trial directory: it records the directory path, plus the trial's UUID when known.",
       "properties": {
         "action": {
           "const": "regrade",
@@ -623,8 +595,7 @@
         },
         "type": {
           "enum": [
-            "local",
-            "hub"
+            "local"
           ],
           "title": "Type",
           "type": "string"
@@ -761,16 +732,16 @@
       "type": "object"
     },
     "TpuSpec": {
-      "description": "Specification for a TPU slice attached to an environment.\n\nThe (type, topology) pair fully determines the GKE node pool the pod\nlands on *and* the per-pod TPU chip count, so there is no separate\nuser-facing chip-count field \u2014 it is derived via chip_count.",
+      "description": "A TPU slice for the environment: an accelerator type and a topology, which together also fix the chip count. hbench's Docker environment does not attach TPUs.",
       "properties": {
         "type": {
-          "description": "TPU accelerator type. Accepts either a user-friendly alias (e.g., 'v6e', 'trillium', 'v4') or a canonical GKE label (e.g., 'tpu-v6e-slice', 'tpu7x').",
+          "description": "TPU accelerator type: an alias (e.g. 'v6e', 'trillium', 'v4') or a full accelerator label (e.g. 'tpu-v6e-slice', 'tpu7x').",
           "minLength": 1,
           "title": "Type",
           "type": "string"
         },
         "topology": {
-          "description": "TPU topology as 'NxM' or 'NxMxK' (e.g., '2x4', '2x2x1').",
+          "description": "TPU topology as 'NxM' or 'NxMxK' (e.g. '2x4', '2x2x1').",
           "title": "Topology",
           "type": "string"
         }
@@ -806,7 +777,8 @@
             }
           ],
           "default": null,
-          "title": "Import Path"
+          "description": "Not supported: hbench runs only its built-in agents. Leave unset.",
+          "title": "Custom Implementation"
         },
         "model_name": {
           "anyOf": [
@@ -831,7 +803,7 @@
             }
           ],
           "default": null,
-          "description": "Per-agent cap on concurrent agent.run() phases. Must not exceed the job's n_concurrent_trials and is usually useful only when lower. When omitted, agent execution is only limited by n_concurrent_trials.",
+          "description": "Per-agent cap on concurrent agent phases. Must not exceed the job's n_concurrent_trials and is usually useful only when lower. When omitted, agent phases are only limited by n_concurrent_trials.",
           "title": "N Concurrent"
         },
         "concurrency_group": {
@@ -848,7 +820,7 @@
           "title": "Concurrency Group"
         },
         "skills": {
-          "description": "Skill directories or source strings (git URLs, org/name[@ref] shorthand, or local paths). Job.create() / Trial.create() resolve any non-local entries to cached directories in-place.",
+          "description": "Local skill directories, uploaded into the agent's container. hbench does not fetch git or registry skills.",
           "items": {
             "anyOf": [
               {
@@ -919,7 +891,7 @@
           "title": "Load Trajectory"
         },
         "extra_allowed_hosts": {
-          "description": "Run-specific hostnames or IP addresses merged into the effective agent phase allowlist during agent.run() only.",
+          "description": "Run-specific hostnames or IP addresses merged into the agent phase's allowlist, for the agent phase only.",
           "items": {
             "type": "string"
           },
@@ -1056,7 +1028,8 @@
             }
           ],
           "default": null,
-          "title": "Import Path"
+          "description": "Not supported: hbench runs only its built-in verifier. Leave unset.",
+          "title": "Custom Implementation"
         },
         "kwargs": {
           "additionalProperties": true,
@@ -1183,7 +1156,7 @@
       "type": "array"
     },
     "extra_instruction_paths": {
-      "description": "Paths to extra instruction files appended to the task instruction. File contents are appended before ``extra_instructions``.",
+      "description": "Paths to extra instruction files appended to the task instruction. File contents are appended before `extra_instructions`.",
       "items": {
         "format": "path",
         "type": "string"
@@ -1192,7 +1165,7 @@
       "type": "array"
     },
     "extra_instructions": {
-      "description": "Inline extra instructions appended to the task instruction. Appended after any ``extra_instruction_paths`` contents.",
+      "description": "Inline extra instructions appended to the task instruction. Appended after any `extra_instruction_paths` contents.",
       "items": {
         "type": "string"
       },
