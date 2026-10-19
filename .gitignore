@@ -3,3 +3,5 @@ jobs/
 .claude/
 viewer/node_modules/
 __pycache__/
+.DS_Store
+trials/

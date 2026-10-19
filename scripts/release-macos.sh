@@ -18,7 +18,7 @@ for target in aarch64-apple-darwin x86_64-apple-darwin; do
   cargo build --release --locked --target "$target"
   name="hbench-$TAG-$target"
   mkdir "$DIST/$name"
-  cp "target/$target/release/hbench" README.md LICENSE NOTICE "$DIST/$name/"
+  cp "target/$target/release/hbench" README.md LICENSE "$DIST/$name/"
   tar -C "$DIST" -czf "$DIST/$name.tar.gz" "$name"
 done
 

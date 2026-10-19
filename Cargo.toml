@@ -2,7 +2,12 @@
 name = "hbench"
 version = "0.2.5"
 edition = "2024"
+description = "Benchmark runner for coding-agent harnesses, the engine behind Harness Playground"
 license = "Apache-2.0"
+repository = "https://github.com/node-q/hbench"
+homepage = "https://nodeq.tech"
+readme = "README.md"
+publish = false
 
 [dependencies]
 aho-corasick = "1.1.5"

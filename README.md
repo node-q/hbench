@@ -1,9 +1,15 @@
 # hbench
 
+hbench is the benchmark engine behind [Harness Playground](https://nodeq.tech), by node-q.
+
 A fast, single-binary benchmark runner for coding-agent harnesses, written in Rust. It runs tasks in Docker, drives
-40+ agents, grades them with task verifiers, and reports rewards, pass@k, tokens and cost. Tasks, datasets and job
-configs use the [upstream](https://github.com/node-q/hbench) task format, so registry datasets such as
-terminal-bench run as-is.
+40+ agents, grades them with task verifiers, and reports rewards, pass@k, tokens and cost. A task is a directory with
+a `task.toml`, an environment, tests and a solution (see [Task format](#task-format)).
+
+Registry datasets such as terminal-bench come from node-q's dataset registry by default:
+`https://raw.githubusercontent.com/node-q/hbench-datasets/main/registry.json`, in the public
+[node-q/hbench-datasets](https://github.com/node-q/hbench-datasets) repo. `--registry-url` (or `--registry-path` for a
+local `registry.json`) overrides it.
 
 Install the latest release (Linux/macOS, x86_64/arm64):
 
@@ -11,10 +17,11 @@ Install the latest release (Linux/macOS, x86_64/arm64):
 curl -fsSL https://nodeq.tech/install.sh | sh
 ```
 
-The binaries are public in [node-q/hbench-releases](https://github.com/node-q/hbench-releases); the script downloads
-from there and checks `SHA256SUMS`. `HBENCH_VERSION=vX.Y.Z` pins a release (nodeq.tech defaults to the version the
-arenas pin; [`scripts/install.sh`](scripts/install.sh) on its own defaults to the latest), and `HBENCH_INSTALL_DIR`
-overrides `~/.local/bin`. If the public download fails and `gh` is signed in, it falls back to this repo's releases.
+Release binaries are published to [node-q/hbench-releases](https://github.com/node-q/hbench-releases); the script
+downloads from there and checks `SHA256SUMS`. `HBENCH_VERSION=vX.Y.Z` pins a release (nodeq.tech defaults to the
+version Harness Playground's arenas use; [`scripts/install.sh`](scripts/install.sh) on its own defaults to the latest),
+and `HBENCH_INSTALL_DIR` overrides `~/.local/bin`. If that download fails, the script falls back to the releases of
+[node-q/hbench](https://github.com/node-q/hbench), the source repo.
 
 Or build from source:
 
@@ -38,13 +45,13 @@ $B datasets list | download <name@ver> | init | add | remove
 $B init <org/name> [--steps N]   $B add|remove|sync ...             # task/dataset authoring (dataset.toml)
 $B tasks init|check|digest|start-env|migrate|schema               # digest: task_checksum + lock digest
 $B analyze jobs/<job> | <trial>    $B check <tasks>                 # agent-run trajectory analysis / task QA
-$B exec "summarize ./notes/*.md" --print-config                  # experimental: compile prompt+paths into tasks
+$B exec -i "summarize the notes" -p 'notes/*.md' --print-config   # experimental: compile prompt+paths into tasks
 $B agents list | schema <agent>    $B trials schema    $B cache clean
 $B completions zsh > ~/.zfunc/_hbench                          # shell completions (bash, zsh, fish, ...)
 ```
 
-Docker: hbench uses whatever `docker` points at (`DOCKER_CONTEXT`/`DOCKER_HOST`). Remote ssh daemons work because
-files move with `docker compose cp` rather than bind mounts.
+Docker: hbench runs every trial in Linux containers on whatever `docker` points at (`DOCKER_CONTEXT`/`DOCKER_HOST`).
+Remote ssh daemons work because files move with `docker compose cp` rather than bind mounts.
 
 `run`, `jobs resume`, `trials start` and `sweeps run` exit 130 when cancelled (SIGINT, SIGTERM or SIGHUP; a second
 signal force-quits after removing the run's compose projects), 1 on an error or when every trial errored
@@ -98,6 +105,8 @@ Other hbench variables: `DOCKER_CONTEXT`/`DOCKER_HOST` (which daemon), `HBENCH_E
 
 ## Task format
 
+A task is a directory:
+
 ```
 task/
 ├── task.toml        # [task] [agent] [verifier] [environment] [[steps]] artifacts=[...] ...
@@ -107,7 +116,7 @@ task/
 └── solution/solve.sh
 ```
 
-Supported task features:
+Task features:
 
 - Multi-step tasks: per-step workdir/setup.sh, healthcheck, `min_reward` gates, mean/final reward strategy, and resume.
 - Shared and separate verifier environments, including bundled verifier images.
@@ -164,8 +173,8 @@ jobs/<job>/<task>__<id>/{config.json, lock.json, result.json, trial.log, excepti
                          agent/, verifier/, artifacts/{manifest.json, logs/artifacts/...}, steps/<name>/...}
 ```
 
-`result.json` has JobStats: per-eval metrics (mean/sum/min/max/uv-script), pass@k, reward/exception stats, tokens, and
-cost. Failed trials are retried by error type (`--max-retries`, include/exclude).
+The job's `result.json` has per-eval metrics (mean/sum/min/max/uv-script), pass@k, reward/exception stats, tokens,
+and cost. Failed trials are retried by error type (`--max-retries`, include/exclude).
 
 Secrets stay out of the output and off command lines:
 
@@ -211,35 +220,22 @@ cd viewer && npm install && npm run build      # type-check + rebuild viewer/dis
 npm run dev                                    # hot reload; proxies /api to `hbench view <folder> --port 8091`
 ```
 
-## Not supported
-
-These require external services:
-
-- Cloud sandboxes (Daytona, Modal, E2B, ...).
-- Hosted package registries (publish/upload, `org/name@ref` packages).
-- Windows containers.
-
-Benchmark adapters aren't needed: they produce task dirs, which hbench runs directly, and converted datasets
-are in the registry.
-
 ## Verification
 
 - `cargo test`: unit tests for every module and agent.
 - `scripts/e2e.sh`: a fixture suite against a real docker daemon. It covers timeouts, missing rewards, reward.json,
   users/env, no-network, compose sidecars, prebuilt images, egress allowlists, and secrets (kept off command lines
   and scrubbed from the job), and checks for leaked containers.
-- `scripts/conformance.sh`: runs the task-format reference `examples/tasks` (`REF=<checkout>`) and checks the expected
-  outcomes, including the network-policy matrix, verifier-mode matrix, multi-step, sidecar artifacts, and extra allowed hosts.
-- `scripts/parity.py <reference_job> <hbench_job>`: diffs a reference job with an hbench job on the same tasks. It
-  compares rewards, exceptions, the `result.json` key structure, the trial file layout, and artifact manifests.
 - `scripts/install-matrix.sh`: installs every installed agent into a real container (`install_only`).
 
-CI (`.github/workflows/ci.yml`) runs on the org's self-hosted Linux runners (`[self-hosted, linux, x64, hpg]`): build +
-`cargo test`, clippy, `cargo audit`, a check that the committed `viewer/dist` matches `viewer/src`, and `scripts/e2e.sh`.
+CI (`.github/workflows/ci.yml`) runs on self-hosted Linux runners: build + `cargo test`, clippy, `cargo audit`, a check
+that the committed `viewer/dist` matches `viewer/src`, and `scripts/e2e.sh`.
 
 ## Releases
 
-Bump `version` in `Cargo.toml`, commit, then push a matching tag:
+The source repo is [node-q/hbench](https://github.com/node-q/hbench); release binaries are published to
+[node-q/hbench-releases](https://github.com/node-q/hbench-releases). Bump `version` in `Cargo.toml`, commit, then push
+a matching tag:
 
 ```bash
 git tag v0.2.0 && git push origin v0.2.0
@@ -247,8 +243,8 @@ git tag v0.2.0 && git push origin v0.2.0
 
 `.github/workflows/release.yml` checks the tag against `Cargo.toml`, runs the tests, builds static x86_64/aarch64 Linux
 binaries, and publishes a GitHub release with `.tar.gz` archives, `SHA256SUMS`, and generated notes. Tags with a suffix
-(`v0.2.0-rc.1`) are published as prereleases. The runners are Linux-only, so add the macOS binaries from a Mac with the
-tag checked out:
+(`v0.2.0-rc.1`) are published as prereleases; other releases are also published to node-q/hbench-releases. The runners
+are Linux-only, so add the macOS binaries from a Mac with the tag checked out:
 
 ```bash
 scripts/release-macos.sh v0.2.0
@@ -256,4 +252,4 @@ scripts/release-macos.sh v0.2.0
 
 ## License
 
-Apache-2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
+Apache-2.0. See [LICENSE](LICENSE).
