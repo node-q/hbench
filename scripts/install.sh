@@ -1,10 +1,9 @@
 #!/bin/sh
 # Install hbench into HBENCH_INSTALL_DIR (default ~/.local/bin).
 #   curl -fsSL https://nodeq.tech/install.sh | sh
-# HBENCH_VERSION=vX.Y.Z pins a release; the default is the latest release of
-# node-q/hbench-releases, where node-q/hbench's release workflow publishes every stable tag.
+# HBENCH_VERSION=vX.Y.Z pins a release; the default is the latest release of node-q/hbench.
 set -eu
-REPO=node-q/hbench-releases
+REPO=node-q/hbench
 # nodeq.tech/install.sh fills this in with the version Harness Playground's arenas use.
 DEFAULT_VERSION=
 DIR=${HBENCH_INSTALL_DIR:-$HOME/.local/bin}
