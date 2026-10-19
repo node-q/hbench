@@ -204,6 +204,10 @@ pub fn write_atomic(path: &Path, contents: impl AsRef<[u8]>) -> std::io::Result<
 /// Agent setup tries, all within the setup timeout.
 const SETUP_ATTEMPTS: u32 = 3;
 
+/// Timeout of a step's workdir/setup.sh unless the agent config's `override_setup_timeout_sec`, which also
+/// bounds the agent install, sets one.
+const STEP_SETUP_TIMEOUT_SEC: f64 = 600.0;
+
 /// Context on an agent phase whose processes could not be stopped: grading then would be unsafe, so the
 /// trial ends there, still reporting the run's own error kind.
 #[derive(Debug)]
@@ -319,7 +323,7 @@ impl Trial {
             .override_timeout_sec
             .or(step.and_then(|s| s.verifier.timeout_sec))
             .or(self.task.config.verifier.timeout_sec)
-            .unwrap_or(600.0);
+            .unwrap_or(crate::task::DEFAULT_VERIFIER_TIMEOUT_SEC);
         self.secs(base, self.cfg.verifier.max_timeout_sec, self.cfg.verifier_timeout_multiplier)
     }
     fn build_timeout(&self, ec: &EnvironmentConfig) -> Duration {
@@ -1121,8 +1125,11 @@ impl Trial {
             env.upload_dir(&wdir, &wd).await?;
             if wdir.join("setup.sh").exists() {
                 let script = format!("{}/setup.sh", wd.trim_end_matches('/'));
-                let timeout =
-                    self.secs(self.cfg.agent.override_setup_timeout_sec.unwrap_or(600.0), None, self.cfg.agent_setup_timeout_multiplier);
+                let timeout = self.secs(
+                    self.cfg.agent.override_setup_timeout_sec.unwrap_or(STEP_SETUP_TIMEOUT_SEC),
+                    None,
+                    self.cfg.agent_setup_timeout_multiplier,
+                );
                 let r = env.exec(&format!("bash {}", crate::env::quote(&script)), user.as_deref(), &BTreeMap::new(), Some(timeout)).await?;
                 if r.code != 0 {
                     bail!("Step '{}' setup.sh exited with code {}: {}", step.name, r.code, r.stderr);
