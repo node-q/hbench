@@ -4,8 +4,8 @@ name: Release
 #
 # The build jobs run the tests and build every binary on GitHub-hosted runners, with no
 # secrets and a read-only token, and attest each archive's build provenance. Only the
-# publish job can write: it creates this repo's release and, for stable tags, mirrors it
-# to node-q/hbench-releases, which `curl -fsSL https://nodeq.tech/install.sh | sh` reads.
+# publish job can write: it creates this repo's release, which
+# `curl -fsSL https://nodeq.tech/install.sh | sh` downloads from.
 on:
   push:
     tags: ["v[0-9]+.[0-9]+.[0-9]+*"]
@@ -88,8 +88,7 @@ jobs:
     name: Publish
     needs: build
     runs-on: ubuntu-24.04
-    # HBENCH_RELEASES_TOKEN (fine-grained, Contents: write on node-q/hbench-releases only)
-    # is a secret of this environment, which only v* tags can deploy to.
+    # Only v* tags can deploy to this environment, so no other ref gets this job's write token.
     environment: release
     permissions:
       contents: write
@@ -111,16 +110,3 @@ jobs:
           flags=(--verify-tag --title "hbench $GITHUB_REF_NAME" --generate-notes)
           [ "$PRERELEASE" = true ] && flags+=(--prerelease)
           gh release create "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" "${flags[@]}" dist/*.tar.gz dist/SHA256SUMS
-      - name: Mirror to node-q/hbench-releases
-        if: ${{ !contains(github.ref_name, '-') }}
-        env:
-          GH_TOKEN: ${{ secrets.HBENCH_RELEASES_TOKEN }}
-        run: |
-          [ -n "$GH_TOKEN" ] || { echo "::error::HBENCH_RELEASES_TOKEN is not set in the release environment"; exit 1; }
-          repo=node-q/hbench-releases
-          notes="hbench $GITHUB_REF_NAME. Notes: https://github.com/$GITHUB_REPOSITORY/releases/tag/$GITHUB_REF_NAME. Install: curl -fsSL https://nodeq.tech/install.sh | sh"
-          if gh release view "$GITHUB_REF_NAME" -R "$repo" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" -R "$repo" dist/*.tar.gz dist/SHA256SUMS --clobber
-          else
-            gh release create "$GITHUB_REF_NAME" -R "$repo" --title "hbench $GITHUB_REF_NAME" --notes "$notes" dist/*.tar.gz dist/SHA256SUMS
-          fi

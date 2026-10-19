@@ -16,7 +16,7 @@ Install the latest release (Linux/macOS, x86_64/arm64):
 curl -fsSL https://nodeq.tech/install.sh | sh
 ```
 
-Release binaries are published to [node-q/hbench-releases](https://github.com/node-q/hbench-releases); the script
+Release binaries are attached to [node-q/hbench's releases](https://github.com/node-q/hbench/releases); the script
 downloads from there and checks `SHA256SUMS`. `HBENCH_VERSION=vX.Y.Z` pins a release (nodeq.tech defaults to the
 version Harness Playground's arenas use; [`scripts/install.sh`](scripts/install.sh) on its own defaults to the latest),
 and `HBENCH_INSTALL_DIR` overrides `~/.local/bin`.
@@ -232,9 +232,7 @@ against a real Docker daemon.
 
 ## Releases
 
-The source repo is [node-q/hbench](https://github.com/node-q/hbench); release binaries are published to
-[node-q/hbench-releases](https://github.com/node-q/hbench-releases). Bump `version` in `Cargo.toml`, commit, then push
-a matching tag:
+Bump `version` in `Cargo.toml`, commit, then push a matching tag:
 
 ```bash
 git tag v0.2.0 && git push origin v0.2.0
@@ -244,7 +242,8 @@ git tag v0.2.0 && git push origin v0.2.0
 builds static x86_64/aarch64 Linux (musl) and x86_64/arm64 macOS binaries. Each `.tar.gz` gets a build provenance
 attestation; check one with `gh attestation verify hbench-v0.2.0-<target>.tar.gz -R node-q/hbench`. A separate publish
 job, in the `release` environment, creates the GitHub release with the archives, `SHA256SUMS` and generated notes. Tags
-with a suffix (`v0.2.0-rc.1`) are published as prereleases; other releases are also published to node-q/hbench-releases.
+with a suffix (`v0.2.0-rc.1`) are published as prereleases, which the install script skips unless `HBENCH_VERSION`
+names one.
 
 ## License
 
