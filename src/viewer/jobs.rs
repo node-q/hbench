@@ -468,7 +468,7 @@ fn partial_trial_result(trial_name: &str, dir: &Path, cfg: &crate::config::Trial
         "trial_uri": as_uri(dir), "task_id": task_id, "source": cfg.task.source, "task_checksum": "", "config": c,
         "agent_info": {"name": agent_name_from_config(&c["agent"]), "version": "", "model_info": mi.map(|(p, n)| json!({"name": n, "provider": p}))},
         "agent_result": null, "verifier_result": null, "verifier_environment_mode": null, "exception_info": null,
-        "started_at": mtime_dt(&dir.join("config.json")).map(py_dt), "finished_at": null, "environment_setup": null, "agent_setup": null,
+        "started_at": mtime_dt(&dir.join("config.json")).map(iso_utc), "finished_at": null, "environment_setup": null, "agent_setup": null,
         "agent_execution": null, "verifier": null, "step_results": null,
     })
 }
@@ -541,7 +541,7 @@ fn walk_files(dir: &Path) -> Vec<PathBuf> {
     out
 }
 
-/// `_agent_kwarg_specs_for`: the launcher's form fields from the agent's options schema.
+/// The launcher's form fields from the agent's options schema.
 fn agent_kwarg_specs(name: &str) -> Vec<Value> {
     let Some(schema) = crate::schemas::agent(name).and_then(|s| serde_json::from_str::<Value>(s).ok()) else { return vec![] };
     let required: Vec<&str> = schema["required"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
@@ -582,7 +582,7 @@ fn agent_kwarg_specs(name: &str) -> Vec<Value> {
     specs
 }
 
-/// LiteLLM pricing lookup (`/api/pricing`), from hbench's pinned LiteLLM price table.
+/// Pricing lookup (`/api/pricing`) from the bundled model price table.
 pub(super) fn pricing(model: &str) -> Res {
     let entry = [model, model.split_once('/').map_or(model, |x| x.1)].into_iter().find_map(crate::agents::pricing::model_cost);
     let Some(e) = entry else { return Err(err(404, format!("No pricing entry for model '{model}'"))) };

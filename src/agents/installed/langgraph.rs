@@ -1,10 +1,11 @@
 //! LangGraph: runs a user's LangGraph project (Python or LangGraph.js) via the bundled runners.
 
-use super::common::{installed_dir, nvm_node_install_snippet, upload_asset};
+use super::common::{installed_dir, nvm_node_install_snippet, upload_asset, uv_install};
 use super::pins;
 use super::{ensure_system_dependencies, exec_agent, exec_root};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::quote;
+use crate::fmt::single_quoted;
 use anyhow::{Result, bail};
 use regex::Regex;
 use serde_json::{Value, json};
@@ -68,7 +69,7 @@ fn suffix(p: &str) -> &str {
     }
 }
 
-/// `_split_graph_path`: `./file.py:attr.path` with dialect-specific identifiers.
+/// Splits a graph spec `./file.py:attr.path` (identifier rules per runtime) into file and attribute path.
 fn split_graph_path(spec: &str) -> Result<(String, String)> {
     let bad = || anyhow::anyhow!("Invalid graph path '{spec}'. Expected './path/to/file.py:attribute'");
     if spec.matches(':').count() != 1 {
@@ -134,27 +135,6 @@ fn normpath(p: &str) -> String {
         }
     }
     format!("/{}", parts.join("/"))
-}
-
-/// Python's `repr()` of a str (as embedded in the Python install heredoc).
-fn py_repr(s: &str) -> String {
-    let q = if s.contains('\'') && !s.contains('"') { '"' } else { '\'' };
-    let mut out = String::from(q);
-    for c in s.chars() {
-        match c {
-            '\\' => out += "\\\\",
-            '\n' => out += "\\n",
-            '\r' => out += "\\r",
-            '\t' => out += "\\t",
-            c if c == q => {
-                out.push('\\');
-                out.push(c);
-            }
-            c => out.push(c),
-        }
-    }
-    out.push(q);
-    out
 }
 
 fn copy_project(src: &Path, dst: &Path) -> Result<()> {
@@ -372,7 +352,7 @@ impl LangGraph {
         let deps = serde_json::to_string(&self.dependency_overrides).unwrap();
         let pv = quote(&self.python_version);
         format!(
-            "set -euo pipefail; curl -LsSf {uv_installer} | sh; if [ -f \"$HOME/.local/bin/env\" ]; then . \"$HOME/.local/bin/env\"; fi; \
+            "set -euo pipefail; {uv_install}; if [ -f \"$HOME/.local/bin/env\" ]; then . \"$HOME/.local/bin/env\"; fi; \
              uv python install {pv}; uv venv {VENV_DIR} --python {pv} --clear; . {VENV_DIR}/bin/activate; uv pip install {langgraph} {dotenv}; python - <<'PY'\n\
              import json, os, subprocess, sys\n\
              project_dir = {}\n\
@@ -390,10 +370,10 @@ impl LangGraph {
              subprocess.check_call([*installer, '-r', dep_path])\n            else:\n                subprocess.check_call([*installer, '-e', dep_path])\n        \
              elif isinstance(dep, str):\n            subprocess.check_call([*installer, dep])\n\
              PY",
-            py_repr(PROJECT_DIR),
-            py_repr(&self.config),
-            py_repr(&deps),
-            uv_installer = pins::uv_installer(),
+            single_quoted(PROJECT_DIR),
+            single_quoted(&self.config),
+            single_quoted(&deps),
+            uv_install = uv_install(None),
             langgraph = pins::LANGGRAPH.requirement(),
             dotenv = pins::PYTHON_DOTENV.requirement()
         )
@@ -676,7 +656,7 @@ mod tests {
         let staged = std::env::temp_dir().join(format!("hbench-lg-stage-{}", uuid::Uuid::new_v4()));
         copy_project(&a.project_path, &staged).unwrap();
         assert!(staged.join("agent.py").exists() && !staged.join(".env").exists() && !staged.join("node_modules").exists());
-        assert_eq!(py_repr("it's"), "\"it's\"");
+        assert_eq!(single_quoted("it's"), "\"it's\"");
     }
 
     #[test]

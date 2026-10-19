@@ -54,7 +54,7 @@ assert got == {"hidden-tests": {"reward": 1.0}, "encrypted-solution": {"reward":
 print("integrity assertions OK")
 EOF
 
-# A public task under a run-level allowlist: upstream ignores the hosts, enforce_allowlist applies them.
+# A public task under a run-level allowlist: the hosts are ignored unless enforce_allowlist applies them.
 # The agent phase must reach the allowlisted hosts and a stand-in for the model server on the host,
 # and nothing else, under the default method (nft+proxy wherever the kernel takes the nftables rules,
 # Docker Desktop included; E2E_REQUIRE_NFT insists on it) and under the proxy-only fallback.

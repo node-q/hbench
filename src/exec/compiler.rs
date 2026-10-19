@@ -167,7 +167,7 @@ fn expand_input_paths(patterns: &[String]) -> Result<Vec<PathBuf>> {
     let mut out = vec![];
     for pat in patterns {
         let resolved = resolve(pat).to_string_lossy().into_owned();
-        let mut paths: Vec<PathBuf> = py_glob(&resolved).iter().map(|p| PathBuf::from(py_path(p))).collect();
+        let mut paths: Vec<PathBuf> = glob_paths(&resolved).iter().map(|p| PathBuf::from(posix_normalize(p))).collect();
         paths.sort();
         if paths.is_empty() {
             bail!("Input path pattern did not match anything: {pat}");
@@ -200,7 +200,7 @@ fn write_auto_verifier(cfg: &CompileConfig, tests_dir: &Path, av: &AutoVerifier)
         std::fs::create_dir_all(&schemas)?;
         let mut checks = vec![];
         for (i, (artifact, schema)) in av.artifact_json_schemas.iter().enumerate() {
-            let src = resolve(&py_path(schema.as_str().unwrap_or_default()));
+            let src = resolve(&posix_normalize(schema.as_str().unwrap_or_default()));
             if !src.is_file() {
                 bail!("Artifact schema path must be a file: {}", src.display());
             }
@@ -220,7 +220,7 @@ fn write_auto_verifier(cfg: &CompileConfig, tests_dir: &Path, av: &AutoVerifier)
     write_file(&tests_dir.join("test.sh"), script, 0o755)
 }
 
-/// Python `json.dumps` default `ensure_ascii=True`.
+/// `s` as a JSON string literal with non-ASCII characters escaped as `\uXXXX`.
 fn ascii_json(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
@@ -275,7 +275,7 @@ fn write_task_config(cfg: &CompileConfig, dir: &Path, environment: Option<&Compi
     Ok(())
 }
 
-/// `Task.is_valid_dir`. Separate-verifier detection is "tests/ ships a Dockerfile or
+/// Whether `dir` is a runnable task dir. Separate-verifier detection is "tests/ ships a Dockerfile or
 /// compose file"; [verifier.environment] definitions aren't resolved.
 fn is_valid_dir(dir: &Path, disable_verification: bool) -> bool {
     let Ok(text) = std::fs::read_to_string(dir.join("task.toml")) else { return false };

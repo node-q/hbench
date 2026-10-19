@@ -2,7 +2,7 @@
 //! Installs a registry (or git-source) ACP server plus the bundled `acp_runner.py`, which
 //! drives one prompt over the Agent Client Protocol and writes acp-summary.json.
 
-use super::common::{installed_dir, nvm_node_install_snippet};
+use super::common::{installed_dir, system_or_nvm_node, uv_install};
 use super::pins;
 use super::{exec_agent, exec_root};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
@@ -232,7 +232,7 @@ fn normalize_checksum(c: &str) -> Result<String> {
 }
 
 impl RegistryEntry {
-    /// Parse + apply the pydantic validators (normalizes checksum and local cmd).
+    /// Parse and validate an entry (normalizes checksum and local cmd).
     pub fn from_value(v: Value) -> Result<RegistryEntry> {
         let mut e: RegistryEntry = serde_json::from_value(v).map_err(|e| anyhow!("Invalid ACP registry entry: {e}"))?;
         let d = &mut e.distribution;
@@ -954,7 +954,7 @@ fn dependencies_command(kind: &str) -> String {
             # independently, then use it to provision the runner with a supported Python.
             if [ ! -x {uv} ]; then
               mkdir -p {UV_INSTALL_DIR}
-              curl -LsSf {uv_installer} | env UV_INSTALL_DIR={UV_INSTALL_DIR} sh
+              {uv_install}
             fi
 
             if [ ! -x {py} ] || ! {py} -c \"import acp, sys; raise SystemExit(sys.version_info < (3, 12))\" >/dev/null 2>&1; then
@@ -970,17 +970,14 @@ fn dependencies_command(kind: &str) -> String {
             if [ \"{install_uv}\" = \"1\" ] && [ ! -x {RUNNER_VENV_PATH}/bin/uvx ]; then
               {uv} pip install --python {py} {uv_pip}
             fi",
-        uv_installer = pins::uv_installer(),
+        uv_install = uv_install(Some(UV_INSTALL_DIR)),
         protocol = pins::ACP_PROTOCOL.requirement(),
         uv_pip = pins::UV.requirement(),
     )
 }
 
 fn node_install_command() -> String {
-    format!(
-        "set -euo pipefail; if ldd --version 2>&1 | grep -qi musl || [ -f /etc/alpine-release ]; then node --version && npm --version; else {}; fi",
-        nvm_node_install_snippet(22)
-    )
+    format!("set -euo pipefail; {}", system_or_nvm_node(22))
 }
 
 fn binary_install_command(t: &BinaryTarget) -> String {
@@ -1113,9 +1110,9 @@ impl Agent for Acp {
         }
         installed_dir(cx).await?;
         // Non-RuntimeError install failures are wrapped; exec failures pass through classified.
-        self.install(cx)
-            .await
-            .map_err(|e| if crate::env::error_kind(&e) == "RuntimeError" { anyhow!("Agent install failed: {e:#}") } else { e })
+        self.install(cx).await.map_err(|e| {
+            if crate::env::error_kind(&e) == crate::env::ErrorKind::Runtime { anyhow!("Agent install failed: {e:#}") } else { e }
+        })
     }
 
     async fn run(&mut self, instruction: &str, cx: &AgentCtx<'_>, _ctx: &mut AgentContext, _resume: bool) -> Result<()> {
@@ -1128,7 +1125,7 @@ impl Agent for Acp {
         exec_agent(cx, &cmd, &self.run_env()).await.map(|_| ())
     }
 
-    fn populate_context_post_run(&self, logs_dir: &Path, ctx: &mut AgentContext) {
+    fn collect_usage(&self, logs_dir: &Path, ctx: &mut AgentContext) {
         let Some(summary) = std::fs::read_to_string(logs_dir.join(SUMMARY_FILENAME))
             .ok()
             .and_then(|t| serde_json::from_str::<Value>(&t).ok())
@@ -1332,7 +1329,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("hbench-acp-sum-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let mut ctx = AgentContext::default();
-        a.populate_context_post_run(&dir, &mut ctx);
+        a.collect_usage(&dir, &mut ctx);
         assert!(ctx.is_empty());
         let summary = json!({
             "prompt_response": {"stopReason": "end_turn", "usage": {"inputTokens": 101, "outputTokens": 5, "cachedReadTokens": 7, "totalTokens": 113}},
@@ -1343,7 +1340,7 @@ mod tests {
             "error": {"type": "RuntimeError", "message": "agent failed to start"},
         });
         std::fs::write(dir.join(SUMMARY_FILENAME), summary.to_string()).unwrap();
-        a.populate_context_post_run(&dir, &mut ctx);
+        a.collect_usage(&dir, &mut ctx);
         assert_eq!((ctx.n_input_tokens, ctx.n_output_tokens, ctx.n_cache_tokens, ctx.cost_usd), (Some(101), Some(5), Some(7), Some(0.12)));
         let m = &ctx.metadata.unwrap()["acp"];
         assert_eq!(m["registry_entry_id"], "codex-acp");

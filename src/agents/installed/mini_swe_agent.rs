@@ -1,11 +1,12 @@
 //! mini-swe-agent installed agent.
 
-use super::common::installed_dir;
+use super::common::{installed_dir, uv_install};
 use super::pins;
 use super::{connection, ensure_system_dependencies, exec_agent};
 use crate::agents::model_connection::{Resolved, Spec};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::quote;
+use crate::fmt::type_name;
 use anyhow::{Result, anyhow, bail};
 use regex::Regex;
 use serde_json::Value;
@@ -23,20 +24,7 @@ const TRAJECTORY_PATH: &str = "/logs/agent/mini-swe-agent.trajectory.json";
 const ENV_PRELUDE: &str =
     "if [ -f \"$HOME/.local/bin/env\" ]; then . \"$HOME/.local/bin/env\"; else export PATH=\"$HOME/.local/bin:$PATH\"; fi; ";
 
-/// Python type name, for Python-style error messages.
-pub(crate) fn py_type(v: &Value) -> &'static str {
-    match v {
-        Value::Null => "NoneType",
-        Value::Bool(_) => "bool",
-        Value::Number(n) if n.is_f64() => "float",
-        Value::Number(_) => "int",
-        Value::String(_) => "str",
-        Value::Array(_) => "list",
-        Value::Object(_) => "dict",
-    }
-}
-
-/// pydantic `str | None` with coerce_numbers_to_str. Explicit null = opt-out (None).
+/// Optional string kwarg; numbers are accepted as their text. Explicit null = opt-out (None).| None` with coerce_numbers_to_str. Explicit null = opt-out (None).
 pub(crate) fn opt_str(args: &AgentArgs, agent: &str, k: &str) -> Result<Option<String>> {
     match args.kwargs.get(k) {
         None | Some(Value::Null) => Ok(None),
@@ -74,11 +62,11 @@ impl MiniSweAgent {
         let deps: String =
             [pins::LITELLM, pins::ORJSON, pins::FASTAPI].iter().map(|d| format!(" --with {}", quote(&d.requirement()))).collect();
         format!(
-            "set -euo pipefail; if ! command -v uv >/dev/null 2>&1; then  curl -LsSf {uv_installer} | sh; fi && \
+            "set -euo pipefail; if ! command -v uv >/dev/null 2>&1; then  {uv_install}; fi && \
              if ! grep -q 'export PATH=\"$HOME/.local/bin:$PATH\"' \"$HOME/.bashrc\" 2>/dev/null; then  echo 'export PATH=\"$HOME/.local/bin:$PATH\"' >> \"$HOME/.bashrc\"; fi && \
              if [ -f \"$HOME/.local/bin/env\" ]; then source \"$HOME/.local/bin/env\"; fi && export PATH=\"$HOME/.local/bin:$PATH\" && \
              uv python install {py} && uv tool install --python {py} {pkg}{deps} && mini-swe-agent --help",
-            uv_installer = pins::uv_installer()
+            uv_install = uv_install(None)
         )
     }
 
@@ -96,7 +84,7 @@ impl MiniSweAgent {
         if let Some(c) = config
             && !c.is_object()
         {
-            bail!("Invalid value for 'config': expected a mapping, got {}", py_type(c));
+            bail!("Invalid value for 'config': expected a mapping, got {}", type_name(c));
         }
         let config_file = opt_str(&args, N, "config_file")?;
         if config.is_some() && config_file.is_some() {
@@ -123,7 +111,7 @@ impl MiniSweAgent {
                     None => ("litellm_model_registry", r.unwrap().clone()),
                 };
                 if !v.is_object() {
-                    bail!("Invalid value for '{source}': expected a mapping, got {}", py_type(&v));
+                    bail!("Invalid value for '{source}': expected a mapping, got {}", type_name(&v));
                 }
                 Some(serde_json::to_string_pretty(&v)?)
             }
@@ -305,7 +293,7 @@ impl Agent for MiniSweAgent {
         exec_agent(cx, &cmd, &env).await.map(|_| ())
     }
 
-    fn populate_context_post_run(&self, logs_dir: &std::path::Path, ctx: &mut AgentContext) {
+    fn collect_usage(&self, logs_dir: &std::path::Path, ctx: &mut AgentContext) {
         if let Some(c) = std::fs::read_to_string(logs_dir.join("mini-swe-agent.trajectory.json")).ok().and_then(|t| parse_trajectory(&t)) {
             *ctx = c;
         }

@@ -1,7 +1,9 @@
 //! Codex CLI, incl. ACP target mode and load_trajectory seeding.
 
 use super::common::parse_jsonl;
-use super::common::{detect_version, installed_dir, opts, parse_bool_env, skills_dir};
+use super::common::{
+    IS_MUSL, NVM_LOAD, detect_version, installed_dir, nvm_activate_node, nvm_install_script, nvm_load, opts, parse_bool_env, skills_dir,
+};
 use super::pins;
 use super::{
     connection, ensure_acp_node_command, ensure_system_dependencies, exec_agent, exec_error, exec_root, filter_jsonl_events,
@@ -24,7 +26,7 @@ const CONFIG_PATH: &str = "/installed-agent/codex-home/config.toml";
 const ACP_CODEX_HOME: &str = "/installed-agent/codex-acp-home";
 /// `@agentclientprotocol/codex-acp` adapter version.
 const ROLLOUT_FILENAME_RE: &str = r"^rollout-(\d{4})-(\d{2})-(\d{2})T\S+\.jsonl$";
-const VERSION_CMD: &str = "if [ -s ~/.nvm/nvm.sh ]; then . ~/.nvm/nvm.sh; fi; codex --version";
+const VERSION_CMD: &str = concat!(nvm_load!(), "; codex --version");
 
 pub fn create(args: AgentArgs) -> Result<AgentBox> {
     Ok(Box::new(Codex::new(args)?))
@@ -57,7 +59,7 @@ impl Codex {
         Ok(if opts::boolean(&self.args, "disable_web_search", None)?.unwrap_or(false) { Some("disabled".into()) } else { web })
     }
 
-    /// `_seed_load_trajectory` + `_upload_load_trajectory`: place the rollout under
+    /// Place the rollout to resume from under
     /// /logs/agent/sessions/<YYYY>/<MM>/<DD>/ (the resume path copies it into CODEX_HOME).
     async fn seed_load_trajectory(&self, cx: &AgentCtx<'_>) -> Result<()> {
         let Some(src) = self.args.load_trajectory.clone() else { bail!("load_trajectory is not set") };
@@ -90,7 +92,7 @@ impl Codex {
         r
     }
 
-    /// `acp_command`'s per-session `CODEX_CONFIG` (Python `json.dumps` formatting).
+    /// The ACP command's per-session `CODEX_CONFIG` (JSON with `, ` / `: ` separators).
     fn acp_session_config(&self) -> Option<String> {
         let mut items: Vec<(&str, Value)> = vec![];
         if let Some(m) = &self.args.model_name {
@@ -170,7 +172,7 @@ impl Codex {
         Ok(None)
     }
 
-    /// `_ensure_agent_owned_dir`: private dir under root-owned /installed-agent.
+    /// A private, agent-owned dir under root-owned /installed-agent.
     async fn ensure_agent_owned_dir(cx: &AgentCtx<'_>, path: &str) -> Result<()> {
         let r = exec_agent(cx, "printf \"\\nHBENCH_CODEX_ID %s %s\\n\" \"$(id -u)\" \"$(id -g)\"", &BTreeMap::new()).await?;
         let re = regex::Regex::new(r"(?m)^HBENCH_CODEX_ID ([0-9]+) ([0-9]+)$").unwrap();
@@ -284,7 +286,7 @@ fn rollout_timestamp(traj: &Value) -> chrono::DateTime<chrono::FixedOffset> {
         return now();
     };
     chrono::DateTime::parse_from_rfc3339(ts)
-        // Naive timestamps taken as UTC (Python would use local time).
+        // Naive timestamps taken as UTC.
         .or_else(|_| chrono::NaiveDateTime::parse_from_str(ts, "%Y-%m-%dT%H:%M:%S%.f").map(|n| n.and_utc().fixed_offset()))
         .unwrap_or_else(|_| now())
 }
@@ -375,7 +377,7 @@ fn latest_session_file(logs_dir: &Path) -> Option<PathBuf> {
 }
 
 /// Totals from the last `token_count` event (the rollout's ATIF final_metrics).
-/// Cost: Codex's own `total_cost`/`cost_usd` when present, else the sum of per-API-call LiteLLM
+/// Cost: Codex's own `total_cost`/`cost_usd` when present, else the sum of per-API-call price-table
 /// estimates (None if any call is unpriced). `model` is the fallback when no `turn_context` names one.
 pub fn parse_rollout_usage(text: &str, model: Option<&str>) -> Option<AgentContext> {
     let events = parse_jsonl(text);
@@ -481,7 +483,7 @@ impl Agent for Codex {
             cx,
             &format!(
                 "set -euo pipefail; _hb_system_node=\"$(command -v node 2>/dev/null || true)\"; \
-                 if [ -s \"$HOME/.nvm/nvm.sh\" ]; then . \"$HOME/.nvm/nvm.sh\"; fi; \
+                 {NVM_LOAD}; \
                  _hb_codex=\"$(command -v codex 2>/dev/null || true)\"; \
                  if [ -z \"$_hb_codex\" ]; then echo \"Could not locate the installed Codex binary for ACP mode\" >&2; exit 1; fi; \
                  {} && npm install -g {adapter} && \
@@ -540,9 +542,7 @@ impl Agent for Codex {
         installed_dir(cx).await?;
         let none = BTreeMap::new();
         let satisfied = match &self.version {
-            None => {
-                cx.exec("if [ -s ~/.nvm/nvm.sh ]; then . ~/.nvm/nvm.sh; fi; command -v codex >/dev/null 2>&1", &none, None).await?.code == 0
-            }
+            None => cx.exec(&format!("{NVM_LOAD}; command -v codex >/dev/null 2>&1"), &none, None).await?.code == 0,
             Some(v) => {
                 let r = cx.exec(VERSION_CMD, &none, None).await?;
                 r.code == 0 && parse_codex_version(&r.stdout) == *v
@@ -554,11 +554,10 @@ impl Agent for Codex {
             exec_agent(
                 cx,
                 &format!(
-                    "set -euo pipefail; if ldd --version 2>&1 | grep -qi musl || [ -f /etc/alpine-release ]; then  npm install -g {spec}; \
-                     else  curl -o- {nvm} | bash &&  export NVM_DIR=\"$HOME/.nvm\" &&  \
-                     \\. \"$NVM_DIR/nvm.sh\" || true &&  command -v nvm &>/dev/null || {{ echo 'Error: NVM failed to load' >&2; exit 1; }} &&  \
-                     nvm install 22 && nvm alias default 22 && npm -v &&  npm install -g {spec}; fi && codex --version",
-                    nvm = pins::nvm_installer(),
+                    "set -euo pipefail; if {IS_MUSL}; then  npm install -g {spec}; \
+                     else  {} && {} &&  npm install -g {spec}; fi && codex --version",
+                    nvm_install_script(),
+                    nvm_activate_node(22),
                 ),
                 &BTreeMap::from([("NVM_NODEJS_ORG_MIRROR".to_string(), "https://nodejs.org/dist".to_string())]),
             )
@@ -626,7 +625,7 @@ impl Agent for Codex {
         exec_agent(cx, &setup, &env).await?;
 
         let cmd = format!(
-            "if [ -s ~/.nvm/nvm.sh ]; then . ~/.nvm/nvm.sh; fi; codex exec {}--dangerously-bypass-approvals-and-sandbox --skip-git-repo-check \
+            "{NVM_LOAD}; codex exec {}--dangerously-bypass-approvals-and-sandbox --skip-git-repo-check \
              --model {model} --json --enable unified_exec {flags_arg}-- {} 2>&1 </dev/null | tee /logs/agent/codex.txt",
             if resume { "resume --last " } else { "" },
             quote(&instruction)
@@ -650,7 +649,7 @@ impl Agent for Codex {
         Ok(())
     }
 
-    fn populate_context_post_run(&self, logs_dir: &Path, ctx: &mut AgentContext) {
+    fn collect_usage(&self, logs_dir: &Path, ctx: &mut AgentContext) {
         if let Some(c) = latest_session_file(logs_dir)
             .and_then(|p| std::fs::read_to_string(p).ok())
             .and_then(|t| parse_rollout_usage(&t, self.args.model_name.as_deref()))
@@ -727,7 +726,7 @@ not json
 
     #[test]
     fn litellm_cost_estimate() {
-        // gpt-5: in 1.25e-6, cache read 1.25e-7, out 1e-5 (pinned LiteLLM table).
+        // gpt-5: in 1.25e-6, cache read 1.25e-7, out 1e-5 (bundled price table).
         let text = r#"{"type":"turn_context","payload":{"model":"gpt-5"}}
 {"type":"response_item","payload":{"type":"message","role":"user","content":[]}}
 {"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":999999,"output_tokens":999}}}}

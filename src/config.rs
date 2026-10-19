@@ -124,8 +124,8 @@ pub struct AgentConfig {
     /// Seed the agent's session from a native (.jsonl) or ATIF (.json) trajectory.
     pub load_trajectory: Option<String>,
     pub extra_allowed_hosts: Vec<String>,
-    /// Beyond upstream: `extra_allowed_hosts` also restrict a task whose agent phase is public, instead of
-    /// being ignored there. The agent phase then reaches only those hosts (none, if the list is empty).
+    /// Make `extra_allowed_hosts` also restrict a task whose agent phase is public, instead of being
+    /// ignored there. The agent phase then reaches only those hosts (none, if the list is empty).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub enforce_allowlist: bool,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -370,7 +370,7 @@ impl Default for RetryConfig {
 
 impl RetryConfig {
     pub fn should_retry(&self, kind: &str) -> bool {
-        if kind == "CancelledError" {
+        if kind == crate::env::ErrorKind::Cancelled.as_str() {
             return false;
         }
         if self.exclude_exceptions.as_ref().is_some_and(|s| s.contains(kind)) {
@@ -599,9 +599,11 @@ impl JobConfig {
     }
 }
 
-/// Pydantic's `exclude_defaults`: drop fields equal to their defaults, recursing into nested
-/// models and into list elements whose element type has a default (how config.json is written).
-fn prune_defaults(v: &mut Value, d: &Value) {
+/// Removes fields equal to their defaults, recursing into nested configs and into list elements whose
+/// element type has a default (how config.json is written). Done on the `Value` rather than with
+/// `skip_serializing_if` because the defaults are contextual (list-element defaults, `job_name` kept, agent
+/// defaults under `user_agent`/`source_trial`) and the full serialization is still needed elsewhere.
+fn drop_defaults(v: &mut Value, d: &Value) {
     let (Value::Object(m), Value::Object(dm)) = (v, d) else { return };
     let elem_default = |k: &str| -> Option<Value> {
         match k {
@@ -616,7 +618,7 @@ fn prune_defaults(v: &mut Value, d: &Value) {
     for k in keys {
         let Some(dv) = dm.get(&k) else {
             if let (Some(ed), Some(Value::Array(items))) = (elem_default(&k), m.get_mut(&k)) {
-                items.iter_mut().for_each(|i| prune_defaults(i, &ed));
+                items.iter_mut().for_each(|i| drop_defaults(i, &ed));
             }
             continue;
         };
@@ -625,11 +627,11 @@ fn prune_defaults(v: &mut Value, d: &Value) {
             continue;
         }
         match (m.get_mut(&k).unwrap(), elem_default(&k)) {
-            (Value::Array(items), Some(ed)) => items.iter_mut().for_each(|i| prune_defaults(i, &ed)),
-            (Value::Object(_), _) if dv.is_object() => prune_defaults(m.get_mut(&k).unwrap(), dv),
+            (Value::Array(items), Some(ed)) => items.iter_mut().for_each(|i| drop_defaults(i, &ed)),
+            (Value::Object(_), _) if dv.is_object() => drop_defaults(m.get_mut(&k).unwrap(), dv),
             (Value::Object(_), _) if k == "user_agent" || k == "source_trial" => {
                 if let Ok(ad) = serde_json::to_value(AgentConfig::default()) {
-                    prune_defaults(m.get_mut(&k).unwrap(), &ad);
+                    drop_defaults(m.get_mut(&k).unwrap(), &ad);
                 }
             }
             _ => {}
@@ -638,28 +640,28 @@ fn prune_defaults(v: &mut Value, d: &Value) {
 }
 
 impl TrialConfig {
-    /// config.json as written by the job runner (`exclude_defaults=True`).
+    /// config.json as written by the job runner (fields at their default omitted).
     pub fn config_json(&self) -> Value {
         let mut v = serde_json::to_value(self).unwrap_or_default();
         let d: TrialConfig = serde_json::from_value(serde_json::json!({"task": {}, "trial_name": "", "trials_dir": "trials"}))
             .expect("default trial config");
-        prune_defaults(&mut v, &serde_json::to_value(d).unwrap_or_default());
+        drop_defaults(&mut v, &serde_json::to_value(d).unwrap_or_default());
         v
     }
 }
 
 impl JobConfig {
-    /// config.json as written by the job runner (`exclude_defaults=True`; job_name is always kept).
+    /// config.json as written by the job runner (fields at their default omitted; job_name is always kept).
     pub fn config_json(&self) -> Value {
         let mut v = serde_json::to_value(self).unwrap_or_default();
         let mut d = serde_json::to_value(JobConfig::default()).unwrap_or_default();
         d.as_object_mut().map(|o| o.remove("job_name"));
-        prune_defaults(&mut v, &d);
+        drop_defaults(&mut v, &d);
         v
     }
 }
 
-/// Rewrite the legacy keys upstream still accepts to their current form, so the strict parse sees only
+/// Rewrite legacy config keys to their current form, so the strict parse sees only
 /// current keys: `orchestrator.{n_concurrent_trials,quiet,retry}` move to the top level, `plugins` and
 /// `environment.suppress_override_warnings` (both no-ops) go, `environment.mounts_json` becomes `mounts`,
 /// and a dataset's `registry: {url, path}` becomes `registry_url` / `registry_path`.

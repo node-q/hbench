@@ -24,7 +24,7 @@ fn builtin_pricing(slug: &str) -> Option<[f64; 4]> {
     })
 }
 
-/// LiteLLM `model_cost` rates for `model` (then without its `provider/` prefix), per million tokens.
+/// Price-table rates for `model` (then without its `provider/` prefix), per million tokens.
 fn litellm_rates(model: &str) -> Option<[f64; 4]> {
     let p = crate::agents::pricing::model_cost(model)
         .or_else(|| crate::agents::pricing::model_cost(model.split_once('/').map_or(model, |(_, m)| m)))?;
@@ -140,7 +140,7 @@ impl CursorCli {
         Ok(format!("{}[{merged}]", &c["base"]))
     }
 
-    /// Per-million rates: user `pricing` override, then built-in Cursor rates, then LiteLLM.
+    /// Per-million rates: user `pricing` override, then built-in Cursor rates, then the price table.
     fn rates(&self) -> Option<[f64; 4]> {
         let model = self.args.model_name.as_deref()?;
         let user = match &self.pricing {
@@ -267,7 +267,7 @@ impl Agent for CursorCli {
         Ok(())
     }
 
-    fn populate_context_post_run(&self, logs_dir: &std::path::Path, ctx: &mut AgentContext) {
+    fn collect_usage(&self, logs_dir: &std::path::Path, ctx: &mut AgentContext) {
         if let Some(c) = std::fs::read_to_string(logs_dir.join("cursor-cli.txt")).ok().and_then(|t| self.parse_usage(&t)) {
             ctx.n_input_tokens = c.n_input_tokens;
             ctx.n_cache_tokens = c.n_cache_tokens;
@@ -319,7 +319,7 @@ mod tests {
         let flat = agent(json!({"pricing": {"input": 1, "output": 2}}), "cursor/unknown").unwrap().parse_usage(log).unwrap();
         assert!((flat.cost_usd.unwrap() - (4500.0 + 400.0) / 1e6).abs() < 1e-12);
         assert_eq!(agent(json!({}), "cursor/unknown").unwrap().parse_usage(log).unwrap().cost_usd, None);
-        // LiteLLM fallback: gpt-5 in 1.25e-6, out 1e-5, cache read 1.25e-7, no cache write (-> input rate).
+        // Price-table fallback: gpt-5 in 1.25e-6, out 1e-5, cache read 1.25e-7, no cache write (-> input rate).
         let l = agent(json!({}), "cursor/gpt-5").unwrap().parse_usage(log).unwrap().cost_usd.unwrap();
         assert!((l - (1000.0 * 1.25e-6 + 3000.0 * 1.25e-7 + 500.0 * 1.25e-6 + 200.0 * 1e-5)).abs() < 1e-12);
         let reported = log.replace("\"cacheWriteTokens\":500}", "\"cacheWriteTokens\":500,\"totalCost\":0.42}");

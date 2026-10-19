@@ -1,12 +1,12 @@
 //! OpenCode installed agent, incl. ACP target mode.
 
 use super::common::parse_jsonl;
-use super::common::{deep_merge_maps, detect_version, installed_dir, nvm_node_install_snippet, opts, skills_dir};
+use super::common::{NVM_LOAD, deep_merge_maps, detect_version, installed_dir, nvm_load, opts, skills_dir, system_or_nvm_node};
 use super::pins;
 use super::{connection, ensure_system_dependencies, exec_agent, exec_root, safe_bin_symlink_command};
 use crate::agents::model_connection::Spec;
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
-use crate::env::{kind_err, quote};
+use crate::env::{ErrorKind, kind_err, quote};
 use anyhow::{Result, bail};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -130,7 +130,7 @@ pub fn parse_opencode_usage(text: &str) -> Option<AgentContext> {
     })
 }
 
-const VERSION_CMD: &str = "[ -f ~/.nvm/nvm.sh ] && . ~/.nvm/nvm.sh; opencode --version";
+const VERSION_CMD: &str = concat!(nvm_load!(), "; opencode --version");
 
 #[async_trait::async_trait]
 impl Agent for OpenCode {
@@ -154,7 +154,7 @@ impl Agent for OpenCode {
         .map(String::from)
         .to_vec();
         if let Some(m) = &self.args.model_name {
-            // Inline config outranks opencode.json, like --model in run(). Python json.dumps spacing.
+            // Inline config outranks opencode.json, like --model in run(). JSON with `: ` spacing.
             c.push(format!("OPENCODE_CONFIG_CONTENT={{\"model\": {}}}", json!(m)));
         }
         c.extend(["opencode".into(), "acp".into()]);
@@ -193,7 +193,7 @@ impl Agent for OpenCode {
             .await?;
         }
         // The npm bin is a native binary; it only needs to be reachable off the nvm PATH.
-        let r = exec_agent(cx, "[ -f ~/.nvm/nvm.sh ] && . ~/.nvm/nvm.sh; command -v opencode", &none).await?;
+        let r = exec_agent(cx, &format!("{NVM_LOAD}; command -v opencode"), &none).await?;
         let Some(bin) = r.stdout.trim().lines().last() else { bail!("Could not locate the opencode binary for ACP mode") };
         exec_root(cx, &safe_bin_symlink_command(bin, "/usr/local/bin/opencode"), &none).await.map(|_| ())
     }
@@ -205,11 +205,7 @@ impl Agent for OpenCode {
         let spec = pins::OPENCODE.npm_spec(self.version.as_deref());
         exec_agent(
             cx,
-            &format!(
-                "set -euo pipefail; if ldd --version 2>&1 | grep -qi musl || [ -f /etc/alpine-release ]; then node --version && npm --version; \
-                 else {nvm}; fi && npm i -g {spec} && opencode --version",
-                nvm = nvm_node_install_snippet(22)
-            ),
+            &format!("set -euo pipefail; {} && npm i -g {spec} && opencode --version", system_or_nvm_node(22)),
             &BTreeMap::new(),
         )
         .await?;
@@ -250,7 +246,7 @@ impl Agent for OpenCode {
         let flags = self.cli_flags()?;
         let flags_arg = if flags.is_empty() { String::new() } else { format!("{flags} ") };
         let cmd = format!(
-            "[ -f ~/.nvm/nvm.sh ] && . ~/.nvm/nvm.sh; opencode --model={model} run --format=json {}{flags_arg}--thinking \
+            "{NVM_LOAD}; opencode --model={model} run --format=json {}{flags_arg}--thinking \
              --dangerously-skip-permissions -- {} 2>&1 </dev/null | stdbuf -oL tee /logs/agent/opencode.txt",
             if resume { "--continue " } else { "" },
             quote(&instruction)
@@ -260,14 +256,14 @@ impl Agent for OpenCode {
         let msgs = error_messages(&r.stdout);
         if !msgs.is_empty() {
             return Err(kind_err(
-                "NonZeroAgentExitCodeError",
+                ErrorKind::NonZeroAgentExitCode,
                 format!("OpenCode emitted error event(s): {}", msgs[..msgs.len().min(3)].join("; ")),
             ));
         }
         Ok(())
     }
 
-    fn populate_context_post_run(&self, logs_dir: &std::path::Path, ctx: &mut AgentContext) {
+    fn collect_usage(&self, logs_dir: &std::path::Path, ctx: &mut AgentContext) {
         if let Some(c) = std::fs::read_to_string(logs_dir.join("opencode.txt")).ok().and_then(|t| parse_opencode_usage(&t)) {
             ctx.n_input_tokens = c.n_input_tokens;
             ctx.n_cache_tokens = c.n_cache_tokens;

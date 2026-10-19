@@ -8,31 +8,20 @@
 //! Requests go through `llm::send_raw` (host curl). Retries mirror the vendor SDKs' defaults.
 //! Usage is recorded without pricing native turns (cost stays unset).
 
-use super::{Action, Computer1, SCREENSHOT_DIR, py_repr, quote};
+use super::{Action, Computer1, SCREENSHOT_DIR, quote, repr_value};
 use crate::agents::AgentContext;
-use crate::agents::llm::{LlmResponse, Request, Usage, send_raw};
-use crate::agents::terminus2::{Shell, pyrepr};
+use crate::agents::llm::{LlmResponse, Request, Usage, backoff, send_raw};
+use crate::agents::terminus2::{Shell, quote_repr};
 use crate::env::{kind_err, tail};
+use crate::fmt::{json_spaced, truthy, type_name};
 use anyhow::{Result, anyhow, bail};
 use base64::Engine;
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use std::time::Duration;
 
-fn py_type(v: &Value) -> &'static str {
-    match v {
-        Value::Null => "NoneType",
-        Value::Bool(_) => "bool",
-        Value::Number(n) if n.is_f64() => "float",
-        Value::Number(_) => "int",
-        Value::String(_) => "str",
-        Value::Array(_) => "list",
-        Value::Object(_) => "dict",
-    }
-}
-
-/// Python `int(v)`.
-fn py_int(v: &Value) -> Result<i64, String> {
+/// Integer from a JSON value: bools as 0/1, floats truncated, numeric strings (`_` separators allowed) parsed.
+fn coerce_int(v: &Value) -> Result<i64, String> {
     match v {
         Value::Bool(b) => Ok(*b as i64),
         Value::Number(n) => n
@@ -40,65 +29,33 @@ fn py_int(v: &Value) -> Result<i64, String> {
             .or_else(|| n.as_f64().filter(|f| f.is_finite()).map(|f| f.trunc() as i64))
             .ok_or_else(|| "cannot convert float infinity to integer".into()),
         Value::String(s) => {
-            s.trim().replace('_', "").parse::<i64>().map_err(|_| format!("invalid literal for int() with base 10: {}", pyrepr(s)))
+            s.trim().replace('_', "").parse::<i64>().map_err(|_| format!("invalid literal for int() with base 10: {}", quote_repr(s)))
         }
-        other => Err(format!("int() argument must be a string, a bytes-like object or a real number, not '{}'", py_type(other))),
+        other => Err(format!("int() argument must be a string, a bytes-like object or a real number, not '{}'", type_name(other))),
     }
 }
 
-/// Python `float(v)`.
-fn py_float(v: &Value) -> Result<f64, String> {
+/// Float from a JSON value: bools as 0/1, numbers as-is, numeric strings parsed.
+fn coerce_float(v: &Value) -> Result<f64, String> {
     match v {
         Value::Bool(b) => Ok(*b as i64 as f64),
         Value::Number(n) => Ok(n.as_f64().unwrap_or(0.0)),
-        Value::String(s) => s.trim().parse::<f64>().map_err(|_| format!("could not convert string to float: {}", pyrepr(s))),
-        other => Err(format!("float() argument must be a string or a real number, not '{}'", py_type(other))),
+        Value::String(s) => s.trim().parse::<f64>().map_err(|_| format!("could not convert string to float: {}", quote_repr(s))),
+        other => Err(format!("float() argument must be a string or a real number, not '{}'", type_name(other))),
     }
 }
 
-/// Python truthiness.
-fn truthy(v: &Value) -> bool {
-    match v {
-        Value::Null => false,
-        Value::Bool(b) => *b,
-        Value::Number(n) => n.as_f64() != Some(0.0),
-        Value::String(s) => !s.is_empty(),
-        Value::Array(a) => !a.is_empty(),
-        Value::Object(o) => !o.is_empty(),
-    }
-}
-
-/// Python `str(v)`.
-fn py_str(v: &Value) -> String {
+/// A string as-is, any other value in literal form (`True`, `None`, `{'k': 1}`).
+fn text_of(v: &Value) -> String {
     match v {
         Value::String(s) => s.clone(),
-        other => py_repr(other),
+        other => repr_value(other),
     }
 }
 
-/// Python `str(d.get(k, "") or "")`.
+/// `d[k]` as text, or empty when the key is missing or not truthy.
 fn str_or_empty(d: &Map<String, Value>, k: &str) -> String {
-    d.get(k).filter(|v| truthy(v)).map(py_str).unwrap_or_default()
-}
-
-/// Python `json.dumps` (default separators, ensure_ascii) of a flat object.
-fn py_json_dumps(m: &Map<String, Value>) -> String {
-    let ascii = |s: String| {
-        s.chars()
-            .map(|c| if c.is_ascii() { c.to_string() } else { c.encode_utf16(&mut [0; 2]).iter().map(|u| format!("\\u{u:04x}")).collect() })
-            .collect::<String>()
-    };
-    let items: Vec<String> = m
-        .iter()
-        .map(|(k, v)| {
-            let v = match v {
-                Value::Bool(b) => if *b { "true" } else { "false" }.to_string(),
-                v => ascii(v.to_string()),
-            };
-            format!("{}: {v}", ascii(json!(k).to_string()))
-        })
-        .collect();
-    format!("{{{}}}", items.join(", "))
+    d.get(k).filter(|v| truthy(v)).map(text_of).unwrap_or_default()
 }
 
 fn hex(b: &[u8]) -> String {
@@ -130,7 +87,7 @@ pub(super) fn anthropic_scale(x: i64, y: i64, w: i64, h: i64) -> (i64, i64) {
     if scale >= 1.0 { (x, y) } else { ((x as f64 / scale) as i64, (y as f64 / scale) as i64) }
 }
 
-/// `scale_normalized_coordinate`: 0..999 grid -> desktop pixels (Python banker's rounding).
+/// `scale_normalized_coordinate`: 0..999 grid -> desktop pixels (round half to even).
 fn scale_normalized(x: i64, y: i64, w: i64, h: i64) -> (i64, i64) {
     let s = |v: i64, d: i64| ((v as f64 * (d - 1) as f64 / 999.0).round_ties_even() as i64).clamp(0, d - 1);
     (s(x, w), s(y, h))
@@ -161,13 +118,13 @@ pub(super) fn normalize_action(a: &Action, w: i64, h: i64) -> Action {
 
 /// `translate_anthropic_action`: Ok(None) = unknown action.
 pub(super) fn translate_anthropic(d: &Map<String, Value>, w: i64, h: i64) -> Result<Option<Action>, String> {
-    let action = d.get("action").map(py_str).unwrap_or_default();
+    let action = d.get("action").map(text_of).unwrap_or_default();
     if action == "screenshot" || action == "cursor_position" {
         return Ok(Some(Action::new(&action)));
     }
     let pair = |v: Option<&Value>| -> Result<Option<(i64, i64)>, String> {
         match v.and_then(Value::as_array).filter(|a| a.len() == 2) {
-            Some(a) => Ok(Some((py_int(&a[0])?, py_int(&a[1])?))),
+            Some(a) => Ok(Some((coerce_int(&a[0])?, coerce_int(&a[1])?))),
             None => Ok(None),
         }
     };
@@ -226,14 +183,14 @@ pub(super) fn translate_anthropic(d: &Map<String, Value>, w: i64, h: i64) -> Res
         }
         "hold_key" => {
             let mut a = plain("hold_key");
-            let k = d.get("key").filter(|v| truthy(v)).or(d.get("text").filter(|v| truthy(v))).map(py_str).unwrap_or_default();
+            let k = d.get("key").filter(|v| truthy(v)).or(d.get("text").filter(|v| truthy(v))).map(text_of).unwrap_or_default();
             a.keys = Some(split_keys(k));
-            a.duration = Some(d.get("duration").map(py_float).transpose()?.unwrap_or(1.0));
+            a.duration = Some(d.get("duration").map(coerce_float).transpose()?.unwrap_or(1.0));
             a
         }
         "scroll" => {
-            let dir = d.get("scroll_direction").map(py_str).unwrap_or_else(|| "down".into());
-            let amount = d.get("scroll_amount").map(py_int).transpose()?.unwrap_or(3);
+            let dir = d.get("scroll_direction").map(text_of).unwrap_or_else(|| "down".into());
+            let amount = d.get("scroll_amount").map(coerce_int).transpose()?.unwrap_or(3);
             let (sx, sy) = match dir.as_str() {
                 "up" => (0, -1),
                 "right" => (1, 0),
@@ -247,7 +204,7 @@ pub(super) fn translate_anthropic(d: &Map<String, Value>, w: i64, h: i64) -> Res
         "wait" => plain("wait"),
         "zoom" => match d.get("region").and_then(Value::as_array).filter(|r| r.len() == 4) {
             Some(r) => {
-                let r = r.iter().map(py_int).collect::<Result<Vec<_>, _>>()?;
+                let r = r.iter().map(coerce_int).collect::<Result<Vec<_>, _>>()?;
                 let (x0, y0) = anthropic_scale(r[0], r[1], w, h);
                 let (x1, y1) = anthropic_scale(r[2], r[3], w, h);
                 let mut a = plain("zoom");
@@ -263,13 +220,13 @@ pub(super) fn translate_anthropic(d: &Map<String, Value>, w: i64, h: i64) -> Res
 
 /// `translate_openai_action`: coordinates are already desktop pixels. None = skip.
 pub(super) fn translate_openai(a: &Value) -> Option<Action> {
-    let kind = a.get("type").filter(|v| truthy(v)).map(py_str).unwrap_or_default();
-    let coord = |k: &str| a.get(k).filter(|v| truthy(v)).map_or(0, |v| py_int(v).unwrap_or(0));
+    let kind = a.get("type").filter(|v| truthy(v)).map(text_of).unwrap_or_default();
+    let coord = |k: &str| a.get(k).filter(|v| truthy(v)).map_or(0, |v| coerce_int(v).unwrap_or(0));
     let modifier = || {
         a["keys"]
             .as_array()?
             .iter()
-            .map(|k| py_str(k).to_lowercase())
+            .map(|k| text_of(k).to_lowercase())
             .find(|k| ["shift", "ctrl", "control", "alt", "option", "super", "cmd", "meta"].contains(&k.as_str()))
     };
     let xy = |kind: &str| {
@@ -281,7 +238,7 @@ pub(super) fn translate_openai(a: &Value) -> Option<Action> {
         "screenshot" | "" => return None,
         "wait" => Action::new("wait"),
         "click" => {
-            let button = a.get("button").filter(|v| truthy(v)).map(py_str).unwrap_or_else(|| "left".into()).to_lowercase();
+            let button = a.get("button").filter(|v| truthy(v)).map(text_of).unwrap_or_else(|| "left".into()).to_lowercase();
             let (k, btn) = match button.as_str() {
                 "right" => ("right_click", None),
                 "middle" | "wheel" => ("click", Some("middle")),
@@ -300,7 +257,7 @@ pub(super) fn translate_openai(a: &Value) -> Option<Action> {
         "move" => xy("mouse_move"),
         "scroll" => {
             let pick = |a1: &str, a2: &str| {
-                a.get(a1).filter(|v| !v.is_null()).or(a.get(a2)).filter(|v| truthy(v)).map_or(0, |v| py_int(v).unwrap_or(0))
+                a.get(a1).filter(|v| !v.is_null()).or(a.get(a2)).filter(|v| truthy(v)).map_or(0, |v| coerce_int(v).unwrap_or(0))
             };
             let mut r = xy("scroll");
             (r.scroll_x, r.scroll_y, r.modifier) = (Some(pick("scroll_x", "scrollX")), Some(pick("scroll_y", "scrollY")), modifier());
@@ -308,15 +265,15 @@ pub(super) fn translate_openai(a: &Value) -> Option<Action> {
         }
         "type" => {
             let mut r = Action::new("type");
-            r.text = Some(a.get("text").filter(|v| truthy(v)).map(py_str).unwrap_or_default());
+            r.text = Some(a.get("text").filter(|v| truthy(v)).map(text_of).unwrap_or_default());
             r
         }
         "keypress" => {
             let mut r = Action::new("keypress");
             r.keys = Some(match a.get("keys").filter(|v| truthy(v)) {
                 None => vec![],
-                Some(Value::Array(k)) => k.iter().map(py_str).collect(),
-                Some(k) => vec![py_str(k)],
+                Some(Value::Array(k)) => k.iter().map(text_of).collect(),
+                Some(k) => vec![text_of(k)],
             });
             r
         }
@@ -331,7 +288,7 @@ pub(super) fn translate_openai(a: &Value) -> Option<Action> {
                         (None, _, Some(l)) if l.len() == 2 => (l[0].clone(), l[1].clone()),
                         _ => (Value::Null, Value::Null),
                     };
-                    let i = |v: &Value| if truthy(v) { py_int(v).unwrap_or(0) } else { 0 };
+                    let i = |v: &Value| if truthy(v) { coerce_int(v).unwrap_or(0) } else { 0 };
                     (i(&px), i(&py))
                 })
                 .collect();
@@ -348,7 +305,7 @@ pub(super) fn translate_openai(a: &Value) -> Option<Action> {
 
 /// `gemini_function_call_to_computer_action`: Ok(None) = unknown function.
 pub(super) fn translate_gemini(name: &str, d: &Map<String, Value>) -> Result<Option<Action>, String> {
-    let int = |k: &str| d.get(k).map_or(Ok(0), py_int);
+    let int = |k: &str| d.get(k).map_or(Ok(0), coerce_int);
     let mk = |kind: &str, source: &'static str| {
         let mut a = Action::new(kind);
         a.source = source;
@@ -374,11 +331,11 @@ pub(super) fn translate_gemini(name: &str, d: &Map<String, Value>) -> Result<Opt
         "scroll" => {
             let (x, y) = (int("x")?, int("y")?);
             let mag = match d.get("magnitude_in_pixels").filter(|v| truthy(v)) {
-                Some(v) => py_int(v)?,
+                Some(v) => coerce_int(v)?,
                 None => 300,
             };
             let mag = if mag == 0 { 300 } else { mag };
-            let dir = d.get("direction").map(py_str).unwrap_or_else(|| "down".into()).to_lowercase();
+            let dir = d.get("direction").map(text_of).unwrap_or_else(|| "down".into()).to_lowercase();
             let (sx, sy) = match dir.as_str() {
                 "up" => (0, -mag),
                 "left" => (-mag, 0),
@@ -391,7 +348,7 @@ pub(super) fn translate_gemini(name: &str, d: &Map<String, Value>) -> Result<Opt
         }
         "press_key" | "hotkey" | "key_down" | "key_up" => {
             let keys: Vec<String> = if name == "hotkey" {
-                let k: Vec<String> = d.get("keys").and_then(Value::as_array).map(|k| k.iter().map(py_str).collect()).unwrap_or_default();
+                let k: Vec<String> = d.get("keys").and_then(Value::as_array).map(|k| k.iter().map(text_of).collect()).unwrap_or_default();
                 if k.is_empty() { vec![] } else { vec![k.join("+")] }
             } else {
                 Some(str_or_empty(d, "key")).filter(|k| !k.is_empty()).into_iter().collect()
@@ -411,14 +368,14 @@ pub(super) fn translate_gemini(name: &str, d: &Map<String, Value>) -> Result<Opt
         }
         "navigate" => {
             let mut a = mk("navigate", "native_prescaled");
-            a.url = Some(d.get("url").map(py_str).unwrap_or_default());
+            a.url = Some(d.get("url").map(text_of).unwrap_or_default());
             a
         }
         "go_back" | "go_forward" => mk(name, "native_prescaled"),
         "wait" => {
             let mut a = mk("sleep", "native_prescaled");
             a.duration_seconds = Some(match d.get("seconds").filter(|v| truthy(v)) {
-                Some(v) => Some(py_float(v)?).filter(|s| *s != 0.0).unwrap_or(1.0),
+                Some(v) => Some(coerce_float(v)?).filter(|s| *s != 0.0).unwrap_or(1.0),
                 None => 1.0,
             });
             a
@@ -503,7 +460,7 @@ pub(super) fn usage_from_any(u: &Value) -> Option<Usage> {
     if prompt.is_none() && completion.is_none() {
         return None;
     }
-    let i = |v: Option<&Value>| v.filter(|v| truthy(v)).map_or(0, |v| py_int(v).unwrap_or(0));
+    let i = |v: Option<&Value>| v.filter(|v| truthy(v)).map_or(0, |v| coerce_int(v).unwrap_or(0));
     Some(Usage {
         prompt_tokens: i(prompt),
         completion_tokens: i(completion),
@@ -537,7 +494,7 @@ pub(super) trait Transport: Send + Sync {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Sdk {
-    /// anthropic / openai Python SDKs: 2 retries on 408/409/429/5xx and connection errors.
+    /// As the anthropic / openai SDKs do: 2 retries on 408/409/429/5xx and connection errors.
     Stainless,
     /// google-genai with a retry wrapper: 4 attempts on 429/500/503/504.
     Gemini,
@@ -595,14 +552,18 @@ impl Transport for Http {
                 ));
             }
             let req = Request { headers, body: body.clone(), timeout: Duration::from_secs(600) };
+            let mut hint = Duration::ZERO;
             let (retry, err) = match send_raw(&self.url, &req).await {
-                Ok((s, text)) if (200..300).contains(&s) => {
+                Ok((s, text, _)) if (200..300).contains(&s) => {
                     return serde_json::from_str(&text).map_err(|e| anyhow!("invalid JSON from {}: {e}: {}", self.url, tail(&text, 1000)));
                 }
-                Ok((s, text)) => (
-                    match self.sdk {
-                        Sdk::Stainless => matches!(s, 408 | 409 | 429) || s >= 500,
-                        Sdk::Gemini => matches!(s, 429 | 500 | 503 | 504),
+                Ok((s, text, retry_after)) => (
+                    {
+                        hint = retry_after.unwrap_or_default();
+                        match self.sdk {
+                            Sdk::Stainless => matches!(s, 408 | 409 | 429) || s >= 500,
+                            Sdk::Gemini => matches!(s, 429 | 500 | 503 | 504),
+                        }
                     },
                     status_error(self.sdk, s, &text),
                 ),
@@ -616,14 +577,14 @@ impl Transport for Http {
                     (self.sdk == Sdk::Stainless, err)
                 }
             };
-            let (max, wait) = match self.sdk {
-                Sdk::Stainless => (3, 0.5 * 2f64.powi(attempt - 1)),
-                Sdk::Gemini => (4, (2.0 * 2f64.powi(attempt - 1)).clamp(2.0, 30.0)),
+            let (max, base, cap) = match self.sdk {
+                Sdk::Stainless => (3, 0.5, 8.0),
+                Sdk::Gemini => (4, 2.0, 30.0),
             };
             if !retry || attempt >= max {
                 return Err(err);
             }
-            tokio::time::sleep(Duration::from_secs_f64(wait)).await;
+            tokio::time::sleep(backoff(attempt, base, cap, hint)).await;
         }
     }
 }
@@ -711,7 +672,7 @@ pub(super) enum Kind {
 /// One native provider instance (conversation state + transport).
 pub(super) struct Native {
     pub kind: Kind,
-    /// Model name with the provider's litellm prefixes stripped (what the SDK receives).
+    /// Model name with the provider's routing prefixes stripped (what the SDK receives).
     pub model: String,
     w: i64,
     h: i64,
@@ -754,7 +715,7 @@ impl Native {
             "bedrock" => Kind::Bedrock,
             "gemini" => Kind::Gemini,
             "openai" => Kind::OpenAi,
-            other => bail!("Unknown computer-1 provider {}", pyrepr(other)),
+            other => bail!("Unknown computer-1 provider {}", quote_repr(other)),
         };
         let mut n = Native::with_transport(kind, model, w, h, auto_ack_safety, Box::new(NoTransport));
         n.transport = Box::new(n.http(aws_region, get)?);
@@ -857,7 +818,7 @@ impl Native {
         m
     }
 
-    /// The `beta.messages.create` body (Bedrock: reshaped like `AnthropicBedrock._prepare_options`).
+    /// The Messages API body with the computer-use beta (Bedrock: reshaped for the invoke endpoint).
     pub fn anthropic_body(&self) -> Value {
         let mut b = json!({
             "model": self.model,
@@ -879,16 +840,18 @@ impl Native {
         let (mut calls, mut texts) = (vec![], vec![]);
         for block in resp["content"].as_array().into_iter().flatten() {
             match block["type"].as_str() {
-                Some("text") => texts.push(block.get("text").filter(|v| truthy(v)).map(py_str).unwrap_or_default()),
+                Some("text") => texts.push(block.get("text").filter(|v| truthy(v)).map(text_of).unwrap_or_default()),
                 Some("tool_use") => {
-                    let id = block.get("id").filter(|v| truthy(v)).map(py_str).unwrap_or_default();
-                    let name = block.get("name").filter(|v| truthy(v)).map(py_str).unwrap_or_default();
+                    let id = block.get("id").filter(|v| truthy(v)).map(text_of).unwrap_or_default();
+                    let name = block.get("name").filter(|v| truthy(v)).map(text_of).unwrap_or_default();
                     let input = block.get("input").cloned().unwrap_or(json!({}));
                     let translated = if name != "computer" {
                         Err(format!("Unsupported tool: {name}"))
                     } else if let Some(d) = input.as_object() {
                         translate_anthropic(d, self.w, self.h).and_then(|a| {
-                            a.ok_or_else(|| format!("Unsupported action: {}", d.get("action").map(py_str).unwrap_or_else(|| "None".into())))
+                            a.ok_or_else(|| {
+                                format!("Unsupported action: {}", d.get("action").map(text_of).unwrap_or_else(|| "None".into()))
+                            })
                         })
                     } else {
                         Err("Computer input must be an object".into())
@@ -914,7 +877,7 @@ impl Native {
                 c.error = Some("Response truncated at max_tokens; no actions executed".into());
             }
         }
-        let id = resp.get("id").filter(|v| truthy(v)).map(py_str);
+        let id = resp.get("id").filter(|v| truthy(v)).map(text_of);
         make_step(
             calls,
             texts.join("\n").trim().to_string(),
@@ -955,7 +918,7 @@ impl Native {
 
     fn gemini_safety_checked(&self, args: &Map<String, Value>) -> Result<()> {
         let Some(d) = args.get("safety_decision").and_then(Value::as_object) else { return Ok(()) };
-        let explanation = d.get("explanation").map(py_str).unwrap_or_default();
+        let explanation = d.get("explanation").map(text_of).unwrap_or_default();
         match d.get("decision").and_then(Value::as_str) {
             Some("blocked") => bail!("Gemini blocked the requested computer action: {explanation}"),
             Some("require_confirmation") if !self.auto_ack_safety => {
@@ -970,10 +933,10 @@ impl Native {
         for s in resp["steps"].as_array().into_iter().flatten() {
             match s["type"].as_str() {
                 Some("model_output") => texts
-                    .extend(s["content"].as_array().into_iter().flatten().filter_map(|c| c.get("text").filter(|t| truthy(t)).map(py_str))),
+                    .extend(s["content"].as_array().into_iter().flatten().filter_map(|c| c.get("text").filter(|t| truthy(t)).map(text_of))),
                 Some("function_call") => {
-                    let name = s.get("name").filter(|v| truthy(v)).map(py_str).unwrap_or_default();
-                    let id = s.get("id").filter(|v| truthy(v)).map(py_str).unwrap_or_default();
+                    let name = s.get("name").filter(|v| truthy(v)).map(text_of).unwrap_or_default();
+                    let id = s.get("id").filter(|v| truthy(v)).map(text_of).unwrap_or_default();
                     let raw = s.get("arguments").cloned().unwrap_or(json!({}));
                     let args = raw.as_object().cloned().unwrap_or_default();
                     // Check every call before returning any actions to the executor.
@@ -997,7 +960,7 @@ impl Native {
             }
         }
         let usage = resp.get("usage").filter(|u| !u.is_null()).map(|u| {
-            let i = |k: &str| u.get(k).filter(|v| truthy(v)).map_or(0, |v| py_int(v).unwrap_or(0));
+            let i = |k: &str| u.get(k).filter(|v| truthy(v)).map_or(0, |v| coerce_int(v).unwrap_or(0));
             Usage {
                 prompt_tokens: i("total_input_tokens"),
                 completion_tokens: i("total_output_tokens"),
@@ -1007,12 +970,12 @@ impl Native {
         });
         let message = if texts.is_empty() { intents } else { texts }.join("\n").trim().to_string();
         let is_terminal = calls.is_empty();
-        make_step(calls, message, usage, resp.get("id").filter(|v| !v.is_null()).map(py_str), is_terminal)
+        make_step(calls, message, usage, resp.get("id").filter(|v| !v.is_null()).map(text_of), is_terminal)
     }
 
     async fn gemini_turn(&mut self, input: Vec<Value>) -> Result<NativeStep> {
         let resp = self.transport.post(&self.gemini_request(input)).await?;
-        self.interaction_id = resp.get("id").filter(|v| !v.is_null()).map(py_str);
+        self.interaction_id = resp.get("id").filter(|v| !v.is_null()).map(text_of);
         self.gemini_step(&resp)
     }
 
@@ -1080,7 +1043,7 @@ impl Native {
                     input.push(json!({
                         "type": "function_result", "name": call.name, "call_id": call.call_id, "is_error": r.status != "success",
                         // Computer Use requires the PNG first; a leading text block is rejected with HTTP 400.
-                        "result": [Self::gemini_image(r.screenshot_ref.as_deref().unwrap_or(shot)), {"type": "text", "text": py_json_dumps(&res)}],
+                        "result": [Self::gemini_image(r.screenshot_ref.as_deref().unwrap_or(shot)), {"type": "text", "text": json_spaced(&Value::Object(res))}],
                     }));
                 }
                 if let Some(e) = extra.filter(|e| !e.is_empty()) {
@@ -1192,11 +1155,11 @@ impl Computer1 {
             };
             results.push(r);
         }
-        // Python's CancelledError bookkeeping has no analogue; a dropped future records nothing.
+        // Cancellation drops the future, so nothing is recorded for the interrupted turn.
         results
     }
 
-    /// `_run_step_loop` (Anthropic / Bedrock / Gemini).
+    /// The step loop (Anthropic / Bedrock / Gemini).
     pub(super) async fn run_step_loop(
         &mut self,
         sh: &dyn Shell,
@@ -1248,7 +1211,7 @@ impl Computer1 {
         Ok(())
     }
 
-    /// `OpenAIComputerUseProvider.run_episodes`: Responses API with `previous_response_id`.
+    /// The OpenAI episode loop: Responses API chained with `previous_response_id`.
     pub(super) async fn run_openai_loop(&mut self, sh: &dyn Shell, ctx: &mut AgentContext, instruction: &str) -> Result<()> {
         self.push_step(Map::from_iter([("source".into(), json!("user")), ("message".into(), json!(instruction))]));
         self.dump_trajectory();
@@ -1269,7 +1232,7 @@ impl Computer1 {
                 .iter()
                 .filter(|i| i["type"] == "message")
                 .flat_map(|i| i["content"].as_array().cloned().unwrap_or_default())
-                .filter_map(|b| b.get("text").filter(|t| truthy(t)).map(py_str))
+                .filter_map(|b| b.get("text").filter(|t| truthy(t)).map(text_of))
                 .collect::<Vec<_>>()
                 .join("\n")
                 .trim()
@@ -1543,7 +1506,7 @@ mod tests {
             ("status".to_string(), json!("error")),
             ("error".to_string(), json!("caf\u{e9} \"x\"")),
         ]);
-        assert_eq!(py_json_dumps(&m), r#"{"url": "", "status": "error", "error": "caf\u00e9 \"x\""}"#);
+        assert_eq!(json_spaced(&Value::Object(m)), r#"{"url": "", "status": "error", "error": "caf\u00e9 \"x\""}"#);
     }
 
     #[test]
@@ -1564,7 +1527,7 @@ mod tests {
             h.last().unwrap().1,
             "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20150830/us-east-1/service/aws4_request, SignedHeaders=host;x-amz-date, Signature=5fa00fa31553b73ebf1942676e86291e8372ff2a2260956d9b8aae1d763fbf31"
         );
-        // Bedrock invoke: ':' is %3A in the canonical path; session token is signed (cross-checked with Python hmac/hashlib).
+        // Bedrock invoke: ':' is %3A in the canonical path; session token is signed (signature cross-checked against an independent HMAC-SHA256).
         let c = AwsCreds { key_id: "AKID".into(), secret: "SECRET".into(), token: Some("TOK".into()), region: "us-west-2".into() };
         let h = sigv4_headers(
             &c,
@@ -1609,7 +1572,7 @@ mod tests {
         assert_eq!(o.http(None, &env(&[("OPENAI_API_KEY", "k")])).unwrap().url, "https://api.openai.com/v1/responses");
         assert!(o.http(None, &env(&[])).is_err());
         let e = status_error(Sdk::Stainless, 429, "{}");
-        assert_eq!((crate::env::error_kind(&e), e.to_string()), ("RateLimitError", "Error code: 429 - {}".to_string()));
+        assert_eq!((crate::env::error_kind(&e).as_str(), e.to_string()), ("RateLimitError", "Error code: 429 - {}".to_string()));
         let e = status_error(Sdk::Gemini, 400, r#"{"error": {"status": "INVALID_ARGUMENT"}}"#);
         assert_eq!(crate::env::error_kind(&e), "ClientError");
         assert!(e.to_string().starts_with("400 INVALID_ARGUMENT."));
@@ -1821,7 +1784,7 @@ mod tests {
 
     #[tokio::test]
     async fn step_loop_limits_dead_session_and_fallback() {
-        // max_turns: no unconsumed request; the fallback writes an empty answer (no litellm query).
+        // max_turns: no unconsumed request; the fallback writes an empty answer (no chat-client query).
         let a = api(vec![response(vec![json!({"action": "screenshot"})], "tool_use")]);
         let (mut c, logs) = native_agent(Kind::Bedrock, "bedrock/us.anthropic.claude-opus-4-7-v1:0", &a, json!({"max_turns": 1}));
         let sh = MockShell::default();

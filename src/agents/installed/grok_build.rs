@@ -339,7 +339,7 @@ fn parse_usage(v: &Value) -> Option<Usage> {
     Some(u)
 }
 
-/// Total cost: LiteLLM price per call (so each is tiered by its own prompt size),
+/// Total cost: price-table cost per call (so each is tiered by its own prompt size),
 /// with xAI's at-boundary tiering and cache-write-at-input-rate adjustments. None if unpriced.
 fn total_cost_usd(model: &str, calls: &[Usage]) -> Option<f64> {
     let key = pricing::pricing_key(model)?;
@@ -349,7 +349,7 @@ fn total_cost_usd(model: &str, calls: &[Usage]) -> Option<f64> {
     let mut total = 0.0;
     for u in calls {
         let prompt = u[0] + u[2] + u[3];
-        // `_input_cost_tier`: the highest `above_Nk` threshold the prompt reaches.
+        // Input tier: the highest `above_Nk` threshold the prompt reaches.
         let (mut rate_key, mut threshold) = ("input_cost_per_token", None::<i64>);
         for (k, v) in p {
             let Some(n) = tier_re.captures(k).and_then(|c| c[1].parse::<i64>().ok()).filter(|_| v.is_number()) else { continue };
@@ -358,7 +358,7 @@ fn total_cost_usd(model: &str, calls: &[Usage]) -> Option<f64> {
             }
         }
         let boundary_rate = p.get(rate_key).and_then(Value::as_f64);
-        // LiteLLM tiers strictly above the boundary, xAI at it: price one synthetic token, then remove it.
+        // The price table tiers strictly above the boundary, xAI at it: price one synthetic token, then remove it.
         let at_boundary = threshold == Some(prompt) && xai && boundary_rate.is_some();
         let (mut input, output) = pricing::cost_per_token(&key, prompt + at_boundary as i64, u[1], u[3], u[2])?;
         if at_boundary {
@@ -373,7 +373,7 @@ fn total_cost_usd(model: &str, calls: &[Usage]) -> Option<f64> {
     Some(total)
 }
 
-/// Usage report parsing, incl. the LiteLLM estimate when grok reports no cost.
+/// Usage report parsing, incl. the price-table estimate when grok reports no cost.
 pub fn usage_from_output(text: &str, model: Option<&str>) -> Option<AgentContext> {
     let mut calls: Vec<Usage> = vec![];
     let mut total: Option<Usage> = None;
@@ -493,7 +493,7 @@ impl Agent for GrokBuild {
         Ok(())
     }
 
-    fn populate_context_post_run(&self, logs_dir: &std::path::Path, ctx: &mut AgentContext) {
+    fn collect_usage(&self, logs_dir: &std::path::Path, ctx: &mut AgentContext) {
         if let Some(c) =
             std::fs::read_to_string(logs_dir.join(OUTPUT)).ok().and_then(|t| usage_from_output(&t, self.args.model_name.as_deref()))
         {

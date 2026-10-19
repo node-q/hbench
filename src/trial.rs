@@ -3,7 +3,7 @@
 use crate::agents::{self, AgentBox, AgentContext, AgentCtx};
 use crate::artifacts::{self, Claims};
 use crate::config::TrialConfig;
-use crate::env::{DockerEnv, EnvSpec, LOG_DIRS, TrialLog, error_kind, kind_err};
+use crate::env::{DockerEnv, EnvSpec, ErrorKind, LOG_DIRS, TrialLog, error_kind, kind_err};
 use crate::task::{
     Artifact, ArtifactSpec, EnvironmentConfig, MAIN, MinReward, NetworkMode, NetworkPolicy, RewardStrategy, StepConfig, Task, VerifierMode,
     normalize_hosts, resolve_env_vars, with_convention,
@@ -15,9 +15,9 @@ use serde_json::{Number, Value};
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tokio::sync::{Semaphore, watch};
+use tokio::sync::watch;
 
 pub type Rewards = BTreeMap<String, Number>;
 
@@ -48,7 +48,7 @@ pub struct ExceptionInfo {
 impl ExceptionInfo {
     pub fn from(e: &anyhow::Error) -> ExceptionInfo {
         ExceptionInfo {
-            exception_type: error_kind(e).into(),
+            exception_type: error_kind(e).to_string(),
             exception_message: format!("{e:#}"),
             exception_traceback: format!("{e:?}"),
             occurred_at: Utc::now(),
@@ -114,6 +114,46 @@ pub struct TrialResult {
 }
 
 impl TrialResult {
+    fn new(cfg: TrialConfig, task: &Task, dir: &Path) -> TrialResult {
+        TrialResult {
+            id: uuid::Uuid::new_v4(),
+            task_name: task.name(),
+            trial_name: cfg.trial_name.clone(),
+            trial_uri: format!("file://{}", dir.canonicalize().unwrap_or(dir.to_path_buf()).display()),
+            task_id: task_id(&cfg),
+            source: cfg.task.source.clone(),
+            task_checksum: task.checksum().unwrap_or_default(),
+            agent_info: AgentInfo {
+                name: cfg.agent.name().into(),
+                version: "unknown".into(),
+                model_info: model_info(&cfg.agent.model_name),
+            },
+            config: cfg,
+            agent_result: None,
+            verifier_result: None,
+            verifier_environment_mode: (!task.has_steps()).then(|| task.verifier_mode(None)),
+            exception_info: None,
+            started_at: Some(Utc::now()),
+            finished_at: None,
+            environment_setup: None,
+            agent_setup: None,
+            agent_execution: None,
+            verifier: None,
+            step_results: None,
+            egress: None,
+        }
+    }
+    /// A trial that never produced its own result (could not be created, or panicked); saved best-effort.
+    pub fn errored(cfg: TrialConfig, task: &Task, e: &anyhow::Error) -> TrialResult {
+        let dir = cfg.trials_dir.join(&cfg.trial_name);
+        let mut r = TrialResult::new(cfg, task, &dir);
+        r.exception_info = Some(ExceptionInfo::from(e));
+        r.finished_at = r.started_at;
+        if dir.is_dir() {
+            let _ = write_atomic(&dir.join("result.json"), serde_json::to_string_pretty(&r).unwrap());
+        }
+        r
+    }
     pub fn reward(&self) -> Option<&Rewards> {
         self.verifier_result.as_ref()?.rewards.as_ref()
     }
@@ -153,6 +193,14 @@ pub fn task_id(cfg: &TrialConfig) -> Value {
     Value::Object(m)
 }
 
+/// Write via a sibling temp file + rename, so readers never see a partial file.
+pub fn write_atomic(path: &Path, contents: impl AsRef<[u8]>) -> std::io::Result<()> {
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(".tmp");
+    std::fs::write(&tmp, contents)?;
+    std::fs::rename(&tmp, path)
+}
+
 /// Agent setup tries, all within the setup timeout.
 const SETUP_ATTEMPTS: u32 = 3;
 
@@ -169,19 +217,6 @@ impl std::fmt::Display for Unstopped {
 
 fn unstopped(e: &anyhow::Error) -> bool {
     e.downcast_ref::<Unstopped>().is_some()
-}
-
-/// Agent errors that are recorded while the verifier still runs (the
-/// AgentTimeoutError + NonZeroAgentExitCodeError family).
-pub fn is_agent_run_error(kind: &str) -> bool {
-    kind == "AgentTimeoutError"
-        || kind == "NonZeroAgentExitCodeError"
-        || kind == "AgentAuthenticationError"
-        || kind == "ModelNotFoundError"
-        || kind == "UnsupportedModelParametersError"
-        || kind == "NetworkConnectionError"
-        || kind.starts_with("Api")
-        || matches!(kind, "OutputTokenExceededError" | "ContextWindowExceededError" | "UnknownApiError" | "AgentSafetyRefusalError")
 }
 
 /// Per-phase network policies.
@@ -206,7 +241,7 @@ fn merge_hosts(p: NetworkPolicy, extra: &[String]) -> NetworkPolicy {
     NetworkPolicy { mode: NetworkMode::Allowlist, allowed_hosts: hosts }
 }
 
-/// upstream ignores run-level hosts on a public phase; `enforce` makes them the whole allowlist instead.
+/// Run-level hosts are ignored on a public phase unless `enforce`, which makes them the whole allowlist.
 fn agent_phase_policy(p: NetworkPolicy, extra: &[String], enforce: bool) -> NetworkPolicy {
     if enforce && p.mode == NetworkMode::Public {
         return NetworkPolicy { mode: NetworkMode::Allowlist, allowed_hosts: extra.to_vec() };
@@ -222,17 +257,20 @@ pub struct Trial {
     agent: Option<AgentBox>,
     env: Option<DockerEnv>,
     env_stopped: bool,
+    /// Separate verifier env while it is up, so cancellation can still tear it down.
+    verifier_env: Mutex<Option<Arc<DockerEnv>>>,
     result: TrialResult,
-    agent_permit: Option<Arc<Semaphore>>,
     shared_verifier_dirty: bool,
     user_agent: Option<AgentBox>,
     bridge: Option<crate::bridge::Bridge>,
     /// The agent's own env overlay (captured at creation; agents may normalize `agent.env`).
     agent_env: Option<BTreeMap<String, String>>,
+    /// Print a stderr line as the trial enters each phase.
+    pub progress: bool,
 }
 
 impl Trial {
-    pub fn new(cfg: TrialConfig, task: Arc<Task>, agent_permit: Option<Arc<Semaphore>>) -> Result<Trial> {
+    pub fn new(cfg: TrialConfig, task: Arc<Task>) -> Result<Trial> {
         // Absolute: docker compose runs with the task's environment/ as cwd.
         let dir = std::path::absolute(cfg.trials_dir.join(&cfg.trial_name))?;
         for d in ["agent", "verifier", "artifacts"] {
@@ -241,33 +279,7 @@ impl Trial {
         std::fs::write(dir.join("config.json"), serde_json::to_string_pretty(&cfg.config_json())?)?;
         std::fs::write(dir.join("lock.json"), serde_json::to_string_pretty(&trial_lock(&cfg))?)?;
         let log = TrialLog::create(&dir.join("trial.log"))?;
-        let result = TrialResult {
-            id: uuid::Uuid::new_v4(),
-            task_name: task.name(),
-            trial_name: cfg.trial_name.clone(),
-            trial_uri: format!("file://{}", dir.canonicalize().unwrap_or(dir.clone()).display()),
-            task_id: task_id(&cfg),
-            source: cfg.task.source.clone(),
-            task_checksum: task.checksum().unwrap_or_default(),
-            config: cfg.clone(),
-            agent_info: AgentInfo {
-                name: cfg.agent.name().into(),
-                version: "unknown".into(),
-                model_info: model_info(&cfg.agent.model_name),
-            },
-            agent_result: None,
-            verifier_result: None,
-            verifier_environment_mode: (!task.has_steps()).then(|| task.verifier_mode(None)),
-            exception_info: None,
-            started_at: Some(Utc::now()),
-            finished_at: None,
-            environment_setup: None,
-            agent_setup: None,
-            agent_execution: None,
-            verifier: None,
-            step_results: None,
-            egress: None,
-        };
+        let result = TrialResult::new(cfg.clone(), &task, &dir);
         Ok(Trial {
             cfg,
             task,
@@ -276,13 +288,20 @@ impl Trial {
             agent: None,
             env: None,
             env_stopped: false,
+            verifier_env: Mutex::new(None),
             result,
-            agent_permit,
             shared_verifier_dirty: false,
             user_agent: None,
             bridge: None,
             agent_env: None,
+            progress: false,
         })
+    }
+
+    fn phase(&self, what: &str) {
+        if self.progress {
+            eprintln!("{}: {what}", self.cfg.trial_name);
+        }
     }
 
     fn secs(&self, base: f64, max: Option<f64>, mult: Option<f64>) -> Duration {
@@ -443,11 +462,12 @@ impl Trial {
                 let _ = self.download_agent_logs(&self.dir.join("agent")).await;
             }
         }
+        self.stop_verifier_env().await;
         self.stop_env().await;
         if let Some(a) = &self.agent {
             let mut ctx = self.result.agent_result.take();
             if let Some(c) = ctx.as_mut().filter(|c| c.is_empty()) {
-                a.populate_context_post_run(&self.dir.join("agent"), c);
+                a.collect_usage(&self.dir.join("agent"), c);
             }
             self.result.agent_result = ctx;
             self.result.agent_info.version = a.version().unwrap_or_else(|| "unknown".into());
@@ -457,13 +477,22 @@ impl Trial {
         }
         self.result.finished_at = Some(Utc::now());
         self.result = crate::redact::value(self.result);
-        let _ = std::fs::write(self.dir.join("result.json"), serde_json::to_string_pretty(&self.result).unwrap());
+        let _ = write_atomic(&self.dir.join("result.json"), serde_json::to_string_pretty(&self.result).unwrap());
         // Trajectories, agent logs and artifacts are uploaded as they are, so no known secret stays in them.
         let n = crate::redact::scrub_dir(&self.dir);
         if n > 0 {
             self.log.line(&format!("redacted secrets in {n} file(s)"));
         }
         self.result
+    }
+
+    async fn stop_verifier_env(&self) {
+        let venv = self.verifier_env.lock().unwrap_or_else(|e| e.into_inner()).take();
+        if let Some(v) = venv
+            && let Err(e) = v.stop().await
+        {
+            self.log.line(&format!("failed to stop verifier env: {e:#}"));
+        }
     }
 
     async fn stop_env(&mut self) {
@@ -556,6 +585,7 @@ impl Trial {
         let env = DockerEnv::new(spec, self.log.clone()).await?;
         self.env = Some(env);
 
+        self.phase("starting environment");
         let t = TimingInfo::start();
         let r = self.env().start().await;
         self.result.environment_setup = Some(t.finish());
@@ -569,12 +599,13 @@ impl Trial {
         {
             let r = self.env().exec_root(&cmd, Some(Duration::from_secs(120))).await?;
             if r.code != 0 {
-                return Err(kind_err("EnvironmentStartError", format!("removing verifier-only files failed: {}", r.stderr)));
+                return Err(kind_err(ErrorKind::EnvironmentStart, format!("removing verifier-only files failed: {}", r.stderr)));
             }
             self.log.line("removed verifier-only files from the agent's container");
         }
         self.upload_skills().await?;
 
+        self.phase("agent setup");
         let t = TimingInfo::start();
         let user = self.agent_user(steps[0]);
         let setup_timeout = self.secs(
@@ -583,7 +614,7 @@ impl Trial {
             self.cfg.agent_setup_timeout_multiplier,
         );
         let timeout_err =
-            |what: &str| kind_err("AgentSetupTimeoutError", format!("{what} timed out after {} seconds", setup_timeout.as_secs_f64()));
+            |what: &str| kind_err(ErrorKind::AgentSetupTimeout, format!("{what} timed out after {} seconds", setup_timeout.as_secs_f64()));
         if let Some(mut ua) = self.user_agent.take() {
             let overlay = resolve_env_vars(&self.cfg.user_agent.as_ref().unwrap().agent.env)?;
             let r = match self.ctx_with(user.clone(), None, overlay, "user-agent") {
@@ -624,7 +655,7 @@ impl Trial {
                 match tokio::time::timeout(setup_timeout, attempts).await {
                     Ok(Ok(())) => Ok(()),
                     Ok(Err((e, n))) => Err(kind_err(
-                        "AgentSetupError",
+                        ErrorKind::AgentSetup,
                         format!(
                             "Agent setup failed before the agent started (environment/install problem, {n} attempt{}): {e:#}",
                             if n == 1 { "" } else { "s" }
@@ -707,7 +738,7 @@ impl Trial {
         Ok(())
     }
 
-    /// Run the agent under its timeout, phase network policy and agent concurrency permit.
+    /// Run the agent under its timeout and phase network policy.
     async fn agent_phase(&mut self, instruction: &str, step: Option<&StepConfig>, resume: bool) -> (AgentContext, TimingInfo, Result<()>) {
         let mut ctx = AgentContext::default();
         let t = TimingInfo::start();
@@ -715,10 +746,10 @@ impl Trial {
             Ok(p) => p,
             Err(e) => return (ctx, t.finish(), Err(e)),
         };
-        let _permit = match &self.agent_permit {
-            Some(s) => Some(s.clone().acquire_owned().await.unwrap()),
-            None => None,
-        };
+        self.phase(&match step {
+            Some(s) => format!("agent run (step {})", s.name),
+            None => "agent run".into(),
+        });
         let timeout = self.agent_timeout(step);
         let switch = plan.agent_phase != plan.agent_env_baseline;
         if switch && let Err(e) = self.env().set_network_policy(&plan.agent_phase).await {
@@ -739,9 +770,10 @@ impl Trial {
                     match timeout {
                         Some(d) => match tokio::time::timeout(d, run).await {
                             Ok(r) => r,
-                            Err(_) => {
-                                Err(kind_err("AgentTimeoutError", format!("Agent execution timed out after {} seconds", d.as_secs_f64())))
-                            }
+                            Err(_) => Err(kind_err(
+                                ErrorKind::AgentTimeout,
+                                format!("Agent execution timed out after {} seconds", d.as_secs_f64()),
+                            )),
                         },
                         None => run.await,
                     }
@@ -750,7 +782,7 @@ impl Trial {
             self.agent = Some(agent);
             r
         };
-        // Beyond upstream: a timed-out agent keeps running in the container after the dropped `docker compose
+        // A timed-out agent keeps running in the container after the dropped `docker compose
         // exec`, still writing files and able to read /tests. Stop the agent's own processes, whether it timed
         // out or exited, and leave what it deliberately detached (a server the task asks for) running.
         let r = match (self.env().kill_agent_processes(&before).await, r) {
@@ -761,9 +793,9 @@ impl Trial {
                 r
             }
             (Err(e), Ok(())) => {
-                Err(kind_err("EnvironmentError", "the agent's processes may still be running").context(Unstopped(format!("{e:#}"))))
+                Err(kind_err(ErrorKind::Environment, "the agent's processes may still be running").context(Unstopped(format!("{e:#}"))))
             }
-            (Err(e), Err(f)) if is_agent_run_error(error_kind(&f)) => Err(f.context(Unstopped(format!("{e:#}")))),
+            (Err(e), Err(f)) if error_kind(&f).is_agent_run_error() => Err(f.context(Unstopped(format!("{e:#}")))),
             (Err(e), Err(f)) => {
                 self.log.line(&format!("stopping the agent's processes failed: {e:#}"));
                 Err(f)
@@ -793,7 +825,7 @@ impl Trial {
                 let run = ua.run(&prompt, &cx, ctx, false);
                 match timeout {
                     Some(d) => tokio::time::timeout(d, run).await.unwrap_or_else(|_| {
-                        Err(kind_err("AgentTimeoutError", format!("Agent execution timed out after {} seconds", d.as_secs_f64())))
+                        Err(kind_err(ErrorKind::AgentTimeout, format!("Agent execution timed out after {} seconds", d.as_secs_f64())))
                     }),
                     None => run.await,
                 }
@@ -806,7 +838,8 @@ impl Trial {
 
     async fn close_bridge(&mut self, user: Option<String>, overlay: BTreeMap<String, String>) {
         let Some(bridge) = self.bridge.take() else { return };
-        let mut agent = self.agent.take().unwrap();
+        // Cancelled during agent setup: the agent is still borrowed by the dropped future.
+        let Some(mut agent) = self.agent.take() else { return };
         if let Ok(cx) = self.ctx_with(user, None, overlay, "agent") {
             if bridge.ready
                 && let Err(e) = bridge.export(&cx, &self.dir.join("agent")).await
@@ -841,7 +874,7 @@ impl Trial {
             let ud = self.dir.join("user-agent");
             let _ = self.env().download_dir(MAIN, "/logs/user-agent", &ud).await;
             if ctx.is_empty() {
-                ua.populate_context_post_run(&ud, ctx);
+                ua.collect_usage(&ud, ctx);
             }
             let usage = std::fs::read_to_string(agent_dir.join(crate::bridge::TRAJECTORY_FILENAME))
                 .ok()
@@ -857,7 +890,7 @@ impl Trial {
         } else if ctx.is_empty()
             && let Some(a) = &self.agent
         {
-            a.populate_context_post_run(&agent_dir, ctx);
+            a.collect_usage(&agent_dir, ctx);
         }
         if let Err(e) = self.env().upload_dir(&agent_dir, "/logs/agent").await {
             self.log.line(&format!("agent log upload failed: {e:#}"));
@@ -930,7 +963,7 @@ impl Trial {
         self.result.agent_execution = Some(timing);
         let mut fatal = None;
         if let Err(e) = r {
-            if is_agent_run_error(error_kind(&e)) && !unstopped(&e) {
+            if error_kind(&e).is_agent_run_error() && !unstopped(&e) {
                 self.record(&e);
             } else {
                 fatal = Some(e);
@@ -1081,14 +1114,16 @@ impl Trial {
         }
         let env = self.env();
         let user = self.agent_user(Some(step));
-        let wd = env.exec("pwd", user.as_deref(), &BTreeMap::new(), None).await?.stdout.trim().to_string();
+        let wd = env.exec("pwd", user.as_deref(), &BTreeMap::new(), Some(Duration::from_secs(60))).await?.stdout.trim().to_string();
         let wd = if wd.is_empty() { "/".to_string() } else { wd };
         let wdir = self.task.step_dir(&step.name).join("workdir");
         if wdir.exists() {
             env.upload_dir(&wdir, &wd).await?;
             if wdir.join("setup.sh").exists() {
                 let script = format!("{}/setup.sh", wd.trim_end_matches('/'));
-                let r = env.exec(&format!("bash {}", crate::env::quote(&script)), user.as_deref(), &BTreeMap::new(), None).await?;
+                let timeout =
+                    self.secs(self.cfg.agent.override_setup_timeout_sec.unwrap_or(600.0), None, self.cfg.agent_setup_timeout_multiplier);
+                let r = env.exec(&format!("bash {}", crate::env::quote(&script)), user.as_deref(), &BTreeMap::new(), Some(timeout)).await?;
                 if r.code != 0 {
                     bail!("Step '{}' setup.sh exited with code {}: {}", step.name, r.code, r.stderr);
                 }
@@ -1102,6 +1137,10 @@ impl Trial {
 
     /// Shared verifier runs in the agent env; separate builds a fresh env from the verifier definition.
     async fn verify(&self, step: Option<&StepConfig>, artifacts_dir: &Path) -> Result<Rewards> {
+        self.phase(&match step {
+            Some(s) => format!("verify (step {})", s.name),
+            None => "verify".into(),
+        });
         let timeout = self.verifier_timeout(step);
         let fut = async {
             let plan = self.net_plan(step)?;
@@ -1124,11 +1163,12 @@ impl Trial {
                     let baseline = plan.verifier_env_baseline.clone().unwrap_or_else(NetworkPolicy::public);
                     let mut spec = self.env_spec(project, dir, ec, baseline.clone(), vec![plan.verifier_phase.clone()], false)?;
                     spec.upload_env_dir = !bundled;
-                    let venv = DockerEnv::new(spec, self.log.clone()).await?;
-                    let r = async {
+                    let venv = Arc::new(DockerEnv::new(spec, self.log.clone()).await?);
+                    *self.verifier_env.lock().unwrap_or_else(|e| e.into_inner()) = Some(venv.clone());
+                    async {
                         venv.start().await.map_err(|e| {
-                            if error_kind(&e) == "EnvironmentStartTimeoutError" {
-                                kind_err("EnvironmentStartTimeoutError", format!("Verifier environment start timed out: {e:#}"))
+                            if error_kind(&e) == ErrorKind::EnvironmentStartTimeout {
+                                kind_err(ErrorKind::EnvironmentStartTimeout, format!("Verifier environment start timed out: {e:#}"))
                             } else {
                                 e
                             }
@@ -1141,20 +1181,18 @@ impl Trial {
                         }
                         self.run_tests(&venv, step, user.as_deref(), bundled).await
                     }
-                    .await;
-                    if let Err(e) = venv.stop().await {
-                        self.log.line(&format!("failed to stop verifier env: {e:#}"));
-                    }
-                    r
+                    .await
                 }
             }
         };
-        match tokio::time::timeout(timeout, fut).await {
+        let r = match tokio::time::timeout(timeout, fut).await {
             Ok(r) => r,
             Err(_) => {
-                Err(kind_err("VerifierTimeoutError", format!("Verifier execution timed out after {} seconds", timeout.as_secs_f64())))
+                Err(kind_err(ErrorKind::VerifierTimeout, format!("Verifier execution timed out after {} seconds", timeout.as_secs_f64())))
             }
-        }
+        };
+        self.stop_verifier_env().await;
+        r
     }
 
     /// Upload tests, run /tests/test.sh, download /logs/verifier, parse rewards.
@@ -1190,7 +1228,7 @@ impl Trial {
             for src in &sources {
                 env.upload_dir(src, "/tests")
                     .await
-                    .map_err(|e| kind_err("AddTestsDirError", format!("Failed to add tests directory to environment: {e:#}")))?;
+                    .map_err(|e| kind_err(ErrorKind::AddTestsDir, format!("Failed to add tests directory to environment: {e:#}")))?;
             }
             format!("/tests/{rel}")
         };
@@ -1202,9 +1240,9 @@ impl Trial {
         venv.extend(resolve_env_vars(&self.cfg.verifier.env)?);
         env.exec(&format!("({script}) > /logs/verifier/test-stdout.txt 2>&1"), user, &venv, None).await?;
         let vdir = self.dir.join("verifier");
-        env.download_dir(MAIN, "/logs/verifier", &vdir)
-            .await
-            .map_err(|e| kind_err("DownloadVerifierDirError", format!("Failed to download verifier directory from environment: {e:#}")))?;
+        env.download_dir(MAIN, "/logs/verifier", &vdir).await.map_err(|e| {
+            kind_err(ErrorKind::DownloadVerifierDir, format!("Failed to download verifier directory from environment: {e:#}"))
+        })?;
         let v = &self.cfg.verifier;
         if !v.include_logs.is_empty() || !v.exclude_logs.is_empty() {
             filter_logs(&vdir, &v.include_logs, &v.exclude_logs, &["reward.txt", "reward.json"]);
@@ -1227,11 +1265,12 @@ impl Trial {
     }
 }
 
-/// Pydantic `exclude_none`: drop null-valued keys recursively.
-fn exclude_none(v: Value) -> Value {
+/// Removes null-valued object keys, recursively (lock.json omits nulls at every depth, including inside
+/// nested configs whose own serialization keeps them, so a serde attribute can't express it).
+fn drop_nulls(v: Value) -> Value {
     match v {
-        Value::Object(m) => Value::Object(m.into_iter().filter(|(_, x)| !x.is_null()).map(|(k, x)| (k, exclude_none(x))).collect()),
-        Value::Array(a) => Value::Array(a.into_iter().map(exclude_none).collect()),
+        Value::Object(m) => Value::Object(m.into_iter().filter(|(_, x)| !x.is_null()).map(|(k, x)| (k, drop_nulls(x))).collect()),
+        Value::Array(a) => Value::Array(a.into_iter().map(drop_nulls).collect()),
         x => x,
     }
 }
@@ -1240,7 +1279,7 @@ fn sha256_prefixed(b: &[u8]) -> String {
     format!("sha256:{}", crate::task::hex(&<sha2::Sha256 as sha2::Digest>::digest(b)))
 }
 
-/// Trial lock (lock.json), dumped with `exclude_none`.
+/// Trial lock (lock.json), with null fields omitted.
 pub fn trial_lock(c: &TrialConfig) -> Value {
     let local = crate::registry::local_path(&c.task);
     let task = Task::load(&local).ok();
@@ -1265,7 +1304,7 @@ pub fn trial_lock(c: &TrialConfig) -> Value {
         .map(|s| serde_json::json!({"name": Path::new(s).file_name().map(|n| n.to_string_lossy().into_owned()), "source": s, "digest": crate::task::content_digest(Path::new(s))}))
         .collect();
     let user_agent = c.user_agent.as_ref();
-    exclude_none(serde_json::json!({
+    drop_nulls(serde_json::json!({
         "schema_version": 2,
         "task": {
             "name": name,
@@ -1305,7 +1344,7 @@ pub fn trial_lock(c: &TrialConfig) -> Value {
 async fn cancellable<T>(mut cancel: watch::Receiver<bool>, fut: impl Future<Output = Result<T>>) -> Result<T> {
     tokio::select! {
         r = fut => r,
-        _ = cancel.wait_for(|c| *c) => Err(kind_err("CancelledError", "Trial cancelled")),
+        _ = cancel.wait_for(|c| *c) => Err(kind_err(ErrorKind::Cancelled, "Trial cancelled")),
     }
 }
 
@@ -1423,9 +1462,9 @@ pub fn parse_rewards(vdir: &Path) -> Result<Rewards> {
     if json_p.exists() {
         let raw = std::fs::read_to_string(&json_p)?;
         if raw.is_empty() {
-            return Err(kind_err("RewardFileEmptyError", format!("Reward file is empty at {}", json_p.display())));
+            return Err(kind_err(ErrorKind::RewardFileEmpty, format!("Reward file is empty at {}", json_p.display())));
         }
-        let parse_err = |m: String| kind_err("VerifierOutputParseError", m);
+        let parse_err = |m: String| kind_err(ErrorKind::VerifierOutputParse, m);
         let v: Value = serde_json::from_str(&raw)
             .map_err(|e| parse_err(format!("Failed to parse rewards from JSON file {}: {e}", json_p.display())))?;
         let Value::Object(map) = v else { return Err(parse_err(format!("Rewards in {} must be a JSON object", json_p.display()))) };
@@ -1442,18 +1481,18 @@ pub fn parse_rewards(vdir: &Path) -> Result<Rewards> {
     } else if txt_p.exists() {
         let raw = std::fs::read_to_string(&txt_p)?;
         if raw.is_empty() {
-            return Err(kind_err("RewardFileEmptyError", format!("Reward file is empty at {}", txt_p.display())));
+            return Err(kind_err(ErrorKind::RewardFileEmpty, format!("Reward file is empty at {}", txt_p.display())));
         }
         let v: f64 = raw
             .trim()
             .parse()
-            .map_err(|_| kind_err("VerifierOutputParseError", format!("Failed to parse rewards from text file {}", txt_p.display())))?;
+            .map_err(|_| kind_err(ErrorKind::VerifierOutputParse, format!("Failed to parse rewards from text file {}", txt_p.display())))?;
         let n = Number::from_f64(v)
             .filter(|_| v.is_finite())
-            .ok_or_else(|| kind_err("VerifierOutputParseError", format!("Non-finite reward in text file {}", txt_p.display())))?;
+            .ok_or_else(|| kind_err(ErrorKind::VerifierOutputParse, format!("Non-finite reward in text file {}", txt_p.display())))?;
         Ok([("reward".to_string(), n)].into())
     } else {
-        Err(kind_err("RewardFileNotFoundError", format!("No reward file found at {} or {}", txt_p.display(), json_p.display())))
+        Err(kind_err(ErrorKind::RewardFileNotFound, format!("No reward file found at {} or {}", txt_p.display(), json_p.display())))
     }
 }
 
@@ -1469,11 +1508,12 @@ mod tests {
 
     #[test]
     fn a_failed_stop_keeps_the_run_error_kind() {
-        let timeout = kind_err("AgentTimeoutError", "Agent execution timed out after 5 seconds").context(Unstopped("exec failed".into()));
+        let timeout =
+            kind_err(ErrorKind::AgentTimeout, "Agent execution timed out after 5 seconds").context(Unstopped("exec failed".into()));
         assert_eq!(error_kind(&timeout), "AgentTimeoutError");
         assert!(unstopped(&timeout));
         assert_eq!(format!("{timeout:#}"), "stopping the agent's processes failed: exec failed: Agent execution timed out after 5 seconds");
-        assert!(!unstopped(&kind_err("AgentTimeoutError", "timed out")));
+        assert!(!unstopped(&kind_err(ErrorKind::AgentTimeout, "timed out")));
     }
 
     #[test]

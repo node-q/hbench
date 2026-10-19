@@ -5,7 +5,7 @@ use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-/// `TaskConfig.model_validate_toml(...).model_dump(mode="json")`, driven by the exported TaskConfig schema:
+/// task.toml validated and dumped as JSON, driven by the exported TaskConfig schema:
 /// properties in field order, defaults (incl. default factories) filled, legacy fields migrated.
 pub(super) fn task_config_dump(toml_text: &str) -> Option<Value> {
     let mut data: Value = serde_json::to_value(toml::from_str::<toml::Table>(toml_text).ok()?).ok()?;
@@ -128,7 +128,7 @@ fn dump_value(v: &Value, prop: &Value, root: &Value) -> Option<Value> {
     })
 }
 
-/// `EnvironmentConfig._parse_size_to_mb`.
+/// A size with a `K`/`M`/`G` suffix (`512M`, `1.5G`) in megabytes; None otherwise.
 fn parse_size_mb(size: &str) -> Option<i64> {
     let s = size.trim().to_uppercase();
     let (n, unit) = s.split_at(s.len().checked_sub(1)?);
@@ -171,7 +171,7 @@ fn task_info(dir: &Path) -> TaskInfo {
     }
 }
 
-/// `TaskDefinitionScanner.get_instruction`.
+/// The task's instruction text: instruction.md, else the steps' instructions joined by section.
 fn task_instruction(dir: &Path, config: Option<&Value>) -> Value {
     let p = dir.join("instruction.md");
     if p.exists() {
@@ -279,7 +279,7 @@ impl App {
                     items.retain(|s| {
                         s["name"].as_str().is_some_and(|x| x.to_lowercase().contains(&n))
                             || s["source"].as_str().is_some_and(|x| x.to_lowercase().contains(&n))
-                            || s["metadata"].as_object().into_iter().flatten().any(|(_, v)| py_str(v).to_lowercase().contains(&n))
+                            || s["metadata"].as_object().into_iter().flatten().any(|(_, v)| search_text(v).to_lowercase().contains(&n))
                     });
                 }
                 for (param, field) in [("difficulty", "difficulty"), ("category", "category")] {
@@ -335,13 +335,13 @@ impl App {
     }
 }
 
-/// Python `str()` of a JSON value (metadata search).
-fn py_str(v: &Value) -> String {
+/// Searchable text of a metadata value: strings as-is, `True`/`False`/`None` literals, lists as quoted items.
+fn search_text(v: &Value) -> String {
     match v {
         Value::String(x) => x.clone(),
         Value::Bool(b) => if *b { "True" } else { "False" }.into(),
         Value::Null => "None".into(),
-        Value::Array(a) => format!("[{}]", a.iter().map(py_repr).collect::<Vec<_>>().join(", ")),
+        Value::Array(a) => format!("[{}]", a.iter().map(repr_scalar).collect::<Vec<_>>().join(", ")),
         x => x.to_string(),
     }
 }

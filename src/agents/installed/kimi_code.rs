@@ -1,6 +1,6 @@
 //! Kimi Code installed agent, with usage totals from its wire log.
 
-use super::common::{installed_dir, nvm_node_install_snippet, skills_dir};
+use super::common::{installed_dir, nvm_load, nvm_node_install_snippet, skills_dir};
 use super::kimi_cli::loads_lenient;
 use super::pins;
 use super::{exec_agent, exec_root};
@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 
 const KIMI_CODE_HOME: &str = "/logs/agent/.kimi-code";
 const OUTPUT_PATH: &str = "/logs/agent/kimi-code.txt";
-const NODE_PATH_SETUP: &str = "if [ -s \"$HOME/.nvm/nvm.sh\" ]; then . \"$HOME/.nvm/nvm.sh\"; fi; export PATH=\"$HOME/.local/bin:$PATH\"; ";
+const NODE_PATH_SETUP: &str = concat!(nvm_load!(), "; export PATH=\"$HOME/.local/bin:$PATH\"; ");
 const SYSTEM_INSTALL: &str = r#"if command -v apk >/dev/null 2>&1; then
   if ! command -v node >/dev/null 2>&1 || \
      ! command -v npm >/dev/null 2>&1; then
@@ -145,7 +145,7 @@ impl Agent for KimiCode {
         exec_agent(cx, &cmd, &env).await.map(|_| ())
     }
 
-    fn populate_context_post_run(&self, logs_dir: &Path, ctx: &mut AgentContext) {
+    fn collect_usage(&self, logs_dir: &Path, ctx: &mut AgentContext) {
         if let Some(c) = usage(logs_dir, self.args.model_name.as_deref()) {
             *ctx = c;
         }
@@ -326,7 +326,7 @@ fn pricing_key(model: &str) -> Option<String> {
 
 /// Token totals of the current turn (earlier `--continue` turns are copied context);
 /// `None` when nothing was parsed or no usage was observed (tokens stay null).
-/// Cost is an all-or-nothing LiteLLM estimate (`estimate_cost_usd`).
+/// Cost is an all-or-nothing price-table estimate (None if any part is unpriced).
 pub fn usage(logs_dir: &Path, model_name: Option<&str>) -> Option<AgentContext> {
     let stream_path = logs_dir.join("kimi-code.txt");
     let has_stream = stream_path.is_file();
@@ -447,7 +447,7 @@ mod tests {
 
     #[test]
     fn litellm_cost_estimate() {
-        // moonshotai/kimi-k3 has no LiteLLM entry: cost stays None.
+        // moonshotai/kimi-k3 has no price-table entry: cost stays None.
         assert_eq!(usage(&logs(Some(WIRE), Some(STREAM)), Some("moonshot/kimi-k2.6")).unwrap().cost_usd, None);
         // moonshotai/x is priced as moonshot/x: in 6e-7, out 2.5e-6, cache read 1.5e-7.
         let wire = WIRE.replace("moonshotai/kimi-k3", "moonshotai/kimi-k2-0905-preview");

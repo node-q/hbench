@@ -279,7 +279,7 @@ impl Agent for Hermes {
         r.map(|_| ())
     }
 
-    fn populate_context_post_run(&self, logs_dir: &std::path::Path, ctx: &mut AgentContext) {
+    fn collect_usage(&self, logs_dir: &std::path::Path, ctx: &mut AgentContext) {
         let Ok(text) = std::fs::read_to_string(logs_dir.join("hermes-session.jsonl")) else { return };
         let native = native_session_id(&text);
         let Some((p, c)) = session_totals(&text) else { return };
@@ -345,7 +345,7 @@ mod tests {
         let dir = a.args.logs_dir.clone();
         std::fs::write(dir.join("hermes-session.jsonl"), &s1).unwrap();
         let mut c = AgentContext::default();
-        a.populate_context_post_run(&dir, &mut c);
+        a.collect_usage(&dir, &mut c);
         assert_eq!((c.n_input_tokens, c.n_output_tokens), (Some(10), Some(5)));
         let s2 = json!({"id": "s1", "messages": [{"role": "assistant", "content": "A", "usage": {"prompt_tokens": 10, "completion_tokens": 5}},
             {"role": "assistant", "content": "", "tool_calls": [{"id": "t", "function": {"name": "terminal", "arguments": "{}"}}], "usage": {"prompt_tokens": 30, "completion_tokens": 7}}]})
@@ -353,7 +353,7 @@ mod tests {
         std::fs::write(dir.join("hermes-session.jsonl"), &s2).unwrap();
         a.last_run_was_resume = true;
         let mut c = AgentContext::default();
-        a.populate_context_post_run(&dir, &mut c);
+        a.collect_usage(&dir, &mut c);
         assert_eq!((c.n_input_tokens, c.n_output_tokens), (Some(30), Some(7)));
     }
 }

@@ -5,6 +5,7 @@ use super::{connection, ensure_system_dependencies, exec_agent, exec_root, uploa
 use crate::agents::model_connection::{Resolved, Spec};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::quote;
+use crate::fmt::json_spaced;
 use anyhow::{Result, anyhow, bail};
 use regex::Regex;
 use serde_json::{Map, Value, json};
@@ -197,35 +198,13 @@ fn session_metadata(records: &Records) -> Value {
         .unwrap_or_else(|| json!({}))
 }
 
-/// Base `_atif_session_id`: reuse the trajectory's session id when it is a UUID; else mint one.
+/// ATIF session id: reuse the trajectory's session id when it is a UUID; else mint one.
 fn atif_session_id(traj: &Value) -> String {
     traj["session_id"]
         .as_str()
         .filter(|s| uuid::Uuid::parse_str(s).is_ok())
         .map(String::from)
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string())
-}
-
-/// Python `json.dumps` (default separators, ensure_ascii).
-fn py_json(v: &Value) -> String {
-    match v {
-        Value::Object(m) => format!(
-            "{{{}}}",
-            m.iter().map(|(k, v)| format!("{}: {}", py_json(&Value::String(k.clone())), py_json(v))).collect::<Vec<_>>().join(", ")
-        ),
-        Value::Array(a) => format!("[{}]", a.iter().map(py_json).collect::<Vec<_>>().join(", ")),
-        Value::String(s) => serde_json::to_string(s).unwrap().chars().fold(String::new(), |mut o, c| {
-            if c.is_ascii() {
-                o.push(c);
-            } else {
-                for u in c.encode_utf16(&mut [0; 2]) {
-                    o += &format!("\\u{u:04x}");
-                }
-            }
-            o
-        }),
-        v => v.to_string(),
-    }
 }
 
 /// Session message text: text content only.
@@ -340,7 +319,7 @@ pub fn atif_to_native(traj: &Value, sid: &str) -> Result<String> {
                 .map(|c| {
                     let raw = &c["extra"]["muse_tool_call"];
                     let id = if raw.get("id").is_some() { raw["id"].clone() } else { json!(uuid::Uuid::new_v4().to_string()) };
-                    let args = if raw.get("args").is_some() { raw["args"].clone() } else { json!(py_json(&c["arguments"])) };
+                    let args = if raw.get("args").is_some() { raw["args"].clone() } else { json!(json_spaced(&c["arguments"])) };
                     json!({"call_id": c["tool_call_id"], "id": id, "name": c["function_name"], "args": args})
                 })
                 .collect();
@@ -376,7 +355,7 @@ pub fn atif_to_native(traj: &Value, sid: &str) -> Result<String> {
         bail!("Muse ATIF loading requires at least one user message");
     }
     event(&mut rows, &run_id, &mut run_seq, json!({"kind": "terminal", "terminal": "completed", "reason": null}));
-    Ok(rows.iter().map(|r| py_json(r) + "\n").collect())
+    Ok(rows.iter().map(|r| json_spaced(r) + "\n").collect())
 }
 
 /// Relocate a session: change only the copied workspace metadata.
@@ -385,7 +364,7 @@ pub fn relocate_session(text: &str, workspace: &str) -> String {
         .map(|line| match serde_json::from_str::<Value>(line) {
             Ok(mut row) if row["payload"]["kind"] == "metadata" => {
                 row["payload"]["record"]["workspace_root"] = json!(workspace);
-                py_json(&row) + "\n"
+                json_spaced(&row) + "\n"
             }
             _ => line.to_string(),
         })
@@ -702,7 +681,7 @@ impl Agent for MuseCode {
         Ok(())
     }
 
-    fn populate_context_post_run(&self, logs_dir: &Path, ctx: &mut AgentContext) {
+    fn collect_usage(&self, logs_dir: &Path, ctx: &mut AgentContext) {
         if let Some(u) = usage_from_logs(logs_dir) {
             ctx.n_input_tokens = u.prompt;
             ctx.n_cache_tokens = u.cached;
@@ -848,7 +827,7 @@ mod tests {
         write_session(&logs.join("sessions").join(&child), CHILD);
         std::fs::write(logs.join(MANIFEST), json!({"session_id": SID, "usage_start": {}, "copied_until": {}}).to_string()).unwrap();
         let mut ctx = AgentContext::default();
-        MuseCode::populate_context_post_run(&agent(json!({}), &[], None).unwrap(), &logs, &mut ctx);
+        MuseCode::collect_usage(&agent(json!({}), &[], None).unwrap(), &logs, &mut ctx);
         assert_eq!((ctx.n_input_tokens, ctx.n_cache_tokens, ctx.n_output_tokens, ctx.cost_usd), (Some(120), Some(56), Some(16), None));
         // Resume boundary: root lines up to 7 (first model_completed is line 6) are excluded.
         std::fs::write(logs.join(MANIFEST), json!({"session_id": SID, "usage_start": {SESSION: 7}}).to_string()).unwrap();

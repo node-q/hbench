@@ -45,14 +45,14 @@ fn artifact_inference_matches_reference() {
 }
 
 #[test]
-fn python_path_helpers() {
+fn path_helpers() {
     assert_eq!(normpath("/work/../up.csv"), "/up.csv");
     assert_eq!(normpath("/../a//./b/"), "/a/b");
     assert_eq!(normpath("../a/../../b"), "../../b");
     assert_eq!(normpath("//x/y"), "//x/y");
-    assert_eq!(py_path("./td/"), "td");
-    assert_eq!(py_path(""), ".");
-    assert_eq!(py_path("///a//b"), "/a/b");
+    assert_eq!(posix_normalize("./td/"), "td");
+    assert_eq!(posix_normalize(""), ".");
+    assert_eq!(posix_normalize("///a//b"), "/a/b");
     assert_eq!(posix_split("a/b/"), ("a/b".into(), "".into()));
     assert_eq!(posix_split("/x"), ("/".into(), "x".into()));
     assert_eq!(slugify(" My Job! "), "my-job");
@@ -173,11 +173,11 @@ fn compile_matches_golden() {
 #[test]
 fn compile_rejects_bad_inputs() {
     let root = tmp("bad");
-    let out = Some(PyPath(root.join("o").to_string_lossy().into_owned()));
+    let out = Some(NormPath(root.join("o").to_string_lossy().into_owned()));
     assert!(compile(&CompileConfig::default()).unwrap_err().to_string().contains("output_dir"));
     let missing = CompileConfig {
         output_dir: out.clone(),
-        instructions: vec![CompileInstruction { text: None, path: Some(PyPath::new("/nonexistent/i.md")) }],
+        instructions: vec![CompileInstruction { text: None, path: Some(NormPath::new("/nonexistent/i.md")) }],
         ..Default::default()
     };
     assert!(compile(&missing).unwrap_err().to_string().starts_with("Instruction path must be a file"));
@@ -214,7 +214,7 @@ fn reduce_task_stages_map_artifacts() {
     write_trial(&job, "task-c__1", &[]);
     let task = ExecReduceTaskConfig {
         task_name: "reduce".into(),
-        output_dir: PyPath(root.join("tasks").to_string_lossy().into_owned()),
+        output_dir: NormPath(root.join("tasks").to_string_lossy().into_owned()),
         task_template: None,
         instruction: CompileInstruction::text("Combine into /app/final.md"),
         artifacts: vec!["/app/final.md".into()],

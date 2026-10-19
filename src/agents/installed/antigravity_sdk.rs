@@ -1,8 +1,7 @@
 //! antigravity-sdk: Google's Antigravity SDK driven by an uploaded uv script (assets/agents/antigravity-sdk).
 
 use super::antigravity_cli::validate_base_url;
-use super::common::{installed_dir, skills_dir};
-use super::pins;
+use super::common::{installed_dir, skills_dir, uv_install};
 use super::{ensure_system_dependencies, exec_agent, exec_root};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::quote;
@@ -201,7 +200,7 @@ impl AntigravitySdk {
         let wheel = self.wheel_path()?;
         if cx.exec("command -v uv >/dev/null 2>&1", &BTreeMap::new(), None).await?.code != 0 {
             ensure_system_dependencies(cx, &["curl", "ca_certificates", "python3"]).await?;
-            exec_root(cx, &format!("curl -LsSf {} | env UV_INSTALL_DIR=/usr/local/bin sh", pins::uv_installer()), &BTreeMap::new()).await?;
+            exec_root(cx, &uv_install(Some("/usr/local/bin")), &BTreeMap::new()).await?;
         }
         let remote_wheel = wheel.as_ref().map(|w| format!("/installed-agent/{}", w.file_name().unwrap().to_string_lossy()));
         if let (Some(w), Some(r)) = (&wheel, &remote_wheel) {
@@ -255,7 +254,7 @@ impl Agent for AntigravitySdk {
         Ok(())
     }
 
-    fn populate_context_post_run(&self, logs_dir: &Path, ctx: &mut AgentContext) {
+    fn collect_usage(&self, logs_dir: &Path, ctx: &mut AgentContext) {
         if let Some(c) = std::fs::read_to_string(logs_dir.join(TRAJECTORY_FILENAME))
             .ok()
             .and_then(|t| parse_trajectory(&t, self.args.model_name.as_deref()))

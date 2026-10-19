@@ -127,7 +127,7 @@ pub trait Agent: Send + Sync {
         Ok(())
     }
     /// Fill usage from downloaded logs when run() left the context empty.
-    fn populate_context_post_run(&self, _logs_dir: &std::path::Path, _ctx: &mut AgentContext) {}
+    fn collect_usage(&self, _logs_dir: &std::path::Path, _ctx: &mut AgentContext) {}
 }
 
 /// Common per-agent inputs.

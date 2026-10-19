@@ -5,7 +5,7 @@
 //! exposes the environment tools to RLM; each tool call comes back to hbench over stdio and runs in
 //! the environment with `docker compose exec`.
 
-use super::terminus2::{Kw, mcp_info, pyrepr};
+use super::terminus2::{Kw, mcp_info, quote_repr};
 use super::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::{ExecResult, kind_err};
 use anyhow::{Context, Result, anyhow, bail};
@@ -59,7 +59,10 @@ fn input_kwargs(signature: &str, instruction: &str, file_tree: &str) -> Result<M
     let fields: Vec<&str> =
         inputs.split(',').filter(|f| !f.trim().is_empty()).map(|f| f.trim().split(':').next().unwrap_or("").trim()).collect();
     if fields.len() != 2 {
-        bail!("dspy-rlm signature must define exactly two input fields (instruction + file_tree semantics), got: {}", pyrepr(signature));
+        bail!(
+            "dspy-rlm signature must define exactly two input fields (instruction + file_tree semantics), got: {}",
+            quote_repr(signature)
+        );
     }
     Ok(Map::from_iter([(fields[0].to_string(), json!(instruction)), (fields[1].to_string(), json!(file_tree))]))
 }
@@ -130,7 +133,7 @@ pub fn create(args: AgentArgs) -> Result<AgentBox> {
 }
 
 impl DspyRlm {
-    /// Host env for the runner: dspy/LiteLLM read API keys from it (agent env overrides).
+    /// Host env for the runner: dspy reads API keys from it (agent env overrides).
     fn host_env(&self) -> BTreeMap<String, String> {
         self.args.extra_env.clone()
     }
@@ -166,11 +169,9 @@ impl DspyRlm {
         let done = run_runner(&cfg, &self.host_env(), &self.args.logs_dir.join("rlm").join("runner.log"), ex).await?;
         Self::apply(ctx, &done);
         match done["error"].as_str() {
-            // The Python exception class becomes the trial's exception type.
+            // The runner's exception type name becomes the trial's exception type.
             // Leaks the (short) class name once per failed run; kind_err wants &'static str.
-            Some(e) => {
-                Err(kind_err(Box::leak(done["kind"].as_str().unwrap_or("RuntimeError").to_string().into_boxed_str()), e.to_string()))
-            }
+            Some(e) => Err(kind_err(done["kind"].as_str().unwrap_or("RuntimeError"), e.to_string())),
             None => Ok(()),
         }
     }

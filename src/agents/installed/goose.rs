@@ -7,6 +7,7 @@ use super::{connection, ensure_system_dependencies, exec_agent, exec_error};
 use crate::agents::model_connection::{Resolved, Spec, with_canonical_provider_envs};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::quote;
+use crate::fmt::float_with_point;
 use anyhow::{Result, bail};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -45,7 +46,7 @@ impl Goose {
             if !(0.0..=1.0).contains(&t) {
                 bail!("Invalid value for 'temperature': must be between 0.0 and 1.0");
             }
-            env.insert("GOOSE_TEMPERATURE".into(), opts::py_float(t));
+            env.insert("GOOSE_TEMPERATURE".into(), float_with_point(t));
         }
         if let Some(n) = opts::int(a, "max_tokens", None)? {
             if !(1..=2_147_483_647).contains(&n) {
@@ -280,7 +281,7 @@ impl Agent for Goose {
         Ok(())
     }
 
-    fn populate_context_post_run(&self, logs_dir: &std::path::Path, ctx: &mut AgentContext) {
+    fn collect_usage(&self, logs_dir: &std::path::Path, ctx: &mut AgentContext) {
         let Some(c) = std::fs::read_to_string(logs_dir.join("goose.txt")).ok().and_then(|t| parse_goose_usage(&t)) else { return };
         ctx.n_input_tokens = c.n_input_tokens;
         ctx.n_output_tokens = c.n_output_tokens;

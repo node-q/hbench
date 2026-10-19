@@ -165,13 +165,13 @@ impl Tmux {
     }
 
     fn send_error(&self, action: &str, cmd: &str, r: &ExecResult) -> anyhow::Error {
-        let c: String = pyrepr(cmd).chars().take(100).collect();
+        let c: String = quote_repr(cmd).chars().take(100).collect();
         anyhow!(
             "{}: failed to send {action} keys: command={c}, return_code={}, stderr={}, stdout={}",
             self.name,
             r.code,
-            pyrepr(&r.stderr),
-            pyrepr(&r.stdout)
+            quote_repr(&r.stderr),
+            quote_repr(&r.stdout)
         )
     }
 
@@ -275,7 +275,7 @@ impl Tmux {
             }
             keys.extend([COMPLETION_COMMAND.to_string(), "Enter".to_string()]);
             self.send_keys_to_session(sh, &keys, "blocking").await?;
-            let r = sh.sh(&format!("timeout {}s tmux wait done", pyf(max_timeout_sec)), false, None).await?;
+            let r = sh.sh(&format!("timeout {}s tmux wait done", float_with_point(max_timeout_sec)), false, None).await?;
             return Ok(r.code == 0);
         }
         let start = Instant::now();

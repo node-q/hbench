@@ -1,6 +1,6 @@
 //! computer-1: desktop computer-use agent.
 //!
-//! Ported: the generic strict-JSON harness (the `litellm` provider flavor, the default for
+//! Includes: the generic strict-JSON harness (the `litellm` provider flavor, the default for
 //! models outside the anthropic/bedrock/gemini/vertex_ai routes), the native computer-use
 //! providers (`native`: Anthropic/Bedrock computer tool, Gemini Computer Use, OpenAI Responses
 //! `computer` tool) with model-based provider selection, and the shared pieces: the desktop runtime
@@ -9,10 +9,11 @@
 //! image-aware context compaction, the ATIF recorder, per-episode logs and final_answer.txt.
 //!
 
-use super::llm::{LiteLlm, Llm, LlmConfig, LlmError, LlmResponse, add_anthropic_caching, lookup_model_info};
-use super::terminus2::{Kw, Shell, limit_output_length, now, py_format, pyf, pyrepr};
+use super::llm::{ChatClient, Llm, LlmConfig, LlmError, LlmResponse, add_anthropic_caching, api_err, lookup_model_info};
+use super::terminus2::{Kw, Shell, fill_template, limit_output_length, now, quote_repr};
 use super::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx, ModelUsage};
-use crate::env::{error_kind, quote};
+use crate::env::{ErrorKind, error_kind, quote};
+use crate::fmt::float_with_point;
 use anyhow::{Result, anyhow, bail};
 use base64::Engine;
 use serde::Serialize;
@@ -42,16 +43,16 @@ mod native;
 
 type BoxFut<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
-/// Python `repr()` of a JSON value (dict-style), for `str(exec_result)` observations.
-fn py_repr(v: &Value) -> String {
+/// A JSON value in literal form (`None`, `True`, quoted strings, `{'k': v}` dicts), as exec results appear in observations.
+fn repr_value(v: &Value) -> String {
     match v {
         Value::Null => "None".into(),
         Value::Bool(b) => if *b { "True" } else { "False" }.into(),
         Value::Number(n) => n.to_string(),
-        Value::String(s) => pyrepr(s),
-        Value::Array(a) => format!("[{}]", a.iter().map(py_repr).collect::<Vec<_>>().join(", ")),
+        Value::String(s) => quote_repr(s),
+        Value::Array(a) => format!("[{}]", a.iter().map(repr_value).collect::<Vec<_>>().join(", ")),
         Value::Object(o) => {
-            format!("{{{}}}", o.iter().map(|(k, v)| format!("{}: {}", pyrepr(k), py_repr(v))).collect::<Vec<_>>().join(", "))
+            format!("{{{}}}", o.iter().map(|(k, v)| format!("{}: {}", quote_repr(k), repr_value(v))).collect::<Vec<_>>().join(", "))
         }
     }
 }
@@ -231,7 +232,7 @@ fn parse_action_dict(d: &Value, w: &mut Vec<String>) -> Result<Action, String> {
         return Err("Action 'type' is missing or not a string".into());
     };
     if !ALLOWED_ACTION_TYPES.contains(&kind) {
-        w.push(format!("Unknown action type: {}", pyrepr(kind)));
+        w.push(format!("Unknown action type: {}", quote_repr(kind)));
     }
     let mut keys = None;
     match o.get("keys") {
@@ -275,7 +276,7 @@ fn parse_action_dict(d: &Value, w: &mut Vec<String>) -> Result<Action, String> {
     Ok(a)
 }
 
-/// Port of `parse_computer_1_response`.
+/// Parses the model's JSON action reply, collecting warnings for recoverable issues.
 fn parse_response(response: &str) -> ParsedAction {
     let mut w = vec![];
     let (json_str, extra) = extract_json_object(response);
@@ -295,9 +296,9 @@ fn parse_response(response: &str) -> ParsedAction {
         Err(e) => {
             let mut msg = format!("Invalid JSON: {e}");
             if json_str.chars().count() < 200 {
-                msg += &format!(" | Content: {}", pyrepr(json_str));
+                msg += &format!(" | Content: {}", quote_repr(json_str));
             } else {
-                msg += &format!(" | Content preview: {}...", pyrepr(&json_str.chars().take(100).collect::<String>()));
+                msg += &format!(" | Content preview: {}...", quote_repr(&json_str.chars().take(100).collect::<String>()));
             }
             return fail(msg, &w, String::new(), String::new());
         }
@@ -398,7 +399,7 @@ struct RuntimeErr {
 }
 impl std::fmt::Display for RuntimeErr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Runtime action {} failed ({}): {}", pyrepr(&self.label), self.code, self.detail)
+        write!(f, "Runtime action {} failed ({}): {}", quote_repr(&self.label), self.code, self.detail)
     }
 }
 impl std::error::Error for RuntimeErr {}
@@ -407,7 +408,7 @@ fn rt_err(label: &str, code: i64, detail: impl Into<String>) -> anyhow::Error {
     RuntimeErr { label: label.into(), code, detail: detail.into() }.into()
 }
 
-/// Python's `TimeoutError` from the readiness waits (the agent maps it to the timeout template).
+/// A readiness wait timed out (the agent maps it to the timeout template).
 #[derive(Debug)]
 struct ReadinessTimeout(String);
 impl std::fmt::Display for ReadinessTimeout {
@@ -485,7 +486,7 @@ struct Geometry {
     window_height: i64,
 }
 
-/// Port of `build_xdotool_argv`: None for actions xdotool doesn't handle.
+/// xdotool argv lists for an action; None for actions xdotool doesn't handle.
 fn build_xdotool_argv(a: &Action, g: &Geometry) -> Option<Vec<Vec<String>>> {
     let s = |v: &str| v.to_string();
     let modifier = resolve_modifier(a.modifier.as_deref());
@@ -599,7 +600,7 @@ impl Desktop {
                     return Err(rt_err(label, r.code.into(), if stderr.is_empty() { "exec returned non-zero" } else { stderr }));
                 }
                 Ok(r) => return Ok(r.stdout),
-                Err(e) if error_kind(&e) == "TimeoutError" => last = Some(rt_err(label, 28, format!("timed out after ~{timeout}s"))),
+                Err(e) if error_kind(&e) == ErrorKind::Timeout => last = Some(rt_err(label, 28, format!("timed out after ~{timeout}s"))),
                 Err(e) => last = Some(rt_err(label, 0, format!("environment.exec failed: {e:#}"))),
             }
             if attempt < retries {
@@ -887,7 +888,7 @@ impl Desktop {
         }
         let t = (a.timeout_sec.filter(|t| *t != 0.0).unwrap_or(self.bash_timeout).ceil() as u64).max(1);
         match sh.sh(&format!("cd / && {cmd}"), false, Some(Duration::from_secs(t))).await {
-            Err(e) if error_kind(&e) == "TimeoutError" => {
+            Err(e) if error_kind(&e) == ErrorKind::Timeout => {
                 json!({"status": "timeout", "return_code": 124, "stdout": "", "stderr": format!("bash action timed out after {t}s: {e}")})
             }
             Err(e) => json!({"status": "error", "return_code": 1, "stdout": "", "stderr": format!("bash action failed to dispatch: {e}")}),
@@ -1126,7 +1127,7 @@ impl Options {
     }
 }
 
-/// Whether the model has a native computer-use tool (litellm flag, else model-name patterns).
+/// Whether the model has a native computer-use tool (model-table flag, else model-name patterns).
 fn is_computer_use_model(model: &str) -> bool {
     let l = model.to_lowercase();
     if ["gemini-3.7-flash", "gemini-3.8-flash"].contains(&l.rsplit('/').next().unwrap_or("")) {
@@ -1153,7 +1154,7 @@ fn resolve_provider_name(model: &str, override_: Option<&str>) -> Result<String>
             if !["anthropic", "bedrock", "gemini", "litellm", "openai"].contains(&n) {
                 bail!(
                     "Unknown computer-1 provider {}. Available providers: ['anthropic', 'bedrock', 'gemini', 'litellm', 'openai']",
-                    pyrepr(n)
+                    quote_repr(n)
                 );
             }
             n.to_string()
@@ -1175,14 +1176,14 @@ fn resolve_provider_name(model: &str, override_: Option<&str>) -> Result<String>
     if name != "litellm" && !is_computer_use_model(model) {
         bail!(
             "Model {} is not a computer-use model for the {} harness. Use a computer-use-capable model, or pass provider='litellm' to run it through the generic JSON harness.",
-            pyrepr(model),
-            pyrepr(&name)
+            quote_repr(model),
+            quote_repr(&name)
         );
     }
     Ok(name)
 }
 
-/// LiteLLM `supports_vision` for known models (None = model unknown or flag unset).
+/// The model table's `supports_vision` for known models (None = model unknown or flag unset).
 fn supports_vision(model: &str) -> Option<bool> {
     lookup_model_info(model)?;
     let l = model.to_lowercase();
@@ -1242,7 +1243,7 @@ impl Computer1 {
         let opts = Options::parse(&args.kwargs)?;
         let model = args.model_name.clone().ok_or_else(|| anyhow!("model_name is required for computer-1"))?;
         let provider = resolve_provider_name(&model, opts.provider.as_deref())?;
-        // Known to LiteLLM without vision support -> fail fast (unknown models pass).
+        // Known to the model table without vision support -> fail fast (unknown models pass).
         if provider == "litellm"
             && opts.enable_images.is_none()
             && lookup_model_info(&model).is_some()
@@ -1250,13 +1251,13 @@ impl Computer1 {
         {
             bail!(
                 "Model {} does not support vision input, but computer-1's generic harness is screenshot-driven. Use a vision-capable model, or pass enable_images explicitly to override litellm's metadata.",
-                pyrepr(&model)
+                quote_repr(&model)
             );
         }
         let unknown: BTreeSet<String> =
             opts.extra_tools.iter().map(|t| t.trim().to_lowercase()).filter(|t| !t.is_empty() && t != "bash").collect();
         if !unknown.is_empty() {
-            bail!("Unknown computer-1 extra_tools: {}. Supported tools: bash.", py_repr(&json!(unknown)));
+            bail!("Unknown computer-1 extra_tools: {}. Supported tools: bash.", repr_value(&json!(unknown)));
         }
         let enable_bash = opts.extra_tools.iter().any(|t| t.trim().eq_ignore_ascii_case("bash"));
         let enable_images = opts.enable_images.unwrap_or_else(|| supports_vision(&model).unwrap_or(true));
@@ -1275,10 +1276,10 @@ impl Computer1 {
             use_responses_api: false,
             llm_kwargs,
         };
-        // Native providers talk to their vendor APIs directly; the litellm client is never used
+        // Native providers talk to their vendor APIs directly; the chat client is never used
         // (no JSON loop, compaction or fallback query), so its endpoint isn't resolved.
         let llm: Box<dyn Llm> =
-            if provider == "litellm" { Box::new(LiteLlm::new(cfg, &|k: &str| args.get_env(k))?) } else { Box::new(NoLlm) };
+            if provider == "litellm" { Box::new(ChatClient::new(cfg, &|k: &str| args.get_env(k))?) } else { Box::new(NoLlm) };
         let mut c = Self::with_llm(args, opts, model, llm, enable_images, enable_bash, session_id);
         c.provider = provider;
         Ok(c)
@@ -1353,7 +1354,7 @@ impl Computer1 {
             ("", "", "")
         };
         let (w, h) = (self.opts.geo.desktop_width.to_string(), self.opts.geo.desktop_height.to_string());
-        py_format(
+        fill_template(
             JSON_TEMPLATE,
             &[
                 ("instruction", instruction),
@@ -1380,7 +1381,7 @@ impl Computer1 {
         vec![json!({"role": "user", "content": content})]
     }
 
-    /// Append an ATIF step (None fields dropped, like `exclude_none`).
+    /// Append an ATIF step (None fields dropped).
     fn push_step(&mut self, mut step: Map<String, Value>) {
         step.insert("step_id".into(), json!(self.steps.len() + 1));
         step.insert("timestamp".into(), json!(now()));
@@ -1564,17 +1565,18 @@ impl Computer1 {
         let r = match self.desktop()?.execute(sh, a).await {
             Ok(r) => r,
             Err(e) if e.downcast_ref::<ReadinessTimeout>().is_some() => {
-                let msg = py_format(TIMEOUT_TEMPLATE, &[("timeout_sec", &pyf(self.opts.action_timeout)), ("action", &a.kind)]);
+                let msg =
+                    fill_template(TIMEOUT_TEMPLATE, &[("timeout_sec", &float_with_point(self.opts.action_timeout)), ("action", &a.kind)]);
                 return Ok((msg, vec![], true));
             }
-            Err(e) => return Ok((format!("Action {} failed: {e}", pyrepr(&a.kind)), vec![self.capture(sh, &shot).await?], true)),
+            Err(e) => return Ok((format!("Action {} failed: {e}", quote_repr(&a.kind)), vec![self.capture(sh, &shot).await?], true)),
         };
         let is_error =
             !matches!(r["status"].as_str(), None | Some("ok" | "done")) || r.get("return_code").is_some_and(|c| c.as_i64() != Some(0));
         let text = if a.kind == "bash" {
             format_bash_observation(&r)
         } else if is_error {
-            py_repr(&r)
+            repr_value(&r)
         } else if a.kind == "cursor_position" {
             format!("X={}, Y={} (desktop pixels)", r["x"], r["y"])
         } else {
@@ -1724,7 +1726,7 @@ impl Computer1 {
         self.llm.call(&p, &self.chat.messages, &Map::new(), None).await.ok().map(|r| r.content)
     }
 
-    /// 3 attempts (not on context overflow / bad request); overflow compacts and recurses (depth <= 2).
+    /// The client retries transient errors; overflow compacts and recurses (depth <= 2).
     fn query<'a>(
         &'a mut self,
         sh: &'a dyn Shell,
@@ -1733,24 +1735,7 @@ impl Computer1 {
         orig: &'a str,
         depth: usize,
     ) -> BoxFut<'a, Result<LlmResponse>> {
-        Box::pin(async move {
-            let mut attempt = 0;
-            loop {
-                attempt += 1;
-                match self.query_once(sh, &prompt, log_dir.clone(), orig, depth).await {
-                    Err(e)
-                        if attempt < 3
-                            && !matches!(
-                                e.downcast_ref::<LlmError>(),
-                                Some(LlmError::ContextLength(_) | LlmError::Api { kind: "BadRequestError", .. })
-                            ) =>
-                    {
-                        continue;
-                    }
-                    r => return r,
-                }
-            }
-        })
+        Box::pin(async move { self.query_once(sh, &prompt, log_dir, orig, depth).await })
     }
 
     async fn query_once(
@@ -1939,7 +1924,7 @@ impl Computer1 {
     }
 }
 
-/// `_aggregate_step_metrics`: native providers' final metrics are the per-step sums.
+/// Native providers' final metrics: the per-step sums.
 fn aggregate_step_metrics(steps: &[Value]) -> Value {
     let mut fm = Map::new();
     for (key, total) in [
@@ -1959,13 +1944,13 @@ fn aggregate_step_metrics(steps: &[Value]) -> Value {
     Value::Object(fm)
 }
 
-/// Stand-in client for native providers, which never query litellm.
+/// Stand-in client for native providers, which never use the chat client.
 struct NoLlm;
 
 #[async_trait::async_trait]
 impl Llm for NoLlm {
     async fn call(&self, _: &str, _: &[Value], _: &Map<String, Value>, _: Option<&str>) -> Result<LlmResponse, LlmError> {
-        Err(LlmError::Api { kind: "APIError", msg: "computer-1 native providers don't use the litellm client".into() })
+        Err(api_err("APIError", "computer-1 native providers don't use the litellm client"))
     }
     fn context_limit(&self) -> i64 {
         1_000_000
@@ -2134,7 +2119,7 @@ mod tests {
             "bash result: status=error exit_code=1\n--- stdout ---\nout\n[stdout truncated]\n--- stderr ---\n(empty)"
         );
         assert_eq!(
-            py_repr(&json!({"status": "recovered", "recovered": true, "x": null})),
+            repr_value(&json!({"status": "recovered", "recovered": true, "x": null})),
             "{'status': 'recovered', 'recovered': True, 'x': None}"
         );
     }

@@ -86,7 +86,7 @@ pub fn criteria_guidance(r: &Rubric) -> String {
     r.criteria.iter().map(|c| format!("- {}: {}", c.name, c.guidance)).collect::<Vec<_>>().join("\n")
 }
 
-/// Pydantic-style object schema (omits `required` when empty, like `model_json_schema`).
+/// JSON Schema object with titled properties (`required` omitted when empty).
 fn object_schema(title: &str, props: Vec<(String, Value)>) -> Map<String, Value> {
     let required: Vec<Value> = props.iter().map(|(k, _)| Value::String(k.clone())).collect();
     let mut o = Map::new();
@@ -103,7 +103,7 @@ fn criteria_props(r: &Rubric) -> Vec<(String, Value)> {
     r.criteria.iter().map(|c| (c.name.clone(), json!({"$ref": "#/$defs/QualityCheckModel"}))).collect()
 }
 
-/// `$defs` first, then the root object, matching pydantic's key order.
+/// `$defs` first, then the root object's keys.
 fn with_defs(mut defs: Vec<(&str, Value)>, root: Map<String, Value>, uses_check_model: bool) -> Value {
     if uses_check_model {
         defs.push(("CheckOutcome", json!({"enum": ["pass", "fail", "not_applicable"], "title": "CheckOutcome", "type": "string"})));
@@ -388,7 +388,7 @@ fn copy_tree(src: &Path, dst: &Path, ignore: &[&str]) -> Result<()> {
     Ok(())
 }
 
-/// Sorted relative paths of all files under `dir` (Python's sorted(rglob) order).
+/// Sorted relative paths of all files under `dir` (sorted by full path).
 pub fn build_file_tree(dir: &Path) -> String {
     fn walk(d: &Path, out: &mut Vec<PathBuf>) {
         for e in std::fs::read_dir(d).into_iter().flatten().flatten() {
@@ -407,8 +407,9 @@ pub fn build_file_tree(dir: &Path) -> String {
     if lines.is_empty() { "No files found".into() } else { lines.join("\n") }
 }
 
-/// Python `str.format_map(defaultdict(str, vars))`: `{name}` substituted (missing -> ""), `{{`/`}}` escapes.
-pub fn py_format(t: &str, vars: &[(&str, &str)]) -> Result<String> {
+/// Substitutes `{name}` fields (missing -> ""; any `.attr`, `[i]`, `!conv` or `:spec` suffix ignored), `{{`/`}}` escapes;
+/// unbalanced braces are an error.
+pub fn render_template(t: &str, vars: &[(&str, &str)]) -> Result<String> {
     let mut out = String::new();
     let mut it = t.chars().peekable();
     while let Some(c) = it.next() {
@@ -462,8 +463,10 @@ fn posix_join(base: &str, name: &str) -> String {
 }
 
 fn write_instruction(dest: &Path, rendered: &str, t: &Template, schema: &Value) -> Result<()> {
-    let output =
-        py_format(t.output_prompt, &[("result_filename", t.result_filename), ("output_schema", &serde_json::to_string_pretty(schema)?)])?;
+    let output = render_template(
+        t.output_prompt,
+        &[("result_filename", t.result_filename), ("output_schema", &serde_json::to_string_pretty(schema)?)],
+    )?;
     std::fs::write(dest.join("instruction.md"), format!("{}\n\n{}\n", rendered.trim_end(), output.trim()))?;
     Ok(())
 }
@@ -497,7 +500,7 @@ pub fn assemble_analyze_task(
         }
         None => "The task definition is not available. Use the trajectory and test output to infer what the task required.".into(),
     };
-    let rendered = py_format(
+    let rendered = render_template(
         template,
         &[("trial_path", &trial_path), ("task_section", &task_section), ("criteria_guidance", &criteria_guidance(rubric))],
     )?;
@@ -510,7 +513,7 @@ pub fn assemble_check_task(task_dir: &Path, rubric: &Rubric, template: &str, sch
     let workdir = write_skeleton(dest, &CHECK, rubric)?;
     let review = dest.join("environment/task");
     copy_tree(task_dir, &review, &[".git"])?;
-    let rendered = py_format(
+    let rendered = render_template(
         template,
         &[
             ("file_tree", &build_file_tree(&review)),
@@ -759,7 +762,7 @@ fn outcome_str(o: Outcome) -> &'static str {
     }
 }
 
-/// Python's `str.title()` after replacing underscores with spaces.
+/// Underscores to spaces, then each alphabetic run capitalized (`not_applicable` -> `Not Applicable`).
 fn title_case(name: &str) -> String {
     let mut out = String::new();
     let mut prev_alpha = false;
@@ -957,8 +960,8 @@ mod tests {
     }
 
     #[test]
-    fn schemas_match_pydantic() {
-        // Generated with pydantic 2.14 model_json_schema() on the reference models.
+    fn schemas_match_golden() {
+        // Golden schemas for the analysis output models.
         let defs = r##""CheckOutcome": {"enum": ["pass", "fail", "not_applicable"], "title": "CheckOutcome", "type": "string"},
             "QualityCheckModel": {"properties": {"explanation": {"title": "Explanation", "type": "string"}, "outcome": {"$ref": "#/$defs/CheckOutcome"}},
                 "required": ["explanation", "outcome"], "title": "QualityCheckModel", "type": "object"}"##;
@@ -982,14 +985,14 @@ mod tests {
     }
 
     #[test]
-    fn python_format() {
+    fn render_template_fields() {
         let v = [("a", "1"), ("b", "{x}")];
-        assert_eq!(py_format("{a}-{b}-{missing}-{{lit}}-{a!r:>3}", &v).unwrap(), "1-{x}--{lit}-1");
-        assert!(py_format("oops }", &v).is_err() && py_format("{a", &v).is_err());
+        assert_eq!(render_template("{a}-{b}-{missing}-{{lit}}-{a!r:>3}", &v).unwrap(), "1-{x}--{lit}-1");
+        assert!(render_template("oops }", &v).is_err() && render_template("{a", &v).is_err());
     }
 
     #[test]
-    fn file_tree_sorted_like_python() {
+    fn file_tree_sorted() {
         let d = tmp();
         assert_eq!(build_file_tree(&d), "No files found");
         for f in ["a.txt", "a/b", "tests/test.sh", "B"] {

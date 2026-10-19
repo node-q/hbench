@@ -1,6 +1,6 @@
 //! trae-agent installed agent.
 
-use super::common::installed_dir;
+use super::common::{installed_dir, uv_install};
 use super::pins;
 use super::{connection, ensure_system_dependencies, exec_agent};
 use crate::agents::model_connection::{Resolved, Spec, with_canonical_provider_envs};
@@ -28,7 +28,7 @@ fn trae_provider(p: &str) -> Option<&'static str> {
     })
 }
 
-/// Pydantic lax `int` coercion.
+/// Integer kwarg: ints, bools, integral floats or numeric strings.
 pub(crate) fn opt_int(k: &str, v: &Value) -> Result<i64> {
     let bad = || anyhow!("Invalid kwargs for agent: {k}: Input should be a valid integer");
     match v {
@@ -39,7 +39,7 @@ pub(crate) fn opt_int(k: &str, v: &Value) -> Result<i64> {
     }
 }
 
-/// Pydantic `str` with coerce_numbers_to_str.
+/// String kwarg; numbers are accepted as their text.
 pub(crate) fn opt_str(k: &str, v: &Value) -> Result<String> {
     match v {
         Value::String(s) => Ok(s.clone()),
@@ -128,8 +128,8 @@ impl TraeAgent {
     }
 }
 
-/// ATIF Step timestamp check: Python's `datetime.fromisoformat(v.replace("Z", "+00:00"))`.
-// Covers the RFC 3339 / naive date-time / date forms agents emit, not every fromisoformat variant.
+/// ATIF Step timestamp check: an ISO-8601 date or date-time (`Z` or offset suffix, or naive).
+// Covers the RFC 3339 / naive date-time / date forms agents emit, not every ISO-8601 variant.
 pub(crate) fn iso_timestamp_ok(v: &Value) -> bool {
     use chrono::{DateTime, NaiveDate, NaiveDateTime};
     let Some(s) = v.as_str() else { return v.is_null() };
@@ -198,10 +198,10 @@ impl Agent for TraeAgent {
         exec_agent(
             cx,
             &format!(
-                "set -euo pipefail; if ! command -v uv &>/dev/null; then  curl -LsSf {uv_installer} | sh &&  \
+                "set -euo pipefail; if ! command -v uv &>/dev/null; then  {uv_install} &&  \
                  export PATH=\"$HOME/.local/bin:$PATH\"; fi && uv tool install --python 3.12 \"trae-agent[test,evaluation] @ \
                  git+https://github.com/bytedance/trae-agent.git{vs}\" && export PATH=\"$HOME/.local/bin:$PATH\" && trae-cli --help",
-                uv_installer = pins::uv_installer()
+                uv_install = uv_install(None)
             ),
             &BTreeMap::new(),
         )
@@ -239,7 +239,7 @@ impl Agent for TraeAgent {
         r.map(|_| ())
     }
 
-    fn populate_context_post_run(&self, logs_dir: &std::path::Path, ctx: &mut AgentContext) {
+    fn collect_usage(&self, logs_dir: &std::path::Path, ctx: &mut AgentContext) {
         let Some(raw) = std::fs::read_to_string(logs_dir.join(TRAJECTORY_FILE)).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok())
         else {
             return;
@@ -317,13 +317,13 @@ mod tests {
         let a = TraeAgent::new(args(json!({}), &[], Some("anthropic/x"))).unwrap();
         let dir = a.args.logs_dir.clone();
         let mut ctx = AgentContext::default();
-        a.populate_context_post_run(&dir, &mut ctx);
+        a.collect_usage(&dir, &mut ctx);
         assert!(ctx.n_input_tokens.is_none());
         std::fs::write(dir.join(TRAJECTORY_FILE), "{not json").unwrap();
-        a.populate_context_post_run(&dir, &mut ctx);
+        a.collect_usage(&dir, &mut ctx);
         assert!(ctx.n_input_tokens.is_none());
         std::fs::write(dir.join(TRAJECTORY_FILE), json!({"llm_interactions": [inter(1000, 200, 50)]}).to_string()).unwrap();
-        a.populate_context_post_run(&dir, &mut ctx);
+        a.collect_usage(&dir, &mut ctx);
         assert_eq!((ctx.n_input_tokens, ctx.n_output_tokens, ctx.n_cache_tokens), (Some(1000), Some(200), Some(50)));
 
         assert_eq!(trajectory_usage(&json!({"llm_interactions": [{"timestamp": "bad"}]})), None);

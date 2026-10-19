@@ -1,9 +1,10 @@
-//! Python `toml` 0.10 encoder.
+//! TOML writer for task.toml, producing the layout of the `toml` 0.10 encoder (inline arrays with
+//! trailing commas, `[a.b]` sections after scalar keys, `\x` escapes rewritten to `\u00`).
 
 use anyhow::{Result, bail};
 use serde_json::{Map, Value};
 
-/// `toml.dumps(o)` from the Python `toml` package, quirks included (task.toml is written with it).
+/// Serializes `o` as a TOML document; null-valued keys are omitted.
 pub(super) fn toml_dumps(o: &Map<String, Value>) -> Result<String> {
     let (mut retval, mut sections) = dump_sections(o, "")?;
     while !sections.is_empty() {
@@ -82,13 +83,13 @@ fn dump_value(v: &Value) -> String {
         Value::Number(n) if n.is_f64() => dump_float(n.as_f64().unwrap_or_default()),
         Value::Number(n) => n.to_string(),
         Value::Array(a) => format!("[{}]", a.iter().map(|x| format!(" {},", dump_value(x))).collect::<String>()),
-        // A dict nested in a list is iterated like one (its keys).
+        // An object nested in a list is written as the list of its keys.
         Value::Object(m) => format!("[{}]", m.keys().map(|k| format!(" {},", dump_str(k))).collect::<String>()),
         Value::Null => dump_str("None"),
     }
 }
 
-/// Python `str(float)` with the encoder's exponent tweak.
+/// Float text: positional in 1e-4..1e16 (always with a `.`), else exponent form without a leading zero.
 fn dump_float(f: f64) -> String {
     if f.is_nan() {
         return "nan".into();
@@ -107,8 +108,8 @@ fn dump_float(f: f64) -> String {
     if s.contains('.') { s } else { format!("{s}.0") }
 }
 
-/// Python `repr(str)`.
-fn py_repr(s: &str) -> String {
+/// `s` as a quoted literal with non-printable characters as `\x`/`\u`/`\U` escapes.
+fn str_literal(s: &str) -> String {
     let quote = if s.contains('\'') && !s.contains('"') { '"' } else { '\'' };
     let mut out = String::from(quote);
     for c in s.chars() {
@@ -138,16 +139,16 @@ fn py_repr(s: &str) -> String {
     out
 }
 
-/// Approximates Python's `str.isprintable` (control, line/para separators, common
-/// format chars, non-ASCII spaces); exact needs Unicode category tables.
+/// Whether a char is printed as-is in a quoted literal: not control, line/para separators, common
+/// format chars or non-ASCII spaces (approximate; exact needs Unicode category tables).
 fn is_printable(c: char) -> bool {
     !(c.is_control()
         || matches!(c as u32, 0xa0 | 0xad | 0x1680 | 0x2000..=0x200f | 0x2028..=0x202f | 0x205f..=0x2064 | 0x3000 | 0xfeff | 0xd800..=0xdfff | 0xe000..=0xf8ff))
 }
 
-/// `toml.encoder._dump_str`, including its `\x` and backslash handling.
+/// A TOML basic string, with `\x` escapes rewritten to `\u00` and doubled backslashes collapsed.
 fn dump_str(s: &str) -> String {
-    let r = py_repr(s);
+    let r = str_literal(s);
     let single = r.starts_with('\'');
     let mut v = r[1..r.len() - 1].to_string();
     if single {
@@ -181,9 +182,9 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    /// Python `toml` encoder quirks (outputs captured from toml 0.10.2).
+    /// Encoder edge cases (expected outputs captured from toml 0.10.2).
     #[test]
-    fn python_toml_encoder() {
+    fn toml_encoder_edge_cases() {
         assert_eq!(dump_str("q\"'\\ \t\n\u{1}é中"), "\"q\\\"'\\ \\t\\nx01é中\"");
         assert_eq!(dump_str("it's \"x\""), "\"it's \\\"x\\\"\"");
         assert_eq!(dump_str("a\\b"), "\"a\\\\b\"");

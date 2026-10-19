@@ -51,7 +51,12 @@ pub fn load_sources(job_dirs: &[PathBuf]) -> Result<Vec<Source>> {
         if !jd.join("config.json").exists() {
             bail!("{} is not a job directory (missing config.json).", jd.display());
         }
-        let mut dirs: Vec<PathBuf> = std::fs::read_dir(jd)?.flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect();
+        let mut dirs: Vec<PathBuf> = std::fs::read_dir(jd)
+            .with_context(|| format!("reading {}", jd.display()))?
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.is_dir())
+            .collect();
         dirs.sort();
         for d in dirs {
             if !d.join("result.json").exists() {
@@ -59,9 +64,15 @@ pub fn load_sources(job_dirs: &[PathBuf]) -> Result<Vec<Source>> {
             }
             let lock = std::fs::read_to_string(d.join("lock.json"))
                 .with_context(|| format!("Source trial '{}' has a result.json but no lock.json.", d.display()))?;
-            let result = serde_json::from_str(&std::fs::read_to_string(d.join("result.json"))?)
-                .with_context(|| format!("unreadable result.json in {}", d.display()))?;
-            out.push(Source { dir: d.canonicalize()?, result, lock: serde_json::from_str(&lock)? });
+            let result = serde_json::from_str(
+                &std::fs::read_to_string(d.join("result.json")).with_context(|| format!("reading {}/result.json", d.display()))?,
+            )
+            .with_context(|| format!("unreadable result.json in {}", d.display()))?;
+            out.push(Source {
+                dir: d.canonicalize().with_context(|| format!("resolving {}", d.display()))?,
+                result,
+                lock: serde_json::from_str(&lock)?,
+            });
         }
     }
     Ok(out)

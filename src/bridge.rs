@@ -212,9 +212,11 @@ impl Bridge {
 
     /// Close the session and export the target-side transcript to the trial's agent dir.
     pub async fn export(&self, cx: &AgentCtx<'_>, host_agent_dir: &Path) -> Result<PathBuf> {
-        let _ = cx.exec("acpx sessions close", &BTreeMap::new(), None).await;
+        // Runs on the cancel path too, so it must not hang.
+        let limit = Some(std::time::Duration::from_secs(60));
+        let _ = cx.exec("acpx sessions close", &BTreeMap::new(), limit).await;
         let container = format!("/logs/agent/{TRAJECTORY_FILENAME}");
-        let r = cx.exec(&format!("acpx sessions export --output {container}"), &BTreeMap::new(), None).await?;
+        let r = cx.exec(&format!("acpx sessions export --output {container}"), &BTreeMap::new(), limit).await?;
         if r.code != 0 {
             bail!("ACPX session export failed: {}", r.stderr);
         }

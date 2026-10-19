@@ -1,11 +1,12 @@
 //! Eve: runs a local Eve app through
 //! Eve's HTTP session API via the uploaded `eve_runner.mjs`.
 
-use super::common::{installed_dir, parse_bool_env_value, skills_dir};
+use super::common::{installed_dir, nvm_install_script, parse_bool_env_value, skills_dir};
 use super::pins;
 use super::{ensure_system_dependencies, exec_agent, exec_error, exec_root};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::quote;
+use crate::fmt::single_quoted;
 use anyhow::{Result, anyhow, bail};
 use regex::Regex;
 use serde_json::{Map, Value, json};
@@ -118,7 +119,7 @@ pub fn create(args: AgentArgs) -> Result<AgentBox> {
     Ok(Box::new(Eve::new(args)?))
 }
 
-/// Pydantic lax int: ints, integral floats, numeric strings.
+/// Integer kwarg: ints, integral floats, numeric strings.
 fn int_opt(args: &AgentArgs, k: &str, default: i64) -> Result<i64> {
     let bad = || anyhow!("Invalid kwargs for agent 'eve':\n  {k}: Input should be a valid integer");
     match args.kwargs.get(k) {
@@ -127,14 +128,6 @@ fn int_opt(args: &AgentArgs, k: &str, default: i64) -> Result<i64> {
         Some(Value::String(s)) => s.trim().parse().map_err(|_| bad()),
         Some(_) => Err(bad()),
     }
-}
-
-/// Python `repr()` of a str (quote choice + escaping, good enough for ASCII names).
-fn py_repr(s: &str) -> String {
-    let q = if s.contains('\'') && !s.contains('"') { '"' } else { '\'' };
-    let body = s.replace('\\', "\\\\");
-    let body = if q == '\'' { body.replace('\'', "\\'") } else { body };
-    format!("{q}{body}{q}")
 }
 
 fn is_ignored(name: &str) -> bool {
@@ -293,7 +286,7 @@ impl Eve {
             };
             std::fs::create_dir_all(&dir)?;
             let file = connection_filename(&mut used, &s.name);
-            let description = format!("hbench-provided MCP server {} via {} transport.", py_repr(&s.name), s.transport());
+            let description = format!("hbench-provided MCP server {} via {} transport.", single_quoted(&s.name), s.transport());
             std::fs::write(
                 dir.join(file),
                 format!(
@@ -435,7 +428,7 @@ struct Metrics {
 
 fn usage_metrics(data: &Map<String, Value>) -> Option<Metrics> {
     let src = data.get("usage").and_then(Value::as_object).unwrap_or(data);
-    // Python isinstance(v, int) accepts bools too.
+    // Bools count as integers (0/1) here.
     let int = |ks: &[&str]| {
         ks.iter().find_map(|k| match src.get(*k)? {
             Value::Bool(b) => Some(*b as i64),
@@ -642,14 +635,14 @@ impl Agent for Eve {
         let command = format!("{NODE_PREFIX}node {}", quote(RUNNER_PATH));
         let env = self.runner_env_with(&|k| std::env::var(k).ok())?;
         let r = cx.exec(&format!("set -o pipefail; cd {PROJECT_DIR} || exit 1; {command}"), &env, None).await?;
-        // Artifacts land in /logs/agent; the trial downloads them and calls populate_context_post_run.
+        // Artifacts land in /logs/agent; the trial downloads them and calls collect_usage.
         if r.code != 0 {
             return Err(exec_error(&command, &r, None));
         }
         Ok(())
     }
 
-    fn populate_context_post_run(&self, logs_dir: &Path, ctx: &mut AgentContext) {
+    fn collect_usage(&self, logs_dir: &Path, ctx: &mut AgentContext) {
         populate(logs_dir, ctx);
     }
 }
@@ -661,8 +654,8 @@ impl Eve {
             cx,
             &format!(
                 "set -euo pipefail; {NODE_PREFIX}if command -v node >/dev/null 2>&1 && node -e 'process.exit(Number(process.versions.node.split(\".\")[0]) >= 24 ? 0 : 1)'; then \
-                 node --version; else curl -o- {nvm_installer} | bash; {NODE_PREFIX}nvm install 24; nvm alias default 24; \
-                 node --version; fi; npm --version; corepack enable || true", nvm_installer = pins::nvm_installer()),
+                 node --version; else {nvm_install}; {NODE_PREFIX}nvm install 24; nvm alias default 24; \
+                 node --version; fi; npm --version; corepack enable || true", nvm_install = nvm_install_script()),
             &BTreeMap::from([("NVM_NODEJS_ORG_MIRROR".to_string(), "https://nodejs.org/dist".to_string())]),
         )
         .await?;

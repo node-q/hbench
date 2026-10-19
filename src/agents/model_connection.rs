@@ -97,7 +97,7 @@ pub fn alias(provider: &str) -> &str {
     }
 }
 
-/// Best-effort stand-in for litellm's provider inference on bare model names.
+/// Best-effort provider inference for bare model names.
 fn infer_provider(model: &str) -> Option<&'static str> {
     let m = model.to_lowercase();
     let pre = |ps: &[&str]| ps.iter().any(|p| m.starts_with(p));

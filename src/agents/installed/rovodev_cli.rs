@@ -150,7 +150,7 @@ impl Agent for RovodevCli {
         r.map(|_| ())
     }
 
-    fn populate_context_post_run(&self, logs_dir: &std::path::Path, ctx: &mut AgentContext) {
+    fn collect_usage(&self, logs_dir: &std::path::Path, ctx: &mut AgentContext) {
         if let Some(c) = std::fs::read_to_string(logs_dir.join("rovodev_session_context.json")).ok().and_then(|t| usage_from_session(&t)) {
             *ctx = c;
         }

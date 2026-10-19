@@ -1,6 +1,6 @@
 //! Code Puppy.
 
-use super::common::installed_dir;
+use super::common::{installed_dir, uv_install};
 use super::pins;
 use super::{connection, ensure_system_dependencies, exec_agent};
 use crate::agents::model_connection::Spec;
@@ -152,7 +152,7 @@ impl Agent for CodePuppy {
         let none = BTreeMap::new();
         exec_agent(
             cx,
-            &format!("set -euo pipefail; curl -LsSf {uv_installer} | sh && {PATH_EXPORT} && uv tool install --python 3.13 code-puppy{spec} && code-puppy --version", uv_installer = pins::uv_installer()),
+            &format!("set -euo pipefail; {uv_install} && {PATH_EXPORT} && uv tool install --python 3.13 code-puppy{spec} && code-puppy --version", uv_install = uv_install(None)),
             &none,
         )
         .await?;
@@ -180,7 +180,7 @@ impl Agent for CodePuppy {
         exec_agent(cx, &self.run_command(&instruction), &env).await.map(|_| ())
     }
 
-    fn populate_context_post_run(&self, logs_dir: &std::path::Path, ctx: &mut AgentContext) {
+    fn collect_usage(&self, logs_dir: &std::path::Path, ctx: &mut AgentContext) {
         if let Ok(t) = std::fs::read_to_string(logs_dir.join("code-puppy-usage.json")) {
             apply_usage(&t, ctx);
         }

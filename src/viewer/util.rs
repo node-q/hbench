@@ -1,4 +1,4 @@
-//! Python-compatible helpers.
+//! Shared viewer helpers: query parsing, file reads and listings, datetime formatting, pagination.
 
 use super::*;
 use chrono::{DateTime, NaiveDateTime, Utc};
@@ -119,19 +119,9 @@ pub(super) fn str_or_null(o: Option<&str>) -> Value {
     o.map_or(Value::Null, |x| Value::String(x.into()))
 }
 
-/// Python truthiness for the JSON values the viewer inspects.
-pub(super) fn truthy(v: &Value) -> bool {
-    match v {
-        Value::Null => false,
-        Value::Bool(b) => *b,
-        Value::Number(n) => n.as_f64() != Some(0.0),
-        Value::String(s) => !s.is_empty(),
-        Value::Array(a) => !a.is_empty(),
-        Value::Object(o) => !o.is_empty(),
-    }
-}
+pub(super) use crate::fmt::truthy;
 
-/// A pydantic datetime: aware timestamps as given, naive ones taken as UTC.
+/// An ISO-8601 datetime: aware timestamps as given, naive ones taken as UTC.
 pub(super) fn parse_dt(v: &Value) -> Option<DateTime<Utc>> {
     let t = v.as_str()?;
     DateTime::parse_from_rfc3339(t)
@@ -144,8 +134,8 @@ pub(super) fn ts(d: &DateTime<Utc>) -> f64 {
     d.timestamp() as f64 + d.timestamp_subsec_micros() as f64 / 1e6
 }
 
-/// pydantic's JSON form of an aware UTC datetime.
-pub(super) fn py_dt(d: DateTime<Utc>) -> String {
+/// ISO-8601 UTC timestamp with microseconds (omitted when zero) and a `Z` suffix.
+pub(super) fn iso_utc(d: DateTime<Utc>) -> String {
     let base = d.format("%Y-%m-%dT%H:%M:%S").to_string();
     match d.timestamp_subsec_micros() {
         0 => format!("{base}Z"),
@@ -153,7 +143,7 @@ pub(super) fn py_dt(d: DateTime<Utc>) -> String {
     }
 }
 
-/// A datetime string re-serialized the way pydantic dumps it (microseconds, `Z` for UTC), else unchanged.
+/// A datetime string re-serialized canonically (microseconds when non-zero, `Z` for UTC), else unchanged.
 fn norm_dt(v: &Value) -> Value {
     let Some(t) = v.as_str() else { return v.clone() };
     if let Ok(d) = DateTime::parse_from_rfc3339(t) {
@@ -357,7 +347,8 @@ pub(super) fn scan_dir(dir: &Path, base: &str, with_dirs: bool, skip_top_manifes
     }
 }
 
-pub(super) fn py_repr(v: &Value) -> String {
+/// Literal form of a scalar for messages and search: `'s'`, `True`, `False`, `None`, numbers as JSON.
+pub(super) fn repr_scalar(v: &Value) -> String {
     match v {
         Value::String(x) => format!("'{x}'"),
         Value::Bool(true) => "True".into(),

@@ -4,8 +4,8 @@ use super::*;
 use anyhow::Result;
 use serde_json::{Map, Value, json};
 
-/// TOML -> JSON in document order (Python `tomllib` dicts keep insertion order; hbench's `toml`
-/// build sorts keys, so reorder by each key's first span).
+/// TOML -> JSON in document order (the `toml` crate's maps sort keys, so reorder by each key's first
+/// span).
 pub(super) fn parse_toml(text: &str) -> Result<Map<String, Value>> {
     let mut v: Map<String, Value> = toml::from_str(text)?;
     let de = toml::de::DeTable::parse(text)?;
@@ -35,7 +35,7 @@ fn reorder_value(v: &mut Value, de: &toml::de::DeValue<'_>) {
     }
 }
 
-/// Builds one pydantic model's `model_dump(mode="json")` minus None, in field order.
+/// Builds one config section as JSON in field order, None fields omitted.
 struct Model<'a> {
     inp: &'a Map<String, Value>,
     out: Map<String, Value>,
@@ -108,7 +108,7 @@ fn obj(v: &Value) -> Map<String, Value> {
     v.as_object().cloned().unwrap_or_default()
 }
 
-/// `TaskConfig.model_validate(toml).model_dump(mode="json")` minus None values.
+/// task.toml data validated and dumped as JSON (defaults filled, None values omitted).
 pub(super) fn normalized_task_config(raw: &Map<String, Value>) -> Map<String, Value> {
     let mut raw = raw.clone();
     if let Some(v) = raw.shift_remove("version") {
@@ -262,7 +262,7 @@ pub(super) fn artifact_value(v: &Value) -> Value {
     }
 }
 
-/// `TaskConfig.model_dump_toml()`.
+/// task.toml text for the normalized task config.
 pub(super) fn task_config_toml(data: &Map<String, Value>) -> Result<String> {
     const LEADING: [&str; 3] = ["schema_version", "source", "multi_step_reward_strategy"];
     const SECTIONS: [&str; 7] = ["task", "steps", "metadata", "verifier", "agent", "environment", "solution"];

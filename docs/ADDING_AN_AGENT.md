@@ -6,7 +6,7 @@ Each installed agent lives in `src/agents/installed/<name>.rs`, with any payload
 ## Framework
 
 - `src/agents/mod.rs`
-  - `trait Agent { name, version, setup_timeout_sec, supports_resume, setup(cx), run(instruction, cx, ctx, resume), populate_context_post_run(logs_dir, ctx) }`
+  - `trait Agent { name, version, setup_timeout_sec, supports_resume, setup(cx), run(instruction, cx, ctx, resume), collect_usage(logs_dir, ctx) }`
   - `AgentCtx`: `exec(cmd, env, timeout)` runs `bash -c` as the phase's default user (task `[agent].user`), with the
     agent `env` overlay applied last. `exec_as(cmd, Some("root"), ...)`. `cx.env` is the `DockerEnv`
     (`upload_file`, `upload_dir`, `download_file`, `exec_root`, ...). `cx.logs_dir` = host dir mirrored from `/logs/agent`.
@@ -34,7 +34,7 @@ Each installed agent lives in `src/agents/installed/<name>.rs`, with any payload
    options → env) and CLI flags, with validated names, defaults and env fallbacks. Write logs to `/logs/agent/<file>`
    (`tee`). Upload secrets with `upload_text`.
 4. Errors: if the agent's output needs filtering before classification, filter the evidence, then call `exec_error`.
-5. `populate_context_post_run`: fill `AgentContext` (n_input_tokens incl. cache, n_cache_tokens, n_output_tokens,
+5. `collect_usage`: fill `AgentContext` (n_input_tokens incl. cache, n_cache_tokens, n_output_tokens,
    cost_usd) from the downloaded logs. ATIF trajectory conversion is optional.
 6. Runner scripts uploaded into the container (`*_runner.py`, `.mjs`, wrappers) are embedded with `include_str!` from
    `assets/agents/<name>/`.

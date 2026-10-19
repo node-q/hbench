@@ -296,7 +296,7 @@ pub struct EnvironmentConfig {
     pub storage: Option<String>,
     pub gpus: Option<u32>,
     pub gpu_types: Option<Vec<String>>,
-    /// Accepted for upstream compatibility; docker has no TPUs.
+    /// Accepted so task.toml files that set it still parse; docker has no TPUs.
     pub tpu: Option<toml::Value>,
     pub env: BTreeMap<String, String>,
     pub workdir: Option<String>,
@@ -635,27 +635,43 @@ pub fn strip_canary(text: &str) -> String {
     lines[i..].join("\n")
 }
 
-/// Task digest (`Packager.compute_content_hash`, gitignore-filtered), `sha256:`-prefixed.
+/// Task digest over the packaged (gitignore-filtered) files, `sha256:`-prefixed.
 pub fn content_digest(dir: &Path) -> String {
     crate::authoring::content_hash(dir).map(|h| format!("sha256:{h}")).unwrap_or_default()
 }
 
-/// Stable sha256 over relative paths + contents of every file under `dir`.
+/// Stable sha256 over relative paths + contents of every file under `dir`, computed once per path
+/// per process. Symlinked files are hashed by content; symlinked directories are not followed.
 pub fn hash_dir(dir: &Path) -> Result<String> {
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<PathBuf, String>>> = std::sync::OnceLock::new();
+    let cache = CACHE.get_or_init(Default::default);
+    if let Some(h) = cache.lock().unwrap().get(dir) {
+        return Ok(h.clone());
+    }
     let mut files = Vec::new();
     if dir.exists() {
         walk(dir, &mut files)?;
     }
     files.sort();
     let mut h = Sha256::new();
+    let mut buf = vec![0u8; 64 * 1024];
     for f in files {
         let rel = f.strip_prefix(dir)?.to_string_lossy().replace('\\', "/");
         h.update(rel.as_bytes());
         h.update([0]);
-        h.update(std::fs::read(&f)?);
+        let mut file = std::fs::File::open(&f)?;
+        loop {
+            let n = std::io::Read::read(&mut file, &mut buf)?;
+            if n == 0 {
+                break;
+            }
+            h.update(&buf[..n]);
+        }
         h.update([0]);
     }
-    Ok(hex(&h.finalize()))
+    let digest = hex(&h.finalize());
+    cache.lock().unwrap().insert(dir.to_path_buf(), digest.clone());
+    Ok(digest)
 }
 
 pub fn hex(b: &[u8]) -> String {
@@ -664,8 +680,9 @@ pub fn hex(b: &[u8]) -> String {
 
 fn walk(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
     for e in std::fs::read_dir(dir)? {
-        let p = e?.path();
-        if p.is_dir() {
+        let e = e?;
+        let p = e.path();
+        if e.file_type()?.is_dir() {
             walk(&p, out)?;
         } else if p.is_file() {
             out.push(p);
@@ -778,6 +795,20 @@ mod tests {
         assert!(s("/a", Some("manifest.json"), None).validate().is_err());
         assert!(s("/a", Some("/abs"), None).validate().is_err());
         assert!(s("/a", Some("x/y"), Some("api")).validate().is_ok());
+    }
+
+    #[test]
+    fn hash_dir_skips_symlinked_dirs() {
+        let d = std::env::temp_dir().join(format!("hbench-hash-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(d.join("sub")).unwrap();
+        std::fs::write(d.join("sub/a"), "x").unwrap();
+        std::os::unix::fs::symlink(&d, d.join("sub/loop")).unwrap();
+        std::os::unix::fs::symlink(d.join("sub/a"), d.join("b")).unwrap();
+        let h = hash_dir(&d).unwrap();
+        let mut e = Sha256::new();
+        e.update(b"b\0x\0sub/a\0x\0");
+        assert_eq!(h, hex(&e.finalize()));
+        std::fs::remove_dir_all(&d).unwrap();
     }
 
     #[test]

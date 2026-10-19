@@ -1,6 +1,6 @@
 //! NVIDIA NeMo Agent Toolkit installed agent.
 
-use super::common::{installed_dir, upload_asset};
+use super::common::{installed_dir, upload_asset, uv_install};
 use super::pins;
 use super::{ensure_system_dependencies, exec_agent, exec_error, exec_root};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
@@ -129,7 +129,7 @@ impl NemoAgent {
         }
     }
 
-    /// `_generate_config_yaml` (insertion-ordered like `yaml.dump(sort_keys=False)`).
+    /// The agent's config YAML (keys in insertion order).
     fn config_yaml(&self) -> String {
         let spec = provider_spec(&self.llm_type);
         let s = |v: &str| Yaml::String(v.into());
@@ -250,15 +250,8 @@ impl Agent for NemoAgent {
         let none = BTreeMap::new();
         let install = async {
             ensure_system_dependencies(cx, if self.nat_repo.is_some() { &["curl", "git"] } else { &["curl"] }).await?;
-            exec_agent(
-                cx,
-                &format!(
-                    "{PATH_SETUP}; command -v uv > /dev/null 2>&1 || curl -LsSf {uv_installer} | sh",
-                    uv_installer = pins::uv_installer()
-                ),
-                &none,
-            )
-            .await?;
+            exec_agent(cx, &format!("{PATH_SETUP}; command -v uv > /dev/null 2>&1 || {uv_install}", uv_install = uv_install(None)), &none)
+                .await?;
             let user = cx.user.clone().unwrap_or_else(|| "root".into());
             exec_root(cx, &format!("mkdir -p /opt/nvidia-nat-venv && chown {user}:{user} /opt/nvidia-nat-venv"), &none).await?;
             exec_agent(cx, &format!("{PATH_SETUP}; uv venv /opt/nvidia-nat-venv --python 3.12 --clear"), &none).await?;
@@ -328,7 +321,7 @@ impl Agent for NemoAgent {
         Ok(())
     }
 
-    fn populate_context_post_run(&self, logs_dir: &std::path::Path, ctx: &mut AgentContext) {
+    fn collect_usage(&self, logs_dir: &std::path::Path, ctx: &mut AgentContext) {
         let out = std::fs::read_to_string(logs_dir.join("nemo-agent-output.txt")).ok();
         let traj = std::fs::read_to_string(logs_dir.join("trajectory.json")).ok();
         parse_outputs(out.as_deref(), traj.as_deref(), ctx);

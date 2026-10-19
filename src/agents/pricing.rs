@@ -1,5 +1,5 @@
-//! LiteLLM-compatible token pricing (the `model_cost` table pinned to LiteLLM 1.93.0,
-//! + a port of `cost_per_token`'s text-token path).
+//! Token pricing from the bundled model price table (assets/litellm, pinned to 1.93.0): per-token
+//! input/output/cache rates, with tiered rates above a prompt-size threshold; text tokens only.
 
 use serde_json::{Map, Value};
 use std::sync::OnceLock;
@@ -9,7 +9,7 @@ fn table() -> &'static Map<String, Value> {
     T.get_or_init(|| serde_json::from_str(include_str!("../../assets/litellm/model_prices_and_context_window.json")).unwrap_or_default())
 }
 
-/// `litellm.model_cost.get(key)` (non-empty entries only).
+/// The price-table entry for `key` (non-empty entries only).
 pub fn model_cost(key: &str) -> Option<&'static Map<String, Value>> {
     table().get(key).and_then(Value::as_object).filter(|m| !m.is_empty() && key != "sample_spec")
 }
@@ -33,19 +33,37 @@ fn threshold(key: &str) -> Option<f64> {
     Some(if t.contains('k') { n * 1000.0 } else { n })
 }
 
-/// `litellm.cost_per_token(model, prompt_tokens, completion_tokens, cache_creation_input_tokens,
-/// cache_read_input_tokens)` -> (prompt_cost, completion_cost). `prompt_tokens` includes cached tokens.
-pub fn cost_per_token(model: &str, prompt: i64, completion: i64, cache_creation: i64, cache_read: i64) -> Option<(f64, f64)> {
-    let m = model_cost(model)?;
-    let mut input = unit(m, "input_cost_per_token").unwrap_or(0.0);
-    let mut output = unit(m, "output_cost_per_token").unwrap_or(0.0);
-    if output == 0.0
+/// Per-token rates for one request.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct Rates {
+    pub input: f64,
+    pub output: f64,
+    pub cache_read: f64,
+    pub cache_write: f64,
+}
+
+impl Rates {
+    /// (prompt_cost, completion_cost); `prompt` includes cached and cache-write tokens.
+    pub fn cost(&self, prompt: i64, completion: i64, cache_creation: i64, cache_read: i64) -> (f64, f64) {
+        let text = (prompt - cache_read - cache_creation).max(0);
+        let prompt_cost = text as f64 * self.input + cache_read as f64 * self.cache_read + cache_creation as f64 * self.cache_write;
+        (prompt_cost, completion as f64 * self.output)
+    }
+}
+
+/// The rates of pricing entry `m` for a request of `prompt` tokens (tiers applied).
+pub fn rates(m: &Map<String, Value>, prompt: i64) -> Rates {
+    let mut r = Rates {
+        input: unit(m, "input_cost_per_token").unwrap_or(0.0),
+        output: unit(m, "output_cost_per_token").unwrap_or(0.0),
+        cache_read: unit(m, "cache_read_input_token_cost").unwrap_or(0.0),
+        cache_write: unit(m, "cache_creation_input_token_cost").unwrap_or(0.0),
+    };
+    if r.output == 0.0
         && let Some(img) = unit(m, "output_cost_per_image_token")
     {
-        output = img;
+        r.output = img;
     }
-    let mut creation = unit(m, "cache_creation_input_token_cost").unwrap_or(0.0);
-    let mut read = unit(m, "cache_read_input_token_cost").unwrap_or(0.0);
     // Tiered pricing: the highest threshold below prompt_tokens applies to every token type.
     let tier_suffixes = ["_flex", "_priority"];
     let mut keys: Vec<&String> =
@@ -55,19 +73,23 @@ pub fn cost_per_token(model: &str, prompt: i64, completion: i64, cache_creation:
         let (Some(t), Some(v)) = (threshold(k), unit(m, k)) else { continue };
         if prompt as f64 > t {
             let ts = k.split("_above_").nth(1).unwrap().split("_tokens").next().unwrap();
-            input = v;
-            output = unit(m, &format!("output_cost_per_token_above_{ts}_tokens")).unwrap_or(output);
-            creation = unit(m, &format!("cache_creation_input_token_cost_above_{ts}_tokens")).unwrap_or(creation);
-            read = unit(m, &format!("cache_read_input_token_cost_above_{ts}_tokens")).unwrap_or(read);
+            r.input = v;
+            r.output = unit(m, &format!("output_cost_per_token_above_{ts}_tokens")).unwrap_or(r.output);
+            r.cache_write = unit(m, &format!("cache_creation_input_token_cost_above_{ts}_tokens")).unwrap_or(r.cache_write);
+            r.cache_read = unit(m, &format!("cache_read_input_token_cost_above_{ts}_tokens")).unwrap_or(r.cache_read);
             break;
         }
     }
-    let text = (prompt - cache_read - cache_creation).max(0);
-    let prompt_cost = text as f64 * input + cache_read as f64 * read + cache_creation as f64 * creation;
-    Some((prompt_cost, completion as f64 * output))
+    r
 }
 
-/// Total cost for a (possibly provider-prefixed) model, or None if LiteLLM has no entry.
+/// `cost_per_token(model, prompt_tokens, completion_tokens, cache_creation_input_tokens,
+/// cache_read_input_tokens)` -> (prompt_cost, completion_cost). `prompt_tokens` includes cached tokens.
+pub fn cost_per_token(model: &str, prompt: i64, completion: i64, cache_creation: i64, cache_read: i64) -> Option<(f64, f64)> {
+    Some(rates(model_cost(model)?, prompt).cost(prompt, completion, cache_creation, cache_read))
+}
+
+/// Total cost for a (possibly provider-prefixed) model, or None if the price table has no entry.
 pub fn total_cost(model: &str, prompt: i64, completion: i64, cache_creation: i64, cache_read: i64) -> Option<f64> {
     let key = pricing_key(model)?;
     cost_per_token(&key, prompt, completion, cache_creation, cache_read).map(|(a, b)| a + b)
@@ -77,7 +99,7 @@ pub fn total_cost(model: &str, prompt: i64, completion: i64, cache_creation: i64
 mod tests {
     use super::*;
     #[test]
-    fn litellm_parity() {
+    fn price_table_costs() {
         // claude-opus-4-1: in 1.5e-5, out 7.5e-5, cache read 1.5e-6, cache write 1.875e-5.
         let (p, c) = cost_per_token("claude-opus-4-1", 1_000_000, 100_000, 100_000, 400_000).unwrap();
         assert!((p - (500_000.0 * 1.5e-5 + 400_000.0 * 1.5e-6 + 100_000.0 * 1.875e-5)).abs() < 1e-9);

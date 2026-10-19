@@ -1,12 +1,13 @@
 //! SWE-agent installed agent. Runs as root only.
 
-use super::common::installed_dir;
+use super::common::{installed_dir, uv_install};
 use super::mini_swe_agent::opt_str;
 use super::pins;
 use super::{connection, ensure_system_dependencies, exec_agent, exec_error, exec_root};
 use crate::agents::model_connection::Spec;
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::quote;
+use crate::fmt::json_spaced;
 use anyhow::{Result, bail};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -37,29 +38,6 @@ pub fn create(args: AgentArgs) -> Result<AgentBox> {
     Ok(Box::new(SweAgent::new(args)?))
 }
 
-/// Python `json.dumps` (default separators, ensure_ascii).
-fn py_json(v: &Value) -> String {
-    match v {
-        Value::Object(m) => format!(
-            "{{{}}}",
-            m.iter().map(|(k, v)| format!("{}: {}", py_json(&Value::String(k.clone())), py_json(v))).collect::<Vec<_>>().join(", ")
-        ),
-        Value::Array(a) => format!("[{}]", a.iter().map(py_json).collect::<Vec<_>>().join(", ")),
-        Value::String(s) => serde_json::to_string(s).unwrap().chars().fold(String::new(), |mut o, c| {
-            if c.is_ascii() {
-                o.push(c);
-            } else {
-                for u in c.encode_utf16(&mut [0; 2]) {
-                    o += &format!("\\u{u:04x}");
-                }
-            }
-            o
-        }),
-        Value::Bool(b) => if *b { "true" } else { "false" }.into(),
-        v => v.to_string(),
-    }
-}
-
 /// A branch, tag or commit; empty or `latest` is the default branch's head.
 fn clone_command(revision: &str) -> String {
     let (repo, dest) = (quote(REPO_URL), quote(REPO_PATH));
@@ -85,7 +63,7 @@ impl SweAgent {
         // completion_kwargs: dict/list -> json.dumps, blank -> None, env fallback when omitted.
         let completion_kwargs = match args.kwargs.get("completion_kwargs") {
             None => args.extra_env.get("SWEAGENT_COMPLETION_KWARGS").cloned().or_else(|| std::env::var("SWEAGENT_COMPLETION_KWARGS").ok()),
-            Some(v @ (Value::Object(_) | Value::Array(_))) => Some(py_json(v)),
+            Some(v @ (Value::Object(_) | Value::Array(_))) => Some(json_spaced(v)),
             Some(_) => opt_str(&args, N, "completion_kwargs")?,
         }
         .filter(|s| !s.trim().is_empty());
@@ -110,7 +88,7 @@ impl SweAgent {
                 bail!("SWE-agent completion_kwargs must be a JSON object when reasoning_effort is configured")
             };
             o.insert("reasoning_effort".into(), Value::String(effort.clone()));
-            kwargs = Some(py_json(&v));
+            kwargs = Some(json_spaced(&v));
         }
         let active = self.args.model_name.as_deref().is_some_and(|m| m.starts_with("openai/")) && effort.to_lowercase() != "none";
         if active {
@@ -279,8 +257,8 @@ impl Agent for SweAgent {
         exec_root(
             cx,
             &format!(
-                "if ! command -v uv >/dev/null 2>&1; then  curl -LsSf {} | sh; fi && if [ -f \"$HOME/.local/bin/env\" ]; then source \"$HOME/.local/bin/env\"; fi",
-                pins::uv_installer()
+                "if ! command -v uv >/dev/null 2>&1; then  {}; fi && if [ -f \"$HOME/.local/bin/env\" ]; then source \"$HOME/.local/bin/env\"; fi",
+                uv_install(None)
             ),
             &none,
         )
@@ -337,7 +315,7 @@ impl Agent for SweAgent {
         Ok(())
     }
 
-    fn populate_context_post_run(&self, logs_dir: &Path, ctx: &mut AgentContext) {
+    fn collect_usage(&self, logs_dir: &Path, ctx: &mut AgentContext) {
         let mut found = vec![];
         find_traj(&logs_dir.join("swe-agent-output"), &mut found);
         // Expect at most one .traj; with several we skip usage rather than panic.
@@ -458,14 +436,14 @@ mod tests {
                 && c.contains("fetch --depth 1 origin -- \"refs/tags/$revision\"")
                 && c.contains("checkout --detach FETCH_HEAD")
         );
-        assert!(py_json(&json!({"k": "é"})) == r#"{"k": "\u00e9"}"#);
+        assert!(json_spaced(&json!({"k": "é"})) == r#"{"k": "\u00e9"}"#);
 
         let dir = std::env::temp_dir().join(format!("hbench-swe-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(dir.join("swe-agent-output/inst")).unwrap();
         std::fs::write(dir.join("swe-agent-output/inst/inst.traj"), r#"{"environment":"swe_main","trajectory":[{"action":"ls"}],"info":{"model_name":"m","total_cost":0.0,"cost":1.5,"input_tokens":1000,"output_tokens":200}}"#).unwrap();
         let a = agent(json!({}), &[], "openai/gpt-5").unwrap();
         let mut ctx = AgentContext::default();
-        a.populate_context_post_run(&dir, &mut ctx);
+        a.collect_usage(&dir, &mut ctx);
         assert_eq!((ctx.n_input_tokens, ctx.n_output_tokens, ctx.cost_usd, ctx.n_cache_tokens), (Some(1000), Some(200), Some(1.5), None));
     }
 }

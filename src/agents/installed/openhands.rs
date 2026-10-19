@@ -1,12 +1,13 @@
 //! OpenHands installed agent.
 
-use super::common::installed_dir;
 use super::common::opts::lax_bool;
+use super::common::{installed_dir, uv_install};
 use super::pins;
 use super::{connection, ensure_system_dependencies, exec_agent, exec_root};
 use crate::agents::model_connection::Spec;
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::quote;
+use crate::fmt::value_text;
 use anyhow::{Result, bail};
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
@@ -73,21 +74,9 @@ fn opt_dict(args: &AgentArgs, agent: &str, k: &str) -> Result<Option<Map<String,
     }
 }
 
-/// Python `str(float)` for ordinary values (`1.0`, `0.7`).
-pub(super) fn py_float(f: f64) -> String {
-    if f.fract() == 0.0 && f.abs() < 1e16 { format!("{f:.1}") } else { f.to_string() }
-}
-
 /// Agent env > host env, empty values kept.
 pub(super) fn raw_env(args: &AgentArgs, k: &str) -> Option<String> {
     args.extra_env.get(k).cloned().or_else(|| std::env::var(k).ok())
-}
-
-fn py_str(v: &Value) -> String {
-    match v {
-        Value::String(s) => s.clone(),
-        v => v.to_string(),
-    }
 }
 
 fn truthy(v: Option<&Value>) -> bool {
@@ -180,11 +169,11 @@ impl OpenHands {
         };
         let py = &self.python_version;
         format!(
-            "set -euo pipefail; curl -LsSf {uv_installer} | sh && \
+            "set -euo pipefail; {uv_install} && \
              if [ -f \"$HOME/.local/bin/env\" ]; then source \"$HOME/.local/bin/env\"; fi && \
              uv python install {py} && uv venv /opt/openhands-venv --python {py} && \
              source /opt/openhands-venv/bin/activate && export SKIP_VSCODE_BUILD=true && {install} && {VERSION_CMD}",
-            uv_installer = pins::uv_installer()
+            uv_install = uv_install(None)
         )
     }
 
@@ -195,7 +184,7 @@ impl OpenHands {
         if let Some(k) = &conn.api_key {
             env.insert("LLM_API_KEY".into(), k.clone());
         }
-        // `api_base or configured_base_url`: Python `or` skips an empty api_base.
+        // `api_base`, unless empty, else the configured base URL.
         let base_url = raw_env(&self.args, "LLM_BASE_URL")
             .or_else(|| self.api_base.clone().filter(|s| !s.is_empty()).or(conn.configured_base_url.clone()));
         if let Some(u) = base_url {
@@ -228,7 +217,7 @@ impl OpenHands {
         if let Some(mi) = &self.model_info {
             for (k, e) in [("max_input_tokens", "LLM_MAX_INPUT_TOKENS"), ("max_output_tokens", "LLM_MAX_OUTPUT_TOKENS")] {
                 if truthy(mi.get(k)) {
-                    env.insert(e.into(), py_str(&mi[k]));
+                    env.insert(e.into(), value_text(&mi[k]));
                 }
             }
         }
@@ -408,7 +397,7 @@ impl Agent for OpenHands {
         Ok(())
     }
 
-    fn populate_context_post_run(&self, logs_dir: &Path, ctx: &mut AgentContext) {
+    fn collect_usage(&self, logs_dir: &Path, ctx: &mut AgentContext) {
         if let Some((p, c, cached, cost)) = usage_from_logs(logs_dir, self.raw_content) {
             ctx.n_input_tokens = Some(p.max(0));
             ctx.n_output_tokens = Some(c.max(0));
@@ -574,7 +563,7 @@ pub(super) mod tests {
 
         let a = agent(json!({}), &[], None).unwrap();
         let mut ctx = AgentContext::default();
-        a.populate_context_post_run(&d, &mut ctx);
+        a.collect_usage(&d, &mut ctx);
         assert_eq!(
             (ctx.n_input_tokens, ctx.n_cache_tokens, ctx.n_output_tokens, ctx.cost_usd),
             (Some(300), Some(150), Some(30), Some(0.03))

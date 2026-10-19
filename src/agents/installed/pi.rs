@@ -186,7 +186,7 @@ fn int(v: &Value) -> i64 {
     v.as_i64().unwrap_or(0)
 }
 
-/// `_metrics_from_usage` -> (prompt, completion, cached, cost).
+/// Usage record -> (prompt, completion, cached, cost).
 fn metrics(usage: &Value) -> Option<(i64, i64, i64, Option<f64>)> {
     let u = usage.as_object()?;
     if !["input", "output", "cacheRead", "cacheWrite", "reasoning", "totalTokens", "cost"].iter().any(|k| u.contains_key(*k)) {
@@ -411,7 +411,7 @@ impl Agent for Pi {
         Ok(())
     }
 
-    fn populate_context_post_run(&self, logs_dir: &Path, ctx: &mut AgentContext) {
+    fn collect_usage(&self, logs_dir: &Path, ctx: &mut AgentContext) {
         let session = newest_session(&logs_dir.join("pi/sessions")).and_then(|p| {
             let copied = p.file_name().and_then(|n| self.session_usage_start.get(n.to_str()?)).copied().unwrap_or(0);
             session_usage(&std::fs::read_to_string(&p).ok()?, copied)

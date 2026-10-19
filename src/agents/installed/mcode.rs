@@ -7,6 +7,7 @@ use super::{connection, ensure_system_dependencies, exec_agent};
 use crate::agents::model_connection::{Spec, provider as provider_access};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::quote;
+use crate::fmt::title_case;
 use anyhow::{Result, anyhow, bail};
 use serde_json::{Map, json};
 use std::collections::BTreeMap;
@@ -42,18 +43,6 @@ in_models && $0 == "      " model ":" && !patched {
 }
 { print }
 END { if (!patched) exit 1 }"#;
-
-/// Python's `str.title()`.
-fn title(s: &str) -> String {
-    let mut prev_cased = false;
-    s.chars()
-        .map(|c| {
-            let out: String = if prev_cased { c.to_lowercase().collect() } else { c.to_uppercase().collect() };
-            prev_cased = c.is_alphabetic();
-            out
-        })
-        .collect()
-}
 
 pub struct MCode {
     args: AgentArgs,
@@ -113,7 +102,7 @@ impl MCode {
             "deepseek" => "DeepSeek".into(),
             "minimax" => "MiniMax".into(),
             "openai" => "OpenAI".into(),
-            p => title(&p.replace(['-', '_'], " ")),
+            p => title_case(&p.replace(['-', '_'], " ")),
         };
         format!("hbench {display}")
     }
@@ -298,7 +287,7 @@ impl Agent for MCode {
         Ok(())
     }
 
-    fn populate_context_post_run(&self, logs_dir: &std::path::Path, ctx: &mut AgentContext) {
+    fn collect_usage(&self, logs_dir: &std::path::Path, ctx: &mut AgentContext) {
         if let Some(c) = std::fs::read_to_string(logs_dir.join("mcode.jsonl")).ok().and_then(|t| parse_usage(&t)) {
             ctx.n_input_tokens = c.n_input_tokens;
             ctx.n_cache_tokens = c.n_cache_tokens;
@@ -319,7 +308,7 @@ mod tests {
         assert!(MCode::new(args(json!({"context_window": 0}), &[], None)).is_err());
         assert!(MCode::new(args(json!({"max_output_tokens": true}), &[], None)).is_err());
         assert!(MCode::new(args(json!({"max_steps": "abc"}), &[], None)).is_err());
-        assert_eq!(title("my provider2x"), "My Provider2X");
+        assert_eq!(title_case("my provider2x"), "My Provider2X");
     }
 
     #[test]

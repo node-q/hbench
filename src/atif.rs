@@ -1,6 +1,7 @@
 //! ATIF (Agent Trajectory Interchange Format) models + Claude Code session-jsonl -> ATIF
 //! converter.
 
+use crate::fmt::json_spaced_utf8;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -132,30 +133,19 @@ pub struct FinalMetrics {
     pub extra: Option<Obj>,
 }
 
-/// Python json.dumps(v, ensure_ascii=False) formatting (", " / ": " separators).
-pub fn py_dumps(v: &Value) -> String {
-    match v {
-        Value::Array(a) => format!("[{}]", a.iter().map(py_dumps).collect::<Vec<_>>().join(", ")),
-        Value::Object(o) => {
-            format!("{{{}}}", o.iter().map(|(k, v)| format!("{}: {}", Value::from(k.as_str()), py_dumps(v))).collect::<Vec<_>>().join(", "))
-        }
-        _ => v.to_string(),
-    }
-}
-
-/// Python `str(value)` for scalars that show up in tool results.
-fn py_str(v: &Value) -> String {
+/// Tool-result text of a value: strings as-is, `True`/`False`/`None` literals, spaced JSON otherwise.
+fn scalar_text(v: &Value) -> String {
     match v {
         Value::String(s) => s.clone(),
         Value::Bool(true) => "True".into(),
         Value::Bool(false) => "False".into(),
         Value::Null => "None".into(),
-        _ => py_dumps(v),
+        _ => json_spaced_utf8(v),
     }
 }
 
 fn stringify(v: &Value) -> String {
-    v.as_str().map(str::to_string).unwrap_or_else(|| py_dumps(v))
+    v.as_str().map(str::to_string).unwrap_or_else(|| json_spaced_utf8(v))
 }
 
 fn truthy(v: Option<&Value>) -> bool {
@@ -283,20 +273,20 @@ fn format_tool_result(block: &Obj, tool_use_result: Option<&Value>) -> (Option<S
         metadata = Some(Obj::from_iter([("tool_use_result".to_string(), Value::Object(tur.clone()))]));
         let mut chunks = vec![];
         if truthy(tur.get("stdout")) {
-            chunks.push(format!("[stdout]\n{}", py_str(&tur["stdout"])).trim_end().to_string());
+            chunks.push(format!("[stdout]\n{}", scalar_text(&tur["stdout"])).trim_end().to_string());
         }
         if truthy(tur.get("stderr")) {
-            chunks.push(format!("[stderr]\n{}", py_str(&tur["stderr"])).trim_end().to_string());
+            chunks.push(format!("[stderr]\n{}", scalar_text(&tur["stderr"])).trim_end().to_string());
         }
         let exit = if truthy(tur.get("exitCode")) { tur.get("exitCode") } else { tur.get("exit_code") };
         if let Some(e) = exit.filter(|e| !e.is_null() && e.as_i64() != Some(0)) {
-            chunks.push(format!("[exit_code] {}", py_str(e)));
+            chunks.push(format!("[exit_code] {}", scalar_text(e)));
         }
         if truthy(tur.get("interrupted")) {
-            chunks.push(format!("[interrupted] {}", py_str(&tur["interrupted"])));
+            chunks.push(format!("[interrupted] {}", scalar_text(&tur["interrupted"])));
         }
         if truthy(tur.get("isImage")) {
-            chunks.push(format!("[is_image] {}", py_str(&tur["isImage"])));
+            chunks.push(format!("[is_image] {}", scalar_text(&tur["isImage"])));
         }
         let rest: Obj = tur
             .iter()
@@ -304,7 +294,7 @@ fn format_tool_result(block: &Obj, tool_use_result: Option<&Value>) -> (Option<S
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
         if !rest.is_empty() {
-            chunks.push(format!("[metadata] {}", py_dumps(&Value::Object(rest))));
+            chunks.push(format!("[metadata] {}", json_spaced_utf8(&Value::Object(rest))));
         }
         if !chunks.is_empty() {
             parts.push(chunks.join("\n"));
@@ -724,7 +714,7 @@ pub fn convert_session(session_dir: &Path, logs_dir: &Path) -> Option<Trajectory
         total_prompt_tokens: total(|m| m.prompt_tokens),
         total_completion_tokens: total(|m| m.completion_tokens),
         total_cached_tokens: total(|m| m.cached_tokens),
-        // No LiteLLM price-estimate fallback here, so cost is only the reported one.
+        // No price-table estimate here, so cost is only the reported one.
         total_cost_usd: stream_total_cost(logs_dir),
         total_steps: Some(steps.len()),
         extra: (!final_extra.is_empty()).then_some(final_extra),
@@ -881,7 +871,7 @@ mod tests {
         );
         assert_eq!(f.total_cost_usd, Some(0.0421));
         assert_eq!(f.extra.unwrap()["service_tiers"], json!(["standard"]));
-        // to_json_dict(exclude_none=True): no nulls on model fields
+        // No nulls on model fields
         assert!(v["steps"][0].get("tool_calls").is_none() && v.get("notes").is_none());
     }
 

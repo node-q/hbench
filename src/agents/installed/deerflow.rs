@@ -2,7 +2,7 @@
 //! `assets/agents/deerflow/deerflow_runner.py`.
 
 use super::common::opts::kw_int;
-use super::common::{installed_dir, upload_asset};
+use super::common::{installed_dir, upload_asset, uv_install};
 use super::pins;
 use super::{ensure_system_dependencies, exec_agent, exec_error, exec_root};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
@@ -49,7 +49,7 @@ const WEB_FETCH_BACKENDS: [(&str, &str); 2] = [
     ("EXA_API_KEY", "deerflow.community.exa.tools:web_fetch_tool"),
 ];
 
-/// DeerFlow's `_coerce_bool` over pydantic-validated bools.
+/// Boolean kwarg: `on`/`off` plus the usual bool forms (bools, 0/1, yes/no strings).
 fn kw_flag(args: &AgentArgs, k: &str, default: bool) -> Result<bool> {
     match args.kwargs.get(k) {
         None | Some(Value::Null) => Ok(default),
@@ -273,11 +273,11 @@ impl DeerFlow {
             .map(|r| format!("git -C {REPO_DIR} fetch --depth 1 origin {0}; git -C {REPO_DIR} checkout --quiet FETCH_HEAD; ", quote(r)))
             .unwrap_or_default();
         format!(
-            "set -euo pipefail; curl -LsSf {uv_installer} | sh; if [ -f \"$HOME/.local/bin/env\" ]; then . \"$HOME/.local/bin/env\"; \
+            "set -euo pipefail; {uv_install}; if [ -f \"$HOME/.local/bin/env\" ]; then . \"$HOME/.local/bin/env\"; \
              else export PATH=\"$HOME/.local/bin:$PATH\"; fi; git clone --depth 1 {} {REPO_DIR}; {checkout}uv python install 3.12; \
              uv venv {VENV_DIR} --python 3.12; uv pip install -q --python {VENV_PYTHON} {REPO_DIR}/backend/packages/harness",
             quote(&self.repo_url),
-            uv_installer = pins::uv_installer()
+            uv_install = uv_install(None)
         )
     }
 

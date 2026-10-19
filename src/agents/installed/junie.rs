@@ -2,6 +2,7 @@
 
 use super::common::parse_jsonl;
 use super::common::{installed_dir, skills_dir};
+use super::pins;
 use super::{ensure_system_dependencies, exec_agent};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::quote;
@@ -57,7 +58,7 @@ pub fn create(args: AgentArgs) -> Result<AgentBox> {
     Ok(Box::new(Junie::new(args)?))
 }
 
-/// Pydantic lax bool.
+/// Boolean kwarg: bools, 0/1 and the usual yes/no strings.
 fn opt_bool(args: &AgentArgs, k: &str, default: bool) -> Result<bool> {
     match args.kwargs.get(k) {
         None => Ok(default),
@@ -270,11 +271,17 @@ impl Agent for Junie {
         ensure_system_dependencies(cx, &["curl", "bash", "unzip"]).await?;
         let url =
             if self.channel == "eap" { "https://junie.jetbrains.com/install-eap.sh" } else { "https://junie.jetbrains.com/install.sh" };
+        // EAP builds are numbered apart from releases, so only an explicit version pins them.
+        let version = match (self.version.as_deref(), self.channel) {
+            (None, "eap") => "latest",
+            (v, _) => pins::JUNIE.or(v),
+        };
+        let version_env = if version == "latest" { String::new() } else { format!("JUNIE_VERSION={} ", quote(version)) };
         let none = BTreeMap::new();
         exec_agent(
             cx,
             &format!(
-                "set -euo pipefail; curl -fsSL {url} | bash && {PATH_EXPORT}if [ ! -x \"$HOME/.local/bin/junie\" ]; then \
+                "set -euo pipefail; curl -fsSL {url} | {version_env}bash && {PATH_EXPORT}if [ ! -x \"$HOME/.local/bin/junie\" ]; then \
                  echo \"Junie launcher not found at $HOME/.local/bin/junie\" >&2; exit 1; fi && junie --version"
             ),
             &none,
@@ -338,7 +345,7 @@ impl Agent for Junie {
         r.map(|_| ())
     }
 
-    fn populate_context_post_run(&self, logs_dir: &Path, ctx: &mut AgentContext) {
+    fn collect_usage(&self, logs_dir: &Path, ctx: &mut AgentContext) {
         if let Some(c) = find_events(logs_dir).and_then(|f| std::fs::read_to_string(f).ok()).and_then(|t| usage_from_events(&t)) {
             *ctx = c;
         }
@@ -406,7 +413,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("events.jsonl"), &text).unwrap();
         let mut ctx = AgentContext::default();
-        a.populate_context_post_run(&a.args.logs_dir, &mut ctx);
+        a.collect_usage(&a.args.logs_dir, &mut ctx);
         assert_eq!(ctx.n_input_tokens, Some(200));
     }
 }

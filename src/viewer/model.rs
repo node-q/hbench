@@ -1,10 +1,10 @@
-//! Model loading (pydantic validate + dump).
+//! Model loading: validate result/config JSON and re-dump it in canonical form.
 
 use super::*;
 use serde_json::{Map, Value, json};
 use std::path::{Path, PathBuf};
 
-/// `JobConfig.model_validate(...)` dumped in full (`model_dump(mode="json")`).
+/// A job config validated and dumped in full (every field, defaults filled).
 pub(super) fn job_config_value(raw: Value) -> Option<Value> {
     let mut raw = raw;
     // scanner._normalize_viewer_job_config: numeric dataset refs -> strings.
@@ -27,7 +27,7 @@ pub(super) fn job_config(job_dir: &Path) -> Option<Value> {
     job_config_value(read_json(&job_dir.join("config.json"))?)
 }
 
-/// `JobResult` as pydantic loads it: required fields present, `updated_at` derived, `trial_results` defaulted.
+/// `JobResult` as loaded for the viewer: required fields present, `updated_at` derived, `trial_results` defaulted.
 pub(super) fn job_result(job_dir: &Path) -> Option<Value> {
     let mut r = read_json_object(&job_dir.join("result.json"))?;
     let o = r.as_object_mut()?;
@@ -100,7 +100,7 @@ pub(super) fn trial_result(trial_dir: &Path) -> Option<Value> {
         .then_some(r)
 }
 
-/// `TrialConfig.model_validate_json(config.json)`: pruned defaults restored.
+/// The trial's config.json parsed, with pruned defaults restored.
 pub(super) fn trial_config(trial_dir: &Path) -> Option<crate::config::TrialConfig> {
     let mut v = read_json_object(&trial_dir.join("config.json"))?;
     let o = v.as_object_mut()?;

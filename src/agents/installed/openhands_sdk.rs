@@ -1,11 +1,12 @@
 //! openhands-sdk: the OpenHands SDK in its own venv, driven by assets/agents/openhands-sdk/openhands_sdk_runner.py.
 
-use super::common::{installed_dir, skills_dir};
-use super::openhands::{opt_bool, opt_f64, opt_int, opt_str, py_float, raw_env};
+use super::common::{installed_dir, skills_dir, uv_install};
+use super::openhands::{opt_bool, opt_f64, opt_int, opt_str, raw_env};
 use super::pins;
 use super::{ensure_system_dependencies, exec_agent, exec_root};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::quote;
+use crate::fmt::float_with_point;
 use anyhow::{Result, bail};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -77,11 +78,11 @@ impl OpenHandsSdk {
         let v = pins::OPENHANDS_SDK.pip_constraint(self.version.as_deref());
         let py = &self.python_version;
         format!(
-            "set -euo pipefail; curl -LsSf {uv_installer} | sh && \
+            "set -euo pipefail; {uv_install} && \
              if [ -f \"$HOME/.local/bin/env\" ]; then source \"$HOME/.local/bin/env\"; fi && \
              uv python install {py} && uv venv /opt/openhands-sdk-venv --python {py} --clear && \
              source /opt/openhands-sdk-venv/bin/activate && uv pip install openhands-sdk{v} openhands-tools{v} {fastapi}",
-            uv_installer = pins::uv_installer(),
+            uv_install = uv_install(None),
             fastapi = pins::FASTAPI.requirement()
         )
     }
@@ -148,7 +149,7 @@ impl OpenHandsSdk {
             env.insert("MAX_ITERATIONS".into(), m.to_string());
         }
         if let Some(t) = self.temperature {
-            env.insert("LLM_TEMPERATURE".into(), py_float(t));
+            env.insert("LLM_TEMPERATURE".into(), float_with_point(t));
         }
         Ok(env)
     }
@@ -228,7 +229,7 @@ impl Agent for OpenHandsSdk {
         Ok(())
     }
 
-    fn populate_context_post_run(&self, logs_dir: &Path, ctx: &mut AgentContext) {
+    fn collect_usage(&self, logs_dir: &Path, ctx: &mut AgentContext) {
         if let Some(c) = std::fs::read_to_string(logs_dir.join("trajectory.json")).ok().and_then(|t| parse_trajectory_metrics(&t)) {
             ctx.n_input_tokens = c.n_input_tokens;
             ctx.n_cache_tokens = c.n_cache_tokens;

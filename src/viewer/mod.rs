@@ -8,11 +8,11 @@ mod http;
 mod jobs;
 mod jobs_write;
 mod model;
-mod py;
 mod summaries;
 mod tasks;
 #[cfg(test)]
 mod tests;
+mod util;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -23,8 +23,8 @@ use compare::*;
 use http::*;
 use jobs::*;
 use model::*;
-use py::*;
 use summaries::*;
+use util::*;
 
 pub(crate) use http::{parse_port_range, serve};
 

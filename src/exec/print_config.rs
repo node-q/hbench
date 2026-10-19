@@ -5,7 +5,7 @@ use crate::config::{AgentConfig, EnvConfig, RetryConfig, VerifierRunConfig};
 use serde::Serialize;
 use serde_json::{Map, Value, json};
 
-/// `ExecConfig.model_dump(mode="json", exclude_defaults=True)`.
+/// The exec config as JSON, fields at their default omitted.
 pub(super) fn print_value(c: &ExecConfig) -> Value {
     let mut root = Map::new();
     if c.schema_version != "1.0" {

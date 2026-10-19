@@ -84,7 +84,7 @@ impl App {
             };
             out.push((parse_dt(&summary["started_at"]).map(|d| ts(&d)), summary));
         }
-        // Most recent first; jobs without started_at last (stable, like Python's reverse sort).
+        // Most recent first; jobs without started_at last (stable reverse sort).
         out.sort_by(|a, b| {
             (b.0.is_some(), b.0.unwrap_or(0.0)).partial_cmp(&(a.0.is_some(), a.0.unwrap_or(0.0))).unwrap_or(std::cmp::Ordering::Equal)
         });
@@ -268,8 +268,8 @@ fn path_label(p: &str) -> String {
     if n.is_empty() { p.into() } else { n }
 }
 
-/// Python `sort(key=..., reverse=...)` (stable; reverse keeps equal items in order).
-fn py_sort<K: PartialOrd>(items: &mut [Value], reverse: bool, key: impl Fn(&Value) -> K) {
+/// Stable sort by `key`, optionally descending; equal items keep their order either way.
+fn sort_values_by<K: PartialOrd>(items: &mut [Value], reverse: bool, key: impl Fn(&Value) -> K) {
     items.sort_by(|a, b| {
         let (x, y) = (key(a), key(b));
         let o = x.partial_cmp(&y).unwrap_or(std::cmp::Ordering::Equal);
@@ -281,12 +281,12 @@ pub(super) fn sort_task_summaries(items: &mut [Value], by: &str, reverse: bool) 
     let st = |v: &Value, k: &str| v[k].as_str().unwrap_or("").to_string();
     let opt = |v: &Value, k: &str| (v[k].is_null(), v[k].as_f64().unwrap_or(0.0));
     match by {
-        "task_name" | "agent_name" | "model_provider" | "model_name" | "source" => py_sort(items, reverse, |v| st(v, by)),
-        "n_trials" | "n_errors" => py_sort(items, reverse, |v| v[by].as_f64().unwrap_or(0.0)),
+        "task_name" | "agent_name" | "model_provider" | "model_name" | "source" => sort_values_by(items, reverse, |v| st(v, by)),
+        "n_trials" | "n_errors" => sort_values_by(items, reverse, |v| v[by].as_f64().unwrap_or(0.0)),
         "avg_duration_ms" | "avg_reward" | "avg_input_tokens" | "avg_cached_input_tokens" | "avg_output_tokens" | "avg_cost_usd" => {
-            py_sort(items, reverse, |v| opt(v, by))
+            sort_values_by(items, reverse, |v| opt(v, by))
         }
-        "exception_types" => py_sort(items, reverse, |v| v["exception_types"][0].as_str().unwrap_or("").to_string()),
+        "exception_types" => sort_values_by(items, reverse, |v| v["exception_types"][0].as_str().unwrap_or("").to_string()),
         _ => {}
     }
 }
@@ -328,12 +328,12 @@ pub(super) fn sort_trial_summaries(items: &mut Vec<Value>, by: &str, reverse: bo
     };
     if by == "duration" {
         let now = ts(&Utc::now());
-        py_sort(&mut present, reverse, |s| {
+        sort_values_by(&mut present, reverse, |s| {
             let end = parse_dt(&s["finished_at"]).map_or(now, |d| ts(&d));
             end - parse_dt(&s["started_at"]).map_or(0.0, |d| ts(&d))
         });
     } else {
-        py_sort(&mut present, reverse, |s| match (&s[by], by) {
+        sort_values_by(&mut present, reverse, |s| match (&s[by], by) {
             (v, "started_at" | "finished_at") => SortKey::Num(parse_dt(v).map_or(0.0, |d| ts(&d))),
             (Value::Number(n), _) => SortKey::Num(n.as_f64().unwrap_or(0.0)),
             (v, _) => SortKey::Str(v.as_str().unwrap_or_default().to_string()),

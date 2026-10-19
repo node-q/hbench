@@ -1,10 +1,11 @@
 //! MiMo installed agent.
 
 use super::common::{deep_merge, installed_setup, parse_jsonl, skills_dir};
+use super::pins;
 use super::{connection, ensure_system_dependencies, exec_agent};
 use crate::agents::model_connection::Spec;
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
-use crate::env::{kind_err, quote};
+use crate::env::{ErrorKind, kind_err, quote};
 use anyhow::{Result, bail};
 use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
@@ -153,11 +154,17 @@ impl Agent for MiMo {
     }
 
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
+        let version_arg = match pins::MIMO.or(self.version.as_deref()) {
+            "latest" => String::new(),
+            v => format!(" -s -- --version {}", quote(v)),
+        };
         let install = async {
             ensure_system_dependencies(cx, &["curl"]).await?;
             exec_agent(
                 cx,
-                "set -euo pipefail; curl -fsSL https://mimo.xiaomi.com/install | bash && export PATH=\"$HOME/.mimocode/bin:$PATH\" && mimo --version",
+                &format!(
+                    "set -euo pipefail; curl -fsSL https://mimo.xiaomi.com/install | bash{version_arg} && export PATH=\"$HOME/.mimocode/bin:$PATH\" && mimo --version"
+                ),
                 &BTreeMap::new(),
             )
             .await
@@ -200,14 +207,14 @@ impl Agent for MiMo {
         let msgs = error_messages(&r.stdout);
         if !msgs.is_empty() {
             return Err(kind_err(
-                "NonZeroAgentExitCodeError",
+                ErrorKind::NonZeroAgentExitCode,
                 format!("MiMo emitted error event(s): {}", msgs[..msgs.len().min(3)].join("; ")),
             ));
         }
         Ok(())
     }
 
-    fn populate_context_post_run(&self, logs_dir: &std::path::Path, ctx: &mut AgentContext) {
+    fn collect_usage(&self, logs_dir: &std::path::Path, ctx: &mut AgentContext) {
         if let Some(c) = std::fs::read_to_string(logs_dir.join("mimo.txt")).ok().and_then(|t| parse_usage(&t)) {
             ctx.n_input_tokens = c.n_input_tokens;
             ctx.n_cache_tokens = c.n_cache_tokens;

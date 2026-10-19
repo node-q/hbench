@@ -1,13 +1,13 @@
-//! A clone of PyYAML's `safe_dump`, so migrated docker-compose files match upstream's byte for byte.
+//! Block-style YAML writer for migrated docker-compose files, with stable byte-for-byte output.
 
-use super::{py_float_repr, py_str};
+use super::{float_repr, yaml_text};
 use regex::Regex;
 use serde_yaml_ng::Value;
 use std::sync::LazyLock;
 
-/// `yaml.safe_dump(v, sort_keys=False)`: block style, indent 2, width 80, ASCII only.
-/// Port of PyYAML's Emitter for the node shapes safe_load produces (no anchors/tags).
-pub(super) fn pyyaml_dump(v: &Value) -> String {
+/// `v` as block-style YAML: indent 2, width 80, ASCII only, keys in order. Handles the node shapes a
+/// YAML load produces (no anchors/tags).
+pub(super) fn to_yaml(v: &Value) -> String {
     let mut e = Emitter { out: String::new(), col: 0, ws: true, indention: true, indent: None, indents: vec![] };
     e.node(v, false, false);
     e.write_indent();
@@ -95,7 +95,7 @@ fn analyze_scalar(s: &[char]) -> Analysis {
     Analysis { empty: false, multiline: line_breaks, allow_block_plain: abp, allow_single_quoted: asq }
 }
 
-/// (text, implicit-plain-ok) as PyYAML's representer + resolver see a scalar.
+/// A scalar's text, and whether it can be written plain (unquoted) without reading back as another type.
 fn scalar_text(v: &Value) -> (String, bool) {
     match v {
         Value::Null => ("null".into(), true),
@@ -107,14 +107,14 @@ fn scalar_text(v: &Value) -> (String, bool) {
             } else if f.is_infinite() {
                 if f > 0.0 { ".inf" } else { "-.inf" }.into()
             } else {
-                let r = py_float_repr(f).to_lowercase();
+                let r = float_repr(f).to_lowercase();
                 if !r.contains('.') && r.contains('e') { r.replacen('e', ".0e", 1) } else { r }
             };
             (s, true)
         }
         Value::Number(n) => (n.to_string(), true),
         Value::String(s) => (s.clone(), !NON_STR_RE.is_match(s)),
-        _ => (py_str(v), true),
+        _ => (yaml_text(v), true),
     }
 }
 
@@ -224,7 +224,7 @@ impl Emitter {
         self.out.push(br.unwrap_or('\n'));
     }
 
-    // No line-break branch; PyYAML never emits multiline plain scalars.
+    // No line-break branch; multiline scalars are never written plain.
     fn write_plain(&mut self, t: &[char], split: bool) {
         if t.is_empty() {
             return;
@@ -369,4 +369,4 @@ fn check_simple_key(k: &Value) -> bool {
     }
 }
 
-// Expected outputs below come from the reference Python mapper run on identical fixtures.
+// Expected outputs below are golden files for these fixtures.
