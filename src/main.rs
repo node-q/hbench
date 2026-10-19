@@ -224,13 +224,13 @@ enum SweepsCmd {
         /// Attempts per task in each sweep.
         #[arg(long, default_value_t = 2)]
         trials_per_task: usize,
-        /// Generic hint passed to agents as the `hint` kwarg.
+        /// Hint appended to every task instruction.
         #[arg(long)]
         hint: Option<String>,
-        /// JSON object {task_name: hint}; runs one job per task.
+        /// JSON object {task_name: hint}; runs one job per task and appends the task's hint to its instruction.
         #[arg(long)]
         hints_file: Option<PathBuf>,
-        /// Skip the API key check before starting.
+        /// Skip the agent credential check before starting.
         #[arg(long)]
         skip_preflight: bool,
     },
@@ -316,7 +316,7 @@ enum JobsCmd {
         /// Remove trials with these error types before resuming (repeatable).
         #[arg(short = 'f', long = "filter-error-type", default_values_t = vec!["CancelledError".to_string()])]
         filter_error_types: Vec<String>,
-        /// Skip the API key check before starting.
+        /// Skip the agent credential check before starting.
         #[arg(long)]
         skip_preflight: bool,
         /// Exit 1 if any trial errored.
@@ -387,7 +387,7 @@ enum TrialsCmd {
         /// Where the trial dir is created.
         #[arg(long, default_value = "trials")]
         trials_dir: PathBuf,
-        /// Skip the API key and kwargs checks before starting.
+        /// Skip the agent credential check before starting.
         #[arg(long)]
         skip_preflight: bool,
     },
@@ -460,7 +460,8 @@ enum TasksCmd {
         /// Path to a template TOML file for task metadata and defaults.
         #[arg(long)]
         metadata_template: Option<PathBuf>,
-        #[arg(long, hide = true)]
+        /// Add standard metadata fields to task.toml.
+        #[arg(long, conflicts_with = "metadata_template")]
         include_standard_metadata: bool,
         /// Skip [task] package section in task.toml.
         #[arg(long)]
@@ -599,7 +600,7 @@ struct RunArgs {
     /// Only install the agent; don't run it.
     #[arg(long, help_heading = "Agent")]
     install_only: bool,
-    /// Don't check agent API keys and kwargs before starting.
+    /// Don't check that agent credentials are set before starting.
     #[arg(long, help_heading = "Agent")]
     skip_preflight: bool,
 
@@ -785,33 +786,7 @@ fn build_job_config(a: &RunArgs) -> Result<JobConfig> {
         };
         cfg.tasks = registry::filter_names(std::mem::take(&mut cfg.tasks), TaskRef::display_name, &f)?;
     }
-    if a.agent.is_some()
-        || !a.models.is_empty()
-        || !a.agent_kwargs.is_empty()
-        || !a.agent_env.is_empty()
-        || a.n_concurrent_agent.is_some()
-        || !a.skill.is_empty()
-    {
-        let base = cfg.agents.first().cloned().unwrap_or_default();
-        let base = AgentConfig { name: a.agent.clone().or(base.name), ..base };
-        let models: Vec<Option<String>> =
-            if a.models.is_empty() { vec![base.model_name.clone()] } else { a.models.iter().cloned().map(Some).collect() };
-        cfg.agents = models
-            .into_iter()
-            .map(|m| {
-                let mut c = AgentConfig { model_name: m, ..base.clone() };
-                for (k, v) in &a.agent_kwargs {
-                    c.kwargs.insert(k.clone(), kwarg_value(v));
-                }
-                c.env.extend(a.agent_env.iter().cloned());
-                if a.n_concurrent_agent.is_some() {
-                    c.n_concurrent = a.n_concurrent_agent;
-                }
-                c.skills.extend(a.skill.iter().cloned());
-                c
-            })
-            .collect();
-    }
+    apply_agent_flags(&mut cfg, a);
     macro_rules! set {
         ($field:expr, $v:expr) => {
             if let Some(v) = $v {
@@ -859,6 +834,29 @@ fn build_job_config(a: &RunArgs) -> Result<JobConfig> {
     }
     cfg.validate()?;
     Ok(cfg)
+}
+
+/// `-a`/`-m` replace the config's agents with one per model, based on its first agent; `--ak`, `--ae`,
+/// `--skill` and `--n-concurrent-agent` apply to every agent.
+fn apply_agent_flags(cfg: &mut JobConfig, a: &RunArgs) {
+    let has_overrides = !a.agent_kwargs.is_empty() || !a.agent_env.is_empty() || a.n_concurrent_agent.is_some() || !a.skill.is_empty();
+    if a.agent.is_some() || !a.models.is_empty() || (has_overrides && cfg.agents.is_empty()) {
+        let base = cfg.agents.first().cloned().unwrap_or_default();
+        let base = AgentConfig { name: a.agent.clone().or(base.name), ..base };
+        let models: Vec<Option<String>> =
+            if a.models.is_empty() { vec![base.model_name.clone()] } else { a.models.iter().cloned().map(Some).collect() };
+        cfg.agents = models.into_iter().map(|m| AgentConfig { model_name: m, ..base.clone() }).collect();
+    }
+    for c in cfg.agents.iter_mut() {
+        for (k, v) in &a.agent_kwargs {
+            c.kwargs.insert(k.clone(), kwarg_value(v));
+        }
+        c.env.extend(a.agent_env.iter().cloned());
+        if a.n_concurrent_agent.is_some() {
+            c.n_concurrent = a.n_concurrent_agent;
+        }
+        c.skills.extend(a.skill.iter().cloned());
+    }
 }
 
 /// Unknown agent names and agent kwargs outside the agent's options schema. `acp:<id>[@version]`
@@ -994,8 +992,7 @@ async fn force_cleanup(trials: Vec<String>) {
 }
 
 /// Exit 1 if every trial errored (or any did, with `fail_on_error`); else 0.
-fn job_exit_code(jr: &job::JobResult, fail_on_error: bool) -> ExitCode {
-    let s = &jr.stats;
+fn job_exit_code(s: &job::JobStats, fail_on_error: bool) -> ExitCode {
     let all = s.n_completed_trials > 0 && s.n_errored_trials == s.n_completed_trials;
     if all || (fail_on_error && s.n_errored_trials > 0) {
         eprintln!("{} of {} trial(s) errored", s.n_errored_trials, s.n_completed_trials);
@@ -1105,7 +1102,7 @@ async fn run() -> Result<ExitCode> {
                 bail!("job {} already exists; use `hbench jobs resume -p {}`", cfg.job_name, cfg.job_dir().display());
             }
             if a.diff.is_empty() {
-                return Ok(job_exit_code(&run_with_ctrl_c(cfg, None, &[]).await?, a.fail_on_error));
+                return Ok(job_exit_code(&run_with_ctrl_c(cfg, None, &[]).await?.stats, a.fail_on_error));
             }
             if cfg.install_only {
                 bail!("--diff cannot use --install-only.");
@@ -1130,7 +1127,7 @@ async fn run() -> Result<ExitCode> {
             }
             cfg.source_jobs =
                 a.diff.iter().map(|p| config::SourceJob { action: "diff".into(), kind: None, job_id: None, path: p.clone() }).collect();
-            Ok(job_exit_code(&run_with_ctrl_c(cfg, Some(trials), &[]).await?, a.fail_on_error))
+            Ok(job_exit_code(&run_with_ctrl_c(cfg, Some(trials), &[]).await?.stats, a.fail_on_error))
         }
         Cmd::Jobs { cmd: JobsCmd::Resume { path, filter_error_types, skip_preflight, fail_on_error } } => {
             let cfg = job::load_config(&path)?;
@@ -1138,7 +1135,7 @@ async fn run() -> Result<ExitCode> {
             if !skip_preflight {
                 preflight_auth(&cfg)?;
             }
-            Ok(job_exit_code(&run_with_ctrl_c(cfg, None, &filter_error_types).await?, fail_on_error))
+            Ok(job_exit_code(&run_with_ctrl_c(cfg, None, &filter_error_types).await?.stats, fail_on_error))
         }
         Cmd::Jobs { cmd: JobsCmd::Summary { path, job_path, json } } => {
             let path = path.or(job_path).context("pass a job dir")?;
@@ -1207,7 +1204,7 @@ async fn run() -> Result<ExitCode> {
                 bail!("no trials in {} match the provided tasks by name", source.display());
             }
             cfg.tasks = by_name.values().map(|p| TaskRef::local(p.clone(), None)).collect();
-            Ok(job_exit_code(&run_with_ctrl_c(cfg, Some(trials), &[]).await?, false))
+            Ok(job_exit_code(&run_with_ctrl_c(cfg, Some(trials), &[]).await?.stats, false))
         }
         Cmd::Trials { cmd: TrialsCmd::Start { config, path, agent, model, agent_kwargs, agent_env, trials_dir, skip_preflight } } => {
             let mut tc: TrialConfig = match config {
@@ -1231,9 +1228,9 @@ async fn run() -> Result<ExitCode> {
                 tc.trial_name = job::trial_name(&tc.task);
             }
             tc.task.validate()?;
+            let cfg = JobConfig { agents: vec![tc.agent.clone()], ..Default::default() };
+            preflight_agents(&cfg)?;
             if !skip_preflight {
-                let cfg = JobConfig { agents: vec![tc.agent.clone()], ..Default::default() };
-                preflight_agents(&cfg)?;
                 preflight_auth(&cfg)?;
             }
             registry::download(std::slice::from_ref(&tc.task))?;
@@ -1296,9 +1293,6 @@ async fn run() -> Result<ExitCode> {
                     steps,
                 },
         } => {
-            if include_standard_metadata {
-                bail!("--include-standard-metadata has been removed. Use --metadata-template <path-to-template.toml> instead.");
-            }
             if let Some(t) = &metadata_template
                 && !t.exists()
             {
@@ -1309,12 +1303,12 @@ async fn run() -> Result<ExitCode> {
                 no_pytest,
                 no_solution,
                 include_canary_strings,
+                include_standard_metadata,
                 no_package,
                 description,
                 authors: authoring::parse_authors(&author),
                 metadata_template,
                 steps,
-                ..Default::default()
             };
             ok(authoring::init_task(&name, &tasks_dir, &opts).map(|_| ()))
         }
@@ -1379,21 +1373,21 @@ async fn run() -> Result<ExitCode> {
                     .collect();
                 trial_names(&dirs)
             });
-            for d in sweeps::run(cfg, max_sweeps, trials_per_task, hint, hints, rx.clone()).await? {
-                println!("{}", d.display());
+            let jobs = sweeps::run(cfg, max_sweeps, trials_per_task, hint, hints, rx.clone()).await?;
+            for (dir, _) in &jobs {
+                println!("{}", dir.display());
             }
             if *rx.borrow() {
                 return Err(Cancelled.into());
             }
-            Ok(ExitCode::SUCCESS)
+            Ok(job_exit_code(&sweeps::trial_counts(jobs.iter().map(|(_, r)| r)), false))
         }
         Cmd::Tasks { cmd: TasksCmd::Migrate { input, output, cpus, memory_mb, storage_mb, gpus } } => {
             println!(
                 "⚠️  WARNING: This migration tool is not foolproof. Please review migrated tasks carefully and make manual adjustments as needed.\n"
             );
             if !input.exists() {
-                println!("❌ Input path does not exist: {}", input.display());
-                return Ok(ExitCode::SUCCESS);
+                bail!("Input path does not exist: {}", input.display());
             }
             let single = input.join("task.yaml").exists();
             if single {
@@ -1406,7 +1400,7 @@ async fn run() -> Result<ExitCode> {
                 Ok(dirs) if single => println!("✓ Successfully migrated task to: {}", dirs[0].display()),
                 Ok(dirs) if dirs.is_empty() => println!("⚠️  No tasks found to migrate"),
                 Ok(dirs) => println!("✓ Successfully migrated {} task(s)", dirs.len()),
-                Err(e) if single => println!("❌ Failed to migrate task: {e:#}"),
+                Err(e) if single => return Err(e.context("Failed to migrate task")),
                 Err(e) => return Err(e),
             }
             Ok(ExitCode::SUCCESS)
@@ -1543,6 +1537,32 @@ mod tests {
     }
 
     #[test]
+    fn agent_flags_apply_to_every_configured_agent() {
+        let dir = std::env::temp_dir().join(format!("hbench-cli-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let job = dir.join("job.yaml");
+        std::fs::write(&job, "agents:\n  - name: claude-code\n    model_name: anthropic/a\n  - name: codex\n    model_name: openai/b\n")
+            .unwrap();
+        let cfg = |extra: &[&str]| {
+            let mut args = vec!["hbench", "run", "-c", job.to_str().unwrap(), "-p", dir.to_str().unwrap()];
+            args.extend(extra);
+            let Cmd::Run(a) = Cli::parse_from(args).cmd else { panic!() };
+            build_job_config(&a).unwrap()
+        };
+        let c = cfg(&["--ak", "max_turns=5", "--ae", "X=1", "--skill", "/skills/s", "--n-concurrent-agent", "2"]);
+        let agents: Vec<(&str, Option<&str>)> = c.agents.iter().map(|a| (a.name(), a.model_name.as_deref())).collect();
+        assert_eq!(agents, [("claude-code", Some("anthropic/a")), ("codex", Some("openai/b"))]);
+        for a in &c.agents {
+            assert_eq!((&a.kwargs["max_turns"], a.env["X"].as_str(), a.n_concurrent), (&Value::from(5), "1", Some(2)));
+            assert_eq!(a.skills, ["/skills/s"]);
+        }
+        let c = cfg(&["-m", "anthropic/c", "--ak", "max_turns=5"]);
+        let agents: Vec<(&str, Option<&str>)> = c.agents.iter().map(|a| (a.name(), a.model_name.as_deref())).collect();
+        assert_eq!(agents, [("claude-code", Some("anthropic/c"))]);
+        assert_eq!(c.agents[0].kwargs["max_turns"], 5);
+    }
+
+    #[test]
     fn task_filters_apply_to_single_tasks() {
         let dir = std::env::temp_dir().join(format!("hbench-cli-{}", uuid::Uuid::new_v4())).join("hello");
         std::fs::create_dir_all(&dir).unwrap();
@@ -1604,10 +1624,14 @@ mod tests {
             n_total_trials: done,
             stats: job::JobStats { n_completed_trials: done, n_errored_trials: errored, ..Default::default() },
         };
-        assert_eq!(job_exit_code(&jr(2, 1), false), ExitCode::SUCCESS);
-        assert_eq!(job_exit_code(&jr(2, 1), true), ExitCode::FAILURE);
-        assert_eq!(job_exit_code(&jr(2, 2), false), ExitCode::FAILURE);
-        assert_eq!(job_exit_code(&jr(0, 0), true), ExitCode::SUCCESS);
+        assert_eq!(job_exit_code(&jr(2, 1).stats, false), ExitCode::SUCCESS);
+        assert_eq!(job_exit_code(&jr(2, 1).stats, true), ExitCode::FAILURE);
+        assert_eq!(job_exit_code(&jr(2, 2).stats, false), ExitCode::FAILURE);
+        assert_eq!(job_exit_code(&jr(0, 0).stats, true), ExitCode::SUCCESS);
+        let sweeps = [jr(2, 2), jr(1, 0)];
+        assert_eq!(job_exit_code(&sweeps::trial_counts(sweeps.iter()), false), ExitCode::SUCCESS);
+        let sweeps = [jr(2, 2), jr(1, 1)];
+        assert_eq!(job_exit_code(&sweeps::trial_counts(sweeps.iter()), false), ExitCode::FAILURE);
     }
 
     #[test]
