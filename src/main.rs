@@ -867,11 +867,14 @@ fn build_job_config(a: &RunArgs) -> Result<JobConfig> {
     Ok(cfg)
 }
 
-/// Unknown agent names and agent kwargs outside the agent's options schema.
+/// Unknown agent names and agent kwargs outside the agent's options schema. `acp:<id>[@version]`
+/// names any agent in the ACP registry, so only the spec's shape is checked here.
 fn preflight_agents(cfg: &JobConfig) -> Result<()> {
     let known = agents::agent_names();
     for a in &cfg.agents {
-        if !known.contains(&a.name()) {
+        if agents::installed::acp::is_acp_registry_shorthand(a.name()) {
+            agents::installed::acp::parse_registry_spec(a.name()).with_context(|| format!("agent {:?}", a.name()))?;
+        } else if !known.contains(&a.name()) {
             bail!("Unknown agent {:?}. Known agents: {}", a.name(), known.join(", "));
         }
         agents::check_kwargs(a.name(), &a.kwargs)?;
@@ -1579,6 +1582,22 @@ mod tests {
             let e = preflight_auth(&agent("codex", serde_json::json!({}), &[])).unwrap_err().to_string();
             assert!(e.contains("OPENAI_API_KEY"), "{e}");
         }
+    }
+
+    #[test]
+    fn preflight_accepts_acp_registry_agents() {
+        let agent = |name: &str, kw: Value| JobConfig {
+            agents: vec![AgentConfig { name: Some(name.into()), kwargs: serde_json::from_value(kw).unwrap(), ..Default::default() }],
+            ..Default::default()
+        };
+        assert!(preflight_agents(&agent("acp:goose", serde_json::json!({}))).is_ok());
+        assert!(preflight_agents(&agent("acp:opencode@1.2.0", serde_json::json!({"permission_mode": "deny"}))).is_ok());
+        // kwargs are still checked against the ACP options schema.
+        assert!(preflight_agents(&agent("acp:goose", serde_json::json!({"bogus": 1}))).is_err());
+        // The registry spec must name an agent (and a version, when `@` is given).
+        assert!(preflight_agents(&agent("acp:", serde_json::json!({}))).is_err());
+        assert!(preflight_agents(&agent("acp:goose@", serde_json::json!({}))).is_err());
+        assert!(preflight_agents(&agent("no-such-agent", serde_json::json!({}))).is_err());
     }
 
     #[test]

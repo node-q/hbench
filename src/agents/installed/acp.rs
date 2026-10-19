@@ -38,12 +38,10 @@ pub const ACP_SHORTHAND_PREFIX: &str = "acp:";
 pub const DEFAULT_REGISTRY_REF: &str = "main";
 pub const DEFAULT_REGISTRY_CACHE_DIR: &str = ".cache/acp-registry";
 
-#[allow(dead_code)] // the factory (mod.rs) does not route `acp:<id>` names yet
 pub fn is_acp_registry_shorthand(agent_name: &str) -> bool {
     agent_name.starts_with(ACP_SHORTHAND_PREFIX)
 }
 
-#[allow(dead_code)] // the factory (mod.rs) does not route `acp:<id>` names yet
 pub fn registry_spec_from_agent_name(agent_name: &str) -> Result<String> {
     match agent_name.strip_prefix(ACP_SHORTHAND_PREFIX) {
         Some(s) => Ok(s.to_string()),
@@ -51,7 +49,6 @@ pub fn registry_spec_from_agent_name(agent_name: &str) -> Result<String> {
     }
 }
 
-#[allow(dead_code)] // the factory (mod.rs) does not route `acp:<id>` names yet
 /// Factory path for `acp:<spec>` names: the ACP agent with `registry_spec` set.
 pub fn create_from_agent_name(agent_name: &str, mut args: AgentArgs) -> Result<AgentBox> {
     args.kwargs.insert("registry_spec".into(), Value::String(registry_spec_from_agent_name(agent_name)?));
