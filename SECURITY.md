@@ -2,12 +2,13 @@
 
 ## Reporting a vulnerability
 
-Email hello@nodeq.tech with "hbench security" in the subject, and please don't open a
-public issue for it. Say what you found, how to reproduce it, and which hbench version
-(`hbench --version`) and platform you used.
+Open an issue on node-q/hbench titled "Security report" that says only that you have
+one, with no details, and a maintainer replies with a private way to send it. Please
+keep the details out of public issues. Include, once asked: what you found, how to
+reproduce it, and the hbench version (`hbench --version`) and platform.
 
-Fixes go into the next release; there are no backports to older ones. Install the latest
-with `curl -fsSL https://nodeq.tech/install.sh | sh`.
+Fixes go into the next release; there are no backports to older ones. The newest release
+is on this repository's Releases page, and `scripts/install.sh` installs it.
 
 ## What hbench does and does not protect
 
