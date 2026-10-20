@@ -25,5 +25,11 @@ trust, or put hbench in a VM you can throw away.
 - **Resources.** Tasks get the CPU and memory limits they declare; disk is not limited.
 - **The viewer.** `hbench view` binds 127.0.0.1. Bound to any other address it serves
   read-only: the routes that start runs and delete jobs answer 403 there.
+- **Check-ins.** `run --check-in <url>` sends that URL the job's id and name, the hbench
+  build, and what it runs: datasets and task names, agent names and models, attempts,
+  timeouts and resource limits. Never keys, agent kwargs or env, or local paths. The API
+  token travels in a header from `HPG_API_TOKEN`, off the command line.
+- **The manifest.** `manifest.json` and `hbench jobs verify` show a job's files were not
+  edited after the run; they cannot show the run was real, since anyone can rebuild hbench.
 
 Reports about any of these are welcome; they are the known limits, not the whole list.

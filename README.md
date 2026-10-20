@@ -183,6 +183,10 @@ the version. `manifest.json`, written last, holds the SHA-256 of the job's confi
 file its trials wrote; `hbench jobs verify -p jobs/<job>` reports any file changed, removed or added since. It shows
 the files are the ones this build wrote, not that the run was real: anyone can rebuild hbench.
 
+`run --check-in <url>` registers the run with a control plane before its first trial: hbench posts the job's id,
+its build and what it runs (SECURITY.md lists exactly what) with the API token in `HPG_API_TOKEN`, and writes the
+nonce it gets back into `config.json` as `check_in`, so a resumed job keeps it. A refused check-in stops the job.
+
 Secrets stay out of the output and off command lines:
 
 - hbench treats as secret the value of every environment variable whose name looks like one (`*_KEY`, `*TOKEN`,

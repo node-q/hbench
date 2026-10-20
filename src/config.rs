@@ -552,6 +552,7 @@ pub struct JobConfig {
     pub extra_instruction_paths: Vec<PathBuf>,
     pub extra_instructions: Vec<String>,
     pub source_jobs: Vec<SourceJob>,
+    pub check_in: Option<crate::check_in::CheckIn>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -591,6 +592,7 @@ impl Default for JobConfig {
             extra_instruction_paths: vec![],
             extra_instructions: vec![],
             source_jobs: vec![],
+            check_in: None,
         }
     }
 }

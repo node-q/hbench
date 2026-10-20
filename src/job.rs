@@ -254,7 +254,7 @@ fn carried_over(job_dir: &Path) -> (uuid::Uuid, usize) {
 
 /// Run (or resume) a job. `filter_error_types`: on resume, rerun trials that failed with these.
 pub async fn run_job(
-    cfg: JobConfig,
+    mut cfg: JobConfig,
     trial_configs: Option<Vec<TrialConfig>>,
     filter_error_types: &[String],
     cancel: watch::Receiver<bool>,
@@ -262,9 +262,13 @@ pub async fn run_job(
     let job_dir = cfg.job_dir();
     std::fs::create_dir_all(&job_dir)?;
     let (job_id, prior_retries) = carried_over(&job_dir);
+    crate::check_in::register(&mut cfg, job_id).await?;
     std::fs::write(job_dir.join("config.json"), serde_json::to_string_pretty(&cfg.config_json())?)?;
     let log = crate::env::TrialLog::create(&job_dir.join("job.log"))?;
     log.line(&format!("job {} started ({} agent config(s))", cfg.job_name, cfg.agents.len()));
+    if let Some(crate::check_in::CheckIn { url, registered_at: Some(at), .. }) = &cfg.check_in {
+        log.line(&format!("checked in at {url}, registered {at}"));
+    }
     for key in cfg.unread_settings() {
         let why = if key == "environment.override_storage_mb" { "hbench does not limit a trial's disk" } else { "hbench ignores it" };
         let warning = format!("warning: {key} is set, but {why}");
