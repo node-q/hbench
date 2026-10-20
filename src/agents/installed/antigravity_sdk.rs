@@ -2,7 +2,7 @@
 
 use super::antigravity_cli::validate_base_url;
 use super::common::{installed_dir, skills_dir, uv_install};
-use super::{ensure_system_dependencies, exec_agent, exec_root};
+use super::{ensure_system_dependencies, exec_agent, exec_root_checked};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::quote;
 use anyhow::{Result, anyhow, bail};
@@ -200,7 +200,7 @@ impl AntigravitySdk {
         let wheel = self.wheel_path()?;
         if cx.exec("command -v uv >/dev/null 2>&1", &BTreeMap::new(), None).await?.code != 0 {
             ensure_system_dependencies(cx, &["curl", "ca_certificates", "python3"]).await?;
-            exec_root(cx, &uv_install(Some("/usr/local/bin")), &BTreeMap::new()).await?;
+            exec_root_checked(cx, &uv_install(Some("/usr/local/bin")), &BTreeMap::new()).await?;
         }
         let remote_wheel = wheel.as_ref().map(|w| format!("/installed-agent/{}", w.file_name().unwrap().to_string_lossy()));
         if let (Some(w), Some(r)) = (&wheel, &remote_wheel) {

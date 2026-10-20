@@ -153,9 +153,9 @@ pub fn resolve_tasks(cfg: &JobConfig) -> Result<Vec<TaskRef>> {
     Ok(v)
 }
 
-/// Identity of a trial config for resume matching (excludes name/job id/job dir). Local tasks match by
+/// Key of a trial config for resume matching (excludes name/job id/job dir). Local tasks match by
 /// dir name, so a job (and its tasks) can be moved and still resume.
-fn identity(c: &TrialConfig) -> Value {
+fn resume_key(c: &TrialConfig) -> Value {
     let mut c = c.clone();
     if c.task.git_url.is_none() {
         c.task.path = c.task.path.as_deref().and_then(Path::file_name).map(PathBuf::from);
@@ -233,7 +233,8 @@ pub fn build_trial_configs(cfg: &JobConfig, tasks: &[TaskRef], job_id: uuid::Uui
     out
 }
 
-struct Shared {
+/// The finished trials and counters of a running job, shared by its trial tasks.
+struct JobProgress {
     results: Vec<TrialResult>,
     running: usize,
     retries: usize,
@@ -292,8 +293,8 @@ pub async fn run_job(
         let keep = r.as_ref().is_some_and(|r| r.exception_info.as_ref().is_none_or(|e| !filter_error_types.contains(&e.exception_type)));
         match r {
             Some(r) if keep => {
-                let id = identity(&r.config);
-                if let Some(i) = pending.iter().position(|c| identity(c) == id) {
+                let id = resume_key(&r.config);
+                if let Some(i) = pending.iter().position(|c| resume_key(c) == id) {
                     pending.remove(i);
                     previous.push(r);
                     continue;
@@ -333,20 +334,20 @@ pub async fn run_job(
         n_total_trials: n_total,
         stats: JobStats::default(),
     }));
-    let shared = Arc::new(Mutex::new(Shared { results: previous, running: 0, retries: prior_retries }));
+    let progress = Arc::new(Mutex::new(JobProgress { results: previous, running: 0, retries: prior_retries }));
     let metric_cfgs = Arc::new(cfg.metrics.clone());
-    let write = {
-        let (job_result, shared, path, metric_cfgs) =
-            (job_result.clone(), shared.clone(), job_dir.join("result.json"), metric_cfgs.clone());
+    let persist_job_result = {
+        let (job_result, progress, path, metric_cfgs) =
+            (job_result.clone(), progress.clone(), job_dir.join("result.json"), metric_cfgs.clone());
         move || {
-            let sh = locked(&shared);
+            let current = locked(&progress);
             let mut jr = locked(&job_result);
             jr.updated_at = Some(Utc::now());
-            jr.stats = compute_stats(&sh.results, jr.n_total_trials, sh.running, sh.retries, &metric_cfgs);
+            jr.stats = compute_stats(&current.results, jr.n_total_trials, current.running, current.retries, &metric_cfgs);
             let _ = write_atomic(&path, serde_json::to_string_pretty(&*jr).unwrap());
         }
     };
-    write();
+    persist_job_result();
 
     let sem = Arc::new(Semaphore::new(cfg.n_concurrent_trials));
     let mut pools: HashMap<String, Arc<Semaphore>> = HashMap::new();
@@ -360,8 +361,8 @@ pub async fn run_job(
     for tcfg in pending {
         let task = tasks[&registry::local_path(&tcfg.task)].clone();
         let pool = pools.get(&tcfg.agent.concurrency_key()).cloned();
-        let (sem, shared, write, cancel, retry, log) =
-            (sem.clone(), shared.clone(), write.clone(), cancel.clone(), cfg.retry.clone(), log.clone());
+        let (sem, progress, persist_job_result, cancel, retry, log) =
+            (sem.clone(), progress.clone(), persist_job_result.clone(), cancel.clone(), cfg.retry.clone(), log.clone());
         handles.push(tokio::spawn(async move {
             // The agent's own pool first, so a trial holding a global slot never waits on it.
             let _agent_permit = match pool {
@@ -372,8 +373,8 @@ pub async fn run_job(
             if *cancel.borrow() {
                 return;
             }
-            locked(&shared).running += 1;
-            write();
+            locked(&progress).running += 1;
+            persist_job_result();
             log.line(&format!("trial {} started (task {}, agent {})", tcfg.trial_name, tcfg.task.display_name(), tcfg.agent.name()));
             let mut attempt = 0;
             let result = loop {
@@ -395,7 +396,7 @@ pub async fn run_job(
                 if !retry.should_retry(&kind) || attempt >= retry.max_retries || *cancel.borrow() {
                     break r;
                 }
-                locked(&shared).retries += 1;
+                locked(&progress).retries += 1;
                 let wait = retry.backoff_sec(attempt);
                 attempt += 1;
                 eprintln!("retrying {} ({attempt}/{}) after {kind} in {wait:.1}s", tcfg.trial_name, retry.max_retries);
@@ -404,9 +405,9 @@ pub async fn run_job(
                 tokio::time::sleep(Duration::from_secs_f64(wait)).await;
             };
             {
-                let mut sh = locked(&shared);
-                sh.running -= 1;
-                sh.results.push(result.clone());
+                let mut current = locked(&progress);
+                current.running -= 1;
+                current.results.push(result.clone());
                 log.line(&format!(
                     "trial {} finished: rewards={} exception={}",
                     result.trial_name,
@@ -420,10 +421,10 @@ pub async fn run_job(
                         .as_ref()
                         .map(|e| format!(" [{}: {}]", e.exception_type, crate::env::tail(&e.exception_message, 200)))
                         .unwrap_or_default();
-                    eprintln!("[{}/{}] {} reward={reward}{err}", sh.results.len(), n_total, result.trial_name);
+                    eprintln!("[{}/{}] {} reward={reward}{err}", current.results.len(), n_total, result.trial_name);
                 }
             }
-            write();
+            persist_job_result();
         }));
     }
     for h in handles {
@@ -437,7 +438,7 @@ pub async fn run_job(
     } else {
         log.line("job cancelled");
     }
-    write();
+    persist_job_result();
     // A secret first seen in a later trial may also be in an earlier one's files, and in job.log.
     crate::redact::scrub_dir(&job_dir);
     let jr = locked(&job_result).clone();
@@ -737,7 +738,7 @@ Job  runtime 1h 2m 5s
     }
 
     #[test]
-    fn trial_plan_order_and_identity() {
+    fn trial_plan_order_and_resume_key() {
         let cfg: JobConfig = serde_json::from_value(serde_json::json!({
             "n_attempts": 2, "agents": [{"name": "oracle"}, {"name": "nop"}], "job_name": "j"
         }))
@@ -747,14 +748,14 @@ Job  runtime 1h 2m 5s
         let names: Vec<(String, &str)> = plan.iter().map(|c| (c.task.display_name(), c.agent.name())).collect();
         assert_eq!(names.len(), 8);
         assert_eq!(&names[..4], &[("a".into(), "oracle"), ("a".into(), "nop"), ("b".into(), "oracle"), ("b".into(), "nop")]);
-        assert_eq!(identity(&plan[0]), identity(&plan[4]));
-        assert_ne!(identity(&plan[0]), identity(&plan[1]));
+        assert_eq!(resume_key(&plan[0]), resume_key(&plan[4]));
+        assert_ne!(resume_key(&plan[0]), resume_key(&plan[1]));
         assert!(plan[0].trial_name.starts_with("a__") && plan[0].trial_name.len() == 10);
         // A moved job (tasks moved along) still matches its finished trials.
         let mut moved = plan[0].clone();
         moved.trials_dir = "/elsewhere/j".into();
         moved.task.path = Some("/moved/t/a".into());
-        assert_eq!(identity(&moved), identity(&plan[0]));
+        assert_eq!(resume_key(&moved), resume_key(&plan[0]));
     }
 
     #[test]

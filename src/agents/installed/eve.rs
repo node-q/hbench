@@ -3,7 +3,7 @@
 
 use super::common::{installed_dir, nvm_install_script, parse_bool_env_value, skills_dir};
 use super::pins;
-use super::{ensure_system_dependencies, exec_agent, exec_error, exec_root};
+use super::{ensure_system_dependencies, exec_agent, exec_error, exec_root_checked};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::quote;
 use crate::fmt::single_quoted;
@@ -659,11 +659,11 @@ impl Eve {
             &BTreeMap::from([("NVM_NODEJS_ORG_MIRROR".to_string(), "https://nodejs.org/dist".to_string())]),
         )
         .await?;
-        exec_root(cx, &format!("rm -rf {PROJECT_DIR} && mkdir -p /installed-agent /logs/agent"), &BTreeMap::new()).await?;
+        exec_root_checked(cx, &format!("rm -rf {PROJECT_DIR} && mkdir -p /installed-agent /logs/agent"), &BTreeMap::new()).await?;
         cx.env.upload_dir(staged, PROJECT_DIR).await?;
         cx.env.upload_file(runner, RUNNER_PATH).await?;
         let u = quote(cx.user.as_deref().unwrap_or("root"));
-        exec_root(cx, &format!("chmod +x {RUNNER_PATH} && chown -R {u}:{u} {PROJECT_DIR} {RUNNER_PATH}"), &BTreeMap::new()).await?;
+        exec_root_checked(cx, &format!("chmod +x {RUNNER_PATH} && chown -R {u}:{u} {PROJECT_DIR} {RUNNER_PATH}"), &BTreeMap::new()).await?;
 
         let in_project = |c: &str| format!("cd {PROJECT_DIR} || exit 1; {c}");
         let no_env = BTreeMap::new();

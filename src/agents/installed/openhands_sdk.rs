@@ -3,7 +3,7 @@
 use super::common::{installed_dir, skills_dir, uv_install};
 use super::openhands::{opt_bool, opt_f64, opt_int, opt_str, raw_env};
 use super::pins;
-use super::{ensure_system_dependencies, exec_agent, exec_root};
+use super::{ensure_system_dependencies, exec_agent, exec_root_checked};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::quote;
 use crate::fmt::float_with_point;
@@ -199,7 +199,8 @@ impl Agent for OpenHandsSdk {
         ensure_system_dependencies(cx, &["curl", "coreutils"]).await?;
         if !installed {
             let u = cx.user.clone().unwrap_or_else(|| "root".into());
-            exec_root(cx, &format!("mkdir -p /opt/openhands-sdk-venv && chown {u}:{u} /opt/openhands-sdk-venv"), &BTreeMap::new()).await?;
+            exec_root_checked(cx, &format!("mkdir -p /opt/openhands-sdk-venv && chown {u}:{u} /opt/openhands-sdk-venv"), &BTreeMap::new())
+                .await?;
             exec_agent(cx, &self.install_cmd(), &BTreeMap::new()).await?;
         }
         let local = cx.logs_dir.join("run_agent.py");
@@ -222,7 +223,7 @@ impl Agent for OpenHandsSdk {
         std::fs::write(&local, &instruction)?;
         cx.env.upload_file(&local, INSTRUCTION_PATH).await?;
         if let Some(u) = &cx.user {
-            exec_root(cx, &format!("chown {} {}", quote(u), quote(INSTRUCTION_PATH)), &BTreeMap::new()).await?;
+            exec_root_checked(cx, &format!("chown {} {}", quote(u), quote(INSTRUCTION_PATH)), &BTreeMap::new()).await?;
         }
         let env = self.run_env()?;
         exec_agent(cx, RUN_CMD, &env).await?;

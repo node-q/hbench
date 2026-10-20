@@ -3,7 +3,7 @@
 use super::common::{installed_dir, uv_install};
 use super::mini_swe_agent::opt_str;
 use super::pins;
-use super::{connection, ensure_system_dependencies, exec_agent, exec_error, exec_root};
+use super::{connection, ensure_system_dependencies, exec_agent, exec_error, exec_root_checked};
 use crate::agents::model_connection::Spec;
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::quote;
@@ -254,7 +254,7 @@ impl Agent for SweAgent {
         installed_dir(cx).await?;
         ensure_system_dependencies(cx, &["curl", "build_tools", "git", "tmux", "coreutils"]).await?;
         let none = BTreeMap::new();
-        exec_root(
+        exec_root_checked(
             cx,
             &format!(
                 "if ! command -v uv >/dev/null 2>&1; then  {}; fi && if [ -f \"$HOME/.local/bin/env\" ]; then source \"$HOME/.local/bin/env\"; fi",
@@ -263,7 +263,7 @@ impl Agent for SweAgent {
             &none,
         )
         .await?;
-        exec_root(
+        exec_root_checked(
             cx,
             &format!(
                 "set -euo pipefail; if [ -f \"$HOME/.local/bin/env\" ]; then source \"$HOME/.local/bin/env\"; fi && uv python install 3.12 && mkdir -p /opt && \
@@ -277,7 +277,7 @@ impl Agent for SweAgent {
             &none,
         )
         .await?;
-        exec_root(
+        exec_root_checked(
             cx,
             "cat > /usr/local/bin/sweagent << 'WRAPPER'\n#!/bin/bash\nsource /opt/sweagent-venv/bin/activate\nexec python -m sweagent.run.run \"$@\"\nWRAPPER\n\
              chmod +x /usr/local/bin/sweagent && cat > /etc/profile.d/testbed-conda.sh << 'EOF'\n\

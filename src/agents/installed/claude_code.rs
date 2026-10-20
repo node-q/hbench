@@ -3,8 +3,8 @@
 use super::common::{installed_dir, skills_dir};
 use super::pins;
 use super::{
-    connection, ensure_acp_node_command, ensure_system_dependencies, exec_agent, exec_error, exec_root, filter_jsonl_events, parse_version,
-    pinned_bin_wrapper_command, safe_bin_symlink_command, upload_text,
+    connection, ensure_acp_node_command, ensure_system_dependencies, exec_agent, exec_error, exec_root_checked, filter_jsonl_events,
+    parse_version, pinned_bin_wrapper_command, safe_bin_symlink_command, upload_text,
 };
 use crate::agents::model_connection::Spec;
 use crate::agents::{Agent, AgentArgs, AgentContext, AgentCtx, ModelUsage};
@@ -387,7 +387,7 @@ impl Agent for ClaudeCode {
         if *system_node == "none" {
             link += &format!(" && {}", safe_bin_symlink_command(node, "/usr/local/bin/node"));
         }
-        exec_root(cx, &link, &BTreeMap::new()).await.map(|_| ())
+        exec_root_checked(cx, &link, &BTreeMap::new()).await.map(|_| ())
     }
 
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()> {

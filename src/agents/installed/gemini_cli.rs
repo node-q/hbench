@@ -3,7 +3,7 @@
 use super::common::parse_jsonl;
 use super::common::{NVM_LOAD, detect_version, installed_dir, nvm_load, nvm_node_install_snippet, opts, parse_bool_env, skills_dir};
 use super::pins;
-use super::{connection, ensure_system_dependencies, exec_agent, exec_root, pinned_bin_wrapper_command, safe_bin_symlink_command};
+use super::{connection, ensure_system_dependencies, exec_agent, exec_root_checked, pinned_bin_wrapper_command, safe_bin_symlink_command};
 use crate::agents::model_connection::{Resolved, Spec};
 use crate::agents::pricing;
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
@@ -166,7 +166,7 @@ impl GeminiCli {
         exec_agent(cx, &format!("mkdir -p {} ~/.gemini", quote(SECRETS_DIR)), env).await?;
         cx.env.upload_file(creds, &tmp).await?;
         if let Some(u) = &cx.user {
-            exec_root(cx, &format!("chown {u} {}", quote(&tmp)), &BTreeMap::new()).await?;
+            exec_root_checked(cx, &format!("chown {u} {}", quote(&tmp)), &BTreeMap::new()).await?;
         }
         exec_agent(cx, &format!("cp {} ~/.gemini/oauth_creds.json\nchmod 600 ~/.gemini/oauth_creds.json", quote(&tmp)), env)
             .await
@@ -320,7 +320,7 @@ impl Agent for GeminiCli {
         if system_node == "none" {
             link += &format!(" && {}", safe_bin_symlink_command(node, "/usr/local/bin/node"));
         }
-        exec_root(cx, &link, &BTreeMap::new()).await?;
+        exec_root_checked(cx, &link, &BTreeMap::new()).await?;
         let oauth = self.oauth_creds_path()?;
         let auth_type = if oauth.is_some() { Some("oauth-personal") } else { self.env_auth_type() };
         if let Some(p) = &oauth {

@@ -3,7 +3,7 @@
 use super::common::{installed_dir, nvm_load, nvm_node_install_snippet, skills_dir};
 use super::kimi_cli::loads_lenient;
 use super::pins;
-use super::{exec_agent, exec_root};
+use super::{exec_agent, exec_root_checked};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx, pricing};
 use crate::env::quote;
 use anyhow::Result;
@@ -109,7 +109,7 @@ impl Agent for KimiCode {
 
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
         installed_dir(cx).await?;
-        exec_root(
+        exec_root_checked(
             cx,
             &format!("{}{SYSTEM_INSTALL}", super::APT_INSTALL_FN),
             &BTreeMap::from([("DEBIAN_FRONTEND".to_string(), "noninteractive".to_string())]),

@@ -4,7 +4,7 @@
 use super::common::opts::kw_int;
 use super::common::{installed_dir, upload_asset, uv_install};
 use super::pins;
-use super::{ensure_system_dependencies, exec_agent, exec_error, exec_root};
+use super::{ensure_system_dependencies, exec_agent, exec_error, exec_root_checked};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::quote;
 use anyhow::{Result, bail};
@@ -350,7 +350,7 @@ impl Agent for DeerFlow {
         self.runtime = Some(rt);
         if cx.exec(&format!("test -x {VENV_DIR}/bin/deerflow"), &none, None).await?.code != 0 {
             ensure_system_dependencies(cx, &["git", "curl"]).await?;
-            exec_root(
+            exec_root_checked(
                 cx,
                 &format!("rm -rf {REPO_DIR} {VENV_DIR} && mkdir -p {REPO_DIR} {VENV_DIR} && chown -R {owner} {REPO_DIR} {VENV_DIR}"),
                 &none,
@@ -362,7 +362,7 @@ impl Agent for DeerFlow {
                 return Err(exec_error(&cmd, &r, None));
             }
         }
-        exec_root(cx, &format!("mkdir -p {PROJECT_DIR} && chown -R {owner} {PROJECT_DIR}"), &none).await?;
+        exec_root_checked(cx, &format!("mkdir -p {PROJECT_DIR} && chown -R {owner} {PROJECT_DIR}"), &none).await?;
         let yaml = serde_yaml_ng::to_string(&self.build_config()?)?;
         upload_asset(cx, &yaml, &format!("{PROJECT_DIR}/config.yaml")).await?;
         upload_asset(cx, RUNNER, RUNNER_PATH).await?;

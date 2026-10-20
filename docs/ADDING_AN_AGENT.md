@@ -15,7 +15,7 @@ Each installed agent lives in `src/agents/installed/<name>.rs`, with any payload
     `render_instruction()` (applies the `prompt_template_path` kwarg).
 - `src/agents/installed/mod.rs`
   - `ensure_system_dependencies(cx, &["curl", "nodejs", ...])`: installs system packages from the shared package table.
-  - `exec_agent(cx, cmd, env)` / `exec_root(...)`: prefix `set -o pipefail;`; a non-zero exit becomes a classified
+  - `exec_agent(cx, cmd, env)` / `exec_root_checked(...)`: prefix `set -o pipefail;`; a non-zero exit becomes a classified
     error (error patterns, last match wins).
   - `exec_error(cmd, result, Some(evidence))`: classify from filtered evidence (see claude-code's stream-json filter).
   - `filter_jsonl_events`, `parse_version`, `upload_text` (mode 600, owned by the agent user), and `connection(args, Spec)`.
