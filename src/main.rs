@@ -1208,10 +1208,7 @@ async fn run() -> Result<ExitCode> {
         }
         Cmd::Trials { cmd: TrialsCmd::Start { config, path, agent, model, agent_kwargs, agent_env, trials_dir, skip_preflight } } => {
             let mut tc: TrialConfig = match config {
-                Some(c) => {
-                    let raw = std::fs::read_to_string(&c).with_context(|| format!("reading {}", c.display()))?;
-                    serde_yaml_ng::from_str(&raw).with_context(|| format!("parsing {}", c.display()))?
-                }
+                Some(c) => TrialConfig::load(&c)?,
                 None => {
                     let p = path.context("pass -p <task dir> or -c <trial.yaml>")?;
                     let p = p.canonicalize().with_context(|| format!("path {}", p.display()))?;
