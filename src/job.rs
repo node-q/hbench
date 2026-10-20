@@ -261,6 +261,12 @@ pub async fn run_job(
     std::fs::write(job_dir.join("config.json"), serde_json::to_string_pretty(&cfg.config_json())?)?;
     let log = crate::env::TrialLog::create(&job_dir.join("job.log"))?;
     log.line(&format!("job {} started ({} agent config(s))", cfg.job_name, cfg.agents.len()));
+    for key in cfg.unread_settings() {
+        let why = if key == "environment.override_storage_mb" { "hbench does not limit a trial's disk" } else { "hbench ignores it" };
+        let warning = format!("warning: {key} is set, but {why}");
+        eprintln!("{warning}");
+        log.line(&warning);
+    }
 
     let mut pending = match trial_configs {
         Some(t) => {
