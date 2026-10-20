@@ -54,7 +54,8 @@ Remote ssh daemons work because files move with `docker compose cp` rather than 
 `run`, `jobs resume`, `trials start` and `sweeps run` exit 130 when cancelled (SIGINT, SIGTERM or SIGHUP; a second
 signal force-quits after removing the run's compose projects), 1 on an error or when every trial errored
 (`--fail-on-error`: any trial), and 0 otherwise. Before starting they check agent kwargs against the agent's schema and,
-for `claude-code`, `codex` and `gemini-cli`, that some credential is set; `--skip-preflight` skips the check.
+for `claude-code`, `codex` and `gemini-cli`, that some credential is set; `--skip-preflight` skips the credential check.
+For `sweeps run`, every trial means every trial of all its sweeps.
 
 ## Agents
 
