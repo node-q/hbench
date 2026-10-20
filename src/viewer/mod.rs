@@ -53,11 +53,14 @@ struct LaunchedRun {
 pub struct App {
     pub folder: PathBuf,
     pub mode: Mode,
+    /// Write routes (starting runs, deleting jobs) answer only then: they run hbench with any config the
+    /// request gives, so they must not be reachable from the network.
+    bound_to_loopback: bool,
     runs: Mutex<HashMap<String, LaunchedRun>>,
 }
 
 impl App {
-    pub fn new(folder: PathBuf, mode: Mode) -> App {
-        App { folder, mode, runs: Mutex::new(HashMap::new()) }
+    pub fn new(folder: PathBuf, mode: Mode, bound_to_loopback: bool) -> App {
+        App { folder, mode, bound_to_loopback, runs: Mutex::new(HashMap::new()) }
     }
 }

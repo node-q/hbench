@@ -57,6 +57,15 @@ fn static_file(path: &str) -> Option<Resp> {
     Some(Resp { status: 200, ctype: ctype.into(), body: body.to_vec(), headers: vec![] })
 }
 
+const READ_ONLY: &str =
+    "The viewer is read-only: it is not bound to a loopback address. Restart it with --host 127.0.0.1 to start runs or delete jobs.";
+
+/// 127.0.0.1, ::1 (bracketed or not), any other loopback IP, or `localhost`.
+pub(super) fn is_loopback_host(host: &str) -> bool {
+    host.eq_ignore_ascii_case("localhost")
+        || host.trim_start_matches('[').trim_end_matches(']').parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback())
+}
+
 /// Origins allowed to make state-changing requests: the viewer's own origin, when its Host is loopback.
 fn write_allowed(req: &Req) -> bool {
     let Some(origin) = req.origin else { return true };
@@ -77,8 +86,13 @@ pub fn handle(app: &App, req: &Req) -> Resp {
 fn route(app: &App, req: &Req) -> Res {
     let (path, query) = req.url.split_once('?').unwrap_or((req.url, ""));
     let q = Query::parse(query);
-    if !matches!(req.method, "GET" | "HEAD" | "OPTIONS") && !write_allowed(req) {
-        return Err(err(403, "Cross-origin request rejected."));
+    if !matches!(req.method, "GET" | "HEAD" | "OPTIONS") {
+        if !app.bound_to_loopback {
+            return Err(err(403, READ_ONLY));
+        }
+        if !write_allowed(req) {
+            return Err(err(403, "Cross-origin request rejected."));
+        }
     }
     let Some(api) = path.strip_prefix("/api/") else {
         if req.method != "GET" {
@@ -146,7 +160,11 @@ pub fn serve(folder: &Path, mode: Option<Mode>, host: &str, ports: (u16, u16)) -
     println!("  {}: {}", if mode == Mode::Tasks { "Tasks folder" } else { "Jobs folder" }, folder.display());
     println!("  Mode: {}", mode.as_str());
     println!("  Server: http://{host}:{port}");
-    let app = Arc::new(App::new(folder, mode));
+    let bound_to_loopback = is_loopback_host(host);
+    if !bound_to_loopback {
+        println!("  Read-only: {host} is not a loopback address, so starting runs and deleting jobs is turned off");
+    }
+    let app = Arc::new(App::new(folder, mode, bound_to_loopback));
     // Fixed worker pool; the SPA fires a handful of parallel requests per page.
     let workers: Vec<_> = (0..8)
         .map(|_| {

@@ -211,8 +211,10 @@ Agent setup is hardened so environment problems aren't charged to the agent:
 
 ## Viewer
 
-`hbench view` serves its own web UI (`viewer/`, React + Vite) for browsing jobs and tasks. The built bundle
-(`viewer/dist`) is committed and embedded at compile time, so `cargo build` doesn't need Node. After changing the UI:
+`hbench view` serves its own web UI (`viewer/`, React + Vite) for browsing jobs and tasks. It listens on 127.0.0.1 by
+default; with `--host` set to any non-loopback address it is read-only, because starting runs and deleting jobs would be
+open to anyone who can reach it. The built bundle (`viewer/dist`) is committed and embedded at compile time, so
+`cargo build` doesn't need Node. After changing the UI:
 
 ```bash
 cd viewer && npm install && npm run build      # type-check + rebuild viewer/dist
