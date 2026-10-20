@@ -4,12 +4,25 @@ use anyhow::{Context, Result, bail};
 use serde_json::{Map, Value, json};
 use std::path::{Path, PathBuf};
 
+/// Which episodes of a trial become rows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum Episodes {
+    All,
+    Last,
+}
+
+/// Which trials are exported, by verifier outcome.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum TrialFilter {
+    Success,
+    Failure,
+    All,
+}
+
 pub struct ExportOpts {
     pub recursive: bool,
-    /// "all" | "last"
-    pub episodes: String,
-    /// None | "success" | "failure"
-    pub success_filter: Option<String>,
+    pub episodes: Episodes,
+    pub filter: TrialFilter,
     pub sharegpt: bool,
     pub include_instruction: bool,
     pub include_verifier_output: bool,
@@ -283,7 +296,7 @@ fn trial_rows(trial_dir: &Path, meta: &RunMeta, o: &ExportOpts) -> Result<Vec<Ma
             _ => break,
         }
     }
-    if o.episodes == "last" && !rows.is_empty() {
+    if o.episodes == Episodes::Last && !rows.is_empty() {
         rows = vec![rows.pop().unwrap()];
     }
     let instruction = o.include_instruction.then(|| instruction(&agent_dir)).flatten();
@@ -341,10 +354,15 @@ pub fn export(root: &Path, o: &ExportOpts) -> Result<Vec<Map<String, Value>>> {
     let mut rows = vec![];
     for t in trials {
         let Some(meta) = load_result(&t).as_ref().and_then(run_metadata) else { continue };
-        if let Some(f) = o.success_filter.as_deref() {
+        let wanted = match o.filter {
+            TrialFilter::All => None,
+            TrialFilter::Success => Some(true),
+            TrialFilter::Failure => Some(false),
+        };
+        if let Some(wanted) = wanted {
             match trial_is_success(&t) {
                 None => continue,
-                Some(ok) if ok != (f == "success") => continue,
+                Some(ok) if ok != wanted => continue,
                 _ => {}
             }
         }
@@ -354,9 +372,6 @@ pub fn export(root: &Path, o: &ExportOpts) -> Result<Vec<Map<String, Value>>> {
 }
 
 pub fn run(root: &Path, output: Option<&Path>, o: &ExportOpts) -> Result<()> {
-    if !matches!(o.episodes.as_str(), "all" | "last") {
-        bail!("--episodes must be one of: all, last");
-    }
     if !root.exists() {
         bail!("path not found: {}", root.display());
     }
@@ -380,8 +395,8 @@ mod tests {
     fn opts() -> ExportOpts {
         ExportOpts {
             recursive: true,
-            episodes: "all".into(),
-            success_filter: None,
+            episodes: Episodes::All,
+            filter: TrialFilter::All,
             sharegpt: false,
             include_instruction: false,
             include_verifier_output: false,
@@ -452,11 +467,11 @@ mod tests {
         assert_eq!(c1[3], json!({"role": "assistant", "content": "Done."}));
 
         let o = ExportOpts {
-            episodes: "last".into(),
+            episodes: Episodes::Last,
             sharegpt: true,
             include_instruction: true,
             include_verifier_output: true,
-            success_filter: Some("success".into()),
+            filter: TrialFilter::Success,
             ..opts()
         };
         let rows = export(&job.join("hello__abc1234"), &o).unwrap();
@@ -464,7 +479,7 @@ mod tests {
         assert_eq!(rows[0]["episode"], "episode-1");
         assert_eq!((rows[0]["instruction"].as_str(), rows[0]["verifier_output"].as_str()), (Some("Make hello.txt"), Some("ok\n")));
         assert_eq!(rows[0]["conversations_sharegpt"][3], json!({"from": "gpt", "value": "Done."}));
-        assert!(export(&job, &ExportOpts { success_filter: Some("failure".into()), ..opts() }).unwrap().is_empty());
+        assert!(export(&job, &ExportOpts { filter: TrialFilter::Failure, ..opts() }).unwrap().is_empty());
 
         let out = job.join("out.jsonl");
         run(&job, Some(&out), &opts()).unwrap();

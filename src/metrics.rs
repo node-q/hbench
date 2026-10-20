@@ -1,6 +1,6 @@
 //! Job metrics: mean/sum/min/max/uv-script and unbiased pass@k.
 
-use crate::config::MetricConfig;
+use crate::config::{MetricConfig, MetricKind};
 use crate::trial::{Rewards, TrialResult};
 use anyhow::{Context, Result, bail};
 use std::collections::{BTreeMap, BTreeSet};
@@ -26,13 +26,13 @@ fn aggregate(rewards: &[Option<&Rewards>], name: &str, f: fn(&[f64]) -> f64) -> 
 }
 
 pub fn compute(m: &MetricConfig, rewards: &[Option<&Rewards>]) -> Result<MetricOut> {
-    Ok(match m.kind.as_str() {
-        "mean" => aggregate(rewards, "mean", |v| if v.is_empty() { 0.0 } else { v.iter().sum::<f64>() / v.len() as f64 }),
-        "sum" => aggregate(rewards, "sum", |v| v.iter().sum()),
-        "min" => aggregate(rewards, "min", |v| v.iter().cloned().fold(f64::INFINITY, f64::min)),
-        "max" => aggregate(rewards, "max", |v| v.iter().cloned().fold(f64::NEG_INFINITY, f64::max)),
-        "uv-script" => uv_script(m, rewards)?,
-        other => bail!("Unsupported metric type: {other}"),
+    let name = m.kind.as_str();
+    Ok(match m.kind {
+        MetricKind::Mean => aggregate(rewards, name, |v| if v.is_empty() { 0.0 } else { v.iter().sum::<f64>() / v.len() as f64 }),
+        MetricKind::Sum => aggregate(rewards, name, |v| v.iter().sum()),
+        MetricKind::Min => aggregate(rewards, name, |v| v.iter().cloned().fold(f64::INFINITY, f64::min)),
+        MetricKind::Max => aggregate(rewards, name, |v| v.iter().cloned().fold(f64::NEG_INFINITY, f64::max)),
+        MetricKind::UvScript => uv_script(m, rewards)?,
     })
 }
 
@@ -121,14 +121,16 @@ mod tests {
     fn metrics_match_reference() {
         let (a, b) = (rw(r#"{"reward":1}"#), rw(r#"{"reward":0.5}"#));
         let rs = [Some(&a), Some(&b), None];
-        let m = |k: &str| compute(&MetricConfig { kind: k.into(), kwargs: Default::default() }, &rs).unwrap();
-        assert_eq!(m("mean")["mean"], 0.5);
-        assert_eq!(m("sum")["sum"], 1.5);
-        assert_eq!(m("min")["min"], 0.0);
-        assert_eq!(m("max")["max"], 1.0);
+        let m = |kind: MetricKind| compute(&MetricConfig { kind, kwargs: Default::default() }, &rs).unwrap();
+        assert_eq!(m(MetricKind::Mean)["mean"], 0.5);
+        assert_eq!(m(MetricKind::Sum)["sum"], 1.5);
+        assert_eq!(m(MetricKind::Min)["min"], 0.0);
+        assert_eq!(m(MetricKind::Max)["max"], 1.0);
         let (x, y) = (rw(r#"{"x":1,"y":0.5}"#), rw(r#"{"x":0}"#));
-        let multi = compute(&MetricConfig { kind: "mean".into(), kwargs: Default::default() }, &[Some(&x), Some(&y), None]).unwrap();
+        let multi = compute(&MetricConfig::default(), &[Some(&x), Some(&y), None]).unwrap();
         assert_eq!((multi["x"].as_f64().unwrap(), multi["y"].as_f64().unwrap()), (1.0 / 3.0, 0.5 / 3.0));
-        assert!(compute(&MetricConfig { kind: "median".into(), kwargs: Default::default() }, &rs).is_err());
+        assert!(serde_json::from_value::<MetricConfig>(serde_json::json!({"type": "median"})).is_err());
+        let uv: MetricConfig = serde_json::from_value(serde_json::json!({"type": "uv-script"})).unwrap();
+        assert_eq!((uv.kind, serde_json::to_value(&uv).unwrap()["type"].as_str()), (MetricKind::UvScript, Some("uv-script")));
     }
 }

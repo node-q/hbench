@@ -210,12 +210,7 @@ pub fn trial_configs(targets: Vec<TrialConfig>, diffs: &[TrialDiff], sources: &[
             Action::Rerun => Some(c),
             Action::Regrade => {
                 let s = &sources[d.source.unwrap()];
-                c.source_trial = Some(SourceTrial {
-                    action: "regrade".into(),
-                    kind: "local".into(),
-                    trial_id: Some(s.result.id.to_string()),
-                    path: Some(s.dir.clone()),
-                });
+                c.source_trial = Some(SourceTrial::regrade_local(s.result.id.to_string(), s.dir.clone()));
                 Some(c)
             }
         })
