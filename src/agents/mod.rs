@@ -13,7 +13,7 @@ pub mod terminus2;
 use crate::config::AgentConfig;
 use crate::env::{DockerEnv, ExecResult};
 use crate::task::Task;
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -170,6 +170,10 @@ impl AgentArgs {
             },
             None => (None, None),
         }
+    }
+    /// `provider/model` -> (provider, model), split at the first `/`, for agents that need both parts.
+    pub fn require_provider_model(&self) -> Result<(&str, &str)> {
+        self.model_name.as_deref().and_then(|m| m.split_once('/')).context("Model name must be in the format provider/model_name")
     }
     pub fn version_kw(&self) -> Option<String> {
         self.kw("version")

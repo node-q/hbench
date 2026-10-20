@@ -14,6 +14,7 @@ use crate::agents::llm::{LlmResponse, Request, Usage, backoff, http_status_kind,
 use crate::agents::terminus2::{Shell, quote_repr};
 use crate::env::{ErrorKind, kind_err, tail};
 use crate::fmt::{json_spaced, truthy, type_name};
+use crate::task::hex;
 use anyhow::{Result, anyhow, bail};
 use base64::Engine;
 use serde_json::{Map, Value, json};
@@ -54,10 +55,6 @@ fn text_of(v: &Value) -> String {
 /// `d[k]` as text, or empty when the key is missing or not truthy.
 fn str_or_empty(d: &Map<String, Value>, k: &str) -> String {
     d.get(k).filter(|v| truthy(v)).map(text_of).unwrap_or_default()
-}
-
-fn hex(b: &[u8]) -> String {
-    b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
 fn strip_data_url(r: &str) -> &str {

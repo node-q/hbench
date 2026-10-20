@@ -226,7 +226,7 @@ impl Agent for OpenClaw {
 
     async fn run(&mut self, instruction: &str, cx: &AgentCtx<'_>, _ctx: &mut AgentContext, _resume: bool) -> Result<()> {
         let instruction = self.args.render_instruction(instruction)?;
-        let Some(provider) = self.provider().map(String::from) else { bail!("Model name must be in the format provider/model_name") };
+        let provider = self.args.require_provider_model()?.0.to_string();
         if !SUPPORTED_PROVIDERS.contains(&provider.as_str()) {
             bail!("Unsupported provider '{provider}'. Supported providers: anthropic, nvidia, openai.");
         }

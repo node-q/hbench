@@ -33,7 +33,7 @@ pub struct ClaudeCode {
     acp_claude_executable: Option<String>,
 }
 
-fn truthy(v: Option<String>) -> bool {
+fn env_flag_enabled(v: Option<String>) -> bool {
     matches!(v.as_deref().map(str::trim).map(str::to_lowercase).as_deref(), Some("1" | "true" | "yes"))
 }
 
@@ -106,7 +106,7 @@ impl ClaudeCode {
     }
 
     fn use_bedrock(&self) -> bool {
-        self.args.get_env("AWS_BEARER_TOKEN_BEDROCK").is_some() || truthy(self.args.get_env("CLAUDE_CODE_USE_BEDROCK"))
+        self.args.get_env("AWS_BEARER_TOKEN_BEDROCK").is_some() || env_flag_enabled(self.args.get_env("CLAUDE_CODE_USE_BEDROCK"))
     }
 
     fn resolved_model(&self) -> Option<String> {
@@ -123,7 +123,7 @@ impl ClaudeCode {
     /// Auth env: API key (default) or subscription OAuth token, or Bedrock.
     fn auth_env(&self) -> Result<BTreeMap<String, String>> {
         let bedrock = self.use_bedrock();
-        let force_oauth = truthy(self.args.get_env("CLAUDE_FORCE_OAUTH"));
+        let force_oauth = env_flag_enabled(self.args.get_env("CLAUDE_FORCE_OAUTH"));
         let oauth = self.args.get_env("CLAUDE_CODE_OAUTH_TOKEN").map(|s| s.trim().to_string()).unwrap_or_default();
         if force_oauth && oauth.is_empty() {
             bail!(

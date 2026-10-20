@@ -163,10 +163,8 @@ impl MiniSweAgent {
                 }
             }
         }
-        let model = match self.args.model_name.as_deref() {
-            Some(m) if m.contains('/') => m,
-            _ => bail!("Model name must be in the format provider/model_name"),
-        };
+        self.args.require_provider_model()?;
+        let model = self.args.model_name.as_deref().unwrap_or_default();
         let access = self.model_connection();
         let mut env = access.env.clone();
         env.insert("MSWEA_CONFIGURED".into(), "true".into());
@@ -238,15 +236,16 @@ pub(crate) fn validate_session_id_headers(v: Option<&Value>) -> Result<Option<Ve
 /// Per-message usage: chat-completions or Responses-API usage, normalized.
 fn message_usage(m: &Value) -> (i64, i64, i64) {
     let mut usage = &m["extra"]["response"]["usage"];
-    if !truthy(usage) && m["object"] == "response" {
+    if !is_nonempty_object(usage) && m["object"] == "response" {
         usage = &m["usage"];
     }
     let first = |a: &str, b: &str| usage[a].as_i64().filter(|n| *n != 0).or(usage[b].as_i64()).unwrap_or(0);
-    let details = if truthy(&usage["prompt_tokens_details"]) { &usage["prompt_tokens_details"] } else { &usage["input_tokens_details"] };
+    let details =
+        if is_nonempty_object(&usage["prompt_tokens_details"]) { &usage["prompt_tokens_details"] } else { &usage["input_tokens_details"] };
     (first("prompt_tokens", "input_tokens"), first("completion_tokens", "output_tokens"), details["cached_tokens"].as_i64().unwrap_or(0))
 }
 
-fn truthy(v: &Value) -> bool {
+fn is_nonempty_object(v: &Value) -> bool {
     v.as_object().is_some_and(|o| !o.is_empty())
 }
 

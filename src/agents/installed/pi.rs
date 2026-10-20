@@ -348,11 +348,7 @@ impl Agent for Pi {
 
     async fn run(&mut self, instruction: &str, cx: &AgentCtx<'_>, _ctx: &mut AgentContext, resume: bool) -> Result<()> {
         let instruction = self.args.render_instruction(instruction)?;
-        let Some((provider, model_id)) =
-            self.args.model_name.clone().and_then(|m| m.split_once('/').map(|(a, b)| (a.to_string(), b.to_string())))
-        else {
-            bail!("Model name must be in the format provider/model_name")
-        };
+        let (provider, model_id) = self.args.require_provider_model().map(|(p, m)| (p.to_string(), m.to_string()))?;
         let access = connection(&self.args, SPEC);
         let mut provider = access.provider.clone().unwrap_or(provider);
         let mut env = access.env.clone();
