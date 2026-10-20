@@ -787,28 +787,6 @@ mod tests {
     }
 
     #[test]
-    fn unread_settings_are_refused_or_reported() {
-        let cfg = |v: Value| -> JobConfig { strict_value(v).unwrap() };
-        for key in REFUSED_UNREAD_SETTINGS {
-            let (section, field) = key.split_once('.').unwrap();
-            let value = if field == "stream" { serde_json::json!(true) } else { serde_json::json!("x") };
-            let err = cfg(serde_json::json!({ section: { field: value } })).validate().unwrap_err().to_string();
-            assert!(err.starts_with(&format!("{key} is not supported")), "{err}");
-        }
-        let viewer_and_hpg = cfg(serde_json::json!({
-            "debug": true,
-            "environment": {"cpu_enforcement_policy": "strict", "override_storage_mb": 10240},
-            "verifier": {"kwargs": {"x": 1}},
-        }));
-        assert!(viewer_and_hpg.validate().is_ok());
-        assert_eq!(
-            viewer_and_hpg.unread_settings(),
-            ["debug", "environment.cpu_enforcement_policy", "environment.override_storage_mb", "verifier.kwargs"]
-        );
-        assert!(JobConfig::default().unread_settings().is_empty());
-    }
-
-    #[test]
     fn secrets_are_templated_or_redacted() {
         // SAFETY: unique var name.
         unsafe { std::env::set_var("HBENCH_T_API_KEY", "sk-live-1234567890") };
@@ -863,5 +841,27 @@ mod tests {
         assert!(inc.should_retry("ApiRateLimitError") && !inc.should_retry("RuntimeError"));
         let b = RetryConfig { wait_multiplier: 2.0, max_wait_sec: 5.0, ..Default::default() };
         assert_eq!((b.backoff_sec(0), b.backoff_sec(2), b.backoff_sec(9)), (1.0, 4.0, 5.0));
+    }
+
+    #[test]
+    fn unread_settings_are_refused_or_reported() {
+        let cfg = |v: Value| -> JobConfig { strict_value(v).unwrap() };
+        for key in REFUSED_UNREAD_SETTINGS {
+            let (section, field) = key.split_once('.').unwrap();
+            let value = if field == "stream" { serde_json::json!(true) } else { serde_json::json!("x") };
+            let err = cfg(serde_json::json!({ section: { field: value } })).validate().unwrap_err().to_string();
+            assert!(err.starts_with(&format!("{key} is not supported")), "{err}");
+        }
+        let viewer_and_hpg = cfg(serde_json::json!({
+            "debug": true,
+            "environment": {"cpu_enforcement_policy": "strict", "override_storage_mb": 10240},
+            "verifier": {"kwargs": {"x": 1}},
+        }));
+        assert!(viewer_and_hpg.validate().is_ok());
+        assert_eq!(
+            viewer_and_hpg.unread_settings(),
+            ["debug", "environment.cpu_enforcement_policy", "environment.override_storage_mb", "verifier.kwargs"]
+        );
+        assert!(JobConfig::default().unread_settings().is_empty());
     }
 }
