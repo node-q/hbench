@@ -147,7 +147,8 @@ PY\n",
                         .join(" ");
                     instruction += &format!("- {}: stdio transport, command: {cmd}\n", s.name);
                 } else {
-                    instruction += &format!("- {}: {} transport, url: {}\n", s.name, s.transport(), s.url.as_deref().unwrap_or("None"));
+                    instruction +=
+                        &format!("- {}: {} transport, url: {}\n", s.name, s.transport(), s.url.as_deref().unwrap_or("(not set)"));
                 }
             }
         }

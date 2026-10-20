@@ -1633,9 +1633,9 @@ pub(crate) fn mcp_info(servers: &[crate::task::McpServer]) -> String {
     let mut s = String::from("\n\nMCP Servers:\nThe following MCP servers are available for this task.\n");
     for m in servers {
         if m.transport() == "stdio" {
-            s += &format!("- {}: stdio transport, command: {} {}\n", m.name, m.command.as_deref().unwrap_or("None"), m.args.join(" "));
+            s += &format!("- {}: stdio transport, command: {} {}\n", m.name, m.command.as_deref().unwrap_or("(not set)"), m.args.join(" "));
         } else {
-            s += &format!("- {}: {} transport, url: {}\n", m.name, m.transport(), m.url.as_deref().unwrap_or("None"));
+            s += &format!("- {}: {} transport, url: {}\n", m.name, m.transport(), m.url.as_deref().unwrap_or("(not set)"));
         }
     }
     s

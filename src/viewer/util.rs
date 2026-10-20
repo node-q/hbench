@@ -334,14 +334,3 @@ pub(super) fn scan_dir(dir: &Path, base: &str, with_dirs: bool, skip_top_manifes
         }
     }
 }
-
-/// Literal form of a scalar for messages and search: `'s'`, `True`, `False`, `None`, numbers as JSON.
-pub(super) fn repr_scalar(v: &Value) -> String {
-    match v {
-        Value::String(x) => format!("'{x}'"),
-        Value::Bool(true) => "True".into(),
-        Value::Bool(false) => "False".into(),
-        Value::Null => "None".into(),
-        x => x.to_string(),
-    }
-}

@@ -1,6 +1,6 @@
 //! grok-build.
 
-use super::common::{deep_merge, installed_dir, parse_bool_env_value, skills_dir};
+use super::common::{deep_merge, installed_dir, parse_bool_env_value, quoted_or_not_set, skills_dir};
 use super::pins;
 use super::{ensure_system_dependencies, exec_agent, exec_error};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx, pricing};
@@ -282,8 +282,8 @@ exit "${{STATUS:-1}}"
         let key_name = self.provider.as_deref().and_then(provider).map(|p| p.1).unwrap_or("XAI_API_KEY");
         let Some(key) = self.args.get_env(key_name) else {
             bail!(
-                "{key_name} environment variable is required for model '{}'. Set it on the host or via --ae {key_name}=...",
-                self.args.model_name.as_deref().unwrap_or("None")
+                "{key_name} environment variable is required for model {}. Set it on the host or via --ae {key_name}=...",
+                quoted_or_not_set(self.args.model_name.as_deref())
             );
         };
         Ok(BTreeMap::from([

@@ -273,18 +273,13 @@ fn compile_verifiers(artifacts: &[String], verify: bool, reward: Option<&str>) -
     vec![]
 }
 
-/// `key=value` kwargs: JSON values, the literals True/False/None, else strings.
+/// `key=value` kwargs: JSON values (`true`, `null`, `5`, `{...}`), else strings.
 fn parse_kwargs(items: &[String]) -> Result<Map<String, Value>> {
     let mut m = Map::new();
     for kw in items {
         let (k, v) = kw.split_once('=').ok_or_else(|| anyhow!("Invalid kwarg format: {kw}. Expected key=value"))?;
         let v = v.trim();
-        let val = serde_json::from_str(v).unwrap_or_else(|_| match v {
-            "True" => Value::Bool(true),
-            "False" => Value::Bool(false),
-            "None" => Value::Null,
-            _ => Value::String(v.to_string()),
-        });
+        let val = serde_json::from_str(v).unwrap_or_else(|_| Value::String(v.to_string()));
         m.insert(k.trim().to_string(), val);
     }
     Ok(m)
