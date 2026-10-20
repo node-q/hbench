@@ -79,7 +79,8 @@ jobs:
       - name: Set up Rust toolchain
         uses: ./.github/actions/setup-rust
       - name: Install cargo-audit
-        run: command -v cargo-audit >/dev/null || cargo install cargo-audit --locked
+        # A cached binary of this version is reused; another version is replaced.
+        run: cargo install cargo-audit --locked --version 0.22.2
         env:
           RUSTFLAGS: ""
       - name: Audit dependencies
