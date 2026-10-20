@@ -23,7 +23,7 @@ trust, or put hbench in a VM you can throw away.
   files, raw and in the common encodings. A secret an agent hashes, encrypts or splits is
   not recognised.
 - **Resources.** Tasks get the CPU and memory limits they declare; disk is not limited.
-- **The viewer.** `hbench view` binds 127.0.0.1. Binding another address exposes its
-  routes, including the ones that start runs and delete jobs, to that network.
+- **The viewer.** `hbench view` binds 127.0.0.1. Bound to any other address it serves
+  read-only: the routes that start runs and delete jobs answer 403 there.
 
 Reports about any of these are welcome; they are the known limits, not the whole list.
