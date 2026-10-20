@@ -1,6 +1,10 @@
 //! TaskConfig (task.toml).
 
 use super::*;
+use crate::task::{
+    DEFAULT_BUILD_TIMEOUT_SEC, DEFAULT_COLLECT_TIMEOUT_SEC, DEFAULT_HEALTHCHECK_INTERVAL_SEC, DEFAULT_HEALTHCHECK_RETRIES,
+    DEFAULT_HEALTHCHECK_START_INTERVAL_SEC, DEFAULT_HEALTHCHECK_TIMEOUT_SEC, DEFAULT_VERIFIER_TIMEOUT_SEC, MAIN,
+};
 use anyhow::Result;
 use serde_json::{Map, Value, json};
 
@@ -147,7 +151,7 @@ fn verifier_cfg(m: &Map<String, Value>) -> Map<String, Value> {
     Model::new(m)
         .opt("network_mode")
         .opt("allowed_hosts")
-        .float("timeout_sec", Some(600.0))
+        .float("timeout_sec", Some(DEFAULT_VERIFIER_TIMEOUT_SEC))
         .val("env", json!({}))
         .opt("user")
         .opt("environment_mode")
@@ -156,7 +160,12 @@ fn verifier_cfg(m: &Map<String, Value>) -> Map<String, Value> {
             "collect",
             |v| {
                 Value::Object(
-                    Model::new(&obj(v)).opt("command").val("service", "main".into()).float("timeout_sec", Some(60.0)).opt("user").done(),
+                    Model::new(&obj(v))
+                        .opt("command")
+                        .val("service", MAIN.into())
+                        .float("timeout_sec", Some(DEFAULT_COLLECT_TIMEOUT_SEC))
+                        .opt("user")
+                        .done(),
                 )
             },
             true,
@@ -200,7 +209,7 @@ pub(super) fn env_cfg(m: &Map<String, Value>) -> Map<String, Value> {
     Model::new(&m)
         .val("network_mode", "public".into())
         .opt("allowed_hosts")
-        .float("build_timeout_sec", Some(600.0))
+        .float("build_timeout_sec", Some(DEFAULT_BUILD_TIMEOUT_SEC))
         .opt("docker_image")
         .val("os", "linux".into())
         .opt("cpus")
@@ -232,11 +241,11 @@ pub(super) fn env_cfg(m: &Map<String, Value>) -> Map<String, Value> {
 fn healthcheck_cfg(m: &Map<String, Value>) -> Map<String, Value> {
     Model::new(m)
         .opt("command")
-        .float("interval_sec", Some(5.0))
-        .float("timeout_sec", Some(30.0))
+        .float("interval_sec", Some(DEFAULT_HEALTHCHECK_INTERVAL_SEC))
+        .float("timeout_sec", Some(DEFAULT_HEALTHCHECK_TIMEOUT_SEC))
         .float("start_period_sec", Some(0.0))
-        .float("start_interval_sec", Some(5.0))
-        .val("retries", 3.into())
+        .float("start_interval_sec", Some(DEFAULT_HEALTHCHECK_START_INTERVAL_SEC))
+        .val("retries", DEFAULT_HEALTHCHECK_RETRIES.into())
         .done()
 }
 

@@ -4,6 +4,10 @@
 //! Generated TOML keeps one fixed layout (see `toml_dumps`: section order, string escaping and float
 //! formatting), so output is stable across releases; task digests hash the packaged file list and contents.
 
+use crate::task::{
+    DEFAULT_BUILD_TIMEOUT_SEC, DEFAULT_COLLECT_TIMEOUT_SEC, DEFAULT_HEALTHCHECK_INTERVAL_SEC, DEFAULT_HEALTHCHECK_RETRIES,
+    DEFAULT_HEALTHCHECK_START_INTERVAL_SEC, DEFAULT_HEALTHCHECK_TIMEOUT_SEC, DEFAULT_VERIFIER_TIMEOUT_SEC, MAIN,
+};
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
@@ -324,8 +328,8 @@ fn agent_model(src: &Map<String, Value>) -> Result<Map<String, Value>> {
 fn collect_model(src: &Map<String, Value>) -> Result<Map<String, Value>> {
     let mut o = Map::new();
     put(&mut o, src, "command", K::Raw, None);
-    put(&mut o, src, "service", K::Raw, Some(json!("main")));
-    put(&mut o, src, "timeout_sec", K::Float, Some(json!(60.0)));
+    put(&mut o, src, "service", K::Raw, Some(json!(MAIN)));
+    put(&mut o, src, "timeout_sec", K::Float, Some(json!(DEFAULT_COLLECT_TIMEOUT_SEC)));
     put(&mut o, src, "user", K::Raw, None);
     Ok(o)
 }
@@ -333,7 +337,7 @@ fn collect_model(src: &Map<String, Value>) -> Result<Map<String, Value>> {
 fn verifier_model(src: &Map<String, Value>) -> Result<Map<String, Value>> {
     let mut o = Map::new();
     put_phase_policy(&mut o, src, None)?;
-    put(&mut o, src, "timeout_sec", K::Float, Some(json!(600.0)));
+    put(&mut o, src, "timeout_sec", K::Float, Some(json!(DEFAULT_VERIFIER_TIMEOUT_SEC)));
     put(&mut o, src, "env", K::Raw, Some(json!({})));
     put(&mut o, src, "user", K::Raw, None);
     put(&mut o, src, "environment_mode", K::Raw, None);
@@ -345,11 +349,11 @@ fn verifier_model(src: &Map<String, Value>) -> Result<Map<String, Value>> {
 fn healthcheck_model(src: &Map<String, Value>) -> Result<Map<String, Value>> {
     let mut o = Map::new();
     put(&mut o, src, "command", K::Raw, None);
-    put(&mut o, src, "interval_sec", K::Float, Some(json!(5.0)));
-    put(&mut o, src, "timeout_sec", K::Float, Some(json!(30.0)));
+    put(&mut o, src, "interval_sec", K::Float, Some(json!(DEFAULT_HEALTHCHECK_INTERVAL_SEC)));
+    put(&mut o, src, "timeout_sec", K::Float, Some(json!(DEFAULT_HEALTHCHECK_TIMEOUT_SEC)));
     put(&mut o, src, "start_period_sec", K::Float, Some(json!(0.0)));
-    put(&mut o, src, "start_interval_sec", K::Float, Some(json!(5.0)));
-    put(&mut o, src, "retries", K::Int, Some(json!(3)));
+    put(&mut o, src, "start_interval_sec", K::Float, Some(json!(DEFAULT_HEALTHCHECK_START_INTERVAL_SEC)));
+    put(&mut o, src, "retries", K::Int, Some(json!(DEFAULT_HEALTHCHECK_RETRIES)));
     Ok(o)
 }
 
@@ -413,7 +417,7 @@ fn environment_model(src: &Map<String, Value>) -> Result<Map<String, Value>> {
     }
     let mut o = Map::new();
     put_phase_policy(&mut o, &src, Some(json!("public")))?;
-    put(&mut o, &src, "build_timeout_sec", K::Float, Some(json!(600.0)));
+    put(&mut o, &src, "build_timeout_sec", K::Float, Some(json!(DEFAULT_BUILD_TIMEOUT_SEC)));
     put(&mut o, &src, "docker_image", K::Raw, None);
     let os = src.get("os").and_then(Value::as_str).map_or("linux".to_string(), str::to_lowercase);
     o.insert("os".into(), json!(os));

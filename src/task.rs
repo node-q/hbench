@@ -9,6 +9,15 @@ use std::path::{Component, Path, PathBuf};
 pub const MAIN: &str = "main";
 pub const CONVENTION_ARTIFACTS: &str = "/logs/artifacts";
 
+// task.toml defaults, shared by the parser, the task.toml files `tasks init` and `exec` write, and trials.
+pub const DEFAULT_VERIFIER_TIMEOUT_SEC: f64 = 600.0;
+pub const DEFAULT_BUILD_TIMEOUT_SEC: f64 = 600.0;
+pub const DEFAULT_COLLECT_TIMEOUT_SEC: f64 = 60.0;
+pub const DEFAULT_HEALTHCHECK_INTERVAL_SEC: f64 = 5.0;
+pub const DEFAULT_HEALTHCHECK_TIMEOUT_SEC: f64 = 30.0;
+pub const DEFAULT_HEALTHCHECK_START_INTERVAL_SEC: f64 = 5.0;
+pub const DEFAULT_HEALTHCHECK_RETRIES: u32 = 3;
+
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct TaskConfig {
@@ -106,7 +115,7 @@ pub struct CollectHook {
     pub command: String,
     #[serde(default = "main_service")]
     pub service: String,
-    #[serde(default = "sixty")]
+    #[serde(default = "collect_timeout_sec")]
     pub timeout_sec: f64,
     #[serde(default)]
     pub user: Option<User>,
@@ -114,8 +123,8 @@ pub struct CollectHook {
 fn main_service() -> String {
     MAIN.into()
 }
-fn sixty() -> f64 {
-    60.0
+fn collect_timeout_sec() -> f64 {
+    DEFAULT_COLLECT_TIMEOUT_SEC
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -149,25 +158,28 @@ pub enum MinReward {
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct Healthcheck {
     pub command: String,
-    #[serde(default = "five")]
+    #[serde(default = "healthcheck_interval_sec")]
     pub interval_sec: f64,
-    #[serde(default = "thirty")]
+    #[serde(default = "healthcheck_timeout_sec")]
     pub timeout_sec: f64,
     #[serde(default)]
     pub start_period_sec: f64,
-    #[serde(default = "five")]
+    #[serde(default = "healthcheck_start_interval_sec")]
     pub start_interval_sec: f64,
-    #[serde(default = "three")]
+    #[serde(default = "healthcheck_retries")]
     pub retries: u32,
 }
-fn five() -> f64 {
-    5.0
+fn healthcheck_interval_sec() -> f64 {
+    DEFAULT_HEALTHCHECK_INTERVAL_SEC
 }
-fn thirty() -> f64 {
-    30.0
+fn healthcheck_timeout_sec() -> f64 {
+    DEFAULT_HEALTHCHECK_TIMEOUT_SEC
 }
-fn three() -> u32 {
-    3
+fn healthcheck_start_interval_sec() -> f64 {
+    DEFAULT_HEALTHCHECK_START_INTERVAL_SEC
+}
+fn healthcheck_retries() -> u32 {
+    DEFAULT_HEALTHCHECK_RETRIES
 }
 
 /// Artifact entry: `"/path"` or `{ source, destination?, exclude?, service? }`.
@@ -312,7 +324,7 @@ pub struct EnvironmentConfig {
 impl Default for EnvironmentConfig {
     fn default() -> Self {
         Self {
-            build_timeout_sec: 600.0,
+            build_timeout_sec: DEFAULT_BUILD_TIMEOUT_SEC,
             docker_image: None,
             os: None,
             cpus: None,
@@ -720,6 +732,19 @@ pub fn resolve_template(k: &str, v: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn defaults_match_the_task_schema() {
+        let schema: serde_json::Value = serde_json::from_str(crate::schemas::TASK).unwrap();
+        let default = |def: &str, prop: &str| schema["$defs"][def]["properties"][prop]["default"].as_f64();
+        assert_eq!(default("VerifierConfig", "timeout_sec"), Some(DEFAULT_VERIFIER_TIMEOUT_SEC));
+        assert_eq!(default("EnvironmentConfig", "build_timeout_sec"), Some(DEFAULT_BUILD_TIMEOUT_SEC));
+        assert_eq!(default("VerifierCollectConfig", "timeout_sec"), Some(DEFAULT_COLLECT_TIMEOUT_SEC));
+        assert_eq!(default("HealthcheckConfig", "interval_sec"), Some(DEFAULT_HEALTHCHECK_INTERVAL_SEC));
+        assert_eq!(default("HealthcheckConfig", "timeout_sec"), Some(DEFAULT_HEALTHCHECK_TIMEOUT_SEC));
+        assert_eq!(default("HealthcheckConfig", "start_interval_sec"), Some(DEFAULT_HEALTHCHECK_START_INTERVAL_SEC));
+        assert_eq!(default("HealthcheckConfig", "retries"), Some(f64::from(DEFAULT_HEALTHCHECK_RETRIES)));
+    }
 
     #[test]
     fn parses_legacy_and_current_task_toml() {
