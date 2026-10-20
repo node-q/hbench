@@ -121,6 +121,8 @@ fn source_agent_exception(s: &StepResult) -> Option<ExceptionInfo> {
     }
 }
 
+/// Regrades `trial` from its `source_trial`: copies the source's agent/ and artifacts/ (per step for a
+/// multi-step task), keeps its agent result, and runs only the verifier, which must be separate.
 pub async fn run(trial: &mut Trial) -> Result<()> {
     let src_dir: PathBuf =
         trial.cfg.source_trial.as_ref().and_then(|s| s.path.clone()).ok_or_else(|| err("regrade needs source_trial.path"))?;

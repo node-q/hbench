@@ -37,6 +37,8 @@ impl TimingInfo {
     }
 }
 
+/// Why a trial (or step) failed, as result.json records it. `exception_type` is an [`ErrorKind`] name;
+/// `exception_traceback` holds the error with its whole cause chain (`{:?}`), not a stack trace.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExceptionInfo {
     pub exception_type: String,
@@ -84,6 +86,7 @@ pub struct StepResult {
     pub verifier: Option<TimingInfo>,
 }
 
+/// A trial's result.json: what ran (config, task, agent), when, its rewards, and its failure if any.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TrialResult {
     pub id: uuid::Uuid,
@@ -122,7 +125,7 @@ impl TrialResult {
             trial_uri: format!("file://{}", dir.canonicalize().unwrap_or(dir.to_path_buf()).display()),
             task_id: task_id(&cfg),
             source: cfg.task.source.clone(),
-            task_checksum: task.checksum().unwrap_or_default(),
+            task_checksum: task.tree_hash().unwrap_or_default(),
             agent_info: AgentInfo {
                 name: cfg.agent.name().into(),
                 version: "unknown".into(),
@@ -274,6 +277,8 @@ pub struct Trial {
 }
 
 impl Trial {
+    /// Creates the trial dir (agent/, verifier/, artifacts/) and writes its config.json, lock.json and
+    /// trial.log; nothing runs until [`Trial::run`].
     pub fn new(cfg: TrialConfig, task: Arc<Task>) -> Result<Trial> {
         // Absolute: docker compose runs with the task's environment/ as cwd.
         let dir = std::path::absolute(cfg.trials_dir.join(&cfg.trial_name))?;
@@ -1324,7 +1329,7 @@ pub fn trial_lock(c: &TrialConfig) -> Value {
         .agent
         .skills
         .iter()
-        .map(|s| serde_json::json!({"name": Path::new(s).file_name().map(|n| n.to_string_lossy().into_owned()), "source": s, "digest": crate::task::content_digest(Path::new(s))}))
+        .map(|s| serde_json::json!({"name": Path::new(s).file_name().map(|n| n.to_string_lossy().into_owned()), "source": s, "digest": crate::task::package_digest(Path::new(s))}))
         .collect();
     let user_agent = c.user_agent.as_ref();
     drop_nulls(serde_json::json!({
@@ -1335,7 +1340,7 @@ pub fn trial_lock(c: &TrialConfig) -> Value {
             "name": name,
             "version": task.as_ref().and_then(|t| t.config.task.as_ref().and_then(|p| p.version.clone())),
             "type": if c.task.git_url.is_some() { "git" } else { "local" },
-            "digest": crate::task::content_digest(&local),
+            "digest": crate::task::package_digest(&local),
             "source": c.task.source,
             "path": c.task.path,
             "git_url": c.task.git_url,
