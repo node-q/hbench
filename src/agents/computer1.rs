@@ -1950,7 +1950,7 @@ struct NoLlm;
 #[async_trait::async_trait]
 impl Llm for NoLlm {
     async fn call(&self, _: &str, _: &[Value], _: &Map<String, Value>, _: Option<&str>) -> Result<LlmResponse, LlmError> {
-        Err(api_err("APIError", "computer-1 native providers don't use the litellm client"))
+        Err(api_err(ErrorKind::Runtime, "computer-1 native providers don't use the chat client"))
     }
     fn context_limit(&self) -> i64 {
         1_000_000

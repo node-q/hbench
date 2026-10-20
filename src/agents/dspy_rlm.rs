@@ -7,7 +7,7 @@
 
 use super::terminus2::{Kw, mcp_info, quote_repr};
 use super::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
-use crate::env::{ExecResult, kind_err};
+use crate::env::{ErrorKind, ExecResult, kind_err};
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
@@ -169,11 +169,29 @@ impl DspyRlm {
         let done = run_runner(&cfg, &self.host_env(), &self.args.logs_dir.join("rlm").join("runner.log"), ex).await?;
         Self::apply(ctx, &done);
         match done["error"].as_str() {
-            // The runner's exception type name becomes the trial's exception type.
-            // Leaks the (short) class name once per failed run; kind_err wants &'static str.
-            Some(e) => Err(kind_err(done["kind"].as_str().unwrap_or("RuntimeError"), e.to_string())),
+            Some(e) => Err(kind_err(runner_error_kind(done["kind"].as_str().unwrap_or_default(), e), e.to_string())),
             None => Ok(()),
         }
+    }
+}
+
+/// The runner reports the class of the exception dspy raised, usually one of litellm's; the others
+/// are classified by their message, as an installed agent's output is.
+fn runner_error_kind(exception_class: &str, msg: &str) -> ErrorKind {
+    match exception_class {
+        "RateLimitError" => ErrorKind::ApiRateLimit,
+        "AuthenticationError" | "PermissionDeniedError" => ErrorKind::AgentAuthentication,
+        "NotFoundError" => ErrorKind::ModelNotFound,
+        "BadRequestError" | "UnprocessableEntityError" => ErrorKind::ApiBadRequest,
+        "ContextWindowExceededError" => ErrorKind::ContextWindowExceeded,
+        "ContentPolicyViolationError" => ErrorKind::AgentSafetyRefusal,
+        "UnsupportedParamsError" => ErrorKind::UnsupportedModelParameters,
+        "APIConnectionError" => ErrorKind::NetworkConnection,
+        "Timeout" | "APITimeoutError" => ErrorKind::ApiResponseStalled,
+        "ServiceUnavailableError" => ErrorKind::ApiOverloaded,
+        "InternalServerError" => ErrorKind::ApiInternalServer,
+        "DspyImportError" => ErrorKind::AgentSetup,
+        _ => crate::agents::installed::classify(msg),
     }
 }
 
@@ -203,6 +221,14 @@ impl Agent for DspyRlm {
 mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn runner_errors_use_hbench_names() {
+        assert_eq!(runner_error_kind("RateLimitError", "slow down"), ErrorKind::ApiRateLimit);
+        assert_eq!(runner_error_kind("ContextWindowExceededError", ""), ErrorKind::ContextWindowExceeded);
+        assert_eq!(runner_error_kind("ValueError", "boom"), ErrorKind::NonZeroAgentExitCode);
+        assert_eq!(runner_error_kind("ValueError", "429 Too Many Requests"), ErrorKind::ApiRateLimit);
+    }
 
     #[test]
     fn signature_mapping_and_options() {

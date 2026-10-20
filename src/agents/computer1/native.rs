@@ -10,9 +10,9 @@
 
 use super::{Action, Computer1, SCREENSHOT_DIR, quote, repr_value};
 use crate::agents::AgentContext;
-use crate::agents::llm::{LlmResponse, Request, Usage, backoff, send_raw};
+use crate::agents::llm::{LlmResponse, Request, Usage, backoff, http_status_kind, send_raw};
 use crate::agents::terminus2::{Shell, quote_repr};
-use crate::env::{kind_err, tail};
+use crate::env::{ErrorKind, kind_err, tail};
 use crate::fmt::{json_spaced, truthy, type_name};
 use anyhow::{Result, anyhow, bail};
 use base64::Engine;
@@ -513,25 +513,16 @@ struct Http {
     aws: Option<AwsCreds>,
 }
 
-/// Exception class + message the vendor SDK raises for an HTTP error status.
+/// The error for an HTTP error status, with the message the vendor SDK gives.
 fn status_error(sdk: Sdk, status: u16, body: &str) -> anyhow::Error {
-    if sdk == Sdk::Gemini {
-        let v: Value = serde_json::from_str(body).unwrap_or(Value::Null);
-        let st = v["error"]["status"].as_str().unwrap_or("");
-        return kind_err(if status >= 500 { "ServerError" } else { "ClientError" }, format!("{status} {st}. {}", tail(body, 4000)));
-    }
-    let kind = match status {
-        400 => "BadRequestError",
-        401 => "AuthenticationError",
-        403 => "PermissionDeniedError",
-        404 => "NotFoundError",
-        409 => "ConflictError",
-        422 => "UnprocessableEntityError",
-        429 => "RateLimitError",
-        s if s >= 500 => "InternalServerError",
-        _ => "APIStatusError",
+    let msg = match sdk {
+        Sdk::Gemini => {
+            let v: Value = serde_json::from_str(body).unwrap_or(Value::Null);
+            format!("{status} {}. {}", v["error"]["status"].as_str().unwrap_or(""), tail(body, 4000))
+        }
+        Sdk::Stainless => format!("Error code: {status} - {}", tail(body, 4000)),
     };
-    kind_err(kind, format!("Error code: {status} - {}", tail(body, 4000)))
+    kind_err(http_status_kind(status), msg)
 }
 
 #[async_trait::async_trait]
@@ -566,13 +557,12 @@ impl Transport for Http {
                     status_error(self.sdk, s, &text),
                 ),
                 Err(e) => {
-                    let timeout = e.kind() == "Timeout";
-                    let err = match self.sdk {
-                        Sdk::Stainless if timeout => kind_err("APITimeoutError", "Request timed out."),
-                        Sdk::Stainless => kind_err("APIConnectionError", format!("Connection error. ({e})")),
-                        Sdk::Gemini => kind_err(if timeout { "ReadTimeout" } else { "ConnectError" }, e.to_string()),
+                    let msg = match self.sdk {
+                        Sdk::Stainless if e.kind() == ErrorKind::ApiResponseStalled => "Request timed out.".to_string(),
+                        Sdk::Stainless => format!("Connection error. ({e})"),
+                        Sdk::Gemini => e.to_string(),
                     };
-                    (self.sdk == Sdk::Stainless, err)
+                    (self.sdk == Sdk::Stainless, kind_err(e.kind(), msg))
                 }
             };
             let (max, base, cap) = match self.sdk {
@@ -1565,9 +1555,9 @@ mod tests {
         assert_eq!(o.http(None, &env(&[("OPENAI_API_KEY", "k")])).unwrap().url, "https://api.openai.com/v1/responses");
         assert!(o.http(None, &env(&[])).is_err());
         let e = status_error(Sdk::Stainless, 429, "{}");
-        assert_eq!((crate::env::error_kind(&e).as_str(), e.to_string()), ("RateLimitError", "Error code: 429 - {}".to_string()));
+        assert_eq!((crate::env::error_kind(&e).as_str(), e.to_string()), ("ApiRateLimitError", "Error code: 429 - {}".to_string()));
         let e = status_error(Sdk::Gemini, 400, r#"{"error": {"status": "INVALID_ARGUMENT"}}"#);
-        assert_eq!(crate::env::error_kind(&e), "ClientError");
+        assert_eq!(crate::env::error_kind(&e), "ApiBadRequestError");
         assert!(e.to_string().starts_with("400 INVALID_ARGUMENT."));
     }
 

@@ -4,7 +4,7 @@ use super::common::parse_jsonl;
 use super::common::{installed_dir, parse_bool_env_value, skills_dir};
 use super::{ensure_system_dependencies, exec_error};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
-use crate::env::{ExecResult, kind_err, quote};
+use crate::env::{ErrorKind, ExecResult, kind_err, quote};
 use anyhow::{Result, anyhow, bail};
 use regex::Regex;
 use serde_json::{Map, Value, json};
@@ -76,27 +76,27 @@ pub fn validate_base_url(url: &str, get_env: &dyn Fn(&str) -> Option<String>) ->
 }
 
 /// agy's `AGY_ERROR: {...}` stderr marker patterns (appended after the base ERROR_PATTERNS).
-fn agy_patterns() -> &'static [(Regex, &'static str)] {
-    static P: OnceLock<Vec<(Regex, &'static str)>> = OnceLock::new();
+fn agy_patterns() -> &'static [(Regex, ErrorKind)] {
+    static P: OnceLock<Vec<(Regex, ErrorKind)>> = OnceLock::new();
     P.get_or_init(|| {
         [
-            (r#"AGY_ERROR:.*"status":"RESOURCE_EXHAUSTED".*"retryable":\s*true.*"#, "ApiRateLimitError"),
-            (r#"AGY_ERROR:.*"status":"RESOURCE_EXHAUSTED".*"retryable":\s*false.*"#, "ApiUsageLimitError"),
-            (r#"AGY_ERROR:.*"status":"UNAVAILABLE".*"retryable":\s*true.*"#, "ApiOverloadedError"),
-            (r#"AGY_ERROR:.*"status":"INTERNAL".*"retryable":\s*true.*"#, "ApiInternalServerError"),
-            (r#"AGY_ERROR:.*"status":"DEADLINE_EXCEEDED".*"retryable":\s*true.*"#, "ApiResponseStalledError"),
-            (r#"AGY_ERROR:.*"status":"UNAUTHENTICATED".*"#, "AgentAuthenticationError"),
-            (r#"AGY_ERROR:.*"retryable":\s*true.*"#, "UnknownApiError"),
-            (r#"AGY_ERROR:.*"retryable":\s*false.*"#, "NonZeroAgentExitCodeError"),
+            (r#"AGY_ERROR:.*"status":"RESOURCE_EXHAUSTED".*"retryable":\s*true.*"#, ErrorKind::ApiRateLimit),
+            (r#"AGY_ERROR:.*"status":"RESOURCE_EXHAUSTED".*"retryable":\s*false.*"#, ErrorKind::ApiUsageLimit),
+            (r#"AGY_ERROR:.*"status":"UNAVAILABLE".*"retryable":\s*true.*"#, ErrorKind::ApiOverloaded),
+            (r#"AGY_ERROR:.*"status":"INTERNAL".*"retryable":\s*true.*"#, ErrorKind::ApiInternalServer),
+            (r#"AGY_ERROR:.*"status":"DEADLINE_EXCEEDED".*"retryable":\s*true.*"#, ErrorKind::ApiResponseStalled),
+            (r#"AGY_ERROR:.*"status":"UNAUTHENTICATED".*"#, ErrorKind::AgentAuthentication),
+            (r#"AGY_ERROR:.*"retryable":\s*true.*"#, ErrorKind::UnknownApi),
+            (r#"AGY_ERROR:.*"retryable":\s*false.*"#, ErrorKind::NonZeroAgentExitCode),
         ]
         .iter()
-        .map(|(p, k)| (Regex::new(&format!("(?i){p}")).unwrap(), *k))
+        .map(|(p, k)| (Regex::new(&format!("(?i){p}")).unwrap(), k.clone()))
         .collect()
     })
 }
 
 /// Base ERROR_PATTERNS + agy patterns, last match wins (base wins ties: it comes first in the list).
-pub fn classify_agy(output: &str) -> &'static str {
+pub fn classify_agy(output: &str) -> ErrorKind {
     super::classify_with(output, agy_patterns())
 }
 

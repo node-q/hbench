@@ -4,7 +4,7 @@ use super::common::{deep_merge, installed_dir, parse_bool_env_value, skills_dir}
 use super::pins;
 use super::{ensure_system_dependencies, exec_agent, exec_error};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx, pricing};
-use crate::env::{kind_err, quote};
+use crate::env::{ErrorKind, kind_err, quote};
 use anyhow::{Result, anyhow, bail};
 use regex::Regex;
 use serde_json::{Map, Value, json};
@@ -313,9 +313,9 @@ fn cli_flags(args: &AgentArgs) -> Result<String> {
 }
 
 /// Prepends `resource-exhausted|currently at capacity` (ApiOverloadedError) to ERROR_PATTERNS.
-fn classify_grok(output: &str) -> &'static str {
-    static P: OnceLock<Vec<(Regex, &'static str)>> = OnceLock::new();
-    let p = P.get_or_init(|| vec![(Regex::new(r"(?i)resource-exhausted|currently at capacity").unwrap(), "ApiOverloadedError")]);
+fn classify_grok(output: &str) -> ErrorKind {
+    static P: OnceLock<Vec<(Regex, ErrorKind)>> = OnceLock::new();
+    let p = P.get_or_init(|| vec![(Regex::new(r"(?i)resource-exhausted|currently at capacity").unwrap(), ErrorKind::ApiOverloaded)]);
     super::classify_ordered(output, p, &[])
 }
 
