@@ -2,7 +2,7 @@
 
 use super::common::{installed_dir, upload_asset, uv_install};
 use super::pins;
-use super::{connection, ensure_system_dependencies, exec_agent, exec_root, upload_text};
+use super::{connection, ensure_system_dependencies, exec_agent, exec_root_checked, upload_text};
 use crate::agents::model_connection::{Resolved, Spec, with_canonical_provider_envs};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::quote;
@@ -271,7 +271,7 @@ impl Agent for Strands {
         installed_dir(cx).await?;
         let none = BTreeMap::new();
         ensure_system_dependencies(cx, &["curl", "git"]).await?;
-        exec_root(cx, &format!("mkdir -p {INSTALL_DIR}"), &none).await?;
+        exec_root_checked(cx, &format!("mkdir -p {INSTALL_DIR}"), &none).await?;
         upload_asset(cx, RUNNER, RUNNER_PATH).await?;
         // Stage the factory under logs/source (kept with the trial for reference), then upload it.
         let mut editable = false;
@@ -292,7 +292,7 @@ impl Agent for Strands {
             cx.env.upload_dir(&target, FACTORY_DIR).await?;
         }
         if let Some(u) = &cx.user {
-            exec_root(cx, &format!("chown -R {} {INSTALL_DIR}", quote(u)), &none).await?;
+            exec_root_checked(cx, &format!("chown -R {} {INSTALL_DIR}", quote(u)), &none).await?;
         }
         exec_agent(cx, &self.install_command(editable), &none).await?;
         if self.version.is_none()
@@ -316,7 +316,7 @@ impl Agent for Strands {
         let _ = std::fs::write(cx.logs_dir.join("instruction.txt"), &instruction);
         upload_asset(cx, &instruction, INSTRUCTION_PATH).await?;
         if let Some(u) = &cx.user {
-            exec_root(cx, &format!("chown {} {INSTRUCTION_PATH}", quote(u)), &BTreeMap::new()).await?;
+            exec_root_checked(cx, &format!("chown {} {INSTRUCTION_PATH}", quote(u)), &BTreeMap::new()).await?;
         }
         let conn = self.connection();
         upload_text(cx, CONFIG_PATH, &(serde_json::to_string_pretty(&self.runner_config(&conn))? + "\n")).await?;

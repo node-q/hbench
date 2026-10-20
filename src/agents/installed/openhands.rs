@@ -3,7 +3,7 @@
 use super::common::opts::lax_bool;
 use super::common::{installed_dir, quoted_or_not_set, uv_install};
 use super::pins;
-use super::{connection, ensure_system_dependencies, exec_agent, exec_root};
+use super::{connection, ensure_system_dependencies, exec_agent, exec_root_checked};
 use crate::agents::model_connection::Spec;
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::quote;
@@ -361,7 +361,7 @@ impl Agent for OpenHands {
         installed_dir(cx).await?;
         ensure_system_dependencies(cx, &["curl", "git", "build_tools", "tmux"]).await?;
         let u = cx.user.clone().unwrap_or_else(|| "root".into());
-        exec_root(cx, &format!("mkdir -p /opt/openhands-venv && chown {u}:{u} /opt/openhands-venv"), &BTreeMap::new()).await?;
+        exec_root_checked(cx, &format!("mkdir -p /opt/openhands-venv && chown {u}:{u} /opt/openhands-venv"), &BTreeMap::new()).await?;
         exec_agent(cx, &self.install_cmd(), &BTreeMap::new()).await?;
         if self.version.is_none() {
             let r = cx.exec(VERSION_CMD, &BTreeMap::new(), None).await?;

@@ -2,7 +2,7 @@
 
 use super::common::{installed_dir, nvm_node_install_snippet, upload_asset, uv_install};
 use super::pins;
-use super::{ensure_system_dependencies, exec_agent, exec_root};
+use super::{ensure_system_dependencies, exec_agent, exec_root_checked};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::quote;
 use crate::fmt::single_quoted;
@@ -541,7 +541,7 @@ impl Agent for LangGraph {
         copy_project(&self.project_path, &staged)?;
         ensure_system_dependencies(cx, &["curl"]).await?;
         let user = quote(cx.user.as_deref().unwrap_or("root"));
-        exec_root(
+        exec_root_checked(
             cx,
             &format!("rm -rf {PROJECT_DIR} {PY_RUNNER_PATH} {NODE_RUNNER_PATH} {runtime_dir} && mkdir -p {PROJECT_DIR} {runtime_dir} && chown -R {user}:{user} {runtime_dir}"),
             &none,
@@ -549,7 +549,7 @@ impl Agent for LangGraph {
         .await?;
         cx.env.upload_dir(&staged, PROJECT_DIR).await?;
         upload_asset(cx, runner, runner_path).await?;
-        exec_root(cx, &format!("chown -R {user}:{user} {PROJECT_DIR}"), &none).await?;
+        exec_root_checked(cx, &format!("chown -R {user}:{user} {PROJECT_DIR}"), &none).await?;
         if node {
             let tools = [pins::TSX, pins::LANGSMITH].map(|p| p.npm_spec(None)).join(" ");
             exec_agent(

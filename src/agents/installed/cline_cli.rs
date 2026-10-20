@@ -2,7 +2,7 @@
 
 use super::common::{installed_dir, nvm_install_script, quoted_or_not_set, skills_dir};
 use super::pins;
-use super::{exec_agent, exec_root};
+use super::{exec_agent, exec_root_checked};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::{ExecResult, quote};
 use crate::fmt::value_text;
@@ -215,7 +215,7 @@ impl ClineCli {
         for attempt in 1..=self.setup_retries {
             let started = chrono::Utc::now();
             let label = if attempt == 1 { label.to_string() } else { format!("{label}.attempt-{attempt}") };
-            let fut = async { if as_root { exec_root(cx, cmd, env).await } else { exec_agent(cx, cmd, env).await } };
+            let fut = async { if as_root { exec_root_checked(cx, cmd, env).await } else { exec_agent(cx, cmd, env).await } };
             let res = match timeout {
                 Some(t) => {
                     tokio::time::timeout(Duration::from_secs_f64(t), fut).await.unwrap_or_else(|_| Err(anyhow!("timed out after {t}s")))

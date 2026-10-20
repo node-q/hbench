@@ -1,7 +1,7 @@
 //! Muse Code installed agent.
 
 use super::common::{installed_dir, skills_dir};
-use super::{connection, ensure_system_dependencies, exec_agent, exec_root, upload_text};
+use super::{connection, ensure_system_dependencies, exec_agent, exec_root_checked, upload_text};
 use crate::agents::model_connection::{Resolved, Spec};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::quote;
@@ -375,7 +375,7 @@ pub fn relocate_session(text: &str, workspace: &str) -> String {
 async fn upload_owned(cx: &AgentCtx<'_>, local: &Path, target: &str) -> Result<()> {
     cx.env.upload_file(local, target).await?;
     if let Some(u) = &cx.user {
-        exec_root(cx, &format!("chown {} {}", quote(u), quote(target)), &BTreeMap::new()).await?;
+        exec_root_checked(cx, &format!("chown {} {}", quote(u), quote(target)), &BTreeMap::new()).await?;
     }
     Ok(())
 }
@@ -399,7 +399,7 @@ impl MuseCode {
         if let Some(dir) = native_dir {
             cx.env.upload_dir(dir, &target).await?;
             if let Some(u) = &cx.user {
-                exec_root(cx, &format!("chown -R {} {target}", quote(u)), &BTreeMap::new()).await?;
+                exec_root_checked(cx, &format!("chown -R {} {target}", quote(u)), &BTreeMap::new()).await?;
             }
         }
         let cwd = exec_agent(cx, "pwd -P", &BTreeMap::new()).await?;

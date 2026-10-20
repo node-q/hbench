@@ -6,7 +6,7 @@ use super::common::{
 };
 use super::pins;
 use super::{
-    connection, ensure_acp_node_command, ensure_system_dependencies, exec_agent, exec_error, exec_root, filter_jsonl_events,
+    connection, ensure_acp_node_command, ensure_system_dependencies, exec_agent, exec_error, exec_root_checked, filter_jsonl_events,
     pinned_bin_wrapper_command, safe_bin_symlink_command, upload_text,
 };
 use crate::agents::model_connection::Spec;
@@ -83,7 +83,7 @@ impl Codex {
             let target = format!("{dir}/{name}");
             cx.env.upload_file(&source, &target).await?;
             if let Some(u) = &cx.user {
-                exec_root(cx, &format!("chown {} {}", quote(u), quote(&target)), &BTreeMap::new()).await?;
+                exec_root_checked(cx, &format!("chown {} {}", quote(u), quote(&target)), &BTreeMap::new()).await?;
             }
             Ok(())
         }
@@ -178,7 +178,7 @@ impl Codex {
         let re = regex::Regex::new(r"(?m)^HBENCH_CODEX_ID ([0-9]+) ([0-9]+)$").unwrap();
         let c = re.captures(&r.stdout).ok_or_else(|| anyhow!("Could not resolve the agent uid/gid to create {path}"))?;
         let q = quote(path);
-        exec_root(cx, &format!("mkdir -p {q} && chown -R {}:{} {q} && chmod 700 {q}", &c[1], &c[2]), &BTreeMap::new()).await?;
+        exec_root_checked(cx, &format!("mkdir -p {q} && chown -R {}:{} {q} && chmod 700 {q}", &c[1], &c[2]), &BTreeMap::new()).await?;
         Ok(())
     }
 }
@@ -508,7 +508,7 @@ impl Agent for Codex {
         if *system_node == "none" {
             cmd += &format!(" && {}", safe_bin_symlink_command(node, "/usr/local/bin/node"));
         }
-        exec_root(cx, &cmd, &BTreeMap::new()).await?;
+        exec_root_checked(cx, &cmd, &BTreeMap::new()).await?;
 
         let mut config = self.effective_config(connection(&self.args, SPEC).configured_base_url.as_deref())?;
         // API-key login can persist credentials; keep them in the temporary home, not a keyring.
@@ -534,7 +534,7 @@ impl Agent for Codex {
         )
         .await;
         // Bridge runs skip native cleanup; root owns the home's parent.
-        exec_root(cx, &format!("rm -rf {home}"), &BTreeMap::new()).await?;
+        exec_root_checked(cx, &format!("rm -rf {home}"), &BTreeMap::new()).await?;
         r.map(|_| ())
     }
 
@@ -562,7 +562,7 @@ impl Agent for Codex {
                 &BTreeMap::from([("NVM_NODEJS_ORG_MIRROR".to_string(), "https://nodejs.org/dist".to_string())]),
             )
             .await?;
-            exec_root(
+            exec_root_checked(
                 cx,
                 "for bin in node codex; do  BIN_PATH=\"$(which \"$bin\" 2>/dev/null || true)\";  \
                  if [ -n \"$BIN_PATH\" ] && [ \"$BIN_PATH\" != \"/usr/local/bin/$bin\" ]; then    ln -sf \"$BIN_PATH\" \"/usr/local/bin/$bin\";  fi; done",
@@ -597,7 +597,7 @@ impl Agent for Codex {
         let mut setup = if let Some(p) = &auth_json {
             cx.env.upload_file(p, AUTH_PATH).await?;
             if let Some(u) = &cx.user {
-                exec_root(cx, &format!("chown {u} {AUTH_PATH}"), &BTreeMap::new()).await?;
+                exec_root_checked(cx, &format!("chown {u} {AUTH_PATH}"), &BTreeMap::new()).await?;
             }
             format!("ln -sf {} \"$CODEX_HOME/auth.json\"\n", quote(AUTH_PATH))
         } else {

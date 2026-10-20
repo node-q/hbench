@@ -1,7 +1,7 @@
 //! RovoDev CLI installed agent.
 
 use super::common::installed_dir;
-use super::{ensure_system_dependencies, exec_agent, exec_root};
+use super::{ensure_system_dependencies, exec_agent, exec_root_checked};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::quote;
 use anyhow::{Result, anyhow, bail};
@@ -103,7 +103,7 @@ impl Agent for RovodevCli {
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
         installed_dir(cx).await?;
         ensure_system_dependencies(cx, &["wget", "gnupg", "git"]).await?;
-        exec_root(
+        exec_root_checked(
             cx,
             "set -euo pipefail; mkdir -p -m 755 /etc/apt/keyrings && wget -nv -O- https://acli.atlassian.com/gpg/public-key.asc | \
              gpg --dearmor -o /etc/apt/keyrings/acli-archive-keyring.gpg && chmod go+r /etc/apt/keyrings/acli-archive-keyring.gpg && \

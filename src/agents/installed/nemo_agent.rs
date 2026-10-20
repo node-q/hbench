@@ -2,7 +2,7 @@
 
 use super::common::{installed_dir, upload_asset, uv_install};
 use super::pins;
-use super::{ensure_system_dependencies, exec_agent, exec_error, exec_root};
+use super::{ensure_system_dependencies, exec_agent, exec_error, exec_root_checked};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::quote;
 use anyhow::{Result, bail};
@@ -253,7 +253,7 @@ impl Agent for NemoAgent {
             exec_agent(cx, &format!("{PATH_SETUP}; command -v uv > /dev/null 2>&1 || {uv_install}", uv_install = uv_install(None)), &none)
                 .await?;
             let user = cx.user.clone().unwrap_or_else(|| "root".into());
-            exec_root(cx, &format!("mkdir -p /opt/nvidia-nat-venv && chown {user}:{user} /opt/nvidia-nat-venv"), &none).await?;
+            exec_root_checked(cx, &format!("mkdir -p /opt/nvidia-nat-venv && chown {user}:{user} /opt/nvidia-nat-venv"), &none).await?;
             exec_agent(cx, &format!("{PATH_SETUP}; uv venv /opt/nvidia-nat-venv --python 3.12 --clear"), &none).await?;
             let spec = match (&self.nat_repo, &self.version) {
                 (Some(r), _) => quote(&format!("{r}[eval,langchain]")),
@@ -265,7 +265,7 @@ impl Agent for NemoAgent {
                 return Err(exec_error(&cmd, &r, None));
             }
             exec_agent(cx, "echo 'export PATH=\"/opt/nvidia-nat-venv/bin:$HOME/.local/bin:$PATH\"' >> ~/.bashrc", &none).await?;
-            exec_root(cx, "mkdir -p /app", &none).await?;
+            exec_root_checked(cx, "mkdir -p /app", &none).await?;
             exec_agent(cx, "/opt/nvidia-nat-venv/bin/nat --version", &none).await?;
             anyhow::Ok(())
         };

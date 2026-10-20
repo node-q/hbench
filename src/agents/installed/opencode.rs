@@ -3,7 +3,7 @@
 use super::common::parse_jsonl;
 use super::common::{NVM_LOAD, deep_merge_maps, detect_version, installed_dir, nvm_load, opts, skills_dir, system_or_nvm_node};
 use super::pins;
-use super::{connection, ensure_system_dependencies, exec_agent, exec_root, safe_bin_symlink_command};
+use super::{connection, ensure_system_dependencies, exec_agent, exec_root_checked, safe_bin_symlink_command};
 use crate::agents::model_connection::Spec;
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::{ErrorKind, kind_err, quote};
@@ -193,7 +193,7 @@ impl Agent for OpenCode {
         // The npm bin is a native binary; it only needs to be reachable off the nvm PATH.
         let r = exec_agent(cx, &format!("{NVM_LOAD}; command -v opencode"), &none).await?;
         let Some(bin) = r.stdout.trim().lines().last() else { bail!("Could not locate the opencode binary for ACP mode") };
-        exec_root(cx, &safe_bin_symlink_command(bin, "/usr/local/bin/opencode"), &none).await.map(|_| ())
+        exec_root_checked(cx, &safe_bin_symlink_command(bin, "/usr/local/bin/opencode"), &none).await.map(|_| ())
     }
 
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()> {

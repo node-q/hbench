@@ -4,7 +4,7 @@
 
 use super::common::{installed_dir, system_or_nvm_node, uv_install};
 use super::pins;
-use super::{exec_agent, exec_root};
+use super::{exec_agent, exec_root_checked};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::quote;
 use anyhow::{Context, Result, anyhow, bail};
@@ -842,9 +842,13 @@ impl Acp {
             bail!("Could not determine the ACP execution user's numeric UID");
         }
         cx.env.upload_dir(&root, "/installed-agent/source").await?;
-        exec_root(cx, &format!("chown -R {uid} /installed-agent/source && chmod -R u+rwX,go-w /installed-agent/source"), &BTreeMap::new())
-            .await?;
-        exec_root(cx, &dependencies_command("uvx"), &debian_env()).await?;
+        exec_root_checked(
+            cx,
+            &format!("chown -R {uid} /installed-agent/source && chmod -R u+rwX,go-w /installed-agent/source"),
+            &BTreeMap::new(),
+        )
+        .await?;
+        exec_root_checked(cx, &dependencies_command("uvx"), &debian_env()).await?;
         let project = quote(&remote_project);
         let lockfile = quote(&format!("{remote_project}/{}", manifest.runtime.lockfile));
         exec_agent(
@@ -883,13 +887,13 @@ impl Acp {
         };
         let target = self.select_distribution(&platform)?;
         self.selected_kind = Some(target.kind());
-        exec_root(cx, &dependencies_command(target.kind()), &debian_env()).await?;
+        exec_root_checked(cx, &dependencies_command(target.kind()), &debian_env()).await?;
         match &target {
             Target::Npx(_) => {
                 exec_agent(cx, &node_install_command(), &BTreeMap::new()).await?;
             }
             Target::Binary(b) => {
-                exec_root(cx, &binary_install_command(b), &BTreeMap::new()).await?;
+                exec_root_checked(cx, &binary_install_command(b), &BTreeMap::new()).await?;
             }
             _ => {}
         }

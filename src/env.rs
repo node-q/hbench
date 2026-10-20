@@ -220,6 +220,23 @@ pub struct ExecResult {
     pub stderr: String,
 }
 
+/// Metadata-only commands (mkdir, test -d, rm -f, ps, inspect, reading logs): a healthy daemon answers in seconds.
+const QUICK_COMMAND_TIMEOUT: Duration = Duration::from_secs(60);
+/// `stop` / `down`: docker gives each container a 10s grace before it kills it.
+const STOP_TIMEOUT: Duration = Duration::from_secs(120);
+/// Tearing a trial's project down: `stop`, or `down` with or without its images and volumes.
+const TEARDOWN_TIMEOUT: Duration = Duration::from_secs(300);
+/// Copying files in or out (`docker compose cp`, a tar of a directory): large trees over an ssh context take minutes.
+const COPY_TIMEOUT: Duration = Duration::from_secs(600);
+/// Emptying log dirs with `rm -rf`, which a chatty agent can fill with many files.
+const CLEAR_DIRS_TIMEOUT: Duration = Duration::from_secs(120);
+/// Applying the egress allowlist, or probing nftables in a throwaway sidecar container.
+const EGRESS_SETUP_TIMEOUT: Duration = Duration::from_secs(120);
+/// Building the egress sidecar image, which pulls its base image the first time.
+const SIDECAR_BUILD_TIMEOUT: Duration = Duration::from_secs(900);
+/// `docker version` before a run: an ssh context may take a few seconds to connect.
+const DAEMON_CHECK_TIMEOUT: Duration = Duration::from_secs(30);
+
 const EGRESS_SERVICE: &str = "hbench-egress-sidecar";
 const EGRESS_READY: &str = "/tmp/hbench-egress-sidecar.ready";
 /// gost's HTTP proxy port (gost.yaml).
@@ -413,7 +430,7 @@ pub fn quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', r"'\''"))
 }
 
-fn sv(a: &[&str]) -> Vec<String> {
+fn to_owned_args(a: &[&str]) -> Vec<String> {
     a.iter().map(|s| s.to_string()).collect()
 }
 
@@ -526,7 +543,7 @@ async fn nft_support(image: &str, log: &TrialLog) -> bool {
     CACHE
         .get_or_try_init(|| async {
             let out = tokio::time::timeout(
-                Duration::from_secs(120),
+                EGRESS_SETUP_TIMEOUT,
                 Command::new("docker")
                     .args(["container", "run", "--rm", "--cap-add", "NET_ADMIN", "--entrypoint", "network-policy", image, "check-nftables"])
                     .kill_on_drop(true)
@@ -576,7 +593,7 @@ async fn egress_image(log: &TrialLog) -> Result<String> {
             }
             let hash = crate::task::hex(&sha2::Digest::finalize(h))[..12].to_string();
             let image = format!("hbench-egress-sidecar:{hash}");
-            let exists = docker_output(&["image", "inspect", &image], Duration::from_secs(60)).await?.status.success();
+            let exists = docker_output(&["image", "inspect", &image], QUICK_COMMAND_TIMEOUT).await?.status.success();
             if !exists {
                 let dir = cache_root().join("egress-sidecar").join(&hash);
                 std::fs::create_dir_all(dir.join("bin"))?;
@@ -587,7 +604,7 @@ async fn egress_image(log: &TrialLog) -> Result<String> {
                     std::fs::set_permissions(&p, std::fs::Permissions::from_mode(mode))?;
                 }
                 log.line(&format!("building egress sidecar image {image}"));
-                let out = docker_output(&["build", "-t", &image, &dir.to_string_lossy()], Duration::from_secs(900)).await?;
+                let out = docker_output(&["build", "-t", &image, &dir.to_string_lossy()], SIDECAR_BUILD_TIMEOUT).await?;
                 if !out.status.success() {
                     bail!("building egress sidecar failed: {}", String::from_utf8_lossy(&out.stderr));
                 }
@@ -829,13 +846,13 @@ impl DockerEnv {
         let started = async move {
             if let Some(mut built) = built {
                 if !*built {
-                    self.run_ok(sv(&["build"]), None).await?;
+                    self.run_ok(to_owned_args(&["build"]), None).await?;
                     *built = true;
                 }
             } else if self.spec.env_dir.join("docker-compose.yaml").exists() {
-                self.run_ok(sv(&["build"]), None).await?;
+                self.run_ok(to_owned_args(&["build"]), None).await?;
             }
-            let _ = self.run(sv(&["down", "--remove-orphans"]), Some(Duration::from_secs(120)), "down (stale)", None).await;
+            let _ = self.run(to_owned_args(&["down", "--remove-orphans"]), Some(STOP_TIMEOUT), "down (stale)", None).await;
             self.up().await?;
             if self.egress == Some(EgressMethod::Proxy) && self.spec.baseline.mode != NetworkMode::Public {
                 self.check_isolated().await?;
@@ -853,7 +870,7 @@ impl DockerEnv {
         }
         if !self.spec.log_dirs.is_empty() {
             let d = self.spec.log_dirs.join(" ");
-            let r = self.exec_root(&format!("mkdir -p {d} && chmod 777 /logs {d}"), Some(Duration::from_secs(60))).await?;
+            let r = self.exec_root(&format!("mkdir -p {d} && chmod 777 /logs {d}"), Some(QUICK_COMMAND_TIMEOUT)).await?;
             if r.code != 0 {
                 bail!("Failed to create /logs dirs (is bash available in the image?): {}{}", r.stdout, r.stderr);
             }
@@ -875,7 +892,7 @@ impl DockerEnv {
     /// `up --detach --wait`, retried when a pull or the daemon fails transiently.
     async fn up(&self) -> Result<()> {
         for attempt in 1.. {
-            let r = self.run(sv(&["up", "--detach", "--wait"]), None, "up --detach --wait", None).await?;
+            let r = self.run(to_owned_args(&["up", "--detach", "--wait"]), None, "up --detach --wait", None).await?;
             if r.code == 0 {
                 break;
             }
@@ -910,14 +927,14 @@ impl DockerEnv {
         let mut merged = self.spec.persistent_env.clone();
         merged.extend(env.clone());
         crate::redact::register_env(&merged);
-        let mut args = sv(&["exec", "-T"]);
+        let mut args = to_owned_args(&["exec", "-T"]);
         if let Some(w) = cwd {
-            args.extend(sv(&["-w", w]));
+            args.extend(to_owned_args(&["-w", w]));
         }
         if let Some(u) = user {
-            args.extend(sv(&["-u", u]));
+            args.extend(to_owned_args(&["-u", u]));
         }
-        args.extend(sv(&["main", "bash", "-c", EXEC_FROM_STDIN]));
+        args.extend(to_owned_args(&["main", "bash", "-c", EXEC_FROM_STDIN]));
         let keys: Vec<&str> = merged.keys().map(String::as_str).collect();
         // Log env keys only: values may be secrets.
         let label = format!("exec user={} env={keys:?}: {}", user.unwrap_or("-"), tail(command, 2000));
@@ -933,53 +950,46 @@ impl DockerEnv {
         if service == MAIN {
             return self.exec(command, user, &BTreeMap::new(), timeout).await;
         }
-        let mut args = sv(&["exec", "-T"]);
+        let mut args = to_owned_args(&["exec", "-T"]);
         if let Some(u) = user {
-            args.extend(sv(&["-u", u]));
+            args.extend(to_owned_args(&["-u", u]));
         }
-        args.extend(sv(&[service, "sh", "-c", command]));
+        args.extend(to_owned_args(&[service, "sh", "-c", command]));
         let label = format!("exec [{service}] {}", tail(command, 2000));
         self.run(args, timeout, &label, None).await
     }
 
     pub async fn is_dir(&self, service: &str, path: &str) -> Result<bool> {
-        Ok(self.service_exec(service, &format!("test -d {}", quote(path)), Some("root"), Some(Duration::from_secs(60))).await?.code == 0)
+        Ok(self.service_exec(service, &format!("test -d {}", quote(path)), Some("root"), Some(QUICK_COMMAND_TIMEOUT)).await?.code == 0)
     }
 
     pub async fn upload_dir(&self, src: &Path, dst: &str) -> Result<()> {
-        let r = self.exec_root(&format!("mkdir -p {}", quote(dst)), Some(Duration::from_secs(60))).await?;
+        let r = self.exec_root(&format!("mkdir -p {}", quote(dst)), Some(QUICK_COMMAND_TIMEOUT)).await?;
         if r.code != 0 {
             bail!("mkdir {dst} failed: {}", r.stderr);
         }
-        self.run_ok(vec!["cp".into(), format!("{}/.", src.display()), format!("main:{dst}")], Some(Duration::from_secs(600)))
-            .await
-            .map(|_| ())
+        self.run_ok(vec!["cp".into(), format!("{}/.", src.display()), format!("main:{dst}")], Some(COPY_TIMEOUT)).await.map(|_| ())
     }
 
     pub async fn upload_file(&self, src: &Path, dst: &str) -> Result<()> {
         if let Some(parent) = Path::new(dst).parent().map(|p| p.display().to_string()).filter(|p| !p.is_empty() && p != "/") {
-            self.exec_root(&format!("mkdir -p {}", quote(&parent)), Some(Duration::from_secs(60))).await?;
+            self.exec_root(&format!("mkdir -p {}", quote(&parent)), Some(QUICK_COMMAND_TIMEOUT)).await?;
         }
-        self.run_ok(vec!["cp".into(), src.display().to_string(), format!("main:{dst}")], Some(Duration::from_secs(600))).await.map(|_| ())
+        self.run_ok(vec!["cp".into(), src.display().to_string(), format!("main:{dst}")], Some(COPY_TIMEOUT)).await.map(|_| ())
     }
 
     pub async fn download_dir(&self, service: &str, src: &str, dst: &Path) -> Result<()> {
         std::fs::create_dir_all(dst)?;
-        self.run_ok(
-            vec!["cp".into(), format!("{service}:{}/.", src.trim_end_matches('/')), dst.display().to_string()],
-            Some(Duration::from_secs(600)),
-        )
-        .await
-        .map(|_| ())
+        self.run_ok(vec!["cp".into(), format!("{service}:{}/.", src.trim_end_matches('/')), dst.display().to_string()], Some(COPY_TIMEOUT))
+            .await
+            .map(|_| ())
     }
 
     pub async fn download_file(&self, service: &str, src: &str, dst: &Path) -> Result<()> {
         if let Some(p) = dst.parent() {
             std::fs::create_dir_all(p)?;
         }
-        self.run_ok(vec!["cp".into(), format!("{service}:{src}"), dst.display().to_string()], Some(Duration::from_secs(600)))
-            .await
-            .map(|_| ())
+        self.run_ok(vec!["cp".into(), format!("{service}:{src}"), dst.display().to_string()], Some(COPY_TIMEOUT)).await.map(|_| ())
     }
 
     /// Tar inside the service with `--exclude` patterns, copy the archive out, extract locally.
@@ -987,12 +997,7 @@ impl DockerEnv {
         let tmp = format!("/tmp/hbench-transfer-{}.tar.gz", uuid::Uuid::new_v4().simple());
         let flags: Vec<String> = exclude.iter().map(|p| format!("--exclude={}", quote(p))).collect();
         let r = self
-            .service_exec(
-                service,
-                &format!("tar czf {tmp} {} -C {} .", flags.join(" "), quote(src)),
-                Some("root"),
-                Some(Duration::from_secs(600)),
-            )
+            .service_exec(service, &format!("tar czf {tmp} {} -C {} .", flags.join(" "), quote(src)), Some("root"), Some(COPY_TIMEOUT))
             .await?;
         if r.code != 0 {
             bail!("tar in {service} failed: {}", r.stderr);
@@ -1009,7 +1014,7 @@ impl DockerEnv {
         }
         .await;
         let _ = std::fs::remove_file(&local);
-        let _ = self.service_exec(service, &format!("rm -f {tmp}"), Some("root"), Some(Duration::from_secs(60))).await;
+        let _ = self.service_exec(service, &format!("rm -f {tmp}"), Some("root"), Some(QUICK_COMMAND_TIMEOUT)).await;
         res
     }
 
@@ -1029,7 +1034,7 @@ impl DockerEnv {
     }
 
     pub async fn stop_service(&self, service: &str) -> Result<()> {
-        self.run_ok(sv(&["stop", service]), Some(Duration::from_secs(120))).await.map(|_| ())
+        self.run_ok(to_owned_args(&["stop", service]), Some(STOP_TIMEOUT)).await.map(|_| ())
     }
 
     pub async fn set_network_policy(&self, p: &NetworkPolicy) -> Result<()> {
@@ -1053,7 +1058,7 @@ impl DockerEnv {
     }
 
     async fn apply_proxy_policy(&self, p: &NetworkPolicy) -> Result<()> {
-        let mut args = sv(&["exec", "--no-TTY", EGRESS_SERVICE, "network-policy"]);
+        let mut args = to_owned_args(&["exec", "--no-TTY", EGRESS_SERVICE, "network-policy"]);
         match p.mode {
             NetworkMode::Public => args.push("allow-all".into()),
             NetworkMode::NoNetwork => args.push("deny-all".into()),
@@ -1062,11 +1067,11 @@ impl DockerEnv {
                 args.extend(p.allowed_hosts.iter().cloned());
             }
         }
-        self.run_ok(args, Some(Duration::from_secs(120))).await.map(|_| ())
+        self.run_ok(args, Some(EGRESS_SETUP_TIMEOUT)).await.map(|_| ())
     }
 
     async fn docker(&self, args: &[&str]) -> Result<String> {
-        let out = docker_output(args, Duration::from_secs(60)).await?;
+        let out = docker_output(args, QUICK_COMMAND_TIMEOUT).await?;
         if !out.status.success() {
             bail!("docker {} failed: {}", args.join(" "), String::from_utf8_lossy(&out.stderr).trim());
         }
@@ -1074,7 +1079,7 @@ impl DockerEnv {
     }
 
     async fn container_id(&self, service: &str) -> Result<String> {
-        let r = self.run_ok(vec!["ps".into(), "-q".into(), service.into()], Some(Duration::from_secs(60))).await?;
+        let r = self.run_ok(vec!["ps".into(), "-q".into(), service.into()], Some(QUICK_COMMAND_TIMEOUT)).await?;
         r.stdout.split_whitespace().next().map(str::to_string).ok_or_else(|| anyhow!("no running container for {service}"))
     }
 
@@ -1116,8 +1121,8 @@ impl DockerEnv {
         let method = self.egress?;
         let mut denied = vec![];
         // The last 20000 lines: older denials may be missed on a very chatty run.
-        let logs = self.compose(&sv(&["logs", "--no-color", "--no-log-prefix", "--tail", "20000", EGRESS_SERVICE])).output();
-        match tokio::time::timeout(Duration::from_secs(60), logs).await {
+        let logs = self.compose(&to_owned_args(&["logs", "--no-color", "--no-log-prefix", "--tail", "20000", EGRESS_SERVICE])).output();
+        match tokio::time::timeout(QUICK_COMMAND_TIMEOUT, logs).await {
             Ok(Ok(o)) if o.status.success() => denied = parse_denials(&String::from_utf8_lossy(&o.stdout)),
             _ => self.log.line("could not read the egress sidecar's log"),
         }
@@ -1163,7 +1168,7 @@ impl DockerEnv {
             }
         }
         cmd.push_str("true");
-        let r = self.exec_root(&cmd, Some(Duration::from_secs(120))).await?;
+        let r = self.exec_root(&cmd, Some(CLEAR_DIRS_TIMEOUT)).await?;
         if r.code != 0 {
             bail!("resetting {dirs:?} failed: {}", r.stderr);
         }
@@ -1192,18 +1197,18 @@ impl DockerEnv {
 
     /// As root from `/`: the agent may have deleted or renamed the task's workdir, and `exec -w` would fail.
     async fn exec_from_root(&self, command: &str) -> Result<ExecResult> {
-        self.exec_in(command, Some("root"), &BTreeMap::new(), Some(Duration::from_secs(60)), Some("/")).await
+        self.exec_in(command, Some("root"), &BTreeMap::new(), Some(QUICK_COMMAND_TIMEOUT), Some("/")).await
     }
 
     pub async fn stop(&self) -> Result<()> {
         let args = if self.spec.keep_containers {
-            sv(&["stop"])
+            to_owned_args(&["stop"])
         } else if self.spec.delete {
-            sv(&["down", "--rmi", "local", "--volumes", "--remove-orphans"])
+            to_owned_args(&["down", "--rmi", "local", "--volumes", "--remove-orphans"])
         } else {
-            sv(&["down"])
+            to_owned_args(&["down"])
         };
-        self.run_ok(args, Some(Duration::from_secs(300))).await.map(|_| ())
+        self.run_ok(args, Some(TEARDOWN_TIMEOUT)).await.map(|_| ())
     }
 }
 
@@ -1275,7 +1280,7 @@ fn cache_home() -> PathBuf {
 /// Fail fast with a readable message when the docker daemon is unreachable.
 pub async fn preflight() -> Result<()> {
     let out = tokio::time::timeout(
-        Duration::from_secs(30),
+        DAEMON_CHECK_TIMEOUT,
         Command::new("docker").args(["version", "--format", "{{.Server.Version}}"]).kill_on_drop(true).output(),
     )
     .await

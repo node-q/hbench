@@ -248,7 +248,7 @@ pub async fn ensure_system_dependencies(cx: &AgentCtx<'_>, deps: &[&str]) -> Res
         }
         return Ok(());
     }
-    exec_root(cx, &cmd, &env).await.map(|_| ())
+    exec_root_checked(cx, &cmd, &env).await.map(|_| ())
 }
 
 /// Error patterns: the match furthest toward the end of the output wins.
@@ -386,7 +386,7 @@ pub async fn exec_agent(cx: &AgentCtx<'_>, cmd: &str, env: &BTreeMap<String, Str
     Ok(r)
 }
 
-pub async fn exec_root(cx: &AgentCtx<'_>, cmd: &str, env: &BTreeMap<String, String>) -> Result<ExecResult> {
+pub async fn exec_root_checked(cx: &AgentCtx<'_>, cmd: &str, env: &BTreeMap<String, String>) -> Result<ExecResult> {
     let r = cx.exec_as(&format!("set -o pipefail; {cmd}"), Some("root"), env, None).await?;
     if r.code != 0 {
         return Err(exec_error(cmd, &r, None));
@@ -418,7 +418,7 @@ pub async fn upload_text(cx: &AgentCtx<'_>, path: &str, content: &str) -> Result
     common::upload_asset(cx, content, path).await?;
     let q = quote(path);
     let chown = cx.user.as_ref().map(|u| format!("chown {} {q} && ", quote(u))).unwrap_or_default();
-    exec_root(cx, &format!("{chown}chmod 600 {q}"), &BTreeMap::new()).await.map(|_| ())
+    exec_root_checked(cx, &format!("{chown}chmod 600 {q}"), &BTreeMap::new()).await.map(|_| ())
 }
 
 /// Shell snippet ensuring a Node >= 20 toolchain is active (nvm-installs Node 22 if needed).
