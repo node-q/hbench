@@ -126,6 +126,8 @@ pub fn compute_stats(
     s
 }
 
+/// A new trial's dir name: the task's dir name (up to 32 characters, trailing `_`/`-` dropped), `__`,
+/// and 7 random hex digits.
 pub fn trial_name(t: &TaskRef) -> String {
     let base = t.display_name();
     let short: String = base.chars().take(32).collect();
@@ -444,6 +446,8 @@ pub async fn run_job(
     Ok(jr)
 }
 
+/// The config a job dir was started with (its config.json), for resume. The job's name and jobs dir come
+/// from where the dir is now, so a moved job resumes in place.
 pub fn load_config(job_dir: &Path) -> Result<JobConfig> {
     // `jobs resume -p .` (or `..`) has no file name to take the job's name from.
     let resolved;

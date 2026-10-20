@@ -443,6 +443,9 @@ pub struct Task {
 }
 
 impl Task {
+    /// Loads a task dir and checks what a trial needs before any container starts: task.toml (unknown
+    /// keys refused, legacy fields migrated), the instruction or each step's instruction, unique step
+    /// names, artifact specs, and an environment definition. Windows tasks are refused.
     pub fn load(dir: &Path) -> Result<Task> {
         let dir = dir.canonicalize().with_context(|| format!("task dir {}", dir.display()))?;
         let toml_path = dir.join("task.toml");
@@ -557,7 +560,9 @@ impl Task {
         }
         Ok(())
     }
-    pub fn checksum(&self) -> Result<String> {
+    /// Hash of every file in the task dir, as result.json's `task_checksum`. Unlike [`package_digest`],
+    /// it also covers files the task's .gitignore leaves out of the package.
+    pub fn tree_hash(&self) -> Result<String> {
         hash_dir(&self.dir)
     }
 
@@ -635,8 +640,9 @@ pub fn strip_canary(text: &str) -> String {
     lines[i..].join("\n")
 }
 
-/// Task digest over the packaged (gitignore-filtered) files, `sha256:`-prefixed.
-pub fn content_digest(dir: &Path) -> String {
+/// Digest of the files a task package contains ([`crate::authoring::collect_files`]: task.toml, instruction.md,
+/// environment/, tests/, solution/, steps/, ..., minus .gitignore matches), `sha256:`-prefixed, as lock.json records it.
+pub fn package_digest(dir: &Path) -> String {
     crate::authoring::content_hash(dir).map(|h| format!("sha256:{h}")).unwrap_or_default()
 }
 

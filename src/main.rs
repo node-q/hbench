@@ -1332,7 +1332,7 @@ async fn run() -> Result<ExitCode> {
                 .filter(|d| Task::is_task_dir(d))
                 .map(|d| -> Result<Value> {
                     let t = Task::load(d)?;
-                    Ok(serde_json::json!({"name": t.name(), "checksum": t.checksum()?, "digest": crate::task::content_digest(d)}))
+                    Ok(serde_json::json!({"name": t.name(), "checksum": t.tree_hash()?, "digest": crate::task::package_digest(d)}))
                 })
                 .collect::<Result<_>>()?;
             println!("{}", serde_json::to_string_pretty(&rows)?);
