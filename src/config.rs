@@ -595,6 +595,10 @@ impl Default for JobConfig {
     }
 }
 
+/// Unread settings that nothing known sends with a value, so setting one is refused rather than ignored.
+pub const REFUSED_UNREAD_SETTINGS: [&str; 4] =
+    ["environment.stream", "environment.override_tpu", "environment.import_path", "verifier.import_path"];
+
 impl JobConfig {
     pub fn job_dir(&self) -> PathBuf {
         self.jobs_dir.join(&self.job_name)
@@ -607,7 +611,31 @@ impl JobConfig {
         Ok(cfg)
     }
 
+    /// Settings hbench parses but never acts on, where they differ from the default. Those in
+    /// [`REFUSED_UNREAD_SETTINGS`] stop the job; the others only get a warning, because hbench's viewer
+    /// or node-q/hpg send them.
+    pub fn unread_settings(&self) -> Vec<&'static str> {
+        let (e, v, default) = (&self.environment, &self.verifier, EnvConfig::default());
+        [
+            ("debug", self.debug),
+            ("environment.stream", e.stream),
+            ("environment.cpu_enforcement_policy", e.cpu_enforcement_policy != default.cpu_enforcement_policy),
+            ("environment.memory_enforcement_policy", e.memory_enforcement_policy != default.memory_enforcement_policy),
+            ("environment.override_storage_mb", e.override_storage_mb.is_some()),
+            ("environment.override_tpu", e.override_tpu.as_ref().is_some_and(|t| !t.is_null())),
+            ("environment.import_path", e.import_path.is_some()),
+            ("verifier.import_path", v.import_path.is_some()),
+            ("verifier.kwargs", !v.kwargs.is_empty()),
+        ]
+        .into_iter()
+        .filter_map(|(key, set)| set.then_some(key))
+        .collect()
+    }
+
     pub fn validate(&self) -> Result<()> {
+        if let Some(key) = self.unread_settings().into_iter().find(|k| REFUSED_UNREAD_SETTINGS.contains(k)) {
+            bail!("{key} is not supported by hbench (nothing reads it); remove it from the job config");
+        }
         if self.n_attempts < 1 || self.n_concurrent_trials < 1 {
             bail!("n_attempts and n_concurrent_trials must be >= 1");
         }
@@ -901,5 +929,27 @@ mod tests {
         assert!(inc.should_retry("ApiRateLimitError") && !inc.should_retry("RuntimeError"));
         let b = RetryConfig { wait_multiplier: 2.0, max_wait_sec: 5.0, ..Default::default() };
         assert_eq!((b.backoff_sec(0), b.backoff_sec(2), b.backoff_sec(9)), (1.0, 4.0, 5.0));
+    }
+
+    #[test]
+    fn unread_settings_are_refused_or_reported() {
+        let cfg = |v: Value| -> JobConfig { strict_value(v).unwrap() };
+        for key in REFUSED_UNREAD_SETTINGS {
+            let (section, field) = key.split_once('.').unwrap();
+            let value = if field == "stream" { serde_json::json!(true) } else { serde_json::json!("x") };
+            let err = cfg(serde_json::json!({ section: { field: value } })).validate().unwrap_err().to_string();
+            assert!(err.starts_with(&format!("{key} is not supported")), "{err}");
+        }
+        let viewer_and_hpg = cfg(serde_json::json!({
+            "debug": true,
+            "environment": {"cpu_enforcement_policy": "strict", "override_storage_mb": 10240},
+            "verifier": {"kwargs": {"x": 1}},
+        }));
+        assert!(viewer_and_hpg.validate().is_ok());
+        assert_eq!(
+            viewer_and_hpg.unread_settings(),
+            ["debug", "environment.cpu_enforcement_policy", "environment.override_storage_mb", "verifier.kwargs"]
+        );
+        assert!(JobConfig::default().unread_settings().is_empty());
     }
 }
