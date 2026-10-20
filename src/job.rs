@@ -328,7 +328,7 @@ pub async fn run_job(
     let lock = serde_json::json!({
         "schema_version": 3,
         "created_at": Utc::now(),
-        "hbench": {"version": env!("CARGO_PKG_VERSION")},
+        "hbench": crate::build_info::json(),
         "n_concurrent_trials": cfg.n_concurrent_trials,
         "retry": cfg.retry,
         "trials": pending.iter().map(crate::trial::trial_lock).collect::<Vec<_>>(),
@@ -450,6 +450,10 @@ pub async fn run_job(
     persist_job_result();
     // A secret first seen in a later trial may also be in an earlier one's files, and in job.log.
     crate::redact::scrub_dir(&job_dir);
+    // Last, so it covers the files as they are left; nothing writes to the job dir after it.
+    if let Err(e) = crate::manifest::write(&job_dir, job_id) {
+        eprintln!("warning: {e:#}");
+    }
     let jr = locked(&job_result).clone();
     Ok(jr)
 }

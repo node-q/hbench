@@ -34,6 +34,7 @@ $B run -c job.yaml                                             # job config (YAM
 $B run -c job.yaml --diff jobs/<old-job>                       # reuse / regrade / rerun vs an earlier job
 $B jobs resume -p jobs/<job>        $B jobs summary -p jobs/<job>
 $B jobs regrade --source jobs/<job> -p <tasks>                 # re-verify recorded outputs
+$B jobs verify -p jobs/<job>                                   # files unchanged since the run (manifest.json)
 $B trials start -p <task> -a codex -m openai/gpt-5             # single trial
 $B trials handoff jobs/<job>/<trial>                           # resume the session locally (claude-code, muse-code)
 $B sweeps run -c job.yaml --max-sweeps 3                       # drop solved tasks each sweep
@@ -167,7 +168,7 @@ could also change files while the tests run; it shows up in the trajectory, so r
 ## Output
 
 ```
-jobs/<job>/{config.json, lock.json, result.json, job.log, trials.json}
+jobs/<job>/{config.json, lock.json, result.json, job.log, trials.json, manifest.json}
 jobs/<job>/<task>__<id>/{config.json, lock.json, result.json, trial.log, exception.txt,
                          agent/, verifier/, artifacts/{manifest.json, logs/artifacts/...}, steps/<name>/...}
 ```
@@ -175,6 +176,12 @@ jobs/<job>/<task>__<id>/{config.json, lock.json, result.json, trial.log, excepti
 `trials.json` is written only for jobs not planned from their config (`jobs regrade`, `run --diff`), so they can be
 resumed. The job's `result.json` has per-eval metrics (mean/sum/min/max/uv-script), pass@k, reward/exception stats, tokens,
 and cost. Failed trials are retried by error type (`--max-retries`, include/exclude).
+
+`lock.json` (the job's and each trial's) records the build that ran it: its version, its results epoch and the
+commit it was built from. Releases of one results epoch grade alike, so `run --diff` reuses their trials whatever
+the version. `manifest.json`, written last, holds the SHA-256 of the job's config, lock, result and log and of every
+file its trials wrote; `hbench jobs verify -p jobs/<job>` reports any file changed, removed or added since. It shows
+the files are the ones this build wrote, not that the run was real: anyone can rebuild hbench.
 
 Secrets stay out of the output and off command lines:
 

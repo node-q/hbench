@@ -115,6 +115,10 @@ fn without_task(v: &Value) -> Value {
     if let Some(o) = v.as_object_mut() {
         o.remove("task");
         o.remove("source_trial");
+        // Builds of one results epoch grade alike, whatever their version or commit.
+        if let Some(epoch) = o.get("hbench").and_then(|h| h.get("results_epoch")).cloned() {
+            o.insert("hbench".into(), serde_json::json!({"results_epoch": epoch}));
+        }
     }
     v
 }
@@ -251,5 +255,20 @@ mod tests {
         assert_eq!(version_action("1.2.3", "2.0.0").unwrap(), Action::Rerun);
         assert_eq!(version_action("1.2.3", "1.2.3-rc1").unwrap(), Action::Rerun);
         assert!(version_action("1.2", "1.2.3").is_err());
+    }
+
+    #[test]
+    fn builds_of_one_results_epoch_are_compatible() {
+        let lock = |version: &str, epoch: Option<&str>| {
+            let mut hbench = serde_json::json!({"version": version, "commit": format!("c-{version}")});
+            if let Some(e) = epoch {
+                hbench["results_epoch"] = e.into();
+            }
+            serde_json::json!({"hbench": hbench, "task": {"name": "t"}, "timeout_multiplier": 1.0})
+        };
+        assert_eq!(without_task(&lock("0.2.5", Some("0.2"))), without_task(&lock("0.2.7", Some("0.2"))));
+        assert_ne!(without_task(&lock("0.2.7", Some("0.2"))), without_task(&lock("0.3.0", Some("0.3"))));
+        assert_ne!(without_task(&lock("0.2.5", None)), without_task(&lock("0.2.7", Some("0.2"))));
+        assert_ne!(without_task(&lock("0.2.5", None)), without_task(&lock("0.2.6", None)));
     }
 }
