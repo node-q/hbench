@@ -43,6 +43,7 @@ $B sweeps run -c job.yaml --max-sweeps 3                       # drop solved tas
 $B view jobs [--port 8080-8089] [--tasks|--jobs]                # web viewer for jobs or task folders (also `view -p jobs`)
 $B traces export -p jobs/<job> -o traces.jsonl                 # trace rows (ATIF episodes)
 $B datasets list | download <name@ver> | init | add | remove
+$B datasets pack | push | convert | export                    # publish OCI datasets (see below)
 $B init <org/name> [--steps N]   $B add|remove|sync ...             # task/dataset authoring (dataset.toml)
 $B tasks init|check|digest|start-env|migrate|schema               # digest: task_checksum + lock digest
 $B analyze jobs/<job> | <trial>    $B check <tasks>                 # agent-run trajectory analysis / task QA
@@ -206,6 +207,43 @@ registry, so a mirror must serve the same digest). A dataset in `hbench.lock` ru
 warning if its tag has moved since; `--locked` refuses a dataset that is not in `hbench.lock`, or whose tag now
 resolves to another digest. `run` and `datasets download` take both flags.
 
+### Publishing datasets
+
+```bash
+$B datasets pack tasks --descriptor source.yaml --oci-layout ./datasets      # ./datasets/<name>, tagged <version>
+$B datasets push tasks --descriptor source.yaml --to oci://ghcr.io/<namespace>/<name>:<version>
+$B datasets convert registry.json -d hello@1.0 --oci-layout ./datasets --check-equivalence
+$B datasets export -d hello@1.0 --registry oci://ghcr.io/<namespace> --oci-layout ./datasets
+```
+
+- `pack` packs every subdirectory of `tasks` that has a `task.toml`, sorted by name, and skips everything else. Its
+  layers are reproducible, so the same tasks and descriptor always make the same manifest. `pack`, `push` and
+  `export` print the manifest digest on stdout, and a summary on stderr.
+- The descriptor is YAML matching [`assets/schemas/dataset-source.v1.json`](assets/schemas/dataset-source.v1.json),
+  which needs only `schema_version: 1`, `name`, `version` and `license`, and accepts node-q/hbench-datasets'
+  `source.yaml` files as they are. `description`, `license`, `upstream` (`url`, `revision`, `creator`, `citation`) and
+  `canary` go into the config blob. `title` and
+  `description` become the manifest's `org.opencontainers.image.title` and `.description`, and `source.git_url` and
+  `source.commit` its `.source` and `.revision` (`upstream.url` and `.revision` without a `source`). Packing fails if
+  the number of tasks is not `source.task_count`, or a task's `docker_image` is not `environment.declared_image`
+  (`{task}` being the task's directory name) or, with `policy: pinned-by-digest`, its entry in `environment.images`.
+  `source.path`, `keywords`, `attribution`, `rai` and `environment.planned` are checked but not used.
+- `push` takes `--to oci://<registry>/<repository>:<version>`, the repository ending in the dataset name. It uploads the
+  blobs the registry lacks, then the manifest, and checks that the tag resolves to the manifest's digest. Pushing the
+  same manifest again changes nothing; a tag that names another manifest is moved only with `--allow-overwrite`.
+  Credentials come from the docker config that `docker login` and `oras login` write (`$DOCKER_CONFIG/config.json`, else
+  `~/.docker/config.json`): the registry's credential helper (`credHelpers`, else `credsStore`), else its `auths` entry.
+  Without any, `push` is anonymous. As for pulls, only loopback registries are reached over plain HTTP.
+- `convert` finds `name@version` in a `registry.json` (a path or a URL), checks out each git repository and commit
+  once, and packs the tasks into `--oci-layout` or pushes them `--to` a registry. It prints `name@version` and the
+  manifest digest. Without `--descriptor` the dataset takes the registry's name, version and description, licence
+  `NOASSERTION`, and the git URL and commit its tasks share as `.source` and `.revision`. `--check-equivalence` reads the
+  result back, unpacks every task and compares it with its checkout: the same files, contents, exec bits and symlink
+  targets, `task_checksum` and package digest. Any difference fails the command.
+- `export` copies `name@version` from `--registry` (as `run` takes it) into `<dir>/<name>`, tagged with the version and
+  checked blob by blob, so that `--registry oci-layout:<dir>` runs it offline. It reads with the docker config's
+  credentials; `run` and `datasets download` pull anonymously.
+
 ### Dataset format
 
 A dataset version is one OCI image manifest (`application/vnd.oci.image.manifest.v1+json`), tagged with the version:
@@ -214,15 +252,15 @@ A dataset version is one OCI image manifest (`application/vnd.oci.image.manifest
 - `config`: a JSON blob of media type `application/vnd.hbench.dataset.config.v1+json`, matching
   [`assets/schemas/dataset-config.v1.json`](assets/schemas/dataset-config.v1.json): the dataset's `name` (the last
   component of its repository), `version` (semver without build metadata, the patch number optional: `2.0`), SPDX
-  `license`, and optionally `description`, `upstream` (`url`, `revision`, `citation`) and `canary`; and `tasks`, one
-  per layer and in layer order, each with `name`, `layer_digest` and `package_digest`, and optionally `docker_image`
-  (pinned, `<image>@sha256:<hex>`), `platforms` (`os/arch`) and `timeouts` (`agent_sec`, `verifier_sec`,
-  `build_sec`).
+  `license`, and optionally `description`, `upstream` (`url`, `revision`, `creator`, `citation`) and `canary`; and
+  `tasks`, one per layer and in layer order, each with `name`, `layer_digest` and `package_digest`, and optionally
+  `docker_image` (pinned, `<image>@sha256:<hex>`), `platforms` (`os/arch`) and `timeouts` (`agent_sec`,
+  `verifier_sec`, `build_sec`).
 - `layers`: one `application/vnd.oci.image.layer.v1.tar+gzip` per task, annotated with
   `org.opencontainers.image.title` (the task's directory name, which equals its config `name`) and
   `dev.hbench.task.package-digest` (its config `package_digest`).
 - Manifest annotations `org.opencontainers.image.version` (equal to the config's version when set), `.licenses`,
-  `.source`, `.revision` and `.created`.
+  `.title`, `.description`, `.source`, `.revision` and `.created`.
 
 A layer is a tar of the task directory's contents, paths relative to it (`./` prefixes are fine): regular files,
 directories, and symlinks that resolve inside the task directory. Files with an exec bit unpack as 0755, other files
@@ -234,7 +272,8 @@ file>\n` for each file the task packages (`task.toml`, `instruction.md`, `README
 
 Layers should be reproducible, so that an unchanged task keeps its layer digest from one dataset version to the next:
 entries sorted by path, modes 0755 (directories and executables) or 0644, uid and gid 0, mtime 0, and gzip without a
-file name or time. With GNU tar and [oras](https://oras.land), publishing a one-task dataset looks like this:
+file name or time. `hbench datasets pack` makes them so; with GNU tar and [oras](https://oras.land) instead,
+publishing a one-task dataset looks like this:
 
 ```bash
 tar -C tasks/hello-world --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner --mode=a=rX,u+w -cf - . \
@@ -327,8 +366,10 @@ npm run dev                                    # hot reload; proxies /api to `hb
 
 CI (`.github/workflows/ci.yml`) runs on GitHub-hosted runners: build + `cargo test` on Linux and macOS, `cargo fmt
 --check` and clippy, `cargo audit`, a check that the committed `viewer/dist` matches `viewer/src`, and `scripts/e2e.sh`
-against a real Docker daemon. On Linux it also runs the OCI tests against a local registry
-(`HBENCH_TEST_OCI_REGISTRY=localhost:5000 cargo test oci::tests`, with `registry:3` listening on port 5000).
+against a real Docker daemon. On Linux it also runs the OCI tests against two local `registry:3` containers
+(`HBENCH_TEST_OCI_REGISTRY=localhost:5000 cargo test oci::tests`), the second taking basic auth with a password
+generated for the run (`HBENCH_TEST_OCI_AUTH_REGISTRY=localhost:5001`,
+`HBENCH_TEST_OCI_AUTH_CREDENTIALS=<user>:<password>`).
 
 ## Releases
 

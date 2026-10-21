@@ -1,5 +1,5 @@
-//! Vendored JSON schemas (task.toml, trial config, an OCI dataset's config blob, each agent's options) under
-//! assets/schemas.
+//! Vendored JSON schemas (task.toml, trial config, an OCI dataset's config blob and source descriptor, each
+//! agent's options) under assets/schemas.
 
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
@@ -9,6 +9,7 @@ use std::sync::{Mutex, OnceLock};
 pub const TASK: &str = include_str!("../assets/schemas/task.json");
 pub const TRIAL: &str = include_str!("../assets/schemas/trial.json");
 pub const DATASET_CONFIG: &str = include_str!("../assets/schemas/dataset-config.v1.json");
+pub const DATASET_SOURCE: &str = include_str!("../assets/schemas/dataset-source.v1.json");
 
 const AGENTS: &[(&str, &str)] = &[
     ("acp", include_str!("../assets/schemas/agents/acp.json")),
@@ -153,8 +154,16 @@ pub fn violations(schema: &Value, value: &Value) -> Result<Vec<String>> {
 }
 
 fn check(root: &Value, schema: &Value, value: &Value, at: &str, out: &mut Vec<String>) -> Result<()> {
-    let Value::Object(rules) = schema else { bail!("schema at {at:?} is not an object") };
     let here = if at.is_empty() { "the document" } else { at };
+    let rules = match schema {
+        Value::Object(rules) => rules,
+        Value::Bool(true) => return Ok(()),
+        Value::Bool(false) => {
+            out.push(format!("{here}: not allowed"));
+            return Ok(());
+        }
+        _ => bail!("schema at {at:?} is not an object"),
+    };
     let child = |key: &str| if at.is_empty() { key.to_string() } else { format!("{at}.{key}") };
     for (keyword, rule) in rules {
         match keyword.as_str() {
@@ -223,6 +232,39 @@ fn check(root: &Value, schema: &Value, value: &Value, at: &str, out: &mut Vec<St
                     out.push(format!("{here}: {n} is below the minimum {limit}"));
                 }
             }
+            "const" => {
+                if value != rule {
+                    out.push(format!("{here}: expected {rule}, got {value}"));
+                }
+            }
+            "enum" => {
+                let allowed = rule.as_array().with_context(|| format!("enum at {here} is not an array"))?;
+                if !allowed.contains(value) {
+                    let allowed: Vec<String> = allowed.iter().map(Value::to_string).collect();
+                    out.push(format!("{here}: {value} is not one of {}", allowed.join(", ")));
+                }
+            }
+            "uniqueItems" => {
+                let (Value::Bool(true), Value::Array(items)) = (rule, value) else { continue };
+                for (i, item) in items.iter().enumerate().filter(|(i, item)| items[..*i].contains(item)) {
+                    out.push(format!("{}: {item} is listed twice", child(&i.to_string())));
+                }
+            }
+            "minProperties" => {
+                let (Some(limit), Value::Object(fields)) = (rule.as_u64(), value) else { continue };
+                if (fields.len() as u64) < limit {
+                    out.push(format!("{here}: needs at least {limit} key(s)"));
+                }
+            }
+            "if" => {
+                let mut failed = vec![];
+                check(root, rule, value, at, &mut failed)?;
+                let branch = if failed.is_empty() { "then" } else { "else" };
+                if let Some(sub) = rules.get(branch) {
+                    check(root, sub, value, at, out)?;
+                }
+            }
+            "then" | "else" => {}
             other => bail!("unsupported schema keyword {other} at {here}"),
         }
     }

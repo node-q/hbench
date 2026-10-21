@@ -41,6 +41,10 @@
           "description": "The upstream commit, tag or release the tasks were packed from.",
           "type": "string"
         },
+        "creator": {
+          "description": "Who created the upstream dataset, as they name themselves.",
+          "type": "string"
+        },
         "citation": {
           "description": "How to cite the upstream dataset, e.g. BibTeX.",
           "type": "string"

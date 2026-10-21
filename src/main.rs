@@ -424,24 +424,69 @@ enum DatasetsCmd {
         #[arg(short = 'o', long)]
         output_dir: Option<PathBuf>,
     },
-    /// Pack task dirs into an OCI image layout, `<output-dir>/<name>`, tagged with the version.
-    #[command(hide = true)]
-    PackLayout {
-        /// A task directory, or a directory of tasks.
-        #[arg(short = 'p', long = "path")]
-        path: PathBuf,
+    /// Pack every task directory (one with a task.toml) in TASKS_DIR into an OCI image layout, `<dir>/<name>`,
+    /// tagged with the version; prints the manifest digest.
+    Pack {
+        /// Directory whose subdirectories are the tasks.
+        tasks_dir: PathBuf,
+        /// Source descriptor (YAML): the dataset's name, version, licence and the rest of its config.
+        #[arg(long)]
+        descriptor: PathBuf,
         /// Directory the layout is written under.
-        #[arg(short = 'o', long)]
-        output_dir: PathBuf,
+        #[arg(long, value_name = "DIR")]
+        oci_layout: PathBuf,
+    },
+    /// Pack TASKS_DIR as `pack` does and push it to a registry, with the docker config's credentials; prints the
+    /// manifest digest.
+    Push {
+        /// Directory whose subdirectories are the tasks.
+        tasks_dir: PathBuf,
+        /// Source descriptor (YAML): the dataset's name, version, licence and the rest of its config.
         #[arg(long)]
-        name: String,
+        descriptor: PathBuf,
+        /// oci://<registry>/<repository>:<version>, the repository ending in the dataset name.
+        #[arg(long, value_name = "TARGET")]
+        to: String,
+        /// Move the tag when it already names another manifest.
         #[arg(long)]
-        version: String,
-        /// SPDX licence expression.
+        allow_overwrite: bool,
+    },
+    /// Pack a registry.json dataset's tasks into an OCI image layout or push them to a registry; prints
+    /// `name@version` and the manifest digest.
+    Convert {
+        /// A registry.json, or its http(s) URL.
+        registry: String,
+        /// Dataset, name@version.
+        #[arg(short = 'd', long)]
+        dataset: String,
+        /// Write the dataset to an OCI image layout, `<dir>/<name>`.
+        #[arg(long, value_name = "DIR", required_unless_present = "to", conflicts_with = "to")]
+        oci_layout: Option<PathBuf>,
+        /// Push the dataset to oci://<registry>/<repository>:<version>.
+        #[arg(long, value_name = "TARGET")]
+        to: Option<String>,
+        /// Source descriptor (YAML); without one the licence is NOASSERTION.
         #[arg(long)]
-        license: String,
-        #[arg(long, default_value = "")]
-        description: String,
+        descriptor: Option<PathBuf>,
+        /// Unpack the result and compare it, file by file, with the git checkouts.
+        #[arg(long)]
+        check_equivalence: bool,
+        /// With --to, move the tag when it already names another manifest.
+        #[arg(long)]
+        allow_overwrite: bool,
+    },
+    /// Copy a dataset from a registry into an OCI image layout, `<dir>/<name>`, for offline use; prints the
+    /// manifest digest.
+    Export {
+        /// Dataset, name@version.
+        #[arg(short = 'd', long)]
+        dataset: String,
+        /// oci://<registry>/<namespace>, or oci-layout:<dir>.
+        #[arg(long)]
+        registry: String,
+        /// Directory the layout is written under.
+        #[arg(long, value_name = "DIR")]
+        oci_layout: PathBuf,
     },
     /// Initialize a new dataset directory.
     Init {
@@ -749,6 +794,15 @@ fn task_dirs(path: &std::path::Path) -> Result<Vec<PathBuf>> {
     let mut dirs: Vec<PathBuf> = std::fs::read_dir(path)?.flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect();
     dirs.sort();
     Ok(dirs)
+}
+
+fn push_summary(p: &oci::publish::Pushed) -> String {
+    let c = &p.copied;
+    if p.unchanged {
+        format!("{} names this manifest already, so nothing was pushed", c.reference)
+    } else {
+        format!("pushed to {}: {} blob(s), {} uploaded ({} bytes)", c.reference, c.blobs, c.copied, c.copied_bytes)
+    }
 }
 
 fn parse_kv(s: &str) -> Result<(String, String), String> {
@@ -1329,10 +1383,61 @@ async fn run() -> Result<ExitCode> {
             }
             Ok(ExitCode::SUCCESS)
         }
-        Cmd::Datasets { cmd: DatasetsCmd::PackLayout { path, output_dir, name, version, license, description } } => {
-            let info = oci::pack::DatasetInfo { name, version, description, license, ..Default::default() };
-            let tasks: Vec<PathBuf> = task_dirs(&path)?.into_iter().filter(|d| Task::is_task_dir(d)).collect();
-            println!("{}", oci::pack::write_layout(&output_dir, &info, &tasks)?);
+        Cmd::Datasets { cmd: DatasetsCmd::Pack { tasks_dir, descriptor, oci_layout } } => {
+            let packed = oci::publish::pack(&tasks_dir, &oci::descriptor::load(&descriptor)?, &oci_layout)?;
+            eprintln!(
+                "packed {}@{}: {} task(s) into {}",
+                packed.name,
+                packed.version,
+                packed.tasks,
+                oci_layout.join(&packed.name).display()
+            );
+            println!("{}", packed.digest);
+            Ok(ExitCode::SUCCESS)
+        }
+        Cmd::Datasets { cmd: DatasetsCmd::Push { tasks_dir, descriptor, to, allow_overwrite } } => {
+            let docker_config = oci::credentials::docker_config_path();
+            let staging = env::cache_root().join("staging");
+            let (packed, pushed) =
+                oci::publish::pack_and_push(&tasks_dir, &descriptor, &to, allow_overwrite, docker_config.as_deref(), &staging).await?;
+            eprintln!("{}@{}: {} task(s); {}", packed.name, packed.version, packed.tasks, push_summary(&pushed));
+            println!("{}", pushed.copied.digest);
+            Ok(ExitCode::SUCCESS)
+        }
+        Cmd::Datasets {
+            cmd: DatasetsCmd::Convert { registry, dataset, oci_layout, to, descriptor, check_equivalence, allow_overwrite },
+        } => {
+            let output = match (oci_layout, to) {
+                (Some(dir), _) => oci::publish::Output::Layout(dir),
+                (None, Some(to)) => oci::publish::Output::Registry(oci::publish::Target::parse(&to)?),
+                (None, None) => bail!("name an output: --oci-layout <dir> or --to oci://<registry>/<repository>:<version>"),
+            };
+            let args = oci::publish::Convert {
+                registry,
+                dataset,
+                descriptor,
+                output,
+                check_equivalence,
+                allow_overwrite,
+                docker_config: oci::credentials::docker_config_path(),
+                download_dir: None,
+                staging: env::cache_root().join("staging"),
+            };
+            let converted = oci::publish::convert(&args).await?;
+            let checked = if check_equivalence { ", equivalent to the checkouts" } else { "" };
+            match &converted.pushed {
+                Some(p) => eprintln!("{} task(s){checked}; {}", converted.tasks, push_summary(p)),
+                None => eprintln!("{} task(s){checked}", converted.tasks),
+            }
+            println!("{}@{} {}", converted.name, converted.version, converted.digest);
+            Ok(ExitCode::SUCCESS)
+        }
+        Cmd::Datasets { cmd: DatasetsCmd::Export { dataset, registry, oci_layout } } => {
+            let location = oci::Location::parse(&registry)?;
+            let auth = oci::credentials::registry_auth(oci::credentials::docker_config_path().as_deref(), &location.registry)?;
+            let copied = oci::publish::export(&dataset, &registry, &oci_layout, auth).await?;
+            eprintln!("exported {dataset} ({} blob(s)) to {}", copied.blobs, copied.reference);
+            println!("{}", copied.digest);
             Ok(ExitCode::SUCCESS)
         }
         Cmd::Datasets { cmd: DatasetsCmd::Download { dataset, registry: r, lock, output_dir } } => {
@@ -1577,6 +1682,21 @@ mod tests {
         assert!(g("*", "anything") && g("hello-*", "hello-world") && g("h?llo", "hello") && g("*-c-*", "polyglot-c-py"));
         assert!(!g("hello", "hello-world") && !g("*x", "abc") && !g("a?", "a"));
         assert!(g("[ab]*", "beta") && !g("[!ab]*", "beta") && g("x.y", "x.y") && !g("x.y", "xzy"));
+    }
+
+    #[test]
+    fn datasets_publishing_flags() {
+        let mut cli = Cli::command();
+        let datasets = cli.find_subcommand_mut("datasets").unwrap();
+        let help = datasets.find_subcommand_mut("push").unwrap().render_help().to_string();
+        assert!(["--descriptor", "--to", "--allow-overwrite"].iter().all(|f| help.contains(f)), "{help}");
+        let parses = |args: &[&str]| Cli::try_parse_from(["hbench", "datasets"].iter().chain(args)).is_ok();
+        assert!(parses(&["push", "tasks", "--descriptor", "source.yaml", "--to", "oci://ghcr.io/ns/hello:1.0"]));
+        assert!(parses(&["pack", "tasks", "--descriptor", "source.yaml", "--oci-layout", "out"]));
+        assert!(parses(&["convert", "registry.json", "-d", "hello@1.0", "--oci-layout", "out", "--check-equivalence"]));
+        assert!(!parses(&["convert", "registry.json", "-d", "hello@1.0"]), "convert needs --oci-layout or --to");
+        assert!(!parses(&["convert", "registry.json", "-d", "hello@1.0", "--oci-layout", "out", "--to", "oci://localhost:5000/hello"]));
+        assert!(parses(&["export", "-d", "hello@1.0", "--registry", "oci://ghcr.io/ns", "--oci-layout", "offline"]));
     }
 
     #[test]
