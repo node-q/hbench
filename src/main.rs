@@ -16,6 +16,7 @@ mod job;
 mod manifest;
 mod metrics;
 mod migrate;
+mod oci;
 mod redact;
 mod registry;
 mod regrade;
@@ -409,17 +410,38 @@ enum TrialsCmd {
 
 #[derive(Subcommand)]
 enum DatasetsCmd {
-    /// List datasets in a registry (--registry-url or --registry-path).
+    /// List datasets in a registry (--registry-url, --registry-path or --registry oci-layout:<dir>).
     List(RegistryArgs),
-    /// Download a registry dataset's tasks into the cache (or --output-dir); needs --registry-url or --registry-path.
+    /// Download a registry dataset's tasks into the cache (or --output-dir); needs --registry-url, --registry-path or --registry.
     Download {
         /// Dataset, name[@version].
         dataset: String,
         #[command(flatten)]
         registry: RegistryArgs,
+        #[command(flatten)]
+        lock: LockArgs,
         /// Download into this dir instead of the cache.
         #[arg(short = 'o', long)]
         output_dir: Option<PathBuf>,
+    },
+    /// Pack task dirs into an OCI image layout, `<output-dir>/<name>`, tagged with the version.
+    #[command(hide = true)]
+    PackLayout {
+        /// A task directory, or a directory of tasks.
+        #[arg(short = 'p', long = "path")]
+        path: PathBuf,
+        /// Directory the layout is written under.
+        #[arg(short = 'o', long)]
+        output_dir: PathBuf,
+        #[arg(long)]
+        name: String,
+        #[arg(long)]
+        version: String,
+        /// SPDX licence expression.
+        #[arg(long)]
+        license: String,
+        #[arg(long, default_value = "")]
+        description: String,
     },
     /// Initialize a new dataset directory.
     Init {
@@ -547,12 +569,35 @@ enum TasksCmd {
 
 #[derive(Args)]
 struct RegistryArgs {
-    /// Dataset registry URL (a registry.json). There is no default: registry datasets need this or --registry-path.
+    /// Dataset registry URL (a registry.json). There is no default: registry datasets need this, --registry-path or --registry.
     #[arg(long)]
     registry_url: Option<String>,
     /// Local dataset registry file (a registry.json), used instead of --registry-url.
     #[arg(long)]
     registry_path: Option<PathBuf>,
+    /// OCI dataset registry, oci://<registry>/<namespace>, or OCI image layouts on disk, oci-layout:<dir>.
+    #[arg(long, conflicts_with_all = ["registry_url", "registry_path"])]
+    registry: Option<String>,
+}
+
+#[derive(Args)]
+struct LockArgs {
+    /// Refuse an OCI dataset that is not in ./hbench.lock, or whose tag now resolves to another digest.
+    #[arg(long, conflicts_with = "lock_write")]
+    locked: bool,
+    /// Record each OCI dataset's manifest digest in ./hbench.lock.
+    #[arg(long)]
+    lock_write: bool,
+}
+
+impl LockArgs {
+    fn mode(&self) -> oci::lockfile::LockMode {
+        match (self.locked, self.lock_write) {
+            (true, _) => oci::lockfile::LockMode::Locked,
+            (false, true) => oci::lockfile::LockMode::Write,
+            (false, false) => oci::lockfile::LockMode::Read,
+        }
+    }
 }
 
 #[derive(Args)]
@@ -563,11 +608,13 @@ struct RunArgs {
     /// Local task dir, or a dir of task dirs.
     #[arg(short = 'p', long = "path", help_heading = "Selection")]
     path: Option<PathBuf>,
-    /// Registry dataset, name[@version]. Needs --registry-url or --registry-path.
+    /// Registry dataset, name[@version]. Needs --registry-url, --registry-path or --registry.
     #[arg(short = 'd', long = "dataset", help_heading = "Selection")]
     dataset: Option<String>,
     #[command(flatten, next_help_heading = "Selection")]
     registry: RegistryArgs,
+    #[command(flatten, next_help_heading = "Selection")]
+    lock: LockArgs,
     /// Only tasks matching this glob (repeatable).
     #[arg(short = 'i', long = "include-task-name", help_heading = "Selection")]
     include: Vec<String>,
@@ -776,6 +823,7 @@ fn build_job_config(a: &RunArgs) -> Result<JobConfig> {
             version,
             registry_url: a.registry.registry_url.clone(),
             registry_path: a.registry.registry_path.clone(),
+            registry: a.registry.registry.clone(),
             ..Default::default()
         });
     }
@@ -1115,6 +1163,7 @@ async fn run() -> Result<ExitCode> {
             if cfg.job_dir().join("config.json").exists() {
                 bail!("job {} already exists; use `hbench jobs resume -p {}`", cfg.job_name, cfg.job_dir().display());
             }
+            oci::pin_datasets(&mut cfg.datasets, a.lock.mode()).await?;
             if a.diff.is_empty() {
                 return Ok(job_exit_code(&run_with_ctrl_c(cfg, None, &[]).await?.stats, a.fail_on_error));
             }
@@ -1122,7 +1171,7 @@ async fn run() -> Result<ExitCode> {
                 bail!("--diff cannot use --install-only.");
             }
             let sources = diff::load_sources(&diff::source_dirs(&a.diff)?)?;
-            let tasks = job::resolve_tasks(&cfg)?;
+            let tasks = job::resolve_tasks(&cfg).await?;
             let targets = job::build_trial_configs(&cfg, &tasks, uuid::Uuid::new_v4());
             let diffs = diff::compare(&targets, &sources)?;
             diff::print_preview(&diffs, &sources);
@@ -1251,7 +1300,7 @@ async fn run() -> Result<ExitCode> {
             if !skip_preflight {
                 preflight_auth(&cfg)?;
             }
-            registry::download(std::slice::from_ref(&tc.task))?;
+            registry::download(std::slice::from_ref(&tc.task)).await?;
             env::preflight().await?;
             let task = std::sync::Arc::new(Task::load(&registry::local_path(&tc.task))?);
             let name = tc.trial_name.clone();
@@ -1269,26 +1318,40 @@ async fn run() -> Result<ExitCode> {
             Ok(if r.exception_info.is_some() { ExitCode::FAILURE } else { ExitCode::SUCCESS })
         }
         Cmd::Datasets { cmd: DatasetsCmd::List(r) } => {
+            if let Some(spec) = &r.registry {
+                for d in oci::list(spec).await? {
+                    println!("{}@{}  ({} tasks)  {}", d.config.name, d.config.version, d.layers.len(), d.config.description);
+                }
+                return Ok(ExitCode::SUCCESS);
+            }
             for d in registry::load(r.registry_url.as_deref(), r.registry_path.as_deref())? {
                 println!("{}@{}  ({} tasks)  {}", d.name, d.version, d.tasks.len(), d.description);
             }
             Ok(ExitCode::SUCCESS)
         }
-        Cmd::Datasets { cmd: DatasetsCmd::Download { dataset, registry: r, output_dir } } => {
+        Cmd::Datasets { cmd: DatasetsCmd::PackLayout { path, output_dir, name, version, license, description } } => {
+            let info = oci::pack::DatasetInfo { name, version, description, license, ..Default::default() };
+            let tasks: Vec<PathBuf> = task_dirs(&path)?.into_iter().filter(|d| Task::is_task_dir(d)).collect();
+            println!("{}", oci::pack::write_layout(&output_dir, &info, &tasks)?);
+            Ok(ExitCode::SUCCESS)
+        }
+        Cmd::Datasets { cmd: DatasetsCmd::Download { dataset, registry: r, lock, output_dir } } => {
             let (name, version) = match dataset.split_once('@') {
                 Some((n, v)) => (n.to_string(), Some(v.to_string())),
                 None => (dataset.clone(), None),
             };
-            let d = DatasetConfig {
+            let mut d = DatasetConfig {
                 name: Some(name),
                 version,
                 registry_url: r.registry_url,
                 registry_path: r.registry_path,
+                registry: r.registry,
                 download_dir: output_dir,
                 ..Default::default()
             };
-            let tasks = registry::dataset_tasks(&d, false)?;
-            registry::download(&tasks)?;
+            oci::pin_datasets(std::slice::from_mut(&mut d), lock.mode()).await?;
+            let tasks = registry::dataset_tasks(&d, false).await?;
+            registry::download(&tasks).await?;
             for t in &tasks {
                 println!("{}", registry::local_path(t).display());
             }

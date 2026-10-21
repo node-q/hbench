@@ -135,20 +135,20 @@ pub fn trial_name(t: &TaskRef) -> String {
     format!("{}__{}", short.trim_end_matches(['_', '-']), &id[..7])
 }
 
-/// Resolve tasks + datasets into task refs; download git tasks.
-pub fn resolve_tasks(cfg: &JobConfig) -> Result<Vec<TaskRef>> {
+/// Resolve tasks + datasets into task refs; download git and OCI tasks.
+pub async fn resolve_tasks(cfg: &JobConfig) -> Result<Vec<TaskRef>> {
     let mut v: Vec<TaskRef> = cfg.tasks.clone();
     for d in &cfg.datasets {
-        v.extend(registry::dataset_tasks(d, cfg.verifier.disable)?);
+        v.extend(registry::dataset_tasks(d, cfg.verifier.disable).await?);
     }
     for t in v.iter_mut() {
-        if t.git_url.is_none()
+        if t.is_local()
             && let Some(p) = &t.path
         {
             t.path = Some(p.canonicalize().with_context(|| format!("task path {}", p.display()))?);
         }
     }
-    registry::download(&v)?;
+    registry::download(&v).await?;
     if v.is_empty() {
         bail!("no tasks selected");
     }
@@ -159,7 +159,7 @@ pub fn resolve_tasks(cfg: &JobConfig) -> Result<Vec<TaskRef>> {
 /// dir name, so a job (and its tasks) can be moved and still resume.
 fn resume_key(c: &TrialConfig) -> Value {
     let mut c = c.clone();
-    if c.task.git_url.is_none() {
+    if c.task.is_local() {
         c.task.path = c.task.path.as_deref().and_then(Path::file_name).map(PathBuf::from);
     }
     let mut v = serde_json::to_value(&c).unwrap();
@@ -254,11 +254,12 @@ fn carried_over(job_dir: &Path) -> (uuid::Uuid, usize) {
 
 /// Run (or resume) a job. `filter_error_types`: on resume, rerun trials that failed with these.
 pub async fn run_job(
-    cfg: JobConfig,
+    mut cfg: JobConfig,
     trial_configs: Option<Vec<TrialConfig>>,
     filter_error_types: &[String],
     cancel: watch::Receiver<bool>,
 ) -> Result<JobResult> {
+    crate::oci::pin_datasets(&mut cfg.datasets, crate::oci::lockfile::LockMode::Read).await?;
     let job_dir = cfg.job_dir();
     std::fs::create_dir_all(&job_dir)?;
     let (job_id, prior_retries) = carried_over(&job_dir);
@@ -279,7 +280,7 @@ pub async fn run_job(
         }
         None => match stored_plan(&cfg)? {
             Some(t) => t,
-            None => build_trial_configs(&cfg, &resolve_tasks(&cfg)?, job_id),
+            None => build_trial_configs(&cfg, &resolve_tasks(&cfg).await?, job_id),
         },
     };
     // Load each distinct task once (validates before any container starts).

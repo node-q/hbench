@@ -35,10 +35,15 @@ jobs:
       attestations: write
     env:
       TARGETS: ${{ matrix.targets }}
-      # Every dependency is pure Rust on Linux, so rust-lld links static musl binaries
-      # for both arches without musl-tools or a cross gcc.
+      # ring (TLS for OCI registries) is the one dependency with C code: clang compiles it for both
+      # musl arches and the toolchain's llvm-ar archives it, and rust-lld links static binaries,
+      # without musl-tools or a cross gcc.
       CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: rust-lld
       CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: rust-lld
+      CC_x86_64_unknown_linux_musl: clang
+      CC_aarch64_unknown_linux_musl: clang
+      AR_x86_64_unknown_linux_musl: llvm-ar
+      AR_aarch64_unknown_linux_musl: llvm-ar
       # macOS tar: no AppleDouble (._*) files or extended attributes in the archives.
       COPYFILE_DISABLE: "1"
     steps:
@@ -52,6 +57,10 @@ jobs:
           [ "v$v" = "$GITHUB_REF_NAME" ] || { echo "::error::tag $GITHUB_REF_NAME != Cargo.toml version v$v"; exit 1; }
       - name: Set up Rust toolchain
         uses: ./.github/actions/setup-rust
+        with:
+          components: llvm-tools
+      - name: Put the toolchain's llvm-ar on PATH
+        run: echo "$(rustc --print sysroot)/lib/rustlib/$(rustc --print host-tuple)/bin" >> "$GITHUB_PATH"
       - name: Add the build targets
         run: for t in $TARGETS; do rustup target add "$t"; done
       - name: Run unit tests

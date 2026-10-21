@@ -64,7 +64,7 @@ pub async fn run(
     let mut base = base;
     base.n_attempts = trials_per_task;
     base.extra_instructions.extend(hint);
-    let mut remaining: Vec<TaskRef> = crate::job::resolve_tasks(&base)?;
+    let mut remaining: Vec<TaskRef> = crate::job::resolve_tasks(&base).await?;
     base.datasets.clear();
     let mut jobs = vec![];
     for idx in 1..=max_sweeps {

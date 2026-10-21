@@ -184,13 +184,18 @@ pub fn model_info(model: &Option<String>) -> Option<ModelInfo> {
     })
 }
 
-/// Task id: `{path}` (local) or `{git_url, git_commit_id, path}`.
+/// Task id: `{path}` (local), `{git_url, git_commit_id, path}` or `{registry, repository, layer_digest, path}` (OCI).
 pub fn task_id(cfg: &TrialConfig) -> Value {
     let t = &cfg.task;
     let mut m = serde_json::Map::new();
     if let Some(u) = &t.git_url {
         m.insert("git_url".into(), u.clone().into());
         m.insert("git_commit_id".into(), t.git_commit_id.clone().into());
+    }
+    if let Some(o) = &t.oci {
+        m.insert("registry".into(), o.registry.clone().into());
+        m.insert("repository".into(), o.repository.clone().into());
+        m.insert("layer_digest".into(), o.layer_digest.clone().into());
     }
     m.insert("path".into(), t.path.as_ref().map(|p| p.display().to_string()).into());
     Value::Object(m)
@@ -1339,12 +1344,20 @@ pub fn trial_lock(c: &TrialConfig) -> Value {
         "task": {
             "name": name,
             "version": task.as_ref().and_then(|t| t.config.task.as_ref().and_then(|p| p.version.clone())),
-            "type": if c.task.git_url.is_some() { "git" } else { "local" },
+            "type": match (&c.task.git_url, &c.task.oci) {
+                (_, Some(_)) => "oci",
+                (Some(_), None) => "git",
+                (None, None) => "local",
+            },
             "digest": crate::task::package_digest(&local),
             "source": c.task.source,
             "path": c.task.path,
             "git_url": c.task.git_url,
             "git_commit_id": c.task.git_commit_id,
+            "registry": c.task.oci.as_ref().map(|o| &o.registry),
+            "repository": c.task.oci.as_ref().map(|o| &o.repository),
+            "manifest_digest": c.task.oci.as_ref().map(|o| &o.manifest_digest),
+            "layer_digest": c.task.oci.as_ref().map(|o| &o.layer_digest),
         },
         "install_only": c.install_only,
         "timeout_multiplier": c.timeout_multiplier,
