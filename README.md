@@ -328,7 +328,7 @@ npm run dev                                    # hot reload; proxies /api to `hb
 CI (`.github/workflows/ci.yml`) runs on GitHub-hosted runners: build + `cargo test` on Linux and macOS, `cargo fmt
 --check` and clippy, `cargo audit`, a check that the committed `viewer/dist` matches `viewer/src`, and `scripts/e2e.sh`
 against a real Docker daemon. On Linux it also runs the OCI tests against a local registry
-(`HBENCH_TEST_OCI_REGISTRY=localhost:5000 cargo test oci::`, with `registry:3` listening on port 5000).
+(`HBENCH_TEST_OCI_REGISTRY=localhost:5000 cargo test oci::tests`, with `registry:3` listening on port 5000).
 
 ## Releases
 

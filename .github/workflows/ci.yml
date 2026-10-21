@@ -40,7 +40,7 @@ jobs:
       - name: Run unit tests
         run: cargo test --locked
       - name: Run the OCI dataset tests against a local registry
-        run: cargo test --locked oci::
+        run: cargo test --locked oci::tests
         env:
           HBENCH_TEST_OCI_REGISTRY: localhost:5000
 
