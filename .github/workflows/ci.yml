@@ -23,11 +23,8 @@ jobs:
   test:
     name: Build & Test
     runs-on: ubuntu-24.04
-    services:
-      registry:
-        image: registry:3@sha256:ddf754342cfc8acc51a56d5d0ab6af06826461864460636d8bd5c546dab2a7b8
-        ports:
-          - 5000:5000
+    env:
+      REGISTRY_IMAGE: registry:3@sha256:ddf754342cfc8acc51a56d5d0ab6af06826461864460636d8bd5c546dab2a7b8
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -39,10 +36,27 @@ jobs:
         run: cargo build --locked --all-targets
       - name: Run unit tests
         run: cargo test --locked
-      - name: Run the OCI dataset tests against a local registry
+      - name: Start two local registries, the second taking basic auth
+        run: |
+          docker run -d --name registry -p 127.0.0.1:5000:5000 "$REGISTRY_IMAGE"
+          auth_dir="$RUNNER_TEMP/registry-auth"
+          mkdir "$auth_dir"
+          password="$(openssl rand -hex 16)"
+          echo "::add-mask::$password"
+          command -v htpasswd > /dev/null || sudo apt-get install -y --no-install-recommends apache2-utils
+          htpasswd -Bbn hbench-test "$password" > "$auth_dir/htpasswd"
+          docker run -d --name registry-auth -p 127.0.0.1:5001:5000 -v "$auth_dir:/auth:ro" \
+            -e REGISTRY_AUTH=htpasswd -e REGISTRY_AUTH_HTPASSWD_REALM=hbench-test \
+            -e REGISTRY_AUTH_HTPASSWD_PATH=/auth/htpasswd "$REGISTRY_IMAGE"
+          echo "HBENCH_TEST_OCI_AUTH_CREDENTIALS=hbench-test:$password" >> "$GITHUB_ENV"
+          for port in 5000 5001; do
+            timeout 30 sh -c "until curl -so /dev/null http://localhost:$port/v2/; do sleep 1; done"
+          done
+      - name: Run the OCI dataset tests against the local registries
         run: cargo test --locked oci::tests
         env:
           HBENCH_TEST_OCI_REGISTRY: localhost:5000
+          HBENCH_TEST_OCI_AUTH_REGISTRY: localhost:5001
 
   test-macos:
     name: Build & Test (macOS)
