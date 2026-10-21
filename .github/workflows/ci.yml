@@ -74,7 +74,10 @@ jobs:
       - name: Set up Rust toolchain
         uses: ./.github/actions/setup-rust
         with:
+          components: llvm-tools
           targets: x86_64-unknown-linux-musl,aarch64-unknown-linux-musl
+      - name: Put the toolchain's llvm-ar on PATH
+        run: echo "$(rustc --print sysroot)/lib/rustlib/$(rustc --print host-tuple)/bin" >> "$GITHUB_PATH"
       - name: Check both musl targets
         run: cargo check --locked --target x86_64-unknown-linux-musl --target aarch64-unknown-linux-musl
 
