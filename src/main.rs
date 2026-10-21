@@ -27,6 +27,7 @@ mod tools;
 mod traces;
 mod trial;
 mod viewer;
+mod wizard;
 
 use crate::config::{AgentConfig, DatasetConfig, JobConfig, SourceTrial, TaskRef, TrialConfig};
 use crate::task::{Artifact, Task};
@@ -1208,7 +1209,10 @@ async fn run() -> Result<ExitCode> {
             clap_complete::generate(shell, &mut Cli::command(), "hbench", &mut std::io::stdout());
             Ok(ExitCode::SUCCESS)
         }
-        Cmd::Run(a) | Cmd::Jobs { cmd: JobsCmd::Start(a) } => {
+        Cmd::Run(mut a) | Cmd::Jobs { cmd: JobsCmd::Start(mut a) } => {
+            if a.config.is_none() && a.path.is_none() && a.dataset.is_none() && std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+                wizard::fill(&mut a)?;
+            }
             let mut cfg = build_job_config(&a)?;
             preflight_agents(&cfg)?;
             if !a.skip_preflight {

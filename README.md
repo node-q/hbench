@@ -16,6 +16,7 @@ A fast, single-binary benchmark runner for coding-agent harnesses, written in Ru
 a `task.toml`, an environment, tests and a solution (see [Task format](#task-format)).
 
 - [Installation](#installation)
+- [Quick start](#quick-start)
 - [Usage](#usage)
 - [Examples](#examples)
 - [Datasets](#datasets)
@@ -46,6 +47,16 @@ Or build from source (the toolchain is pinned in `rust-toolchain.toml`):
 cargo install --path .    # builds and puts `hbench` on your PATH (~/.cargo/bin)
 ```
 
+## Quick start
+
+```bash
+hbench run     # asks what to run: tasks, agent, model, how many tasks
+hbench view    # browse the results in the web viewer
+```
+
+`hbench run` asks its questions, then prints the same run as one command, so the next run (or a script) can skip
+them. Every answer has a flag; see [Usage](#usage).
+
 ## Usage
 
 ```bash
@@ -59,7 +70,7 @@ hbench trials start -p <task> -a codex -m openai/gpt-5    # a single trial
 hbench sweeps run -c job.yaml --max-sweeps 3              # rerun, dropping solved tasks each sweep
 
 # Inspect and manage jobs
-hbench view jobs                                          # web viewer
+hbench view                                               # web viewer (jobs/)
 hbench jobs summary -p jobs/<job>
 hbench jobs resume -p jobs/<job>
 hbench jobs regrade --source jobs/<job> -p <tasks>        # re-verify recorded outputs
@@ -136,7 +147,7 @@ only the tasks whose names match. `hbench agents list` shows every agent.
 Browse the results in the web viewer:
 
 ```bash
-hbench view jobs
+hbench view
 ```
 
 ## Datasets
