@@ -1,23 +1,27 @@
-//! Where a dataset's manifests and blobs come from: an OCI registry, pulled anonymously into the
-//! content-addressed blob cache, or an OCI image layout on disk. Every manifest and blob is checked against its
-//! digest before it is used.
+//! Where a dataset's manifests and blobs come from and go to: an OCI registry, pulled into the content-addressed
+//! blob cache (anonymously, unless the store was opened with credentials), or OCI image layouts on disk,
+//! `<root>/<repository>`. Every manifest and blob is checked against its digest before it is used.
 
-use super::format::{MANIFEST_MEDIA_TYPE, MAX_MANIFEST_BYTES, REF_NAME};
+use super::format::{ARTIFACT_TYPE, INDEX_MEDIA_TYPE, MANIFEST_MEDIA_TYPE, MAX_MANIFEST_BYTES, REF_NAME};
 use super::{LAYOUT_SCHEME, Sha256Writer, sha256_digest, verify_file};
 use anyhow::{Context, Result, bail};
 use futures_util::StreamExt;
 use oci_client::Reference;
 use oci_client::client::{ClientConfig, ClientProtocol};
+use oci_client::errors::{OciDistributionError, OciErrorCode};
 use oci_client::secrets::RegistryAuth;
-use std::io::Write;
+use serde_json::{Value, json};
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const READ_TIMEOUT: Duration = Duration::from_secs(120);
+const UPLOAD_CHUNK_BYTES: usize = 1024 * 1024;
+const LAYOUT_VERSION: &str = "1.0.0";
 
 pub enum Store {
-    Registry { client: oci_client::Client, registry: String, blobs: PathBuf },
+    Registry { client: oci_client::Client, registry: String, blobs: PathBuf, auth: RegistryAuth },
     Layout { root: PathBuf },
 }
 
@@ -33,6 +37,11 @@ impl Store {
     /// The store for a task's or dataset's `registry` (a registry host, or `oci-layout:<dir>`), caching
     /// registry blobs under `cache_root/blobs/sha256`.
     pub fn open(registry: &str, cache_root: &Path) -> Result<Store> {
+        Store::open_with_auth(registry, cache_root, RegistryAuth::Anonymous)
+    }
+
+    /// [`Store::open`], authenticating to a registry with `auth`.
+    pub fn open_with_auth(registry: &str, cache_root: &Path, auth: RegistryAuth) -> Result<Store> {
         if let Some(dir) = registry.strip_prefix(LAYOUT_SCHEME) {
             return Ok(Store::Layout { root: PathBuf::from(dir) });
         }
@@ -44,10 +53,11 @@ impl Store {
             connect_timeout: Some(CONNECT_TIMEOUT),
             read_timeout: Some(READ_TIMEOUT),
             user_agent: concat!("hbench/", env!("CARGO_PKG_VERSION")),
+            use_monolithic_push: true,
             ..Default::default()
         };
         let client = oci_client::Client::try_from(config).context("creating the OCI registry client")?;
-        Ok(Store::Registry { client, registry: registry.to_string(), blobs: cache_root.join("blobs/sha256") })
+        Ok(Store::Registry { client, registry: registry.to_string(), blobs: cache_root.join("blobs/sha256"), auth })
     }
 
     pub fn reference(&self, repository: &str, tag_or_digest: &str) -> String {
@@ -62,12 +72,10 @@ impl Store {
     pub async fn resolve_tag(&self, repository: &str, tag: &str) -> Result<String> {
         let reference = self.reference(repository, tag);
         match self {
-            Store::Registry { client, registry, blobs } => {
+            Store::Registry { client, registry, blobs, auth } => {
                 let image = Reference::with_tag(registry.clone(), repository.to_string(), tag.to_string());
-                let (body, _) = client
-                    .pull_manifest_raw(&image, &RegistryAuth::Anonymous, &[MANIFEST_MEDIA_TYPE])
-                    .await
-                    .map_err(|e| fetch_error(&reference, e))?;
+                let (body, _) =
+                    client.pull_manifest_raw(&image, auth, &[MANIFEST_MEDIA_TYPE]).await.map_err(|e| fetch_error(&reference, auth, e))?;
                 if body.len() as u64 > MAX_MANIFEST_BYTES {
                     bail!("{reference}: the manifest is over {MAX_MANIFEST_BYTES} bytes");
                 }
@@ -81,17 +89,7 @@ impl Store {
                 if !marker.is_file() {
                     bail!("{reference}: {} is not an OCI image layout (no oci-layout file)", layout.display());
                 }
-                let text =
-                    std::fs::read_to_string(layout.join("index.json")).with_context(|| format!("{reference}: reading index.json"))?;
-                let index: oci_spec::image::ImageIndex =
-                    serde_json::from_str(&text).with_context(|| format!("{reference}: parsing index.json"))?;
-                let tagged: Vec<String> = index
-                    .manifests()
-                    .iter()
-                    .filter(|m| m.annotations().as_ref().and_then(|a| a.get(REF_NAME)).is_some_and(|r| r == tag))
-                    .map(|m| m.digest().to_string())
-                    .collect();
-                match tagged.as_slice() {
+                match layout_tagged(&layout, tag).with_context(|| reference.clone())?.as_slice() {
                     [d] => Ok(d.clone()),
                     [] => bail!("{reference} not found: no manifest in {} has {REF_NAME} {tag}", layout.display()),
                     _ => bail!("{reference}: several manifests in {} have {REF_NAME} {tag}", layout.display()),
@@ -100,10 +98,89 @@ impl Store {
         }
     }
 
+    /// The digest of the manifest `repository:tag` names now, or None when the tag names none.
+    pub async fn tagged(&self, repository: &str, tag: &str) -> Result<Option<String>> {
+        let reference = self.reference(repository, tag);
+        match self {
+            Store::Registry { client, registry, auth, .. } => {
+                let image = Reference::with_tag(registry.clone(), repository.to_string(), tag.to_string());
+                match client.fetch_manifest_digest(&image, auth).await {
+                    Ok(digest) => Ok(Some(digest)),
+                    Err(e) if is_not_found(&e) => Ok(None),
+                    Err(e) => Err(fetch_error(&reference, auth, e)),
+                }
+            }
+            Store::Layout { root } => match layout_tagged(&root.join(repository), tag).with_context(|| reference.clone())?.as_slice() {
+                [] => Ok(None),
+                [d] => Ok(Some(d.clone())),
+                _ => bail!("{reference}: several manifests have {REF_NAME} {tag}"),
+            },
+        }
+    }
+
+    /// Put the blob at `path` (`digest`, `size` bytes) into `repository`, unless it is there already; whether it
+    /// was copied.
+    pub async fn put_blob(&self, repository: &str, digest: &str, size: u64, path: &Path) -> Result<bool> {
+        let reference = self.reference(repository, digest);
+        match self {
+            Store::Layout { root } => {
+                let blobs = root.join(repository).join("blobs/sha256");
+                let target = blobs.join(hex(digest)?);
+                if verify_file(&target, digest, size).is_ok() {
+                    return Ok(false);
+                }
+                std::fs::create_dir_all(&blobs)?;
+                let tmp = blobs.join(format!(".{}.tmp-{}", hex(digest)?, uuid::Uuid::new_v4().simple()));
+                let copied = std::fs::copy(path, &tmp).map_err(anyhow::Error::from).and_then(|_| verify_file(&tmp, digest, size));
+                if let Err(e) = copied {
+                    let _ = std::fs::remove_file(&tmp);
+                    return Err(e.context(format!("copying {} to {reference}", path.display())));
+                }
+                std::fs::rename(&tmp, &target)?;
+                Ok(true)
+            }
+            Store::Registry { client, registry, auth, .. } => {
+                let image = Reference::with_digest(registry.clone(), repository.to_string(), digest.to_string());
+                client.store_auth_if_needed(image.resolve_registry(), auth).await;
+                if client.blob_exists(&image, digest).await.map_err(|e| push_error(&reference, auth, e))? {
+                    return Ok(false);
+                }
+                let file = std::fs::File::open(path).with_context(|| format!("reading {}", path.display()))?;
+                client
+                    .push_blob_stream(&image, file_chunks(file), digest, Some(size))
+                    .await
+                    .map_err(|e| push_error(&reference, auth, e))?;
+                Ok(true)
+            }
+        }
+    }
+
+    /// Put `manifest` into `repository` and tag it `tag`, moving the tag if it names another manifest; the
+    /// manifest's digest.
+    pub async fn put_manifest(&self, repository: &str, tag: &str, manifest: &[u8]) -> Result<String> {
+        let digest = sha256_digest(manifest);
+        let reference = self.reference(repository, tag);
+        match self {
+            Store::Layout { root } => {
+                let layout = root.join(repository);
+                let blobs = layout.join("blobs/sha256");
+                std::fs::create_dir_all(&blobs)?;
+                store_blob(&blobs, &digest, manifest)?;
+                tag_in_layout(&layout, tag, &digest, manifest.len() as u64).with_context(|| reference.clone())?;
+            }
+            Store::Registry { client, registry, auth, .. } => {
+                let image = Reference::with_tag(registry.clone(), repository.to_string(), tag.to_string());
+                let media_type = http::HeaderValue::from_static(MANIFEST_MEDIA_TYPE);
+                client.push_manifest_raw(&image, manifest.to_vec(), media_type).await.map_err(|e| push_error(&reference, auth, e))?;
+            }
+        }
+        Ok(digest)
+    }
+
     /// The manifest with `digest`, from the layout, the cache or the registry, checked against its digest.
     pub async fn manifest(&self, repository: &str, digest: &str) -> Result<Vec<u8>> {
         let reference = self.reference(repository, digest);
-        let (client, registry, blobs) = match self {
+        let (client, registry, blobs, auth) = match self {
             Store::Layout { root } => {
                 let bytes = read_limited(&root.join(repository).join("blobs/sha256").join(hex(digest)?), MAX_MANIFEST_BYTES)
                     .with_context(|| reference.clone())?;
@@ -112,7 +189,7 @@ impl Store {
                 }
                 return Ok(bytes);
             }
-            Store::Registry { client, registry, blobs } => (client, registry, blobs),
+            Store::Registry { client, registry, blobs, auth } => (client, registry, blobs, auth),
         };
         if let Ok(bytes) = read_limited(&blobs.join(hex(digest)?), MAX_MANIFEST_BYTES)
             && sha256_digest(&bytes) == digest
@@ -120,10 +197,8 @@ impl Store {
             return Ok(bytes);
         }
         let image = Reference::with_digest(registry.clone(), repository.to_string(), digest.to_string());
-        let (body, _) = client
-            .pull_manifest_raw(&image, &RegistryAuth::Anonymous, &[MANIFEST_MEDIA_TYPE])
-            .await
-            .map_err(|e| fetch_error(&reference, e))?;
+        let (body, _) =
+            client.pull_manifest_raw(&image, auth, &[MANIFEST_MEDIA_TYPE]).await.map_err(|e| fetch_error(&reference, auth, e))?;
         if sha256_digest(&body) != digest {
             bail!("{reference}: the manifest does not match its digest");
         }
@@ -154,7 +229,7 @@ impl Store {
                 verify_file(&path, digest, size).with_context(|| reference.clone())?;
                 Ok(path)
             }
-            Store::Registry { client, registry, blobs } => {
+            Store::Registry { client, registry, blobs, auth } => {
                 let path = blobs.join(hex(digest)?);
                 if verify_file(&path, digest, size).is_ok() {
                     return Ok(path);
@@ -163,7 +238,7 @@ impl Store {
                 let tmp = blobs.join(format!(".{}.tmp-{}", hex(digest)?, uuid::Uuid::new_v4().simple()));
                 let image = Reference::with_digest(registry.clone(), repository.to_string(), digest.to_string());
                 let fetched = async {
-                    client.store_auth_if_needed(image.resolve_registry(), &RegistryAuth::Anonymous).await;
+                    client.store_auth_if_needed(image.resolve_registry(), auth).await;
                     let mut stream = client.pull_blob_stream(&image, digest).await?;
                     let mut out = Sha256Writer::new(std::fs::File::create(&tmp)?);
                     while let Some(chunk) = stream.next().await {
@@ -192,13 +267,90 @@ impl Store {
     }
 }
 
-fn fetch_error(reference: &str, e: oci_client::errors::OciDistributionError) -> anyhow::Error {
-    match e {
-        oci_client::errors::OciDistributionError::UnauthorizedError { .. } => {
+fn fetch_error(reference: &str, auth: &RegistryAuth, e: OciDistributionError) -> anyhow::Error {
+    match (e, auth) {
+        (OciDistributionError::UnauthorizedError { .. }, RegistryAuth::Anonymous) => {
             anyhow::anyhow!("{reference}: not found, or not public (hbench pulls anonymously)")
         }
-        e => anyhow::Error::new(e).context(format!("fetching {reference}")),
+        (OciDistributionError::UnauthorizedError { .. }, _) => anyhow::anyhow!("{reference}: not found, or the credentials can't read it"),
+        (e, _) => anyhow::Error::new(e).context(format!("fetching {reference}")),
     }
+}
+
+fn push_error(reference: &str, auth: &RegistryAuth, e: OciDistributionError) -> anyhow::Error {
+    let denied = match &e {
+        OciDistributionError::UnauthorizedError { .. } | OciDistributionError::AuthenticationFailure(_) => true,
+        OciDistributionError::RegistryError { envelope, .. } => {
+            envelope.errors.iter().any(|e| matches!(e.code, OciErrorCode::Unauthorized | OciErrorCode::Denied))
+        }
+        _ => false,
+    };
+    match (denied, auth) {
+        (true, RegistryAuth::Anonymous) => anyhow::anyhow!(
+            "{reference}: the registry refused an anonymous push; log in with `docker login` or `oras login` (hbench reads $DOCKER_CONFIG/config.json, else ~/.docker/config.json)"
+        ),
+        (true, _) => anyhow::Error::new(e).context(format!("{reference}: the registry refused the push with these credentials")),
+        (false, _) => anyhow::Error::new(e).context(format!("pushing {reference}")),
+    }
+}
+
+fn is_not_found(e: &OciDistributionError) -> bool {
+    match e {
+        OciDistributionError::ImageManifestNotFoundError(_) => true,
+        OciDistributionError::ServerError { code, .. } => *code == 404,
+        OciDistributionError::RegistryError { envelope, .. } => envelope
+            .errors
+            .iter()
+            .any(|e| matches!(e.code, OciErrorCode::ManifestUnknown | OciErrorCode::NameUnknown | OciErrorCode::NotFound)),
+        _ => false,
+    }
+}
+
+fn file_chunks(file: std::fs::File) -> impl futures_util::Stream<Item = oci_client::errors::Result<bytes::Bytes>> + Send + 'static {
+    futures_util::stream::try_unfold(file, |mut file| async move {
+        let mut chunk = vec![0; UPLOAD_CHUNK_BYTES];
+        let n = file.read(&mut chunk)?;
+        if n == 0 {
+            return Ok(None);
+        }
+        chunk.truncate(n);
+        Ok(Some((bytes::Bytes::from(chunk), file)))
+    })
+}
+
+/// The digests of the manifests in the layout at `layout` tagged `tag` (none when there is no layout).
+fn layout_tagged(layout: &Path, tag: &str) -> Result<Vec<String>> {
+    let text = match std::fs::read_to_string(layout.join("index.json")) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
+        Err(e) => return Err(e).context("reading index.json"),
+    };
+    let index: oci_spec::image::ImageIndex = serde_json::from_str(&text).context("parsing index.json")?;
+    Ok(index
+        .manifests()
+        .iter()
+        .filter(|m| m.annotations().as_ref().and_then(|a| a.get(REF_NAME)).is_some_and(|r| r == tag))
+        .map(|m| m.digest().to_string())
+        .collect())
+}
+
+/// Tag the dataset manifest `digest` (`size` bytes, already in the layout's blobs) `tag` in the OCI image layout
+/// at `layout`, replacing any manifest that had the tag.
+pub(super) fn tag_in_layout(layout: &Path, tag: &str, digest: &str, size: u64) -> Result<()> {
+    let index_path = layout.join("index.json");
+    let mut manifests: Vec<Value> = match std::fs::read_to_string(&index_path) {
+        Ok(s) => serde_json::from_str::<Value>(&s).context("parsing index.json")?["manifests"].as_array().cloned().unwrap_or_default(),
+        Err(_) => vec![],
+    };
+    manifests.retain(|m| m["annotations"][REF_NAME] != tag);
+    manifests.push(json!({
+        "mediaType": MANIFEST_MEDIA_TYPE, "artifactType": ARTIFACT_TYPE, "digest": digest, "size": size,
+        "annotations": {REF_NAME: tag},
+    }));
+    manifests.sort_by(|a, b| a["annotations"][REF_NAME].as_str().cmp(&b["annotations"][REF_NAME].as_str()));
+    let index = json!({"schemaVersion": 2, "mediaType": INDEX_MEDIA_TYPE, "manifests": manifests});
+    std::fs::write(layout.join("oci-layout"), json!({"imageLayoutVersion": LAYOUT_VERSION}).to_string())?;
+    Ok(crate::trial::write_atomic(&index_path, serde_json::to_vec_pretty(&index)?)?)
 }
 
 fn hex(digest: &str) -> Result<&str> {

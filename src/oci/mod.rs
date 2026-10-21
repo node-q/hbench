@@ -1,12 +1,15 @@
 //! Datasets as OCI artifacts, read from a registry (`oci://<registry>/<namespace>`) or from OCI image layouts on
-//! disk (`oci-layout:<dir>`). `-d name@version` is the manifest tagged `<version>` in repository
-//! `<namespace>/<name>` (in a layout dir, the layout `<dir>/<name>`). Tasks unpack into
+//! disk (`oci-layout:<dir>`), and published to both ([`publish`]). `-d name@version` is the manifest tagged
+//! `<version>` in repository `<namespace>/<name>` (in a layout dir, the layout `<dir>/<name>`). Tasks unpack into
 //! `<cache>/tasks/sha256/<layer>/<task>` and registry blobs land in `<cache>/blobs/sha256/<digest>`, both checked
 //! against their digests.
 
+pub mod credentials;
+pub mod descriptor;
 pub mod format;
 pub mod lockfile;
 pub mod pack;
+pub mod publish;
 mod store;
 mod unpack;
 

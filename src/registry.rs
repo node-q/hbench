@@ -128,18 +128,20 @@ pub async fn dataset_tasks(d: &DatasetConfig, disable_verification: bool) -> Res
     let regs = load(d.registry_url.as_deref(), d.registry_path.as_deref())?;
     let ds = find(&regs, name, d.version.as_deref())?;
     let tasks = filter_names(ds.tasks.clone(), |t| t.name.clone(), d)?;
-    Ok(tasks
-        .into_iter()
-        .map(|t| TaskRef {
-            path: Some(t.path.into()),
-            git_url: t.git_url,
-            git_commit_id: t.git_commit_id,
-            overwrite: d.overwrite,
-            download_dir: d.download_dir.clone(),
-            source: Some(name.to_string()),
-            ..Default::default()
-        })
-        .collect())
+    Ok(tasks.into_iter().map(|t| task_ref(t, d, name)).collect())
+}
+
+/// The task ref of registry task `t` in dataset `name`, downloaded as `d` says.
+pub fn task_ref(t: RegistryTask, d: &DatasetConfig, name: &str) -> TaskRef {
+    TaskRef {
+        path: Some(t.path.into()),
+        git_url: t.git_url,
+        git_commit_id: t.git_commit_id,
+        overwrite: d.overwrite,
+        download_dir: d.download_dir.clone(),
+        source: Some(name.to_string()),
+        ..Default::default()
+    }
 }
 
 fn cache_dir(t: &TaskRef) -> PathBuf {

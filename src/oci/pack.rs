@@ -5,19 +5,19 @@
 
 use super::Sha256Writer;
 use super::format::{
-    self, ARTIFACT_TYPE, CONFIG_MEDIA_TYPE, CREATED, ConfigBlob, INDEX_MEDIA_TYPE, LAYER_MEDIA_TYPE, LICENSES, MANIFEST_MEDIA_TYPE,
-    PACKAGE_DIGEST, REF_NAME, REVISION, SOURCE, TITLE, TaskEntry, Timeouts, Upstream, VERSION,
+    self, ARTIFACT_TYPE, CONFIG_MEDIA_TYPE, CREATED, ConfigBlob, DESCRIPTION, LAYER_MEDIA_TYPE, LICENSES, MANIFEST_MEDIA_TYPE,
+    PACKAGE_DIGEST, REVISION, SOURCE, TITLE, TaskEntry, Timeouts, Upstream, VERSION,
 };
 use anyhow::{Context, Result, bail};
-use serde_json::{Value, json};
+use serde_json::json;
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 const GZIP_OS_UNIX: u8 = 3;
-const LAYOUT_VERSION: &str = "1.0.0";
 
-enum Kind {
+#[derive(Debug, PartialEq)]
+pub(super) enum Kind {
     Dir,
     File { executable: bool, len: u64 },
     Symlink(PathBuf),
@@ -28,15 +28,29 @@ enum Kind {
 pub struct DatasetInfo {
     pub name: String,
     pub version: String,
+    pub title: Option<String>,
     pub description: String,
     pub license: String,
     pub upstream: Option<Upstream>,
     pub canary: Option<String>,
+    pub source: Option<Provenance>,
     pub created: Option<String>,
 }
 
+/// Where the packed files were taken from: the manifest's `org.opencontainers.image.source` and `.revision`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Provenance {
+    pub url: String,
+    pub revision: Option<String>,
+}
+
+/// The name a task directory's layer gets: the directory's own name.
+pub(super) fn task_name(dir: &Path) -> String {
+    dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
+}
+
 /// Every entry under `dir` as (`/`-separated relative path, kind), sorted by path.
-fn entries(dir: &Path) -> Result<Vec<(String, Kind)>> {
+pub(super) fn entries(dir: &Path) -> Result<Vec<(String, Kind)>> {
     fn walk(root: &Path, dir: &Path, out: &mut Vec<(String, Kind)>) -> Result<()> {
         for e in std::fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {
             let p = e?.path();
@@ -143,7 +157,7 @@ pub fn write_layout(root: &Path, info: &DatasetInfo, tasks: &[PathBuf]) -> Resul
     std::fs::create_dir_all(&blobs)?;
     let (mut entries, mut layers) = (vec![], vec![]);
     for dir in tasks {
-        let name = dir.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_string();
+        let name = task_name(dir);
         if !format::is_task_name(&name) {
             bail!("{}: {name:?} is not a valid task name", dir.display());
         }
@@ -169,10 +183,17 @@ pub fn write_layout(root: &Path, info: &DatasetInfo, tasks: &[PathBuf]) -> Resul
     let mut annotations = serde_json::Map::new();
     annotations.insert(VERSION.into(), info.version.clone().into());
     annotations.insert(LICENSES.into(), info.license.clone().into());
-    if let Some(u) = &info.upstream {
-        annotations.insert(SOURCE.into(), u.url.clone().into());
-        if let Some(r) = &u.revision {
-            annotations.insert(REVISION.into(), r.clone().into());
+    if let Some(t) = &info.title {
+        annotations.insert(TITLE.into(), t.clone().into());
+    }
+    if !info.description.is_empty() {
+        annotations.insert(DESCRIPTION.into(), info.description.clone().into());
+    }
+    let upstream = info.upstream.as_ref().map(|u| Provenance { url: u.url.clone(), revision: u.revision.clone() });
+    if let Some(p) = info.source.clone().or(upstream) {
+        annotations.insert(SOURCE.into(), p.url.into());
+        if let Some(r) = p.revision {
+            annotations.insert(REVISION.into(), r.into());
         }
     }
     if let Some(c) = &info.created {
@@ -189,19 +210,6 @@ pub fn write_layout(root: &Path, info: &DatasetInfo, tasks: &[PathBuf]) -> Resul
     let manifest_bytes = serde_json::to_vec(&manifest)?;
     format::Dataset::new(&format::parse_manifest(&manifest_bytes)?, &config_bytes).context("the packed dataset does not verify")?;
     let (digest, size) = write_blob(&blobs, |w| Ok(w.write_all(&manifest_bytes)?))?;
-    let index_path = layout.join("index.json");
-    let mut manifests: Vec<Value> = match std::fs::read_to_string(&index_path) {
-        Ok(s) => serde_json::from_str::<Value>(&s)?["manifests"].as_array().cloned().unwrap_or_default(),
-        Err(_) => vec![],
-    };
-    manifests.retain(|m| m["annotations"][REF_NAME] != info.version.as_str());
-    manifests.push(json!({
-        "mediaType": MANIFEST_MEDIA_TYPE, "artifactType": ARTIFACT_TYPE, "digest": digest, "size": size,
-        "annotations": {REF_NAME: info.version},
-    }));
-    manifests.sort_by(|a, b| a["annotations"][REF_NAME].as_str().cmp(&b["annotations"][REF_NAME].as_str()));
-    let index = json!({"schemaVersion": 2, "mediaType": INDEX_MEDIA_TYPE, "manifests": manifests});
-    std::fs::write(layout.join("oci-layout"), json!({"imageLayoutVersion": LAYOUT_VERSION}).to_string())?;
-    crate::trial::write_atomic(&index_path, serde_json::to_vec_pretty(&index)?)?;
+    super::store::tag_in_layout(&layout, &info.version, &digest, size)?;
     Ok(digest)
 }

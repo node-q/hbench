@@ -7,6 +7,8 @@ use serde_json::Value;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
+mod publish;
+
 /// A temp dir, removed when it goes out of scope.
 struct Scratch(PathBuf);
 
@@ -371,24 +373,12 @@ fn lock_json_records_oci_tasks() {
     assert!(bad_digest.validate().is_err());
 }
 
-async fn push_layout(layout: &Path, version: &str, registry: &str, repository: &str) -> String {
-    let index: Value = serde_json::from_slice(&std::fs::read(layout.join("index.json")).unwrap()).unwrap();
-    let entry = index["manifests"].as_array().unwrap().iter().find(|m| m["annotations"][format::REF_NAME] == version).unwrap();
-    let blob = |digest: &str| std::fs::read(layout.join("blobs/sha256").join(digest.trim_start_matches("sha256:"))).unwrap();
-    let manifest_bytes = blob(entry["digest"].as_str().unwrap());
-    let manifest: Value = serde_json::from_slice(&manifest_bytes).unwrap();
-    let super::store::Store::Registry { client, .. } = super::store::Store::open(registry, &scratch("push")).unwrap() else {
-        unreachable!()
-    };
-    let reference = oci_client::Reference::with_tag(registry.into(), repository.into(), version.into());
-    client.store_auth_if_needed(registry, &oci_client::secrets::RegistryAuth::Anonymous).await;
-    let blobs = std::iter::once(&manifest["config"]).chain(manifest["layers"].as_array().unwrap());
-    for d in blobs.map(|d| d["digest"].as_str().unwrap()) {
-        client.push_blob(&reference, blob(d), d).await.unwrap();
-    }
-    let media_type = http::HeaderValue::from_static(format::MANIFEST_MEDIA_TYPE);
-    client.push_manifest_raw(&reference, manifest_bytes.clone(), media_type).await.unwrap();
-    sha256_digest(&manifest_bytes)
+/// Push dataset `name@version` from the layout under `root` to `registry/repository`, moving the tag if it is
+/// there; the manifest digest.
+async fn push_layout(root: &Path, name: &str, version: &str, registry: &str, repository: &str) -> String {
+    let target = super::publish::Target { registry: registry.into(), repository: repository.into(), tag: Some(version.into()) };
+    let pushed = super::publish::push(root, name, version, &target, oci_client::secrets::RegistryAuth::Anonymous, true).await.unwrap();
+    pushed.copied.digest
 }
 
 /// Run with a registry on localhost, e.g. `docker run -d -p 127.0.0.1:5000:5000 registry:3` and
@@ -403,7 +393,7 @@ async fn example_tasks_unpack_byte_identical_from_a_registry() {
     let lock = locks.join("hbench.lock");
     let namespace = format!("hbench-test/{}", uuid::Uuid::new_v4().simple());
     let digest = write_layout(&root, &info("examples", "1.0"), &example_tasks()).unwrap();
-    assert_eq!(push_layout(&root.join("examples"), "1.0", &registry, &format!("{namespace}/examples")).await, digest);
+    assert_eq!(push_layout(&root, "examples", "1.0", &registry, &format!("{namespace}/examples")).await, digest);
     let d = DatasetConfig { registry: Some(format!("oci://{registry}/{namespace}")), ..layout_dataset(&root, &cache, "examples", "1.0") };
     let tasks = resolve(&lock, d.clone()).await.unwrap();
     let oci = tasks[0].oci.as_ref().unwrap();
@@ -428,7 +418,7 @@ async fn example_tasks_unpack_byte_identical_from_a_registry() {
     let mut locked = vec![d.clone()];
     pin_datasets_at(&lock, &mut locked, LockMode::Write).await.unwrap();
     write_layout(&root, &info("examples", "1.0"), &example_tasks()[..1]).unwrap();
-    let moved = push_layout(&root.join("examples"), "1.0", &registry, &format!("{namespace}/examples")).await;
+    let moved = push_layout(&root, "examples", "1.0", &registry, &format!("{namespace}/examples")).await;
     let err = pin_datasets_at(&lock, &mut [d.clone()], LockMode::Locked).await.unwrap_err().to_string();
     assert_eq!(err, format!("--locked: examples@1.0 resolves to {moved}, but hbench.lock locks it at {digest}"));
 }

@@ -1,0 +1,123 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/node-q/hbench/blob/master/assets/schemas/dataset-source.v1.json",
+  "title": "hbench dataset source descriptor, v1",
+  "description": "The source.yaml that `hbench datasets pack`, `push` and `convert` read: what the dataset's config blob and manifest say beyond its tasks, and what its task directories must be. It accepts every descriptor of node-q/hbench-datasets' schema/source.v1.json, and needs only schema_version, name, version and license. The fields that reach the config blob take what assets/schemas/dataset-config.v1.json takes; the other fields keep source.v1's rules.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "name", "version", "license"],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "name": {
+      "description": "Dataset name: the last component of its OCI repository, and the <name> in -d <name>@<version>.",
+      "type": "string",
+      "pattern": "^[a-z0-9]+((\\.|_|__|-+)[a-z0-9]+)*$",
+      "maxLength": 128
+    },
+    "version": {
+      "description": "Dataset version: semver without build metadata, the patch number optional. It is the manifest's tag.",
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(\\.(0|[1-9][0-9]*))?(-[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?$",
+      "maxLength": 128
+    },
+    "title": {
+      "description": "Human-readable title, the manifest's org.opencontainers.image.title.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "description": {
+      "description": "The config's description, and the manifest's org.opencontainers.image.description.",
+      "type": "string",
+      "minLength": 1
+    },
+    "license": {
+      "description": "SPDX licence expression covering the task directories as published.",
+      "type": "string",
+      "minLength": 1
+    },
+    "keywords": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    },
+    "upstream": {
+      "description": "The dataset this version is derived from; the config's upstream.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["url"],
+      "properties": {
+        "url": { "type": "string", "minLength": 1 },
+        "revision": { "type": "string", "minLength": 1 },
+        "creator": { "type": "string", "minLength": 1 },
+        "citation": { "type": "string", "minLength": 1 }
+      }
+    },
+    "canary": {
+      "description": "The canary string the dataset's files carry; the config's canary.",
+      "type": "string",
+      "minLength": 1
+    },
+    "source": {
+      "description": "The git repository and commit the task directories were taken from: the manifest's org.opencontainers.image.source and .revision. hbench refuses to pack any other number of tasks than task_count.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["git_url", "commit", "path", "task_count"],
+      "properties": {
+        "git_url": { "type": "string", "pattern": "^https://" },
+        "commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "path": {
+          "type": "string",
+          "pattern": "^(\\.|[A-Za-z0-9_][A-Za-z0-9._-]*(/[A-Za-z0-9_][A-Za-z0-9._-]*)*)$"
+        },
+        "task_count": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "environment": {
+      "description": "How the tasks reference their prebuilt images. hbench checks each task.toml's docker_image against declared_image ({task} standing for the task directory's name) and, for pinned-by-digest, against images.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["policy"],
+      "properties": {
+        "policy": { "enum": ["as-declared", "pinned-by-digest"] },
+        "declared_image": { "type": "string", "pattern": "\\{task\\}" },
+        "images": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": { "type": "string", "pattern": "^[^@\\s]+@sha256:[0-9a-f]{64}$" }
+        },
+        "planned": { "type": "string", "minLength": 1 }
+      },
+      "if": { "properties": { "policy": { "const": "pinned-by-digest" } } },
+      "then": { "required": ["images"] },
+      "else": { "properties": { "images": false } }
+    },
+    "attribution": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "rai": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "data_collection": { "type": "string", "minLength": 1 },
+        "data_collection_type": { "$ref": "#/$defs/statements" },
+        "data_use_cases": { "$ref": "#/$defs/statements" },
+        "data_limitations": { "$ref": "#/$defs/statements" },
+        "data_biases": { "$ref": "#/$defs/statements" },
+        "personal_sensitive_information": { "$ref": "#/$defs/statements" },
+        "data_social_impact": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  "$defs": {
+    "statements": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 }
+    }
+  }
+}

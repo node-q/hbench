@@ -13,6 +13,7 @@ pub const MANIFEST_MEDIA_TYPE: &str = "application/vnd.oci.image.manifest.v1+jso
 pub const INDEX_MEDIA_TYPE: &str = "application/vnd.oci.image.index.v1+json";
 
 pub const TITLE: &str = "org.opencontainers.image.title";
+pub const DESCRIPTION: &str = "org.opencontainers.image.description";
 pub const PACKAGE_DIGEST: &str = "dev.hbench.task.package-digest";
 pub const REF_NAME: &str = "org.opencontainers.image.ref.name";
 pub const VERSION: &str = "org.opencontainers.image.version";
@@ -45,6 +46,8 @@ pub struct Upstream {
     pub url: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub revision: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub creator: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub citation: Option<String>,
 }
