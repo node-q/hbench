@@ -1,4 +1,5 @@
-//! Dataset registry (registry.json) + git-backed task download.
+//! Dataset sources: a registry.json with git-backed tasks, an OCI registry or OCI image layouts
+//! ([`crate::oci`]), or a local directory of tasks.
 
 use crate::config::{DatasetConfig, TaskRef};
 use crate::task::{Task, hex};
@@ -11,9 +12,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-/// There is no default registry: registry datasets name one with `--registry-url` / `--registry-path`
-/// (or a dataset's `registry_url` / `registry_path` in a job config).
-pub const NO_REGISTRY: &str = "no dataset registry configured: pass --registry-url or --registry-path (in a job config, set the dataset's registry_url or registry_path)";
+/// There is no default registry: registry datasets name one with `--registry-url` / `--registry-path` or
+/// `--registry` (or a dataset's `registry_url` / `registry_path` / `registry` in a job config).
+pub const NO_REGISTRY: &str = "no dataset registry configured: pass --registry-url or --registry-path, or --registry oci://<registry>/<namespace> or oci-layout:<dir> (in a job config, set the dataset's registry_url, registry_path or registry)";
 
 #[derive(Debug, Deserialize)]
 pub struct Dataset {
@@ -104,9 +105,10 @@ fn check_runnable(task_dir: &Path, disable_verification: bool) -> Result<()> {
     Ok(())
 }
 
-/// Resolve a dataset config into task refs (local dirs, or git refs from a registry). A local dataset's
-/// tasks are its subdirectories with a task.toml; a selected task that fails to load is an error.
-pub fn dataset_tasks(d: &DatasetConfig, disable_verification: bool) -> Result<Vec<TaskRef>> {
+/// Resolve a dataset config into task refs (local dirs, git refs from a registry.json, or layers of an OCI
+/// dataset). A local dataset's tasks are its subdirectories with a task.toml; a selected task that fails to
+/// load is an error.
+pub async fn dataset_tasks(d: &DatasetConfig, disable_verification: bool) -> Result<Vec<TaskRef>> {
     if let Some(p) = &d.path {
         let p = p.canonicalize().with_context(|| format!("dataset path {}", p.display()))?;
         let source = p.file_name().map(|n| n.to_string_lossy().into_owned());
@@ -120,6 +122,9 @@ pub fn dataset_tasks(d: &DatasetConfig, disable_verification: bool) -> Result<Ve
         return Ok(dirs.into_iter().map(|t| TaskRef { path: Some(t), source: source.clone(), ..Default::default() }).collect());
     }
     let name = d.name.as_deref().context("dataset needs path or name")?;
+    if d.registry.is_some() {
+        return filter_names(crate::oci::dataset_tasks(d).await?, TaskRef::display_name, d);
+    }
     let regs = load(d.registry_url.as_deref(), d.registry_path.as_deref())?;
     let ds = find(&regs, name, d.version.as_deref())?;
     let tasks = filter_names(ds.tasks.clone(), |t| t.name.clone(), d)?;
@@ -144,12 +149,13 @@ fn cache_dir(t: &TaskRef) -> PathBuf {
     t.download_dir.clone().unwrap_or_else(|| crate::env::cache_root().join("tasks")).join(key)
 }
 
-/// Host path of a task (git tasks resolve into the download cache).
+/// Host path of a task (git and OCI tasks resolve into the download cache).
 pub fn local_path(t: &TaskRef) -> PathBuf {
     let p = t.path.clone().unwrap_or_default();
-    match &t.git_url {
-        Some(_) => cache_dir(t).join(p),
-        None => p,
+    match (&t.git_url, &t.oci) {
+        (_, Some(oci)) => crate::oci::task_dir(t, oci),
+        (Some(_), None) => cache_dir(t).join(p),
+        (None, None) => p,
     }
 }
 
@@ -217,8 +223,9 @@ fn fetch(dir: &Path, url: &str, commit: &str, paths: &[String]) -> Result<()> {
     Ok(())
 }
 
-/// Sparse, shallow checkout of each (repo, commit) group of git tasks.
-pub fn download(tasks: &[TaskRef]) -> Result<()> {
+/// Unpack OCI tasks into the cache, and make a sparse, shallow checkout of each (repo, commit) group of git tasks.
+pub async fn download(tasks: &[TaskRef]) -> Result<()> {
+    crate::oci::download(&tasks.iter().filter(|t| t.oci.is_some()).collect::<Vec<_>>()).await?;
     let mut groups: BTreeMap<PathBuf, Vec<&TaskRef>> = BTreeMap::new();
     for t in tasks.iter().filter(|t| t.git_url.is_some()) {
         groups.entry(cache_dir(t)).or_default().push(t);
@@ -256,13 +263,13 @@ pub fn download(tasks: &[TaskRef]) -> Result<()> {
 mod tests {
     use crate::config::DatasetConfig;
 
-    #[test]
-    fn registry_datasets_need_a_registry() {
+    #[tokio::test]
+    async fn registry_datasets_need_a_registry() {
         let e = super::load(None, None).unwrap_err().to_string();
         assert!(e.starts_with("no dataset registry configured: pass --registry-url or --registry-path"), "{e}");
         assert_eq!(super::load(Some(" "), None).unwrap_err().to_string(), super::NO_REGISTRY);
         let named = DatasetConfig { name: Some("terminal-bench".into()), version: Some("2.0".into()), ..Default::default() };
-        assert_eq!(super::dataset_tasks(&named, false).unwrap_err().to_string(), super::NO_REGISTRY);
+        assert_eq!(super::dataset_tasks(&named, false).await.unwrap_err().to_string(), super::NO_REGISTRY);
         // With a local registry.json the same reference resolves.
         let dir = std::env::temp_dir().join(format!("hbench-reg-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -272,14 +279,14 @@ mod tests {
             r#"[{"name": "terminal-bench", "version": "2.0", "tasks": [{"name": "hello", "git_url": "https://example.com/t.git", "git_commit_id": "abc", "path": "tasks/hello"}]}]"#,
         )
         .unwrap();
-        let tasks = super::dataset_tasks(&DatasetConfig { registry_path: Some(reg), ..named }, false).unwrap();
+        let tasks = super::dataset_tasks(&DatasetConfig { registry_path: Some(reg), ..named }, false).await.unwrap();
         assert_eq!(tasks.len(), 1);
         assert_eq!(tasks[0].git_url.as_deref(), Some("https://example.com/t.git"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    #[test]
-    fn local_datasets_report_broken_tasks() {
+    #[tokio::test]
+    async fn local_datasets_report_broken_tasks() {
         let root = std::env::temp_dir().join(format!("hbench-reg-{}", uuid::Uuid::new_v4()));
         let task = |name: &str, files: &[&str]| {
             for f in files {
@@ -292,15 +299,15 @@ mod tests {
         task("good", &runnable);
         task("no-tests", &runnable[..3]);
         task("docs", &["README.md"]);
-        let names = |d: &DatasetConfig, disable_verification: bool| -> anyhow::Result<Vec<String>> {
-            Ok(super::dataset_tasks(d, disable_verification)?.iter().map(|t| t.display_name()).collect())
-        };
+        async fn names(d: &DatasetConfig, disable_verification: bool) -> anyhow::Result<Vec<String>> {
+            Ok(super::dataset_tasks(d, disable_verification).await?.iter().map(|t| t.display_name()).collect())
+        }
         let all = DatasetConfig { path: Some(root.clone()), ..Default::default() };
-        let err = format!("{:#}", names(&all, false).unwrap_err());
+        let err = format!("{:#}", names(&all, false).await.unwrap_err());
         assert!(err.contains("no-tests") && err.contains("does not contain tests/test.sh"), "{err}");
-        assert_eq!(names(&all, true).unwrap(), ["good", "no-tests"]);
+        assert_eq!(names(&all, true).await.unwrap(), ["good", "no-tests"]);
         let without_broken = DatasetConfig { exclude_task_names: Some(vec!["no-tests".into()]), ..all };
-        assert_eq!(names(&without_broken, false).unwrap(), ["good"]);
+        assert_eq!(names(&without_broken, false).await.unwrap(), ["good"]);
         let _ = std::fs::remove_dir_all(&root);
     }
 

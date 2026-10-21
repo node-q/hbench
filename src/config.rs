@@ -262,7 +262,7 @@ pub struct VerifierRunConfig {
     pub disable: bool,
 }
 
-/// Trial-level task reference: a local path, or a git-hosted task.
+/// Trial-level task reference: a local path, a git-hosted task, or a task of an OCI dataset.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct TaskRef {
@@ -275,6 +275,18 @@ pub struct TaskRef {
     pub overwrite: bool,
     pub download_dir: Option<PathBuf>,
     pub source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub oci: Option<OciTask>,
+}
+
+/// A task of an OCI dataset: its layer, and the dataset manifest that lists it. `registry` is the registry host,
+/// or `oci-layout:<dir>` for a dataset read from an OCI image layout `<dir>/<repository>`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct OciTask {
+    pub registry: String,
+    pub repository: String,
+    pub manifest_digest: String,
+    pub layer_digest: String,
 }
 
 impl TaskRef {
@@ -291,7 +303,20 @@ impl TaskRef {
         if self.git_commit_id.is_some() && self.git_url.is_none() {
             bail!("'git_commit_id' requires 'git_url' to be set.");
         }
+        if let Some(o) = &self.oci {
+            let plain_name = self.path.as_deref().is_some_and(|p| p.to_str().is_some_and(crate::oci::format::is_task_name));
+            if self.git_url.is_some() || !plain_name || !crate::oci::is_repository(&o.repository) {
+                bail!("an OCI task's path is its task name and its repository a repository path, and it has no git_url");
+            }
+            if ![&o.manifest_digest, &o.layer_digest].iter().all(|d| crate::oci::format::is_sha256_digest(d)) {
+                bail!("an OCI task's manifest_digest and layer_digest must be sha256 digests");
+            }
+        }
         Ok(())
+    }
+    /// A task directory on the host, rather than one downloaded into the cache.
+    pub fn is_local(&self) -> bool {
+        self.git_url.is_none() && self.oci.is_none()
     }
     /// Short name used in trial names / filters.
     pub fn display_name(&self) -> String {
@@ -309,6 +334,12 @@ pub struct DatasetConfig {
     pub reference: Option<String>,
     pub registry_url: Option<String>,
     pub registry_path: Option<PathBuf>,
+    /// An OCI registry, `oci://<registry>/<namespace>`, or OCI image layouts, `oci-layout:<dir>`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub registry: Option<String>,
+    /// The manifest digest an OCI dataset runs at, recorded when its tag is resolved.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub digest: Option<String>,
     pub repo: Option<String>,
     pub overwrite: bool,
     pub download_dir: Option<PathBuf>,
@@ -688,6 +719,20 @@ impl JobConfig {
                 (Some(_), Some(_)) => bail!("Cannot set both 'path' and 'name'."),
                 _ => {}
             }
+            if let Some(spec) = &d.registry {
+                crate::oci::Location::parse(spec)?;
+                if d.registry_url.is_some() || d.registry_path.is_some() {
+                    bail!("a dataset sets registry or registry_url/registry_path, not both");
+                }
+                if d.version.is_none() {
+                    bail!("an OCI dataset needs a version");
+                }
+            }
+            if let Some(digest) = &d.digest
+                && (d.registry.is_none() || !crate::oci::format::is_sha256_digest(digest))
+            {
+                bail!("a dataset's digest is the sha256 manifest digest of an OCI dataset (one with a registry)");
+            }
         }
         for a in &self.artifacts {
             a.spec().validate()?;
@@ -760,7 +805,8 @@ impl JobConfig {
 /// Rewrite legacy config keys to their current form, so the strict parse sees only
 /// current keys: `orchestrator.{n_concurrent_trials,quiet,retry}` move to the top level, `plugins` and
 /// `environment.suppress_override_warnings` (both no-ops) go, `environment.mounts_json` becomes `mounts`,
-/// and a dataset's `registry: {url, path}` becomes `registry_url` / `registry_path`.
+/// and a dataset's `registry: {url, path}` becomes `registry_url` / `registry_path` (a string `registry` names an
+/// OCI registry and is kept).
 pub fn migrate_legacy(v: &mut Value) {
     let Some(obj) = v.as_object_mut() else { return };
     obj.remove("plugins");
@@ -777,6 +823,9 @@ pub fn migrate_legacy(v: &mut Value) {
     }
     for d in obj.get_mut("datasets").and_then(Value::as_array_mut).into_iter().flatten() {
         let Some(d) = d.as_object_mut() else { continue };
+        if !d.get("registry").is_some_and(Value::is_object) {
+            continue;
+        }
         if let Some(Value::Object(reg)) = d.remove("registry") {
             for (from, to) in [("url", "registry_url"), ("path", "registry_path")] {
                 if let Some(val) = reg.get(from) {
@@ -852,6 +901,49 @@ mod tests {
         assert_eq!(ok.n_concurrent_trials, 2);
         assert_eq!(ok.environment.mounts.as_ref().map(Vec::len), Some(1));
         assert_eq!(ok.datasets[0].registry_url.as_deref(), Some("https://r/registry.json"));
+    }
+
+    #[test]
+    fn oci_datasets_take_a_registry_string() {
+        let load = |v: Value| -> Result<JobConfig> {
+            let mut v = v;
+            migrate_legacy(&mut v);
+            let cfg: JobConfig = strict_value(v)?;
+            cfg.validate()?;
+            Ok(cfg)
+        };
+        let digest = format!("sha256:{}", "0".repeat(64));
+        let oci =
+            load(serde_json::json!({"datasets": [{"name": "hello", "version": "1.0", "registry": "oci://ghcr.io/ns", "digest": digest}]}))
+                .unwrap();
+        assert_eq!(
+            (oci.datasets[0].registry.as_deref(), oci.datasets[0].digest.as_deref()),
+            (Some("oci://ghcr.io/ns"), Some(digest.as_str()))
+        );
+        assert_eq!(
+            oci.config_json()["datasets"],
+            serde_json::json!([{"name": "hello", "version": "1.0", "registry": "oci://ghcr.io/ns", "digest": digest}])
+        );
+        let legacy = load(serde_json::json!({"datasets": [{"name": "hello", "registry": {"path": "registry.json"}}]})).unwrap();
+        assert_eq!(
+            (legacy.datasets[0].registry_path.as_deref(), legacy.datasets[0].registry.as_deref()),
+            (Some(Path::new("registry.json")), None)
+        );
+        assert_eq!(legacy.config_json()["datasets"], serde_json::json!([{"name": "hello", "registry_path": "registry.json"}]));
+        let err = |v: Value| format!("{:#}", load(v).unwrap_err());
+        assert!(
+            err(serde_json::json!({"datasets": [{"name": "hello", "version": "1.0", "registry": "https://r/registry.json"}]}))
+                .contains("--registry-url")
+        );
+        assert!(
+            err(serde_json::json!({"datasets": [{"name": "hello", "version": "1.0", "registry": "oci://r/ns", "registry_url": "https://r"}]}))
+                .contains("not both")
+        );
+        assert!(err(serde_json::json!({"datasets": [{"name": "hello", "registry": "oci://r/ns"}]})).contains("needs a version"));
+        assert!(
+            err(serde_json::json!({"datasets": [{"name": "hello", "registry_url": "https://r", "digest": digest}]})).contains("digest")
+        );
+        assert!(serde_json::to_value(TaskRef::default()).unwrap().get("oci").is_none());
     }
 
     #[test]

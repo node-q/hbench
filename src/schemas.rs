@@ -1,11 +1,14 @@
-//! Vendored JSON schemas (task.toml, trial config, each agent's options) under assets/schemas.
+//! Vendored JSON schemas (task.toml, trial config, an OCI dataset's config blob, each agent's options) under
+//! assets/schemas.
 
+use anyhow::{Context, Result, bail};
 use serde_json::Value;
-use std::collections::{BTreeMap, BTreeSet};
-use std::sync::OnceLock;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::sync::{Mutex, OnceLock};
 
 pub const TASK: &str = include_str!("../assets/schemas/task.json");
 pub const TRIAL: &str = include_str!("../assets/schemas/trial.json");
+pub const DATASET_CONFIG: &str = include_str!("../assets/schemas/dataset-config.v1.json");
 
 const AGENTS: &[(&str, &str)] = &[
     ("acp", include_str!("../assets/schemas/agents/acp.json")),
@@ -139,9 +142,149 @@ pub fn options_table(agent: &str, schema: &Value) -> String {
     out
 }
 
+const ANNOTATION_KEYWORDS: &[&str] = &["$schema", "$id", "$defs", "title", "description"];
+
+/// Where `value` breaks `schema`, one message per violation. Only the keywords hbench's own schemas use are
+/// understood; a schema with any other keyword is an error, never a silent pass.
+pub fn violations(schema: &Value, value: &Value) -> Result<Vec<String>> {
+    let mut out = vec![];
+    check(schema, schema, value, "", &mut out)?;
+    Ok(out)
+}
+
+fn check(root: &Value, schema: &Value, value: &Value, at: &str, out: &mut Vec<String>) -> Result<()> {
+    let Value::Object(rules) = schema else { bail!("schema at {at:?} is not an object") };
+    let here = if at.is_empty() { "the document" } else { at };
+    let child = |key: &str| if at.is_empty() { key.to_string() } else { format!("{at}.{key}") };
+    for (keyword, rule) in rules {
+        match keyword.as_str() {
+            k if ANNOTATION_KEYWORDS.contains(&k) => {}
+            "$ref" => {
+                let target = rule.as_str().and_then(|r| r.strip_prefix("#/$defs/")).and_then(|name| root["$defs"].get(name));
+                check(root, target.with_context(|| format!("unresolvable $ref {rule} at {here}"))?, value, at, out)?;
+            }
+            "type" => {
+                let kind = rule.as_str().with_context(|| format!("type at {here} is not a string"))?;
+                if !has_type(value, kind) {
+                    out.push(format!("{here}: expected {kind}, got {value}"));
+                }
+            }
+            "properties" => {
+                let (Value::Object(props), Value::Object(fields)) = (rule, value) else { continue };
+                for (name, sub) in props {
+                    if let Some(field) = fields.get(name) {
+                        check(root, sub, field, &child(name), out)?;
+                    }
+                }
+            }
+            "required" => {
+                let Value::Object(fields) = value else { continue };
+                for name in rule.as_array().into_iter().flatten().filter_map(Value::as_str) {
+                    if !fields.contains_key(name) {
+                        out.push(format!("{here}: missing {name}"));
+                    }
+                }
+            }
+            "additionalProperties" => {
+                let (Value::Bool(false), Value::Object(fields)) = (rule, value) else { continue };
+                let known = rules.get("properties").and_then(Value::as_object);
+                for name in fields.keys().filter(|k| !known.is_some_and(|p| p.contains_key(*k))) {
+                    out.push(format!("{here}: unknown key {name}"));
+                }
+            }
+            "items" => {
+                let Value::Array(items) = value else { continue };
+                for (i, item) in items.iter().enumerate() {
+                    check(root, rule, item, &child(&i.to_string()), out)?;
+                }
+            }
+            "pattern" => {
+                let (Some(pattern), Value::String(s)) = (rule.as_str(), value) else { continue };
+                if !matches_pattern(pattern, s)? {
+                    out.push(format!("{here}: {s:?} does not match {pattern}"));
+                }
+            }
+            "minLength" | "maxLength" => {
+                let (Some(limit), Value::String(s)) = (rule.as_u64(), value) else { continue };
+                let n = s.chars().count() as u64;
+                if (keyword == "minLength" && n < limit) || (keyword == "maxLength" && n > limit) {
+                    out.push(format!("{here}: {keyword} is {limit}, got {n} characters"));
+                }
+            }
+            "minItems" => {
+                let (Some(limit), Value::Array(items)) = (rule.as_u64(), value) else { continue };
+                if (items.len() as u64) < limit {
+                    out.push(format!("{here}: needs at least {limit} item(s)"));
+                }
+            }
+            "minimum" => {
+                let (Some(limit), Some(n)) = (rule.as_f64(), value.as_f64()) else { continue };
+                if n < limit {
+                    out.push(format!("{here}: {n} is below the minimum {limit}"));
+                }
+            }
+            other => bail!("unsupported schema keyword {other} at {here}"),
+        }
+    }
+    Ok(())
+}
+
+fn has_type(v: &Value, kind: &str) -> bool {
+    match kind {
+        "object" => v.is_object(),
+        "array" => v.is_array(),
+        "string" => v.is_string(),
+        "number" => v.is_number(),
+        "integer" => v.is_i64() || v.is_u64(),
+        "boolean" => v.is_boolean(),
+        "null" => v.is_null(),
+        _ => false,
+    }
+}
+
+fn matches_pattern(pattern: &str, s: &str) -> Result<bool> {
+    static COMPILED: OnceLock<Mutex<HashMap<String, regex::Regex>>> = OnceLock::new();
+    let mut compiled = COMPILED.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
+    if !compiled.contains_key(pattern) {
+        compiled.insert(pattern.to_string(), regex::Regex::new(pattern).with_context(|| format!("schema pattern {pattern}"))?);
+    }
+    Ok(compiled[pattern].is_match(s))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dataset_config_schema_checks_what_it_declares() {
+        let schema: Value = serde_json::from_str(DATASET_CONFIG).unwrap();
+        let digest = format!("sha256:{}", "a".repeat(64));
+        let good = serde_json::json!({
+            "name": "hello", "version": "1.0", "license": "Apache-2.0",
+            "tasks": [{"name": "hello-world", "layer_digest": digest, "package_digest": digest, "timeouts": {"agent_sec": 60.0}}],
+        });
+        assert_eq!(violations(&schema, &good).unwrap(), Vec::<String>::new());
+        let bad = serde_json::json!({
+            "name": "Hello", "version": "v1", "license": "", "extra": 1,
+            "tasks": [{"name": "../x", "layer_digest": "sha256:abc", "timeouts": {"agent_sec": -1}}],
+        });
+        assert_eq!(
+            violations(&schema, &bad).unwrap(),
+            [
+                "the document: unknown key extra",
+                "name: \"Hello\" does not match ^[a-z0-9]+((\\.|_|__|-+)[a-z0-9]+)*$",
+                "version: \"v1\" does not match ^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(\\.(0|[1-9][0-9]*))?(-[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?$",
+                "license: minLength is 1, got 0 characters",
+                "tasks.0: missing package_digest",
+                "tasks.0.name: \"../x\" does not match ^[A-Za-z0-9][A-Za-z0-9._-]*$",
+                "tasks.0.layer_digest: \"sha256:abc\" does not match ^sha256:[0-9a-f]{64}$",
+                "tasks.0.timeouts.agent_sec: -1 is below the minimum 0",
+            ]
+        );
+        let unknown_keyword = serde_json::json!({"type": "object", "propertyNames": {"maxLength": 3}});
+        assert!(violations(&unknown_keyword, &good).unwrap_err().to_string().contains("unsupported schema keyword propertyNames"));
+    }
+
     #[test]
     fn every_agent_has_options() {
         for n in crate::agents::agent_names() {

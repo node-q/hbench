@@ -1,0 +1,122 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/node-q/hbench/blob/master/assets/schemas/dataset-config.v1.json",
+  "title": "hbench dataset config, v1",
+  "description": "The config blob (media type application/vnd.hbench.dataset.config.v1+json) of an hbench dataset: an OCI image manifest with artifactType application/vnd.hbench.dataset.v1 and one application/vnd.oci.image.layer.v1.tar+gzip layer per task. `tasks` lists the manifest's layers in the same order.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["name", "version", "license", "tasks"],
+  "properties": {
+    "name": {
+      "description": "Dataset name, as in `-d <name>@<version>`. It is the last component of the dataset's OCI repository, so it follows the OCI repository-name rules.",
+      "type": "string",
+      "pattern": "^[a-z0-9]+((\\.|_|__|-+)[a-z0-9]+)*$",
+      "maxLength": 128
+    },
+    "version": {
+      "description": "Dataset version: semver without build metadata, the patch number optional (2.0, 2.0.1, 3.0.0-rc.1). It is the manifest's tag.",
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(\\.(0|[1-9][0-9]*))?(-[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?$",
+      "maxLength": 128
+    },
+    "description": {
+      "type": "string"
+    },
+    "license": {
+      "description": "SPDX licence expression covering the dataset's tasks, e.g. Apache-2.0 or MIT AND CC-BY-4.0.",
+      "type": "string",
+      "minLength": 1
+    },
+    "upstream": {
+      "description": "Where the tasks come from.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["url"],
+      "properties": {
+        "url": {
+          "type": "string",
+          "minLength": 1
+        },
+        "revision": {
+          "description": "The upstream commit, tag or release the tasks were packed from.",
+          "type": "string"
+        },
+        "citation": {
+          "description": "How to cite the upstream dataset, e.g. BibTeX.",
+          "type": "string"
+        }
+      }
+    },
+    "canary": {
+      "description": "The canary string the dataset's files carry, so training corpora can filter them out.",
+      "type": "string"
+    },
+    "tasks": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/task"
+      }
+    }
+  },
+  "$defs": {
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "task": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "layer_digest", "package_digest"],
+      "properties": {
+        "name": {
+          "description": "Task directory name; equals the layer's org.opencontainers.image.title annotation.",
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+          "maxLength": 255
+        },
+        "layer_digest": {
+          "description": "Digest of the task's layer, as in the manifest.",
+          "$ref": "#/$defs/digest"
+        },
+        "package_digest": {
+          "description": "The task's package digest (lock.json's task.digest, `hbench tasks digest`); equals the layer's dev.hbench.task.package-digest annotation.",
+          "$ref": "#/$defs/digest"
+        },
+        "docker_image": {
+          "description": "The prebuilt image the task runs in, pinned by digest.",
+          "type": "string",
+          "pattern": "^[^@\\s]+@sha256:[0-9a-f]{64}$"
+        },
+        "platforms": {
+          "description": "Platforms the task's environment runs on, as os/arch[/variant].",
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9]+/[a-z0-9_]+(/[a-z0-9]+)?$"
+          }
+        },
+        "timeouts": {
+          "description": "The task's timeouts in seconds, as its task.toml sets them.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "agent_sec": {
+              "type": "number",
+              "minimum": 0
+            },
+            "verifier_sec": {
+              "type": "number",
+              "minimum": 0
+            },
+            "build_sec": {
+              "type": "number",
+              "minimum": 0
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -8,7 +8,8 @@ a `task.toml`, an environment, tests and a solution (see [Task format](#task-for
 
 hbench has no default dataset registry. To run a named dataset (`-d name@version`), point it at a `registry.json`
 with `--registry-url`, or at a local one with `--registry-path` (in a job config, the dataset's `registry_url` or
-`registry_path`). Local task directories (`-p`) need neither.
+`registry_path`), or at an OCI registry or OCI image layouts with `--registry` (see
+[Datasets from an OCI registry](#datasets-from-an-oci-registry)). Local task directories (`-p`) need none of them.
 
 Install the latest release (Linux/macOS, x86_64/arm64):
 
@@ -29,6 +30,7 @@ B=target/release/hbench
 
 $B run -p examples/tasks/hello-world                          # oracle on one task
 $B run -d terminal-bench@2.0 -a oracle -n 8                    # registry dataset
+$B run -d hello@1.0 --registry oci://ghcr.io/<namespace> --locked   # OCI dataset, pinned by ./hbench.lock
 $B run -d terminal-bench-sample@2.0 -a claude-code -m anthropic/claude-opus-5-5 -k 3 -i 'regex*'
 $B run -c job.yaml                                             # job config (YAML/JSON)
 $B run -c job.yaml --diff jobs/<old-job>                       # reuse / regrade / rerun vs an earlier job
@@ -165,6 +167,92 @@ or a service manager), keep running for the verifier. If they cannot be stopped,
 ungraded with the run's own error (`AgentTimeoutError` after a timeout). In a shared verifier environment such a process
 could also change files while the tests run; it shows up in the trajectory, so review trajectories of top runs.
 
+## Datasets from an OCI registry
+
+`--registry` reads datasets from an OCI registry, or from OCI image layouts on disk, instead of a `registry.json`:
+
+```bash
+$B run -d hello@1.0 --registry oci://ghcr.io/node-q/hbench-datasets -a oracle
+$B datasets download hello@1.0 --registry oci-layout:./datasets    # ./datasets/hello is an OCI image layout
+$B datasets list --registry oci-layout:./datasets
+```
+
+- `oci://<registry>/<namespace>`: `-d <name>@<version>` is the manifest tagged `<version>` in
+  `<registry>/<namespace>/<name>`. Pulls are anonymous (with a registry token where the registry asks for one, as
+  GHCR does) and over HTTPS, except to `localhost`, `127.0.0.1` and `::1`, which use plain HTTP.
+- `oci-layout:<dir>`: `<dir>/<name>` is an OCI image layout, and the dataset is the manifest in its `index.json`
+  whose `org.opencontainers.image.ref.name` is `<version>`. `oras cp <registry>/<namespace>/<name>:<version>
+  --to-oci-layout <dir>/<name>:<version>` makes one, for offline use.
+- In a job config, a dataset sets `registry: "oci://..."` or `registry: "oci-layout:..."` (a string; the object
+  `registry: {url, path}` is still the legacy `registry.json` form) with a `name` and a `version`, and may set
+  `digest: "sha256:..."` to run that manifest whatever the tag says now.
+
+Nothing reaches the task cache unchecked. The manifest must match its digest, the config blob must match
+[`assets/schemas/dataset-config.v1.json`](assets/schemas/dataset-config.v1.json) and the manifest and name the dataset
+`-d` asks for, and each layer must match its digest and size, both while it downloads and while it unpacks. The unpacked files must match the task's
+package digest. Absolute paths, `..`, hard links, device files and symlinks that leave the task directory are
+refused. A layer is unpacked into a temp directory and renamed into place. Blobs are cached in
+`~/.cache/hbench/blobs/sha256/<hex>`, and tasks in `~/.cache/hbench/tasks/sha256/<layer hex>/<task>` (both under
+`<dir>` with `datasets download -o <dir>`). A cached task is used only while it matches its package digest, and is
+unpacked again otherwise.
+
+A job records what it ran: the job's `config.json` has each dataset's `registry` and manifest `digest`, and each
+trial's `lock.json` task has `type: "oci"`, `registry`, `repository`, `manifest_digest` and `layer_digest`. Unpacked,
+a task is byte-identical to the directory it was packed from, so `task_checksum` (`result.json`) and the package
+digest (`lock.json`'s `task.digest`) are the ones `hbench tasks digest -p <task dir>` prints for that directory.
+
+`--lock-write` records each OCI dataset's manifest digest in `./hbench.lock`, keyed by `name@version` (not by
+registry, so a mirror must serve the same digest). A dataset in `hbench.lock` runs at its locked digest, with a
+warning if its tag has moved since; `--locked` refuses a dataset that is not in `hbench.lock`, or whose tag now
+resolves to another digest. `run` and `datasets download` take both flags.
+
+### Dataset format
+
+A dataset version is one OCI image manifest (`application/vnd.oci.image.manifest.v1+json`), tagged with the version:
+
+- `artifactType`: `application/vnd.hbench.dataset.v1`.
+- `config`: a JSON blob of media type `application/vnd.hbench.dataset.config.v1+json`, matching
+  [`assets/schemas/dataset-config.v1.json`](assets/schemas/dataset-config.v1.json): the dataset's `name` (the last
+  component of its repository), `version` (semver without build metadata, the patch number optional: `2.0`), SPDX
+  `license`, and optionally `description`, `upstream` (`url`, `revision`, `citation`) and `canary`; and `tasks`, one
+  per layer and in layer order, each with `name`, `layer_digest` and `package_digest`, and optionally `docker_image`
+  (pinned, `<image>@sha256:<hex>`), `platforms` (`os/arch`) and `timeouts` (`agent_sec`, `verifier_sec`,
+  `build_sec`).
+- `layers`: one `application/vnd.oci.image.layer.v1.tar+gzip` per task, annotated with
+  `org.opencontainers.image.title` (the task's directory name, which equals its config `name`) and
+  `dev.hbench.task.package-digest` (its config `package_digest`).
+- Manifest annotations `org.opencontainers.image.version` (equal to the config's version when set), `.licenses`,
+  `.source`, `.revision` and `.created`.
+
+A layer is a tar of the task directory's contents, paths relative to it (`./` prefixes are fine): regular files,
+directories, and symlinks that resolve inside the task directory. Files with an exec bit unpack as 0755, other files
+as 0644, directories as 0755; owners and times are not restored. The package digest is what
+`hbench tasks digest -p <task dir>` prints as `digest`: `sha256:` and the SHA-256 of `<path>\0<sha256 hex of the
+file>\n` for each file the task packages (`task.toml`, `instruction.md`, `README.md`, `trajectory.json`, and
+`environment/`, `tests/`, `solution/` and `steps/`, less what the task's `.gitignore` ignores, or without one
+`__pycache__/`, `*.pyc`, `.DS_Store`, `*.swp`, `*.swo` and `*~`), sorted by path.
+
+Layers should be reproducible, so that an unchanged task keeps its layer digest from one dataset version to the next:
+entries sorted by path, modes 0755 (directories and executables) or 0644, uid and gid 0, mtime 0, and gzip without a
+file name or time. With GNU tar and [oras](https://oras.land), publishing a one-task dataset looks like this:
+
+```bash
+tar -C tasks/hello-world --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner --mode=a=rX,u+w -cf - . \
+  | gzip -n > hello-world                                # the file name becomes the layer's title
+cat > annotations.json <<'JSON'
+{"$manifest": {"org.opencontainers.image.version": "1.0", "org.opencontainers.image.licenses": "Apache-2.0"},
+ "hello-world": {"dev.hbench.task.package-digest": "<digest from hbench tasks digest -p tasks/hello-world>"}}
+JSON
+cat > config.json <<'JSON'
+{"name": "hello", "version": "1.0", "license": "Apache-2.0",
+ "tasks": [{"name": "hello-world", "layer_digest": "sha256:<sha256sum hello-world>",
+            "package_digest": "<digest from hbench tasks digest -p tasks/hello-world>"}]}
+JSON
+oras push ghcr.io/<namespace>/hello:1.0 --artifact-type application/vnd.hbench.dataset.v1 \
+  --config config.json:application/vnd.hbench.dataset.config.v1+json --annotation-file annotations.json \
+  hello-world:application/vnd.oci.image.layer.v1.tar+gzip
+```
+
 ## Output
 
 ```
@@ -239,7 +327,8 @@ npm run dev                                    # hot reload; proxies /api to `hb
 
 CI (`.github/workflows/ci.yml`) runs on GitHub-hosted runners: build + `cargo test` on Linux and macOS, `cargo fmt
 --check` and clippy, `cargo audit`, a check that the committed `viewer/dist` matches `viewer/src`, and `scripts/e2e.sh`
-against a real Docker daemon.
+against a real Docker daemon. On Linux it also runs the OCI tests against a local registry
+(`HBENCH_TEST_OCI_REGISTRY=localhost:5000 cargo test oci::`, with `registry:3` listening on port 5000).
 
 ## Releases
 
