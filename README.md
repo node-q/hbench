@@ -187,6 +187,11 @@ the files are the ones this build wrote, not that the run was real: anyone can r
 its build and what it runs (SECURITY.md lists exactly what) with the API token in `HPG_API_TOKEN`, and writes the
 nonce it gets back into `config.json` as `check_in`, so a resumed job keeps it. A refused check-in stops the job.
 
+With `--quick`, the dataset's task names are its anchors: the control plane draws more tasks to run with them, and
+hbench runs the drawn list in their place, recording the draw and its digest in `check_in`. Where the control plane
+can't be reached or answers with a server error, or makes no draw, the anchors run alone; unreachable, the run is not
+registered. `--quick` takes one dataset, named by task, without `n_tasks` or exclusions.
+
 Secrets stay out of the output and off command lines:
 
 - hbench treats as secret the value of every environment variable whose name looks like one (`*_KEY`, `*TOKEN`,

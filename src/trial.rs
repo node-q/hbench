@@ -1303,7 +1303,7 @@ fn drop_nulls(v: Value) -> Value {
     }
 }
 
-fn sha256_prefixed(b: &[u8]) -> String {
+pub fn sha256_prefixed(b: &[u8]) -> String {
     format!("sha256:{}", crate::task::hex(&<sha2::Sha256 as sha2::Digest>::digest(b)))
 }
 

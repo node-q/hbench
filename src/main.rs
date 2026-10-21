@@ -687,6 +687,9 @@ struct RunArgs {
     /// Register the run with a control plane as it starts (its check-in URL; token in HPG_API_TOKEN).
     #[arg(long, value_name = "URL", help_heading = "Output")]
     check_in: Option<String>,
+    /// With --check-in: the dataset's task names are its anchors; run them with the tasks the control plane draws.
+    #[arg(long, requires = "check_in", help_heading = "Output")]
+    quick: bool,
     /// Artifact path to collect (repeatable).
     #[arg(long, help_heading = "Output")]
     artifact: Vec<String>,
@@ -817,7 +820,8 @@ fn build_job_config(a: &RunArgs) -> Result<JobConfig> {
     set!(cfg.jobs_dir, a.jobs_dir.clone());
     set!(cfg.job_name, a.job_name.clone());
     if let Some(url) = &a.check_in {
-        cfg.check_in = Some(check_in::CheckIn { url: url.clone(), ..Default::default() });
+        cfg.check_in =
+            Some(check_in::CheckIn { url: url.clone(), task_set: a.quick.then(|| check_in::QUICK.to_string()), ..Default::default() });
     }
     set!(cfg.timeout_multiplier, a.timeout_multiplier);
     set!(cfg.retry.max_retries, a.max_retries);

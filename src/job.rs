@@ -262,12 +262,20 @@ pub async fn run_job(
     let job_dir = cfg.job_dir();
     std::fs::create_dir_all(&job_dir)?;
     let (job_id, prior_retries) = carried_over(&job_dir);
-    crate::check_in::register(&mut cfg, job_id).await?;
+    let check_in_warnings = crate::check_in::register(&mut cfg, job_id).await?;
     std::fs::write(job_dir.join("config.json"), serde_json::to_string_pretty(&cfg.config_json())?)?;
     let log = crate::env::TrialLog::create(&job_dir.join("job.log"))?;
     log.line(&format!("job {} started ({} agent config(s))", cfg.job_name, cfg.agents.len()));
     if let Some(crate::check_in::CheckIn { url, registered_at: Some(at), .. }) = &cfg.check_in {
         log.line(&format!("checked in at {url}, registered {at}"));
+    }
+    if let Some(crate::check_in::CheckIn { quick_draw: Some(draw), .. }) = &cfg.check_in {
+        let n = cfg.datasets[0].task_names.as_ref().map_or(0, Vec::len);
+        log.line(&format!("quick draw {draw}: {n} task(s)"));
+    }
+    for warning in check_in_warnings.iter().map(|w| format!("warning: {w}")) {
+        eprintln!("{warning}");
+        log.line(&warning);
     }
     for key in cfg.unread_settings() {
         let why = if key == "environment.override_storage_mb" { "hbench does not limit a trial's disk" } else { "hbench ignores it" };
