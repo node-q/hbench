@@ -1,6 +1,6 @@
 # ADR 0001: Datasets as OCI artifacts
 
-**Status:** proposed · 2026-10-21
+**Status:** accepted · 2026-10-21
 
 ## Context
 
