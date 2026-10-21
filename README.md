@@ -1,3 +1,12 @@
+```text
+██╗  ██╗██████╗ ███████╗███╗   ██╗ ██████╗██╗  ██╗
+██║  ██║██╔══██╗██╔════╝████╗  ██║██╔════╝██║  ██║
+███████║██████╔╝█████╗  ██╔██╗ ██║██║     ███████║
+██╔══██║██╔══██╗██╔══╝  ██║╚██╗██║██║     ██╔══██║
+██║  ██║██████╔╝███████╗██║ ╚████║╚██████╗██║  ██║
+╚═╝  ╚═╝╚═════╝ ╚══════╝╚═╝  ╚═══╝ ╚═════╝╚═╝  ╚═╝
+```
+
 # hbench
 
 hbench is the benchmark engine behind [Harness Playground](https://nodeq.tech), by node-q.
@@ -6,11 +15,21 @@ A fast, single-binary benchmark runner for coding-agent harnesses, written in Ru
 40+ agents, grades them with task verifiers, and reports rewards, pass@k, tokens and cost. A task is a directory with
 a `task.toml`, an environment, tests and a solution (see [Task format](#task-format)).
 
-hbench has no default dataset registry. To run a named dataset (`-d name@version`), point it at a `registry.json`
-with `--registry-url`, or at a local one with `--registry-path` (in a job config, the dataset's `registry_url` or
-`registry_path`). Local task directories (`-p`) need neither.
+- [Installation](#installation)
+- [Usage](#usage)
+- [Examples](#examples)
+- [Datasets](#datasets)
+- [Agents](#agents) · [Task format](#task-format) · [Output](#output) · [Troubleshooting](#troubleshooting)
+- [Development](#development)
+- [License](#license)
+- [Contributors and contact](#contributors-and-contact)
 
-Install the latest release (Linux/macOS, x86_64/arm64):
+## Installation
+
+Requirements: a Docker daemon (local, or remote through `DOCKER_CONTEXT`/`DOCKER_HOST`) and Linux or macOS,
+x86_64 or arm64.
+
+Install the latest release:
 
 ```bash
 curl -fsSL https://nodeq.tech/install.sh | sh
@@ -21,33 +40,52 @@ downloads from there and checks `SHA256SUMS`. `HBENCH_VERSION=vX.Y.Z` pins a rel
 version Harness Playground's arenas use; [`scripts/install.sh`](scripts/install.sh) on its own defaults to the latest),
 and `HBENCH_INSTALL_DIR` overrides `~/.local/bin`.
 
-Or build from source:
+Or build from source (the toolchain is pinned in `rust-toolchain.toml`):
 
 ```bash
-cargo build --release
-B=target/release/hbench
-
-$B run -p examples/tasks/hello-world                          # oracle on one task
-$B run -d terminal-bench@2.0 -a oracle -n 8                    # registry dataset
-$B run -d terminal-bench-sample@2.0 -a claude-code -m anthropic/claude-opus-5-5 -k 3 -i 'regex*'
-$B run -c job.yaml                                             # job config (YAML/JSON)
-$B run -c job.yaml --diff jobs/<old-job>                       # reuse / regrade / rerun vs an earlier job
-$B jobs resume -p jobs/<job>        $B jobs summary -p jobs/<job>
-$B jobs regrade --source jobs/<job> -p <tasks>                 # re-verify recorded outputs
-$B jobs verify -p jobs/<job>                                   # files unchanged since the run (manifest.json)
-$B trials start -p <task> -a codex -m openai/gpt-5             # single trial
-$B trials handoff jobs/<job>/<trial>                           # resume the session locally (claude-code, muse-code)
-$B sweeps run -c job.yaml --max-sweeps 3                       # drop solved tasks each sweep
-$B view jobs [--port 8080-8089] [--tasks|--jobs]                # web viewer for jobs or task folders (also `view -p jobs`)
-$B traces export -p jobs/<job> -o traces.jsonl                 # trace rows (ATIF episodes)
-$B datasets list | download <name@ver> | init | add | remove
-$B init <org/name> [--steps N]   $B add|remove|sync ...             # task/dataset authoring (dataset.toml)
-$B tasks init|check|digest|start-env|migrate|schema               # digest: task_checksum + lock digest
-$B analyze jobs/<job> | <trial>    $B check <tasks>                 # agent-run trajectory analysis / task QA
-$B exec -i "summarize the notes" -p 'notes/*.md' --print-config   # experimental: compile prompt+paths into tasks
-$B agents list | schema <agent>    $B trials schema    $B cache clean
-$B completions zsh > ~/.zfunc/_hbench                          # shell completions (bash, zsh, fish, ...)
+cargo install --path .    # builds and puts `hbench` on your PATH (~/.cargo/bin)
 ```
+
+## Usage
+
+```bash
+# Run
+hbench run -p examples/tasks/hello-world                  # one local task, oracle agent
+hbench run -d terminal-bench@2.0 --registry-url <registry-url> -a oracle -n 8   # a registry dataset (see Datasets)
+hbench run -c job.yaml                                    # from a job config (YAML/JSON)
+hbench run -c job.yaml --diff jobs/<old-job>              # reuse / regrade / rerun vs an earlier job
+hbench trials start -p <task> -a codex -m openai/gpt-5    # a single trial
+hbench sweeps run -c job.yaml --max-sweeps 3              # rerun, dropping solved tasks each sweep
+
+# Inspect and manage jobs
+hbench view jobs                                          # web viewer
+hbench jobs summary -p jobs/<job>
+hbench jobs resume -p jobs/<job>
+hbench jobs regrade --source jobs/<job> -p <tasks>        # re-verify recorded outputs
+hbench jobs verify -p jobs/<job>                          # files unchanged since the run (manifest.json)
+hbench trials handoff jobs/<job>/<trial>                  # continue the session locally (claude-code, muse-code)
+hbench traces export -p jobs/<job> -o traces.jsonl        # trace rows (ATIF episodes)
+hbench analyze jobs/<job>                                 # trajectory analysis
+
+# Tasks and datasets
+hbench tasks init|check|digest|start-env|migrate|schema
+hbench datasets list|download|init|add|remove
+hbench check <tasks>                                      # task QA
+hbench init <org/name> [--steps N]                        # new task
+hbench add|remove|sync ...                                # edit a dataset (dataset.toml)
+hbench exec -i "summarize the notes" -p 'notes/*.md'      # experimental: turn a prompt + files into tasks
+
+# Other
+hbench agents list                                        # every supported agent
+hbench agents schema <agent>                              # an agent's options (--ak)
+hbench trials schema                                      # trial config schema
+hbench cache clean
+hbench completions zsh > ~/.zfunc/_hbench                 # shell completions (bash, zsh, fish, ...)
+```
+
+hbench has no default dataset registry. To run a named dataset (`-d name@version`), point it at a `registry.json`
+with `--registry-url`, or at a local one with `--registry-path` (in a job config, the dataset's `registry_url` or
+`registry_path`). Local task directories (`-p`) need neither.
 
 Docker: hbench runs every trial in Linux containers on whatever `docker` points at (`DOCKER_CONTEXT`/`DOCKER_HOST`).
 Remote ssh daemons work because files move with `docker compose cp` rather than bind mounts.
@@ -57,6 +95,76 @@ signal force-quits after removing the run's compose projects), 1 on an error or 
 (`--fail-on-error`: any trial), and 0 otherwise. Before starting they check agent kwargs against the agent's schema and,
 for `claude-code`, `codex` and `gemini-cli`, that some credential is set; `--skip-preflight` skips the credential check.
 For `sweeps run`, every trial means every trial of all its sweeps.
+
+## Examples
+
+Check the setup with the oracle agent, which runs each task's reference solution:
+
+```bash
+hbench run -p examples/tasks/hello-world
+```
+
+Run Claude Code on a sample of a registry dataset (an API key, or a subscription token from `claude setup-token`):
+
+```bash
+ANTHROPIC_API_KEY=... hbench run -d terminal-bench-sample@2.0 --registry-url <registry-url> \
+  -a claude-code -m anthropic/claude-opus-5-5
+```
+
+The same with other agents:
+
+```bash
+# Codex (OpenAI)
+OPENAI_API_KEY=... hbench run -d terminal-bench-sample@2.0 --registry-url <registry-url> \
+  -a codex -m openai/gpt-5
+
+# Gemini CLI (Google)
+GEMINI_API_KEY=... hbench run -d terminal-bench-sample@2.0 --registry-url <registry-url> \
+  -a gemini-cli -m google/gemini-3-pro
+
+# DeepSeek's harness
+DEEPSEEK_API_KEY=... hbench run -d terminal-bench-sample@2.0 --registry-url <registry-url> \
+  -a deepseek-harness -m deepseek/deepseek-v4-flash
+```
+
+Common options: `-k 3` runs 3 attempts per task (for pass@k), `-n 4` runs 4 trials at a time, `-i 'regex*'` keeps
+only the tasks whose names match. `hbench agents list` shows every agent.
+
+Browse the results in the web viewer:
+
+```bash
+hbench view jobs
+```
+
+## Datasets
+
+hbench has no built-in registry: `-d name@version` needs `--registry-url <registry-url>`, the URL of a
+`registry.json` that lists datasets (or `--registry-path` for a local file). Common datasets:
+
+| Dataset | Tasks | What it tests |
+|---|---|---|
+| `terminal-bench@2.0` | 89 | Tasks in a terminal: build, debug, configure, train |
+| `terminal-bench-sample@2.0` | 10 | A sample of Terminal-Bench 2.0, for a quick check |
+| `terminal-bench-pro@1.0` | 200 | An extended Terminal-Bench set |
+| `swebench-verified@1.0` | 500 | Real GitHub issues in Python repos, human-validated |
+| `swebenchpro@1.0` | 731 | Bugs and features in Python, JS/TS and Go repos |
+| `swebench_multilingual@1.0` | 300 | SWE-bench beyond Python |
+| `aider-polyglot@1.0` | 225 | Code editing across several languages |
+| `livecodebench@6.0` | 100 | Competitive programming |
+
+List them all:
+
+```bash
+hbench datasets list --registry-url <registry-url>
+```
+
+Run one:
+
+```bash
+hbench run -d swebench-verified@1.0 \
+  --registry-url <registry-url> \
+  -a claude-code -m anthropic/claude-opus-5-5 -n 4
+```
 
 ## Agents
 
@@ -75,17 +183,21 @@ Installs default to the versions in `src/agents/installed/pins.rs`, helpers incl
 release changes neither results nor installs until the pin moves. `--ak version=X` installs another version and
 `version=latest` the newest. The vendor installers of `antigravity-cli`, `cortex-code`, `cursor-cli`, `junie`, `mimo`,
 `muse-code` and `rovodev-cli` take no version and always fetch the newest release; `result.json` records what was
-installed. `scripts/dev/check-pins.py` lists the pins with a newer release. Claude Code works with an API key or a subscription token (`CLAUDE_CODE_OAUTH_TOKEN`, from `claude setup-token`).
+installed. `scripts/dev/check-pins.py` lists the pins with a newer release.
 
-`deepseek-harness` runs DeepSeek's own harness ([`dsh`](https://github.com/deepseek-ai/deepseek-harness),
-npm `@deepseek-ai/dsh`) in its headless profile. It needs `DEEPSEEK_API_KEY` (optional `DEEPSEEK_BASE_URL`, an
-Anthropic-Messages root). Pass the model as `-m deepseek/<id>` (default: dsh's `deepseek-flash`) and optionally
-`--ak reasoning_effort=off|low|high|max`. It writes `trajectory.json` (ATIF), token usage and LiteLLM cost from dsh's
-session logs, and supports `resume_trajectory` for multi-step tasks.
+The most used ones:
 
-```bash
-DEEPSEEK_API_KEY=... $B run -d terminal-bench@2.0 -a deepseek-harness -m deepseek/deepseek-v4-flash
-```
+| Agent | What it runs | Model (`-m`) | Useful options (`--ak`) |
+|---|---|---|---|
+| `claude-code` | Anthropic's Claude Code; an API key or a subscription token (`claude setup-token`) | `anthropic/claude-opus-5-5` | `reasoning_effort`, `max_turns`, `max_budget_usd` |
+| `codex` | OpenAI's Codex CLI | `openai/gpt-5` | `reasoning_effort`, `web_search` |
+| `gemini-cli` | Google's Gemini CLI | `google/gemini-3-pro` | `reasoning_effort`, `sandbox` |
+| `opencode` | opencode, with any provider's model | `<provider>/<model>` | `variant` |
+| `terminus-2` | A minimal tmux-based agent, with any provider's model | `<provider>/<model>` | `max_turns`, `temperature` |
+| `deepseek-harness` | DeepSeek's own harness ([`dsh`](https://github.com/deepseek-ai/deepseek-harness)) | `deepseek/deepseek-v4-flash` | `reasoning_effort` |
+| `oracle` | Each task's reference solution, to check the tasks | — | — |
+
+`hbench agents schema <agent>` lists every option of an agent, with its type and default.
 
 ### Environment variables
 
@@ -217,7 +329,9 @@ Agent setup is hardened so environment problems aren't charged to the agent:
 - **Missing credentials**: the run stops before starting trials and names the variable to set (see
   [Environment variables](#environment-variables)).
 
-## Viewer
+## Development
+
+### Viewer
 
 `hbench view` serves its own web UI (`viewer/`, React + Vite) for browsing jobs and tasks. It listens on 127.0.0.1 by
 default; with `--host` set to any non-loopback address it is read-only, because starting runs and deleting jobs would be
@@ -229,7 +343,7 @@ cd viewer && npm install && npm run build      # type-check + rebuild viewer/dis
 npm run dev                                    # hot reload; proxies /api to `hbench view <folder> --port 8091`
 ```
 
-## Verification
+### Verification
 
 - `cargo test`: unit tests for every module and agent.
 - `scripts/e2e.sh`: a fixture suite against a real docker daemon. It covers timeouts, missing rewards, reward.json,
@@ -241,21 +355,14 @@ CI (`.github/workflows/ci.yml`) runs on GitHub-hosted runners: build + `cargo te
 --check` and clippy, `cargo audit`, a check that the committed `viewer/dist` matches `viewer/src`, and `scripts/e2e.sh`
 against a real Docker daemon.
 
-## Releases
-
-Bump `version` in `Cargo.toml`, commit, then push a matching tag:
-
-```bash
-git tag v0.2.0 && git push origin v0.2.0
-```
-
-`.github/workflows/release.yml` checks the tag against `Cargo.toml` and, on GitHub-hosted runners, runs the tests and
-builds static x86_64/aarch64 Linux (musl) and x86_64/arm64 macOS binaries. Each `.tar.gz` gets a build provenance
-attestation; check one with `gh attestation verify hbench-v0.2.0-<target>.tar.gz -R node-q/hbench`. A separate publish
-job, in the `release` environment, creates the GitHub release with the archives, `SHA256SUMS` and generated notes. Tags
-with a suffix (`v0.2.0-rc.1`) are published as prereleases, which the install script skips unless `HBENCH_VERSION`
-names one.
-
 ## License
 
 Apache-2.0. See [LICENSE](LICENSE).
+
+## Contributors and contact
+
+hbench is built and maintained by [node-q](https://nodeq.tech). See the
+[contributors graph](https://github.com/node-q/hbench/graphs/contributors) for everyone who has contributed.
+
+Report bugs and request features in [GitHub issues](https://github.com/node-q/hbench/issues). To add an agent, see
+[docs/ADDING_AN_AGENT.md](docs/ADDING_AN_AGENT.md).
