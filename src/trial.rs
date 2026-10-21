@@ -1335,7 +1335,7 @@ pub fn trial_lock(c: &TrialConfig) -> Value {
     drop_nulls(serde_json::json!({
         "schema_version": 2,
         // The build that ran this trial: a job resumed on another build has trials from both.
-        "hbench": {"version": env!("CARGO_PKG_VERSION")},
+        "hbench": crate::build_info::json(),
         "task": {
             "name": name,
             "version": task.as_ref().and_then(|t| t.config.task.as_ref().and_then(|p| p.version.clone())),

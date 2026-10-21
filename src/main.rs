@@ -4,6 +4,7 @@ mod artifacts;
 mod atif;
 mod authoring;
 mod bridge;
+mod build_info;
 mod config;
 mod diff;
 mod env;
@@ -12,6 +13,7 @@ mod fmt;
 mod fsutil;
 mod integrity;
 mod job;
+mod manifest;
 mod metrics;
 mod migrate;
 mod redact;
@@ -337,6 +339,15 @@ enum JobsCmd {
         /// Print result.json (stats included) as JSON.
         #[arg(long)]
         json: bool,
+    },
+    /// Check a job's files against its manifest.json: exit 1 if any was changed, removed or added.
+    Verify {
+        /// Job dir.
+        #[arg(required_unless_present = "job_path", conflicts_with = "job_path")]
+        path: Option<PathBuf>,
+        /// Job dir (same as the positional argument).
+        #[arg(short = 'p', long = "job-path")]
+        job_path: Option<PathBuf>,
     },
     /// Re-run (separate) verification against a finished job's recorded outputs.
     Regrade {
@@ -1151,6 +1162,19 @@ async fn run() -> Result<ExitCode> {
                 job::print_summary(&serde_json::from_str(&s).with_context(|| format!("parsing {}", p.display()))?, &path);
             }
             Ok(ExitCode::SUCCESS)
+        }
+        Cmd::Jobs { cmd: JobsCmd::Verify { path, job_path } } => {
+            let path = path.or(job_path).context("pass a job dir")?;
+            let problems = manifest::verify(&path)?;
+            if problems.is_empty() {
+                println!("{}: every file matches its manifest", path.display());
+                return Ok(ExitCode::SUCCESS);
+            }
+            for p in &problems {
+                println!("{p}");
+            }
+            eprintln!("{}: {} file(s) differ from the manifest", path.display(), problems.len());
+            Ok(ExitCode::FAILURE)
         }
         Cmd::Jobs { cmd: JobsCmd::Regrade { source, path, jobs_dir, job_name, n_concurrent } } => {
             let path = path.canonicalize().with_context(|| format!("task path {}", path.display()))?;
