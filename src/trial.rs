@@ -954,6 +954,29 @@ impl Trial {
         Ok(())
     }
 
+    /// Where the container stood as the agent started, for a verifier that grades the agent's container.
+    async fn final_state_start(&self, mode: VerifierMode) -> Option<crate::final_state::Start> {
+        if mode != VerifierMode::Shared || self.cfg.verifier.disable {
+            return None;
+        }
+        crate::final_state::start(self.env())
+            .await
+            .inspect_err(|e| self.log.line(&format!("the final state will not be saved: {e:#}")))
+            .ok()
+    }
+
+    async fn save_final_state(&self, start: &crate::final_state::Start) {
+        match crate::final_state::save(self.env(), start, &self.dir).await {
+            Ok(c) if c.complete => self.log.line(&format!("saved the final state: {} change(s)", c.changes.len())),
+            Ok(c) => self.log.line(&format!(
+                "saved an incomplete final state: {} change(s){}",
+                c.changes.len(),
+                c.error.map(|e| format!(", {e}")).unwrap_or_default()
+            )),
+            Err(e) => self.log.line(&format!("saving the final state failed: {e:#}")),
+        }
+    }
+
     /// /logs/artifacts behaves like a bind mount: files the shared verifier writes there end up in
     /// the trial's artifacts too, so re-sync the convention dir after shared verification.
     async fn resync_convention_artifacts(&self, artifacts_dir: &Path) {
@@ -968,6 +991,7 @@ impl Trial {
     async fn run_single_step(&mut self) -> Result<()> {
         let mode = self.task.verifier_mode(None);
         let instruction = self.instruction(None)?;
+        let start = self.final_state_start(mode).await;
         let (mut ctx, timing, r) = self.agent_phase(&instruction, None, false).await;
         self.result.agent_execution = Some(timing);
         let mut fatal = None;
@@ -988,6 +1012,9 @@ impl Trial {
         self.collect_artifacts(&self.dir.join("artifacts"), None, separate).await?;
         if separate {
             self.stop_env().await;
+        }
+        if let Some(start) = start {
+            self.save_final_state(&start).await;
         }
         if !self.cfg.verifier.disable {
             let t = TimingInfo::start();

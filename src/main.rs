@@ -9,6 +9,7 @@ mod config;
 mod diff;
 mod env;
 mod exec;
+mod final_state;
 mod fmt;
 mod fsutil;
 mod integrity;

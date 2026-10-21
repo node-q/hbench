@@ -23,6 +23,7 @@ expect = {
     "no-network":      ({"reward": 1.0}, None),
     "compose-sidecar": ({"reward": 1.0}, None),
     "prebuilt":        ({"reward": 1.0}, None),
+    "final-state":     ({"reward": 1.0}, None),
 }
 seen = {}
 for r in job.glob("*/result.json"):
@@ -36,9 +37,21 @@ for r in job.glob("*/result.json"):
 assert seen == {t: 2 for t in expect}, seen
 res = json.loads((job / "result.json").read_text())
 s = res["stats"]
-assert res["finished_at"] and s["n_completed_trials"] == 20 and s["n_errored_trials"] == 8, s
+assert res["finished_at"] and s["n_completed_trials"] == 22 and s["n_errored_trials"] == 8, s
 ev = s["evals"]["oracle__fixtures"]
 assert ev["exception_stats"].keys() == {"AgentTimeoutError", "RewardFileNotFoundError"}, ev
+# What the agent changed is saved with each trial a shared verifier grades.
+for t in job.glob("final-state__*"):
+    state = json.loads((t / "final_state/changes.json").read_text())
+    got = {c["path"]: c for c in state["changes"]}
+    assert state["complete"] and not state.get("error"), state
+    assert got["/app/run.sh"]["kind"] == "file" and got["/app/run.sh"]["mode"] == "755", got
+    assert got["/app/latest"] == {"path": "/app/latest", "kind": "symlink", "uid": 0, "gid": 0, "target": "run.sh"}, got
+    assert got["/app/old.txt"]["kind"] == "deleted" and "/app/kept.txt" not in got, got
+    assert got["/root/.cache/pip/w"]["left_out"] == "cache", got
+    files = sorted(str(f.relative_to(t / "final_state/files")) for f in (t / "final_state/files").rglob("*") if f.is_file())
+    assert files == ["app/again.sh", "app/run.sh", "solution/solve.sh"], files
+    assert (t / "final_state/files/app/run.sh").read_text() == "#!/bin/sh\necho new\n"
 print("fixture assertions OK")
 EOF
 

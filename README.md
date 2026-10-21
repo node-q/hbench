@@ -170,7 +170,8 @@ could also change files while the tests run; it shows up in the trajectory, so r
 ```
 jobs/<job>/{config.json, lock.json, result.json, job.log, trials.json, manifest.json}
 jobs/<job>/<task>__<id>/{config.json, lock.json, result.json, trial.log, exception.txt,
-                         agent/, verifier/, artifacts/{manifest.json, logs/artifacts/...}, steps/<name>/...}
+                         agent/, verifier/, artifacts/{manifest.json, logs/artifacts/...}, steps/<name>/...,
+                         final_state/{changes.json, files/...}}
 ```
 
 `trials.json` is written only for jobs not planned from their config (`jobs regrade`, `run --diff`), so they can be
@@ -182,6 +183,14 @@ commit it was built from. Releases of one results epoch grade alike, so `run --d
 the version. `manifest.json`, written last, holds the SHA-256 of the job's config, lock, result and log and of every
 file its trials wrote; `hbench jobs verify -p jobs/<job>` reports any file changed, removed or added since. It shows
 the files are the ones this build wrote, not that the run was real: anyone can rebuild hbench.
+
+`final_state/` is what the agent left in the task's container when the verifier started, for a single-step task
+whose verifier shares the agent's container, so the verifier can be run again later without the agent.
+`changes.json` lists every path changed since the agent started (by inode change time, which nothing in the container
+can set back) with its kind, mode and owner, and every path deleted since. `files/` holds the changed files' content,
+except caches (`__pycache__`, `.cache`, `.npm`, `/var/cache`, `/var/log`, apt lists), which are listed and marked
+`left_out`. Over 500 files or 8 MiB, no content is saved and `complete` is false. A separate verifier grades the
+trial's artifacts, which are already saved, so it gets no `final_state/`.
 
 Secrets stay out of the output and off command lines:
 
@@ -233,8 +242,8 @@ npm run dev                                    # hot reload; proxies /api to `hb
 
 - `cargo test`: unit tests for every module and agent.
 - `scripts/e2e.sh`: a fixture suite against a real docker daemon. It covers timeouts, missing rewards, reward.json,
-  users/env, no-network, compose sidecars, prebuilt images, egress allowlists, and secrets (kept off command lines
-  and scrubbed from the job), and checks for leaked containers.
+  users/env, no-network, compose sidecars, prebuilt images, the final state saved with a trial, egress allowlists, and
+  secrets (kept off command lines and scrubbed from the job), and checks for leaked containers.
 - `scripts/install-matrix.sh`: installs every installed agent into a real container (`install_only`).
 
 CI (`.github/workflows/ci.yml`) runs on GitHub-hosted runners: build + `cargo test` on Linux and macOS, `cargo fmt

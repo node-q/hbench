@@ -7,7 +7,7 @@
 use crate::task::{EnvironmentConfig, Healthcheck, MAIN, NetworkMode, NetworkPolicy};
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Value, json};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -1081,6 +1081,13 @@ impl DockerEnv {
     async fn container_id(&self, service: &str) -> Result<String> {
         let r = self.run_ok(vec!["ps".into(), "-q".into(), service.into()], Some(QUICK_COMMAND_TIMEOUT)).await?;
         r.stdout.split_whitespace().next().map(str::to_string).ok_or_else(|| anyhow!("no running container for {service}"))
+    }
+
+    /// The paths `docker diff` reports deleted from the service's container, against its image.
+    pub async fn deleted_paths(&self, service: &str) -> Result<BTreeSet<String>> {
+        let id = self.container_id(service).await?;
+        let out = self.docker(&["diff", &id]).await?;
+        Ok(out.lines().filter_map(|l| l.strip_prefix("D ")).map(str::to_string).collect())
     }
 
     async fn container_networks(&self, id: &str) -> Result<Vec<String>> {
