@@ -1,6 +1,6 @@
 [package]
 name = "hbench"
-version = "0.2.6"
+version = "0.3.0"
 edition = "2024"
 description = "Benchmark runner for coding-agent harnesses, the engine behind Harness Playground"
 license = "Apache-2.0"
