@@ -7,10 +7,26 @@ use serde_json::Value;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
-fn scratch(tag: &str) -> PathBuf {
+/// A temp dir, removed when it goes out of scope.
+struct Scratch(PathBuf);
+
+impl std::ops::Deref for Scratch {
+    type Target = Path;
+    fn deref(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn scratch(tag: &str) -> Scratch {
     let d = std::env::temp_dir().join(format!("hbench-oci-{tag}-{}", uuid::Uuid::new_v4().simple()));
     std::fs::create_dir_all(&d).unwrap();
-    d
+    Scratch(d)
 }
 
 fn example_tasks() -> Vec<PathBuf> {
@@ -110,7 +126,8 @@ fn rewrite(layout: &Path, version: &str, edit: impl FnOnce(&mut Value, &mut Valu
 
 #[tokio::test]
 async fn example_tasks_unpack_byte_identical_from_an_oci_layout() {
-    let (root, cache, lock) = (scratch("layout"), scratch("cache"), scratch("lock").join("hbench.lock"));
+    let (root, cache, locks) = (scratch("layout"), scratch("cache"), scratch("lock"));
+    let lock = locks.join("hbench.lock");
     let digest = write_layout(&root, &info("examples", "1.0"), &example_tasks()).unwrap();
     assert_eq!(write_layout(&scratch("again"), &info("examples", "1.0"), &example_tasks()).unwrap(), digest, "packing is reproducible");
     let tasks = resolve(&lock, layout_dataset(&root, &cache, "examples", "1.0")).await.unwrap();
@@ -150,7 +167,8 @@ fn layers_depend_only_on_paths_contents_and_exec_bits() {
         out
     };
     let original = pack(&source);
-    let copy = scratch("copy").join("hello-world");
+    let copies = scratch("copy");
+    let copy = copies.join("hello-world");
     copy_dir(&source, &copy);
     let instruction = std::fs::File::options().write(true).open(copy.join("instruction.md")).unwrap();
     instruction.set_modified(std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000)).unwrap();
@@ -165,7 +183,8 @@ fn layers_depend_only_on_paths_contents_and_exec_bits() {
 
 #[tokio::test]
 async fn a_changed_layer_byte_is_refused() {
-    let (root, cache, lock) = (scratch("layout"), scratch("cache"), scratch("lock").join("hbench.lock"));
+    let (root, cache, locks) = (scratch("layout"), scratch("cache"), scratch("lock"));
+    let lock = locks.join("hbench.lock");
     write_layout(&root, &info("hello", "1.0"), &[example("hello-world")]).unwrap();
     let tasks = resolve(&lock, layout_dataset(&root, &cache, "hello", "1.0")).await.unwrap();
     let blob = root.join("hello/blobs/sha256").join(tasks[0].oci.as_ref().unwrap().layer_digest.trim_start_matches("sha256:"));
@@ -180,8 +199,10 @@ async fn a_changed_layer_byte_is_refused() {
 
 #[tokio::test]
 async fn files_that_differ_from_the_package_digest_are_refused() {
-    let (root, cache, lock) = (scratch("layout"), scratch("cache"), scratch("lock").join("hbench.lock"));
-    let changed = scratch("changed").join("hello-world");
+    let (root, cache, locks) = (scratch("layout"), scratch("cache"), scratch("lock"));
+    let lock = locks.join("hbench.lock");
+    let changes = scratch("changed");
+    let changed = changes.join("hello-world");
     copy_dir(&example("hello-world"), &changed);
     std::fs::write(changed.join("tests/test.sh"), "#!/bin/sh\nexit 0\n").unwrap();
     write_layout(&root, &info("hello", "1.0"), &[changed]).unwrap();
@@ -199,8 +220,8 @@ async fn files_that_differ_from_the_package_digest_are_refused() {
 
 #[tokio::test]
 async fn manifests_and_configs_must_agree() {
-    let lock = scratch("lock").join("hbench.lock");
-    let lock = &lock;
+    let locks = scratch("lock");
+    let lock = &locks.join("hbench.lock");
     let refused = |edit: fn(&mut Value, &mut Value)| async move {
         let (root, cache) = (scratch("layout"), scratch("cache"));
         write_layout(&root, &info("hello", "1.0"), &[example("hello-world")]).unwrap();
@@ -275,7 +296,8 @@ fn entries_that_could_leave_the_task_dir_are_refused() {
 
 #[tokio::test]
 async fn locked_refuses_a_tag_that_moved() {
-    let (root, cache, lock) = (scratch("layout"), scratch("cache"), scratch("lock").join("hbench.lock"));
+    let (root, cache, locks) = (scratch("layout"), scratch("cache"), scratch("lock"));
+    let lock = locks.join("hbench.lock");
     let first = write_layout(&root, &info("hello", "1.0"), &[example("hello-world")]).unwrap();
     let dataset = || vec![layout_dataset(&root, &cache, "hello", "1.0")];
     let pin = |mode: LockMode| {
@@ -377,7 +399,8 @@ async fn example_tasks_unpack_byte_identical_from_a_registry() {
         eprintln!("skipped: set HBENCH_TEST_OCI_REGISTRY=<host:port> to run against a registry");
         return;
     };
-    let (root, cache, lock) = (scratch("layout"), scratch("cache"), scratch("lock").join("hbench.lock"));
+    let (root, cache, locks) = (scratch("layout"), scratch("cache"), scratch("lock"));
+    let lock = locks.join("hbench.lock");
     let namespace = format!("hbench-test/{}", uuid::Uuid::new_v4().simple());
     let digest = write_layout(&root, &info("examples", "1.0"), &example_tasks()).unwrap();
     assert_eq!(push_layout(&root.join("examples"), "1.0", &registry, &format!("{namespace}/examples")).await, digest);
