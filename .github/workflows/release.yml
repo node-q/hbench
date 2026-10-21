@@ -35,10 +35,14 @@ jobs:
       attestations: write
     env:
       TARGETS: ${{ matrix.targets }}
-      # Every dependency is pure Rust on Linux, so rust-lld links static musl binaries
-      # for both arches without musl-tools or a cross gcc.
+      # ring (TLS for OCI registries) is the one dependency with C code: clang compiles it for both
+      # musl arches, and rust-lld links static binaries, without musl-tools or a cross gcc.
       CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: rust-lld
       CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: rust-lld
+      CC_x86_64_unknown_linux_musl: clang
+      CC_aarch64_unknown_linux_musl: clang
+      AR_x86_64_unknown_linux_musl: llvm-ar
+      AR_aarch64_unknown_linux_musl: llvm-ar
       # macOS tar: no AppleDouble (._*) files or extended attributes in the archives.
       COPYFILE_DISABLE: "1"
     steps:
