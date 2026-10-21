@@ -6,11 +6,20 @@ A fast, single-binary benchmark runner for coding-agent harnesses, written in Ru
 40+ agents, grades them with task verifiers, and reports rewards, pass@k, tokens and cost. A task is a directory with
 a `task.toml`, an environment, tests and a solution (see [Task format](#task-format)).
 
-hbench has no default dataset registry. To run a named dataset (`-d name@version`), point it at a `registry.json`
-with `--registry-url`, or at a local one with `--registry-path` (in a job config, the dataset's `registry_url` or
-`registry_path`). Local task directories (`-p`) need neither.
+- [Installation](#installation)
+- [Usage](#usage)
+- [Examples](#examples)
+- [Agents](#agents) · [Task format](#task-format) · [Output](#output) · [Troubleshooting](#troubleshooting)
+- [Development](#development)
+- [License](#license)
+- [Contributors and contact](#contributors-and-contact)
 
-Install the latest release (Linux/macOS, x86_64/arm64):
+## Installation
+
+Requirements: a Docker daemon (local, or remote through `DOCKER_CONTEXT`/`DOCKER_HOST`) and Linux or macOS,
+x86_64 or arm64.
+
+Install the latest release:
 
 ```bash
 curl -fsSL https://nodeq.tech/install.sh | sh
@@ -21,15 +30,18 @@ downloads from there and checks `SHA256SUMS`. `HBENCH_VERSION=vX.Y.Z` pins a rel
 version Harness Playground's arenas use; [`scripts/install.sh`](scripts/install.sh) on its own defaults to the latest),
 and `HBENCH_INSTALL_DIR` overrides `~/.local/bin`.
 
-Or build from source:
+Or build from source (the toolchain is pinned in `rust-toolchain.toml`):
 
 ```bash
 cargo build --release
 B=target/release/hbench
+```
 
+## Usage
+
+```bash
 $B run -p examples/tasks/hello-world                          # oracle on one task
 $B run -d terminal-bench@2.0 -a oracle -n 8                    # registry dataset
-$B run -d terminal-bench-sample@2.0 -a claude-code -m anthropic/claude-opus-5-5 -k 3 -i 'regex*'
 $B run -c job.yaml                                             # job config (YAML/JSON)
 $B run -c job.yaml --diff jobs/<old-job>                       # reuse / regrade / rerun vs an earlier job
 $B jobs resume -p jobs/<job>        $B jobs summary -p jobs/<job>
@@ -48,6 +60,10 @@ $B agents list | schema <agent>    $B trials schema    $B cache clean
 $B completions zsh > ~/.zfunc/_hbench                          # shell completions (bash, zsh, fish, ...)
 ```
 
+hbench has no default dataset registry. To run a named dataset (`-d name@version`), point it at a `registry.json`
+with `--registry-url`, or at a local one with `--registry-path` (in a job config, the dataset's `registry_url` or
+`registry_path`). Local task directories (`-p`) need neither.
+
 Docker: hbench runs every trial in Linux containers on whatever `docker` points at (`DOCKER_CONTEXT`/`DOCKER_HOST`).
 Remote ssh daemons work because files move with `docker compose cp` rather than bind mounts.
 
@@ -56,6 +72,34 @@ signal force-quits after removing the run's compose projects), 1 on an error or 
 (`--fail-on-error`: any trial), and 0 otherwise. Before starting they check agent kwargs against the agent's schema and,
 for `claude-code`, `codex` and `gemini-cli`, that some credential is set; `--skip-preflight` skips the credential check.
 For `sweeps run`, every trial means every trial of all its sweeps.
+
+## Examples
+
+Check the setup with the oracle agent, which runs each task's reference solution:
+
+```bash
+$B run -p examples/tasks/hello-world
+```
+
+Run Claude Code on a sample of a registry dataset, 3 attempts per task, only the tasks matching `regex*`:
+
+```bash
+ANTHROPIC_API_KEY=... $B run -d terminal-bench-sample@2.0 --registry-url <registry.json URL> \
+  -a claude-code -m anthropic/claude-opus-5-5 -k 3 -i 'regex*'
+```
+
+Run DeepSeek's own harness on a full dataset:
+
+```bash
+DEEPSEEK_API_KEY=... $B run -d terminal-bench@2.0 --registry-url <registry.json URL> \
+  -a deepseek-harness -m deepseek/deepseek-v4-flash
+```
+
+Browse the results in the web viewer:
+
+```bash
+$B view jobs
+```
 
 ## Agents
 
@@ -81,10 +125,6 @@ npm `@deepseek-ai/dsh`) in its headless profile. It needs `DEEPSEEK_API_KEY` (op
 Anthropic-Messages root). Pass the model as `-m deepseek/<id>` (default: dsh's `deepseek-flash`) and optionally
 `--ak reasoning_effort=off|low|high|max`. It writes `trajectory.json` (ATIF), token usage and LiteLLM cost from dsh's
 session logs, and supports `resume_trajectory` for multi-step tasks.
-
-```bash
-DEEPSEEK_API_KEY=... $B run -d terminal-bench@2.0 -a deepseek-harness -m deepseek/deepseek-v4-flash
-```
 
 ### Environment variables
 
@@ -210,7 +250,9 @@ Agent setup is hardened so environment problems aren't charged to the agent:
 - **Missing credentials**: the run stops before starting trials and names the variable to set (see
   [Environment variables](#environment-variables)).
 
-## Viewer
+## Development
+
+### Viewer
 
 `hbench view` serves its own web UI (`viewer/`, React + Vite) for browsing jobs and tasks. It listens on 127.0.0.1 by
 default; with `--host` set to any non-loopback address it is read-only, because starting runs and deleting jobs would be
@@ -222,7 +264,7 @@ cd viewer && npm install && npm run build      # type-check + rebuild viewer/dis
 npm run dev                                    # hot reload; proxies /api to `hbench view <folder> --port 8091`
 ```
 
-## Verification
+### Verification
 
 - `cargo test`: unit tests for every module and agent.
 - `scripts/e2e.sh`: a fixture suite against a real docker daemon. It covers timeouts, missing rewards, reward.json,
@@ -234,7 +276,7 @@ CI (`.github/workflows/ci.yml`) runs on GitHub-hosted runners: build + `cargo te
 --check` and clippy, `cargo audit`, a check that the committed `viewer/dist` matches `viewer/src`, and `scripts/e2e.sh`
 against a real Docker daemon.
 
-## Releases
+### Releases
 
 Bump `version` in `Cargo.toml`, commit, then push a matching tag:
 
@@ -252,3 +294,11 @@ names one.
 ## License
 
 Apache-2.0. See [LICENSE](LICENSE).
+
+## Contributors and contact
+
+hbench is built and maintained by [node-q](https://nodeq.tech). See the
+[contributors graph](https://github.com/node-q/hbench/graphs/contributors) for everyone who has contributed.
+
+Report bugs and request features in [GitHub issues](https://github.com/node-q/hbench/issues). To add an agent, see
+[docs/ADDING_AN_AGENT.md](docs/ADDING_AN_AGENT.md).
