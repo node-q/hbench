@@ -50,12 +50,14 @@ cargo install --path .    # builds and puts `hbench` on your PATH (~/.cargo/bin)
 ## Quick start
 
 ```bash
-hbench run     # asks what to run: tasks, agent, model, how many tasks
+hbench run     # asks what to run: dataset and version, which tasks, agent, model
 hbench view    # browse the results in the web viewer
 ```
 
-`hbench run` asks its questions, then prints the same run as one command, so the next run (or a script) can skip
-them. Every answer has a flag; see [Usage](#usage).
+`hbench run` offers node-q's datasets (`oci://ghcr.io/node-q/hbench-datasets`: terminal-bench, humaneval-plus), a
+local folder, another OCI registry or a `registry.json`; then all the dataset's tasks, the first few, or the ones you
+tick. It prints the same run as one command before starting, so the next run (or a script) can skip the questions.
+Every answer has a flag; see [Usage](#usage).
 
 ## Usage
 

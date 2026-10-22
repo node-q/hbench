@@ -1211,7 +1211,7 @@ async fn run() -> Result<ExitCode> {
         }
         Cmd::Run(mut a) | Cmd::Jobs { cmd: JobsCmd::Start(mut a) } => {
             if a.config.is_none() && a.path.is_none() && a.dataset.is_none() && std::io::IsTerminal::is_terminal(&std::io::stdin()) {
-                wizard::fill(&mut a)?;
+                wizard::fill(&mut a).await?;
             }
             let mut cfg = build_job_config(&a)?;
             preflight_agents(&cfg)?;
