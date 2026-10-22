@@ -41,8 +41,14 @@ hbench run     # pick a dataset, tasks, agent and model
 hbench view    # see the results in your browser
 ```
 
-Pick the `oracle` agent first: it runs each task's own solution, so it needs no API key and checks your setup. For
-a real agent, export its key first (see [Agents](#agents)). Every run is saved in `jobs/`.
+To run Claude Code, set your Anthropic key first, then pick `claude-code`:
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+hbench run
+```
+
+Other agents need their own key (see [Agents](#agents)). Every run is saved in `jobs/`.
 
 ## Usage
 
