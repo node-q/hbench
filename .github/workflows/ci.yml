@@ -177,3 +177,40 @@ jobs:
         run: scripts/e2e.sh
         env:
           E2E_REQUIRE_NFT: "1"
+
+  hbench-action-smoke-test:
+    name: hbench-action smoke test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Every example task passes with its own solution (oracle)
+        uses: node-q/hbench-action@v1
+        with:
+          version: latest
+          path: examples/tasks
+          agent: oracle
+          n-concurrent: 3
+          min-mean-reward: 1
+          artifact-name: hbench-examples-oracle
+          artifact-retention-days: 7
+      - name: No example task passes when nothing is done (nop)
+        id: nop
+        uses: node-q/hbench-action@v1
+        with:
+          version: latest
+          path: examples/tasks
+          agent: nop
+          n-concurrent: 3
+          upload-artifact: false
+      - name: Check that nop scored 0 on every example task
+        env:
+          MEAN_REWARD: ${{ steps.nop.outputs.mean-reward }}
+        run: |
+          if [[ "$MEAN_REWARD" != 0.0 ]]; then
+            echo "::error::nop scored $MEAN_REWARD on the example tasks: a task passes without the work"
+            exit 1
+          fi
