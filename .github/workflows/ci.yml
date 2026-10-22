@@ -188,7 +188,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Every example task passes with its own solution (oracle)
-        uses: node-q/hbench-action@3597a63bb829a9ea1152924a990e2c0a973ecd3c # v1.1.0
+        uses: node-q/hbench-action@v1
         with:
           version: latest
           path: examples/tasks
@@ -199,7 +199,7 @@ jobs:
           artifact-retention-days: 7
       - name: No example task passes when nothing is done (nop)
         id: nop
-        uses: node-q/hbench-action@3597a63bb829a9ea1152924a990e2c0a973ecd3c # v1.1.0
+        uses: node-q/hbench-action@v1
         with:
           version: latest
           path: examples/tasks
