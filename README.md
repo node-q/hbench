@@ -15,6 +15,7 @@ Run coding agents (Claude Code, Codex, Gemini CLI and more) on benchmark tasks, 
 
 - [Installation](#installation)
 - [Quick start](#quick-start)
+- [Docs](#docs)
 - [Usage](#usage)
 - [Agents](#agents)
 - [License](#license)
@@ -49,6 +50,16 @@ hbench run
 ```
 
 Other agents need their own key (see [Agents](#agents)). Every run is saved in `jobs/`.
+
+## Docs
+
+The full docs are at [nodeq.tech/docs](https://nodeq.tech/docs). Good places to start:
+
+- [Run your first arena on your machine](https://nodeq.tech/docs/get-started/first-local-run)
+- [Read your result](https://nodeq.tech/docs/get-started/read-your-result)
+- [Use a local model server](https://nodeq.tech/docs/how-to/local-model-server)
+- [Agents](https://nodeq.tech/docs/reference/agents) and the [hbench command line](https://nodeq.tech/docs/reference/hbench-cli)
+- [Troubleshooting](https://nodeq.tech/docs/troubleshooting)
 
 ## Usage
 
