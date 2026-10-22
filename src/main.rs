@@ -414,7 +414,7 @@ enum TrialsCmd {
 
 #[derive(Subcommand)]
 enum DatasetsCmd {
-    /// List datasets in a registry (--registry-url, --registry-path or --registry oci-layout:<dir>).
+    /// List datasets in a registry (--registry-url, --registry-path, --registry oci-layout:<dir>, or --registry oci://... with a dataset index).
     List(RegistryArgs),
     /// Download a registry dataset's tasks into the cache (or --output-dir); needs --registry-url, --registry-path or --registry.
     Download {

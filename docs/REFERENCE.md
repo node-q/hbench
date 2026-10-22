@@ -170,6 +170,7 @@ could also change files while the tests run; it shows up in the trajectory, so r
 hbench run -d hello@1.0 --registry oci://ghcr.io/node-q/hbench-datasets -a oracle
 hbench datasets download hello@1.0 --registry oci-layout:./datasets    # ./datasets/hello is an OCI image layout
 hbench datasets list --registry oci-layout:./datasets
+hbench datasets list --registry oci://ghcr.io/node-q/hbench-datasets         # what its dataset index lists
 ```
 
 - `oci://<registry>/<namespace>`: `-d <name>@<version>` is the manifest tagged `<version>` in
@@ -178,6 +179,10 @@ hbench datasets list --registry oci-layout:./datasets
 - `oci-layout:<dir>`: `<dir>/<name>` is an OCI image layout, and the dataset is the manifest in its `index.json`
   whose `org.opencontainers.image.ref.name` is `<version>`. `oras cp <registry>/<namespace>/<name>:<version>
   --to-oci-layout <dir>/<name>:<version>` makes one, for offline use.
+- `datasets list --registry oci://<registry>/<namespace>` lists the datasets the namespace's
+  [dataset index](#dataset-index) names: an OCI registry has no list of its repositories that hbench can read
+  (GHCR serves none), so without an index a dataset is run by name. An `oci-layout:<dir>` is listed from its
+  subdirectories.
 - In a job config, a dataset sets `registry: "oci://..."` or `registry: "oci-layout:..."` (a string; the object
   `registry: {url, path}` is still the legacy `registry.json` form) with a `name` and a `version`, and may set
   `digest: "sha256:..."` to run that manifest whatever the tag says now.
@@ -284,6 +289,28 @@ JSON
 oras push ghcr.io/<namespace>/hello:1.0 --artifact-type application/vnd.hbench.dataset.v1 \
   --config config.json:application/vnd.hbench.dataset.config.v1+json --annotation-file annotations.json \
   hello-world:application/vnd.oci.image.layer.v1.tar+gzip
+```
+
+### Dataset index
+
+A registry lists its datasets in `<namespace>/index`: the manifest tagged `latest` there, an OCI image manifest with
+`artifactType` `application/vnd.hbench.dataset-index.v1`, an empty config (`application/vnd.oci.empty.v1+json`) and one
+layer of media type `application/vnd.hbench.dataset-index.v1+json`, matching
+[`assets/schemas/dataset-index.v1.json`](../assets/schemas/dataset-index.v1.json):
+
+```json
+{"schema_version": 1,
+ "datasets": [{"name": "hello", "version": "1.0", "digest": "sha256:<manifest digest of hello:1.0>"}]}
+```
+
+`datasets list` and the interactive `hbench run` read it. hbench opens every listed dataset by its digest, with the
+checks any dataset manifest and config pass, and refuses an entry whose dataset names another `name@version`, so the
+index only says which datasets there are. Since it lives at `<namespace>/index`, no dataset can be named `index`. oras
+1.1 and later push an index with the empty config on their own:
+
+```bash
+oras push ghcr.io/<namespace>/index:latest --artifact-type application/vnd.hbench.dataset-index.v1 \
+  index.json:application/vnd.hbench.dataset-index.v1+json
 ```
 
 ## Output

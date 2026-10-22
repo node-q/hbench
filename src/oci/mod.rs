@@ -39,7 +39,7 @@ pub struct Location {
     pub namespace: String,
 }
 
-fn is_repository_component(s: &str) -> bool {
+pub(crate) fn is_repository_component(s: &str) -> bool {
     static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     RE.get_or_init(|| regex::Regex::new(r"^[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*$").unwrap()).is_match(s)
 }
@@ -49,7 +49,7 @@ pub fn is_repository(s: &str) -> bool {
     s.split('/').all(is_repository_component)
 }
 
-fn is_tag(s: &str) -> bool {
+pub(crate) fn is_tag(s: &str) -> bool {
     static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     RE.get_or_init(|| regex::Regex::new(r"^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$").unwrap()).is_match(s)
 }
@@ -368,11 +368,48 @@ pub async fn versions(spec: &str, name: &str) -> Result<Vec<String>> {
     Ok(tags)
 }
 
-/// `datasets list` for an OCI layout dir: every tagged dataset in it, verified.
+/// The datasets `--registry` `spec`'s index lists (`<namespace>/index:latest`), each opened by its digest and
+/// checked against its entry; None when the namespace has no index, or none an anonymous client can read.
+pub async fn indexed(spec: &str) -> Result<Option<Vec<Dataset>>> {
+    let location = Location::parse(spec)?;
+    let store = Store::open(&location.registry, &crate::env::cache_root())?;
+    let repository = location.repository(format::DATASET_INDEX_REPOSITORY)?;
+    let Some(digest) = store.visible_tag(&repository, format::DATASET_INDEX_TAG).await? else {
+        return Ok(None);
+    };
+    let reference = store.reference(&repository, &digest);
+    let manifest = store.manifest(&repository, &digest).await?;
+    let layer = format::parse_index_manifest(&manifest).with_context(|| reference.clone())?;
+    let bytes = store
+        .blob_bytes(&repository, layer.digest().as_ref(), layer.size(), format::MAX_DATASET_INDEX_BYTES)
+        .await
+        .with_context(|| reference.clone())?;
+    let index = format::parse_dataset_index(&bytes).with_context(|| reference.clone())?;
+    let mut datasets = vec![];
+    for e in index.datasets {
+        let d = open(&store, &location.repository(&e.name)?, &e.digest)
+            .await
+            .with_context(|| format!("{reference} lists {}@{}", e.name, e.version))?;
+        if (d.config.name.as_str(), d.config.version.as_str()) != (e.name.as_str(), e.version.as_str()) {
+            bail!("{reference} lists {}@{} at {}, which is {}@{}", e.name, e.version, e.digest, d.config.name, d.config.version);
+        }
+        datasets.push(d);
+    }
+    Ok(Some(datasets))
+}
+
+/// `datasets list`: every dataset a registry's index lists, or every tagged dataset in an OCI layout dir, verified.
 pub async fn list(spec: &str) -> Result<Vec<Dataset>> {
     let location = Location::parse(spec)?;
     let Some(dir) = location.registry.strip_prefix(LAYOUT_SCHEME) else {
-        bail!("an OCI registry can't be listed; name a dataset with -d <name>@<version> (oci-layout: dirs can be listed)");
+        return indexed(spec).await?.with_context(|| {
+            format!(
+                "{spec} has no dataset index ({}/{}:{}), or it is not public, so it can't be listed; name a dataset with -d <name>@<version>",
+                location.registry,
+                location.repository(format::DATASET_INDEX_REPOSITORY).unwrap_or_default(),
+                format::DATASET_INDEX_TAG
+            )
+        });
     };
     let store = Store::open(&location.registry, &crate::env::cache_root())?;
     let mut names: Vec<String> = std::fs::read_dir(dir)
@@ -380,6 +417,7 @@ pub async fn list(spec: &str) -> Result<Vec<Dataset>> {
         .flatten()
         .filter(|e| e.path().join("index.json").is_file())
         .filter_map(|e| e.file_name().to_str().map(String::from))
+        .filter(|name| name != format::DATASET_INDEX_REPOSITORY)
         .collect();
     names.sort();
     let mut out = vec![];

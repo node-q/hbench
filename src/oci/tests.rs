@@ -422,3 +422,86 @@ async fn example_tasks_unpack_byte_identical_from_a_registry() {
     let err = pin_datasets_at(&lock, &mut [d.clone()], LockMode::Locked).await.unwrap_err().to_string();
     assert_eq!(err, format!("--locked: examples@1.0 resolves to {moved}, but hbench.lock locks it at {digest}"));
 }
+
+/// Put a dataset index listing `entries` (name, version, digest) at `repository:latest` in `store`, staging its
+/// blobs under `dir`; the index manifest's digest.
+async fn put_index(dir: &Path, store: &super::store::Store, repository: &str, entries: &[(&str, &str, &str)]) -> String {
+    let datasets: Vec<Value> = entries.iter().map(|(n, v, d)| serde_json::json!({"name": n, "version": v, "digest": d})).collect();
+    let index = serde_json::to_vec(&serde_json::json!({"schema_version": 1, "datasets": datasets})).unwrap();
+    let empty = b"{}".to_vec();
+    for bytes in [&index, &empty] {
+        let path = dir.join(uuid::Uuid::new_v4().simple().to_string());
+        std::fs::write(&path, bytes).unwrap();
+        store.put_blob(repository, &sha256_digest(bytes), bytes.len() as u64, &path).await.unwrap();
+    }
+    let manifest = serde_json::json!({
+        "schemaVersion": 2,
+        "mediaType": format::MANIFEST_MEDIA_TYPE,
+        "artifactType": format::DATASET_INDEX_ARTIFACT_TYPE,
+        "config": {"mediaType": "application/vnd.oci.empty.v1+json", "digest": sha256_digest(&empty), "size": empty.len()},
+        "layers": [{"mediaType": format::DATASET_INDEX_MEDIA_TYPE, "digest": sha256_digest(&index), "size": index.len()}],
+    });
+    store.put_manifest(repository, format::DATASET_INDEX_TAG, &serde_json::to_vec(&manifest).unwrap()).await.unwrap()
+}
+
+#[test]
+fn dataset_indexes_are_checked_entry_by_entry() {
+    let digest = format!("sha256:{}", "a".repeat(64));
+    let index = |entries: Value| serde_json::to_vec(&serde_json::json!({"schema_version": 1, "datasets": entries})).unwrap();
+    let ok = format::parse_dataset_index(&index(serde_json::json!([{"name": "terminal-bench", "version": "2.0.1", "digest": digest}])));
+    assert_eq!(ok.unwrap().datasets[0].version, "2.0.1");
+    let refused = |bytes: Vec<u8>| format::parse_dataset_index(&bytes).unwrap_err().to_string();
+    assert!(
+        refused(serde_json::to_vec(&serde_json::json!({"schema_version": 2, "datasets": []})).unwrap()).contains("schema_version is 2")
+    );
+    assert!(refused(index(serde_json::json!([{"name": "a/b", "version": "1.0", "digest": digest}]))).contains("not a dataset name"));
+    assert!(refused(index(serde_json::json!([{"name": "index", "version": "1.0", "digest": digest}]))).contains("not a dataset name"));
+    assert!(refused(index(serde_json::json!([{"name": "x", "version": "1.0", "digest": "sha256:12"}]))).contains("not a sha256 digest"));
+    let twice = serde_json::json!([{"name": "x", "version": "1.0", "digest": digest}, {"name": "x", "version": "1.0", "digest": digest}]);
+    assert!(refused(index(twice)).contains("lists x@1.0 twice"));
+    assert!(
+        refused(index(serde_json::json!([{"name": "x", "version": "1.0", "digest": digest, "extra": 1}]))).contains("not a dataset index")
+    );
+}
+
+#[tokio::test]
+async fn an_index_lists_its_datasets_each_checked_against_its_digest() {
+    let (root, staging) = (scratch("layout"), scratch("staging"));
+    let one = write_layout(&root, &info("examples", "1.0"), &example_tasks()).unwrap();
+    let two = write_layout(&root, &info("examples", "2.0"), &example_tasks()[..1]).unwrap();
+    let spec = format!("oci-layout:{}", root.display());
+    let store = super::store::Store::open(&spec, &staging).unwrap();
+    assert!(super::indexed(&spec).await.unwrap().is_none());
+
+    put_index(&staging, &store, "index", &[("examples", "1.0", &one), ("examples", "2.0", &two)]).await;
+    let listed = super::indexed(&spec).await.unwrap().unwrap();
+    let ids: Vec<(String, String, usize)> =
+        listed.iter().map(|d| (d.config.name.clone(), d.config.version.clone(), d.layers.len())).collect();
+    assert_eq!(ids, [("examples".to_string(), "1.0".to_string(), 3), ("examples".to_string(), "2.0".to_string(), 1)]);
+    assert_eq!(super::list(&spec).await.unwrap().len(), 2, "a layout lists its datasets, not its index");
+
+    put_index(&staging, &store, "index", &[("examples", "3.0", &one)]).await;
+    let err = format!("{:#}", super::indexed(&spec).await.unwrap_err());
+    assert!(err.contains(&format!("lists examples@3.0 at {one}, which is examples@1.0")), "{err}");
+}
+
+/// Run with a registry on localhost, as `example_tasks_unpack_byte_identical_from_a_registry` says.
+#[tokio::test]
+async fn datasets_list_reads_a_registrys_index() {
+    let Ok(registry) = std::env::var("HBENCH_TEST_OCI_REGISTRY") else {
+        eprintln!("skipped: set HBENCH_TEST_OCI_REGISTRY=<host:port> to run against a registry");
+        return;
+    };
+    let (root, staging) = (scratch("layout"), scratch("staging"));
+    let namespace = format!("hbench-test/{}", uuid::Uuid::new_v4().simple());
+    let spec = format!("oci://{registry}/{namespace}");
+    let err = super::list(&spec).await.unwrap_err().to_string();
+    assert!(err.contains(&format!("has no dataset index ({registry}/{namespace}/index:latest), or it is not public")), "{err}");
+
+    let digest = write_layout(&root, &info("examples", "1.0"), &example_tasks()).unwrap();
+    push_layout(&root, "examples", "1.0", &registry, &format!("{namespace}/examples")).await;
+    let store = super::store::Store::open(&registry, &staging).unwrap();
+    put_index(&staging, &store, &format!("{namespace}/index"), &[("examples", "1.0", &digest)]).await;
+    let listed = super::list(&spec).await.unwrap();
+    assert_eq!(listed.iter().map(|d| (d.config.name.as_str(), d.layers.len())).collect::<Vec<_>>(), [("examples", 3)]);
+}
