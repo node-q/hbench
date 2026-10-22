@@ -8,7 +8,13 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, SystemTime};
 
 const LATEST_URL: &str = "https://api.github.com/repos/node-q/hbench/releases/latest";
-const INSTALL: &str = "curl -fsSL https://nodeq.tech/install.sh | sh";
+/// nodeq.tech/install.sh defaults to the version Harness Playground's arenas use, which can be older than the latest
+/// release; HBENCH_VERSION overrides that default, so this names the latest tag (read from the /releases/latest
+/// redirect, like the script) unless the user set one.
+const INSTALL: &str = r#"HBENCH_VERSION=${HBENCH_VERSION:-$(curl -fsSLI -o /dev/null -w '%{url_effective}' https://github.com/node-q/hbench/releases/latest | sed 's|.*/||')}
+case "$HBENCH_VERSION" in v*) ;; *) echo "could not find the latest hbench release" >&2; exit 1 ;; esac
+export HBENCH_VERSION
+curl -fsSL https://nodeq.tech/install.sh | sh"#;
 const MAX_AGE: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// Prints a notice on stderr when the cached latest release is newer than this build, then refreshes a stale cache.
@@ -38,7 +44,7 @@ pub fn notify() {
     }
 }
 
-/// `hbench update`: runs the install script, which replaces this binary with the latest release.
+/// `hbench update`: runs the install script for the latest release (or HBENCH_VERSION), replacing this binary.
 pub fn run() -> anyhow::Result<std::process::ExitCode> {
     let status = Command::new("sh").args(["-c", INSTALL]).status()?;
     Ok(if status.success() { std::process::ExitCode::SUCCESS } else { std::process::ExitCode::FAILURE })

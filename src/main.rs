@@ -147,7 +147,7 @@ enum Cmd {
         /// Target shell.
         shell: clap_complete::Shell,
     },
-    /// Install the latest release (runs `curl -fsSL https://nodeq.tech/install.sh | sh`).
+    /// Install the latest release with nodeq.tech/install.sh (HBENCH_VERSION=vX.Y.Z picks another).
     Update,
 }
 
