@@ -45,9 +45,6 @@ const PROVIDERS: &[(&str, &[&str])] = &[
     ("ollama", &[]),
 ];
 
-/// node-q's dataset registry, offered first.
-const NODEQ_REGISTRY: &str = "oci://ghcr.io/node-q/hbench-datasets";
-
 enum Source {
     Path(String),
     /// `flag` (`--registry`, `--registry-url` or `--registry-path`) with `registry`, and `name@version`.
@@ -165,16 +162,17 @@ async fn ask(a: &mut RunArgs) -> Result<()> {
     }
     eprintln!("\n  {}\n", style("set up a run · ↑↓ to move, Enter to pick").dim());
 
+    let default_registry = registry::default_registry();
     let sources = [
-        format!("{:<26}{}", "Default datasets", style(NODEQ_REGISTRY.trim_start_matches(oci::REGISTRY_SCHEME)).dim()),
+        format!("{:<26}{}", "Default datasets", style(default_registry.trim_start_matches(oci::REGISTRY_SCHEME)).dim()),
         format!("{:<26}{}", "Tasks in a local folder", style("a task, or a folder of tasks").dim()),
         format!("{:<26}{}", "Another OCI registry", style("oci://<registry>/<namespace> or oci-layout:<dir>").dim()),
         format!("{:<26}{}", "A registry.json", style("URL or path").dim()),
     ];
     let (source, tasks) = match Select::with_theme(&t).with_prompt("What to run").items(&sources).default(0).interact()? {
         0 => {
-            let (dataset, tasks) = pick_oci(&t, NODEQ_REGISTRY).await?;
-            (Source::Dataset { flag: "--registry", registry: NODEQ_REGISTRY.into(), dataset }, tasks)
+            let (dataset, tasks) = pick_oci(&t, &default_registry).await?;
+            (Source::Dataset { flag: "--registry", registry: default_registry, dataset }, tasks)
         }
         1 => {
             let def = if Path::new("examples/tasks").is_dir() { "examples/tasks" } else { "." };
@@ -368,6 +366,7 @@ fn shell_quote(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::registry::DEFAULT_REGISTRY;
     use clap::Parser;
 
     #[test]
@@ -391,14 +390,14 @@ mod tests {
     fn answers_fill_the_run_args() {
         let mut a = run_args();
         let ans = Answers {
-            source: Source::Dataset { flag: "--registry", registry: NODEQ_REGISTRY.into(), dataset: "terminal-bench@2.0.1".into() },
+            source: Source::Dataset { flag: "--registry", registry: DEFAULT_REGISTRY.into(), dataset: "terminal-bench@2.0.1".into() },
             tasks: Tasks::First(3),
             agent: "codex".into(),
             model: Some("openai/gpt-5".into()),
         };
         let cmd = apply(&mut a, ans).join(" ");
         assert_eq!(cmd, "hbench run -d terminal-bench@2.0.1 --registry oci://ghcr.io/node-q/hbench-datasets -l 3 -a codex -m openai/gpt-5");
-        assert_eq!((a.dataset.as_deref(), a.registry.registry.as_deref()), (Some("terminal-bench@2.0.1"), Some(NODEQ_REGISTRY)));
+        assert_eq!((a.dataset.as_deref(), a.registry.registry.as_deref()), (Some("terminal-bench@2.0.1"), Some(DEFAULT_REGISTRY)));
         assert_eq!((a.agent.as_deref(), a.models.as_slice(), a.n_tasks), (Some("codex"), &["openai/gpt-5".to_string()][..], Some(3)));
 
         let mut a = run_args();
