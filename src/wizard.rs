@@ -31,6 +31,21 @@ const TOP_AGENTS: &[(&str, &str, Option<&str>)] = &[
     ("oracle", "Oracle · runs each task's reference solution", None),
 ];
 
+/// Providers offered for the model, with their models; an empty list asks for the model name.
+// ponytail: a hand-picked list (the bundled price table is stale and has thousands of entries); "other…" and
+// "custom…" reach every other provider and model.
+const PROVIDERS: &[(&str, &[&str])] = &[
+    ("anthropic", &["claude-opus-5-5", "claude-fable-5-1", "claude-sonnet-5-5", "claude-haiku-5-5"]),
+    ("openai", &["gpt-5.6", "gpt-5.6-sol", "gpt-5.5", "gpt-5"]),
+    ("google", &["gemini-3-pro", "gemini-3.5-flash"]),
+    ("deepseek", &["deepseek-v4-flash", "deepseek-v4-pro"]),
+    ("moonshot", &["kimi-k2.6"]),
+    ("xai", &["grok-4"]),
+    ("mistral", &["devstral-latest", "mistral-large-latest"]),
+    ("openrouter", &[]),
+    ("ollama", &[]),
+];
+
 /// node-q's dataset registry, offered first.
 const NODEQ_REGISTRY: &str = "oci://ghcr.io/node-q/hbench-datasets";
 // ponytail: an OCI registry can't list its repositories (GHCR has no public catalog), so node-q's dataset names are
@@ -231,15 +246,7 @@ async fn ask(a: &mut RunArgs) -> Result<()> {
     {
         bail!("{agent} needs credentials: `export {}=...` (or one of {}), then run again", names[0], names[1..].join(", "));
     }
-    let model = if matches!(agent.as_str(), "oracle" | "nop") {
-        None
-    } else {
-        let mut i = Input::<String>::with_theme(&t).with_prompt("Model (provider/name)");
-        if let Some(m) = suggested {
-            i = i.default(m.into());
-        }
-        Some(i.interact_text()?)
-    };
+    let model = if matches!(agent.as_str(), "oracle" | "nop") { None } else { Some(pick_model(&t, suggested)?) };
 
     let cmd = apply(a, Answers { source, tasks, agent, model });
     eprintln!("\n  {}\n  {}\n", style("Same run without the questions:").dim(), style(cmd.join(" ")).cyan());
@@ -321,6 +328,39 @@ fn apply(a: &mut RunArgs, ans: Answers) -> Vec<String> {
     cmd
 }
 
+/// A provider from [`PROVIDERS`] (marked when its key is set), then one of its models; "other…" and "custom…" are typed.
+fn pick_model(t: &ColorfulTheme, suggested: Option<&str>) -> Result<String> {
+    let (sp, sm) = suggested.and_then(|m| m.split_once('/')).unzip();
+    let mut labels: Vec<String> = PROVIDERS
+        .iter()
+        .map(|(p, _)| {
+            let envs = agents::model_connection::provider(p).map_or(&[][..], |a| a.api_key_envs);
+            match envs.iter().find(|n| std::env::var(n).is_ok_and(|v| !v.is_empty())) {
+                Some(n) => format!("{p:<12}{}", style(format!("{n} set")).green()),
+                None => p.to_string(),
+            }
+        })
+        .collect();
+    labels.push(format!("{:<12}{}", "other…", style("type provider/name").dim()));
+    let def = PROVIDERS.iter().position(|(p, _)| Some(*p) == sp).unwrap_or(0);
+    let Some((p, models)) = PROVIDERS.get(Select::with_theme(t).with_prompt("Provider").items(&labels).default(def).interact()?) else {
+        return Ok(Input::with_theme(t).with_prompt("Model (provider/name)").interact_text()?);
+    };
+    let mut items: Vec<&str> = models.to_vec();
+    items.push("custom…");
+    let i = if models.is_empty() {
+        models.len()
+    } else {
+        let def = models.iter().position(|m| Some(*m) == sm).unwrap_or(0);
+        Select::with_theme(t).with_prompt("Model").items(&items).default(def).interact()?
+    };
+    let name = match models.get(i) {
+        Some(m) => m.to_string(),
+        None => Input::<String>::with_theme(t).with_prompt(format!("Model ({p}/…)")).interact_text()?,
+    };
+    Ok(format!("{p}/{name}"))
+}
+
 fn shell_quote(s: &str) -> String {
     if !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || "-_./@:=".contains(c)) {
         s.to_string()
@@ -333,6 +373,18 @@ fn shell_quote(s: &str) -> String {
 mod tests {
     use super::*;
     use clap::Parser;
+
+    #[test]
+    fn suggested_models_are_listed_and_providers_known() {
+        for (agent, _, m) in TOP_AGENTS {
+            if let Some((p, name)) = m.and_then(|m| m.split_once('/')) {
+                assert!(PROVIDERS.iter().any(|(q, ms)| *q == p && ms.contains(&name)), "{agent}: {p}/{name} not in PROVIDERS");
+            }
+        }
+        for (p, _) in PROVIDERS {
+            assert!(agents::model_connection::provider(p).is_some(), "{p} has no model_connection entry");
+        }
+    }
 
     fn run_args() -> Box<RunArgs> {
         let crate::Cmd::Run(a) = crate::Cli::parse_from(["hbench", "run"]).cmd else { panic!() };
