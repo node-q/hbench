@@ -357,6 +357,17 @@ pub async fn download(tasks: &[&TaskRef]) -> Result<()> {
     Ok(())
 }
 
+/// The versions of dataset `name` in `--registry` `spec`, oldest first: its tags that start with a digit (so not
+/// cosign's `sha256-<hex>` ones).
+pub async fn versions(spec: &str, name: &str) -> Result<Vec<String>> {
+    let location = Location::parse(spec)?;
+    let store = Store::open(&location.registry, &crate::env::cache_root())?;
+    let mut tags = store.tags(&location.repository(name)?).await?;
+    tags.retain(|t| t.starts_with(|c: char| c.is_ascii_digit()));
+    tags.sort_by_key(|t| t.split(['.', '-']).map(|p| p.parse::<u64>().unwrap_or(u64::MAX)).collect::<Vec<_>>());
+    Ok(tags)
+}
+
 /// `datasets list` for an OCI layout dir: every tagged dataset in it, verified.
 pub async fn list(spec: &str) -> Result<Vec<Dataset>> {
     let location = Location::parse(spec)?;

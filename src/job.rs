@@ -11,6 +11,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
@@ -323,7 +324,18 @@ pub async fn run_job(
             pending.len()
         ));
     }
-    if !cfg.quiet {
+    // On a terminal: one line per finished trial and a status line redrawn in place; otherwise plain log lines.
+    let live = !cfg.quiet && std::io::stderr().is_terminal();
+    if live {
+        eprintln!(
+            "{}",
+            paint_if(
+                use_color_on_stderr(),
+                "2",
+                &format!("{} trial(s) · {} at a time · {}\n", pending.len(), cfg.n_concurrent_trials, job_dir.display())
+            )
+        );
+    } else if !cfg.quiet {
         eprintln!("job {}: {} trial(s) to run, concurrency {}", job_dir.display(), pending.len(), cfg.n_concurrent_trials);
     }
     let lock = serde_json::json!({
@@ -367,6 +379,18 @@ pub async fn run_job(
         }
     }
     let quiet = cfg.quiet;
+    let ticker = live.then(|| {
+        let progress = progress.clone();
+        let started = std::time::Instant::now();
+        tokio::spawn(async move {
+            let mut frame = 0usize;
+            loop {
+                eprint!("\r\x1b[2K{}", status_line(&locked(&progress), n_total, frame, started.elapsed()));
+                frame = frame.wrapping_add(1);
+                tokio::time::sleep(Duration::from_millis(120)).await;
+            }
+        })
+    });
     let mut handles = Vec::new();
     for tcfg in pending {
         let task = tasks[&registry::local_path(&tcfg.task)].clone();
@@ -390,7 +414,7 @@ pub async fn run_job(
             let result = loop {
                 let r = match Trial::new(tcfg.clone(), task.clone()) {
                     Ok(mut t) => {
-                        t.progress = !quiet;
+                        t.progress = !quiet && !live;
                         // Its own task, so a panic becomes this trial's error instead of losing the bookkeeping.
                         match tokio::spawn(t.run(cancel.clone())).await {
                             Ok(r) => r,
@@ -398,7 +422,7 @@ pub async fn run_job(
                         }
                     }
                     Err(e) => {
-                        eprintln!("{}: could not create trial: {e:#}", tcfg.trial_name);
+                        eprintln!("{}{}: could not create trial: {e:#}", clear_line(live), tcfg.trial_name);
                         TrialResult::errored(tcfg.clone(), &task, &e)
                     }
                 };
@@ -409,7 +433,7 @@ pub async fn run_job(
                 locked(&progress).retries += 1;
                 let wait = retry.backoff_sec(attempt);
                 attempt += 1;
-                eprintln!("retrying {} ({attempt}/{}) after {kind} in {wait:.1}s", tcfg.trial_name, retry.max_retries);
+                eprintln!("{}retrying {} ({attempt}/{}) after {kind} in {wait:.1}s", clear_line(live), tcfg.trial_name, retry.max_retries);
                 log.line(&format!("trial {} retry {attempt} after {kind}", tcfg.trial_name));
                 let _ = std::fs::remove_dir_all(tcfg.trials_dir.join(&tcfg.trial_name));
                 tokio::time::sleep(Duration::from_secs_f64(wait)).await;
@@ -424,7 +448,9 @@ pub async fn run_job(
                     result.reward().map(|r| serde_json::to_string(r).unwrap()).unwrap_or_else(|| "-".into()),
                     result.exception_info.as_ref().map(|e| e.exception_type.as_str()).unwrap_or("-")
                 ));
-                if !quiet {
+                if live {
+                    eprintln!("\r\x1b[2K{}", trial_line(&result));
+                } else if !quiet {
                     let reward = result.reward().map(|r| serde_json::to_string(r).unwrap()).unwrap_or_else(|| "-".into());
                     let err = result
                         .exception_info
@@ -439,8 +465,12 @@ pub async fn run_job(
     }
     for h in handles {
         if let Err(e) = h.await {
-            eprintln!("trial task failed: {e}");
+            eprintln!("{}trial task failed: {e}", clear_line(live));
         }
+    }
+    if let Some(t) = ticker {
+        t.abort();
+        eprint!("\r\x1b[2K");
     }
     if !*cancel.borrow() {
         locked(&job_result).finished_at = Some(Utc::now());
@@ -485,8 +515,64 @@ pub fn print_summary(jr: &JobResult, job_dir: &Path) {
 }
 
 fn use_color() -> bool {
-    use std::io::IsTerminal;
     std::env::var_os("NO_COLOR").is_none() && std::io::stdout().is_terminal()
+}
+
+fn use_color_on_stderr() -> bool {
+    std::env::var_os("NO_COLOR").is_none() && std::io::stderr().is_terminal()
+}
+
+fn paint_if(color: bool, code: &str, t: &str) -> String {
+    if color { format!("\x1b[{code}m{t}\x1b[0m") } else { t.to_string() }
+}
+
+/// Erases the live status line before another line is printed over it.
+fn clear_line(live: bool) -> &'static str {
+    if live { "\r\x1b[2K" } else { "" }
+}
+
+/// A trial whose every reward is 1.0 or more.
+pub fn passed(r: &TrialResult) -> bool {
+    r.reward().is_some_and(|rw| !rw.is_empty() && rw.values().all(|v| v.as_f64().is_some_and(|f| f >= 1.0)))
+}
+
+/// `✓ task  1.0  35s`, `✗ task  0.0  2m 3s` or `! task  AgentTimeoutError  15m 0s`.
+fn trial_line(r: &TrialResult) -> String {
+    let c = use_color_on_stderr();
+    let took = r.started_at.map(|s| format_duration(s, r.finished_at)).unwrap_or_default();
+    let reward = r.reward().map(|rw| rw.values().map(|v| v.to_string()).collect::<Vec<_>>().join(" ")).unwrap_or_default();
+    let (mark, code, what) = match (&r.exception_info, passed(r)) {
+        (_, true) => ("✓", "32", reward),
+        (Some(e), false) => ("!", "33", e.exception_type.clone()),
+        (None, false) => ("✗", "31", if reward.is_empty() { "no reward".into() } else { reward }),
+    };
+    format!("  {} {:<40} {}  {}", paint_if(c, code, mark), r.task_name, paint_if(c, code, &what), paint_if(c, "2", &took))
+}
+
+/// `⠹ ████████░░░░  3/10  ✓ 2  ✗ 1  ! 0  · 30% pass · 4 running · 2m 10s`
+fn status_line(p: &JobProgress, n_total: usize, frame: usize, elapsed: Duration) -> String {
+    const SPIN: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+    let c = use_color_on_stderr();
+    let done = p.results.len();
+    let ok = p.results.iter().filter(|r| passed(r)).count();
+    let err = p.results.iter().filter(|r| !passed(r) && r.exception_info.is_some()).count();
+    let (a, b) = bar(done as f64 / n_total.max(1) as f64);
+    let t = elapsed.as_secs();
+    let took = if t >= 60 { format!("{}m {}s", t / 60, t % 60) } else { format!("{t}s") };
+    let pass = if done > 0 { format!("{:.0}% pass", 100.0 * ok as f64 / done as f64) } else { "– pass".into() };
+    format!(
+        "{} {}{}  {done}/{n_total}  {} {}  {} {}  {} {}  {}",
+        paint_if(c, "36", SPIN[frame % SPIN.len()]),
+        paint_if(c, "36", &a),
+        paint_if(c, "2", &b),
+        paint_if(c, "32", "✓"),
+        ok,
+        paint_if(c, "31", "✗"),
+        done - ok - err,
+        paint_if(c, "33", "!"),
+        err,
+        paint_if(c, "2", &format!("· {pass} · {} running · {took}", p.running)),
+    )
 }
 
 const BAR: usize = 24;
@@ -554,6 +640,29 @@ pub fn render_summary(jr: &JobResult, job_dir: &Path, color: bool) -> String {
                 .unwrap_or_default();
             format!("  {label:<w$}  {}{bars}\n", paint("1", &format!("{text:>6}")))
         };
+        // Passed: every reward of the trial is 1.0 or more; the share is of every finished trial.
+        let mut pass_by: HashMap<&String, bool> = HashMap::new();
+        for vals in e.reward_stats.values() {
+            for (v, names) in vals {
+                let ok = v.parse::<f64>().is_ok_and(|f| f >= 1.0);
+                for n in names {
+                    *pass_by.entry(n).or_insert(true) &= ok;
+                }
+            }
+        }
+        if !pass_by.is_empty() {
+            let n_pass = pass_by.values().filter(|ok| **ok).count();
+            let frac = n_pass as f64 / total.max(1) as f64;
+            let (a, b) = bar(frac);
+            out += &format!(
+                "  {:<w$}  {}  {}{}  {}\n",
+                "Passed",
+                paint(&format!("1;{}", tone(frac)), &format!("{:>5.0}%", 100.0 * frac)),
+                paint(tone(frac), &a),
+                paint("2", &b),
+                paint("2", &format!("{n_pass} of {total}"))
+            );
+        }
         for (l, v) in &metrics {
             out += &score(l, metric_text(v), v.as_f64().filter(|f| (0.0..=1.0).contains(f)));
         }
@@ -730,6 +839,7 @@ adhoc • oracle
 ─────────────────────────────────────────────────────
   Trials                  4  finished · 3 graded · 1 exceptions
 
+  Passed                25%  ██████░░░░░░░░░░░░░░░░░░  1 of 4
   Mean                0.250  ██████░░░░░░░░░░░░░░░░░░
   Pass@2              0.500  ████████████░░░░░░░░░░░░
 

@@ -98,6 +98,27 @@ impl Store {
         }
     }
 
+    /// Every tag in `repository`.
+    pub async fn tags(&self, repository: &str) -> Result<Vec<String>> {
+        match self {
+            Store::Registry { client, registry, auth, .. } => {
+                let image = Reference::with_tag(registry.clone(), repository.to_string(), "latest".into());
+                let r =
+                    client.list_tags(&image, auth, None, None).await.map_err(|e| fetch_error(&self.reference(repository, "*"), auth, e))?;
+                Ok(r.tags)
+            }
+            Store::Layout { root } => {
+                let text = match std::fs::read_to_string(root.join(repository).join("index.json")) {
+                    Ok(t) => t,
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
+                    Err(e) => return Err(e).context("reading index.json"),
+                };
+                let index: oci_spec::image::ImageIndex = serde_json::from_str(&text).context("parsing index.json")?;
+                Ok(index.manifests().iter().filter_map(|m| m.annotations().as_ref()?.get(REF_NAME).cloned()).collect())
+            }
+        }
+    }
+
     /// The digest of the manifest `repository:tag` names now, or None when the tag names none.
     pub async fn tagged(&self, repository: &str, tag: &str) -> Result<Option<String>> {
         let reference = self.reference(repository, tag);
