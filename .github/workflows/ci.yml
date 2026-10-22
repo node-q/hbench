@@ -178,8 +178,8 @@ jobs:
         env:
           E2E_REQUIRE_NFT: "1"
 
-  examples:
-    name: Example Tasks
+  hbench-action-smoke-test:
+    name: hbench-action smoke test
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
