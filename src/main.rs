@@ -859,6 +859,26 @@ fn kwarg_value(v: &str) -> Value {
     serde_json::from_str(v).unwrap_or_else(|_| Value::String(v.to_string()))
 }
 
+/// A dataset's `name@version`, task count and description.
+type DatasetRow = (String, usize, String);
+
+/// One line per dataset, in aligned columns; a description that would run past `terminal_width` is cut with `…`.
+fn dataset_lines(rows: &[DatasetRow], terminal_width: Option<usize>) -> Vec<String> {
+    let id_width = rows.iter().map(|(id, ..)| id.chars().count()).max().unwrap_or(0);
+    let count_width = rows.iter().map(|(_, tasks, _)| tasks.to_string().len()).max().unwrap_or(0);
+    rows.iter()
+        .map(|(id, tasks, description)| {
+            let noun = if *tasks == 1 { "task " } else { "tasks" };
+            let line =
+                format!("{id:<id_width$}  {tasks:>count_width$} {noun}  {}", description.split_whitespace().collect::<Vec<_>>().join(" "));
+            match terminal_width {
+                Some(width) if line.chars().count() > width => line.chars().take(width.saturating_sub(1)).chain(['…']).collect(),
+                _ => line.trim_end().to_string(),
+            }
+        })
+        .collect()
+}
+
 fn build_job_config(a: &RunArgs) -> Result<JobConfig> {
     let mut cfg = match &a.config {
         Some(p) => JobConfig::load(p)?,
@@ -1385,15 +1405,22 @@ async fn run() -> Result<ExitCode> {
             Ok(if r.exception_info.is_some() { ExitCode::FAILURE } else { ExitCode::SUCCESS })
         }
         Cmd::Datasets { cmd: DatasetsCmd::List(r) } => {
-            if r.registry_url.is_none() && r.registry_path.is_none() {
+            let rows: Vec<DatasetRow> = if r.registry_url.is_none() && r.registry_path.is_none() {
                 let spec = r.registry.unwrap_or_else(registry::default_registry);
-                for d in oci::list(&spec).await? {
-                    println!("{}@{}  ({} tasks)  {}", d.config.name, d.config.version, d.layers.len(), d.config.description);
-                }
-                return Ok(ExitCode::SUCCESS);
-            }
-            for d in registry::load(r.registry_url.as_deref(), r.registry_path.as_deref())? {
-                println!("{}@{}  ({} tasks)  {}", d.name, d.version, d.tasks.len(), d.description);
+                oci::list(&spec)
+                    .await?
+                    .into_iter()
+                    .map(|d| (format!("{}@{}", d.config.name, d.config.version), d.layers.len(), d.config.description))
+                    .collect()
+            } else {
+                registry::load(r.registry_url.as_deref(), r.registry_path.as_deref())?
+                    .into_iter()
+                    .map(|d| (format!("{}@{}", d.name, d.version), d.tasks.len(), d.description))
+                    .collect()
+            };
+            let terminal_width = dialoguer::console::Term::stdout().size_checked().map(|(_, columns)| usize::from(columns));
+            for line in dataset_lines(&rows, terminal_width) {
+                println!("{line}");
             }
             Ok(ExitCode::SUCCESS)
         }
@@ -1696,6 +1723,24 @@ mod tests {
         assert!(g("*", "anything") && g("hello-*", "hello-world") && g("h?llo", "hello") && g("*-c-*", "polyglot-c-py"));
         assert!(!g("hello", "hello-world") && !g("*x", "abc") && !g("a?", "a"));
         assert!(g("[ab]*", "beta") && !g("[!ab]*", "beta") && g("x.y", "x.y") && !g("x.y", "xzy"));
+    }
+
+    #[test]
+    fn datasets_list_one_line_per_dataset() {
+        let rows: Vec<DatasetRow> = vec![
+            ("terminal-bench@2.0.1".into(), 89, "89 hard tasks\nin a terminal.".into()),
+            ("cruxeval-input@1.0".into(), 800, "800 Python problems.".into()),
+            ("hello@1.0".into(), 1, String::new()),
+        ];
+        assert_eq!(
+            dataset_lines(&rows, None),
+            [
+                "terminal-bench@2.0.1   89 tasks  89 hard tasks in a terminal.",
+                "cruxeval-input@1.0    800 tasks  800 Python problems.",
+                "hello@1.0               1 task",
+            ]
+        );
+        assert_eq!(dataset_lines(&rows[..1], Some(40)), ["terminal-bench@2.0.1  89 tasks  89 hard…"]);
     }
 
     #[test]
