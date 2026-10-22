@@ -139,6 +139,20 @@ impl Store {
         }
     }
 
+    /// The digest `repository:tag` names now, or None when the tag names none or, pulling anonymously, the repository
+    /// is not public: an anonymous client can't tell those apart.
+    pub async fn visible_tag(&self, repository: &str, tag: &str) -> Result<Option<String>> {
+        if let Store::Registry { client, registry, auth: RegistryAuth::Anonymous, .. } = self {
+            let image = Reference::with_tag(registry.clone(), repository.to_string(), tag.to_string());
+            return match client.fetch_manifest_digest(&image, &RegistryAuth::Anonymous).await {
+                Ok(digest) => Ok(Some(digest)),
+                Err(e) if is_not_found(&e) || matches!(e, OciDistributionError::UnauthorizedError { .. }) => Ok(None),
+                Err(e) => Err(fetch_error(&self.reference(repository, tag), &RegistryAuth::Anonymous, e)),
+            };
+        }
+        self.tagged(repository, tag).await
+    }
+
     /// Put the blob at `path` (`digest`, `size` bytes) into `repository`, unless it is there already; whether it
     /// was copied.
     pub async fn put_blob(&self, repository: &str, digest: &str, size: u64, path: &Path) -> Result<bool> {

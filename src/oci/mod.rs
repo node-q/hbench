@@ -369,12 +369,12 @@ pub async fn versions(spec: &str, name: &str) -> Result<Vec<String>> {
 }
 
 /// The datasets `--registry` `spec`'s index lists (`<namespace>/index:latest`), each opened by its digest and
-/// checked against its entry; None when the namespace has no index.
+/// checked against its entry; None when the namespace has no index, or none an anonymous client can read.
 pub async fn indexed(spec: &str) -> Result<Option<Vec<Dataset>>> {
     let location = Location::parse(spec)?;
     let store = Store::open(&location.registry, &crate::env::cache_root())?;
     let repository = location.repository(format::DATASET_INDEX_REPOSITORY)?;
-    let Some(digest) = store.tagged(&repository, format::DATASET_INDEX_TAG).await? else {
+    let Some(digest) = store.visible_tag(&repository, format::DATASET_INDEX_TAG).await? else {
         return Ok(None);
     };
     let reference = store.reference(&repository, &digest);
@@ -404,7 +404,7 @@ pub async fn list(spec: &str) -> Result<Vec<Dataset>> {
     let Some(dir) = location.registry.strip_prefix(LAYOUT_SCHEME) else {
         return indexed(spec).await?.with_context(|| {
             format!(
-                "{spec} has no dataset index ({}/{}:{}), so it can't be listed; name a dataset with -d <name>@<version>",
+                "{spec} has no dataset index ({}/{}:{}), or it is not public, so it can't be listed; name a dataset with -d <name>@<version>",
                 location.registry,
                 location.repository(format::DATASET_INDEX_REPOSITORY).unwrap_or_default(),
                 format::DATASET_INDEX_TAG

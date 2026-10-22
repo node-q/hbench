@@ -496,7 +496,7 @@ async fn datasets_list_reads_a_registrys_index() {
     let namespace = format!("hbench-test/{}", uuid::Uuid::new_v4().simple());
     let spec = format!("oci://{registry}/{namespace}");
     let err = super::list(&spec).await.unwrap_err().to_string();
-    assert!(err.contains(&format!("has no dataset index ({registry}/{namespace}/index:latest)")), "{err}");
+    assert!(err.contains(&format!("has no dataset index ({registry}/{namespace}/index:latest), or it is not public")), "{err}");
 
     let digest = write_layout(&root, &info("examples", "1.0"), &example_tasks()).unwrap();
     push_layout(&root, "examples", "1.0", &registry, &format!("{namespace}/examples")).await;

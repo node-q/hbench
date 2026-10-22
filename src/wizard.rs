@@ -109,7 +109,11 @@ async fn pick_oci(t: &ColorfulTheme, registry: &str) -> Result<(String, Vec<Stri
         busy("reading the datasets", oci::list(registry)).await?
     } else {
         match busy("reading the dataset index", oci::indexed(registry)).await {
-            Ok(datasets) => datasets.unwrap_or_default(),
+            Ok(Some(datasets)) => datasets,
+            Ok(None) => {
+                eprintln!("  {}", style(format!("{registry} lists no datasets (no public dataset index); name one")).dim());
+                vec![]
+            }
             Err(e) => {
                 eprintln!("  {}", style(format!("could not read {registry}'s dataset index: {e:#}")).dim());
                 vec![]
