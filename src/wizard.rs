@@ -47,10 +47,10 @@ const PROVIDERS: &[(&str, &[&str])] = &[
 
 enum Source {
     Path(String),
-    /// `flag` (`--registry`, `--registry-url` or `--registry-path`) with `registry`, and `name@version`.
+    /// `name@version` in `registry`: its flag (`--registry`, `--registry-url` or `--registry-path`) and value, or
+    /// None when the command line named the registry.
     Dataset {
-        flag: &'static str,
-        registry: String,
+        registry: Option<(&'static str, String)>,
         dataset: String,
     },
 }
@@ -61,10 +61,11 @@ enum Tasks {
     Pick(Vec<String>),
 }
 
+/// What the questions chose; None where the command line had already chosen, so it is not asked or overridden.
 struct Answers {
     source: Source,
-    tasks: Tasks,
-    agent: String,
+    tasks: Option<Tasks>,
+    agent: Option<String>,
     model: Option<String>,
 }
 
@@ -223,20 +224,62 @@ async fn ask(a: &mut RunArgs) -> Result<()> {
     }
     eprintln!("\n  {}\n", style("set up a run · ↑↓ to move, Enter to pick").dim());
 
+    let given_registry = match (&a.registry.registry, &a.registry.registry_url, &a.registry.registry_path) {
+        (Some(r), _, _) => Some(("--registry", r.clone())),
+        (_, Some(u), _) => Some(("--registry-url", u.clone())),
+        (_, _, Some(p)) => Some(("--registry-path", p.display().to_string())),
+        _ => None,
+    };
+    let (source, tasks) = match given_registry {
+        Some((flag, registry)) => {
+            let (dataset, tasks) =
+                if flag == "--registry" { pick_oci(&t, &registry).await? } else { pick_registry_json(&t, flag, &registry).await? };
+            (Source::Dataset { registry: None, dataset }, tasks)
+        }
+        None => pick_source(&t).await?,
+    };
+    let tasks = if a.n_tasks.is_some() || !a.include.is_empty() { None } else { Some(pick_tasks(&t, tasks)?) };
+
+    let (agent, suggested, asked_agent) = match &a.agent {
+        Some(n) => (n.clone(), TOP_AGENTS.iter().find(|(name, _, _)| name == n).and_then(|(_, _, m)| *m), false),
+        None => {
+            let (n, m) = pick_agent(&t)?;
+            (n, m, true)
+        }
+    };
+    if let Some(names) = auth_envs(&agent)
+        && !names.iter().any(|n| std::env::var(n).is_ok_and(|v| !v.is_empty()))
+    {
+        bail!("{agent} needs credentials: `export {}=...` (or one of {}), then run again", names[0], names[1..].join(", "));
+    }
+    let model = if matches!(agent.as_str(), "oracle" | "nop") || !a.models.is_empty() { None } else { Some(pick_model(&t, suggested)?) };
+
+    let typed = std::iter::once("hbench".to_string()).chain(std::env::args().skip(1).map(|w| shell_quote(&w))).collect();
+    let cmd = apply(a, Answers { source, tasks, agent: asked_agent.then_some(agent), model }, typed);
+    eprintln!("\n  {}\n  {}\n", style("Same run without the questions:").dim(), style(cmd.join(" ")).cyan());
+    if !Confirm::with_theme(&t).with_prompt("Start").default(true).interact()? {
+        bail!("aborted");
+    }
+    eprintln!();
+    Ok(())
+}
+
+/// The task source, from the default registry, a local folder or another registry, with its task names.
+async fn pick_source(t: &ColorfulTheme) -> Result<(Source, Vec<String>)> {
     let default_registry = registry::default_registry();
     let sources = [
         format!("{:<26}{}", "Default datasets", style(default_registry.trim_start_matches(oci::REGISTRY_SCHEME)).dim()),
         format!("{:<26}{}", "Tasks in a local folder", style("a task, or a folder of tasks").dim()),
         format!("{:<26}{}", "Another registry", style("an OCI registry or layout, or a registry.json (URL or path)").dim()),
     ];
-    let (source, tasks) = match Select::with_theme(&t).with_prompt("What to run").items(&sources).default(0).interact()? {
+    Ok(match Select::with_theme(t).with_prompt("What to run").items(&sources).default(0).interact()? {
         0 => {
-            let (dataset, tasks) = pick_oci(&t, &default_registry).await?;
-            (Source::Dataset { flag: "--registry", registry: default_registry, dataset }, tasks)
+            let (dataset, tasks) = pick_oci(t, &default_registry).await?;
+            (Source::Dataset { registry: Some(("--registry", default_registry)), dataset }, tasks)
         }
         1 => {
             let def = if Path::new("examples/tasks").is_dir() { "examples/tasks" } else { "." };
-            let p: String = Input::with_theme(&t).with_prompt("Folder").default(def.into()).interact_text()?;
+            let p: String = Input::with_theme(t).with_prompt("Folder").default(def.into()).interact_text()?;
             let tasks = if Task::is_task_dir(Path::new(&p)) {
                 vec![]
             } else {
@@ -255,43 +298,31 @@ async fn ask(a: &mut RunArgs) -> Result<()> {
             (Source::Path(p), tasks)
         }
         _ => {
-            let typed: String = Input::with_theme(&t)
+            let typed: String = Input::with_theme(t)
                 .with_prompt("Registry")
                 .validate_with(|s: &String| registry_flag(s).map(|_| ()).map_err(|e| e.to_string()))
                 .interact_text()?;
             let (flag, registry) = registry_flag(&typed)?;
             let (dataset, tasks) =
-                if flag == "--registry" { pick_oci(&t, &registry).await? } else { pick_registry_json(&t, flag, &registry).await? };
-            (Source::Dataset { flag, registry, dataset }, tasks)
+                if flag == "--registry" { pick_oci(t, &registry).await? } else { pick_registry_json(t, flag, &registry).await? };
+            (Source::Dataset { registry: Some((flag, registry)), dataset }, tasks)
         }
-    };
-    let tasks = pick_tasks(&t, tasks)?;
+    })
+}
 
+/// One of the top agents, or any other; with the model it suggests.
+fn pick_agent(t: &ColorfulTheme) -> Result<(String, Option<&'static str>)> {
     let mut labels: Vec<String> = TOP_AGENTS.iter().map(|(n, d, _)| format!("{n:<17}{}", style(d).dim())).collect();
     labels.push(format!("{:<17}{}", "more…", style("every other agent").dim()));
-    let i = Select::with_theme(&t).with_prompt("Agent").items(&labels).default(0).interact()?;
-    let (agent, suggested) = match TOP_AGENTS.get(i) {
+    let i = Select::with_theme(t).with_prompt("Agent").items(&labels).default(0).interact()?;
+    Ok(match TOP_AGENTS.get(i) {
         Some((n, _, m)) => (n.to_string(), *m),
         None => {
             let all = agents::agent_names();
-            let n = all[Select::with_theme(&t).with_prompt("Agent").items(&all).default(0).max_length(12).interact()?];
+            let n = all[Select::with_theme(t).with_prompt("Agent").items(&all).default(0).max_length(12).interact()?];
             (n.to_string(), None)
         }
-    };
-    if let Some(names) = auth_envs(&agent)
-        && !names.iter().any(|n| std::env::var(n).is_ok_and(|v| !v.is_empty()))
-    {
-        bail!("{agent} needs credentials: `export {}=...` (or one of {}), then run again", names[0], names[1..].join(", "));
-    }
-    let model = if matches!(agent.as_str(), "oracle" | "nop") { None } else { Some(pick_model(&t, suggested)?) };
-
-    let cmd = apply(a, Answers { source, tasks, agent, model });
-    eprintln!("\n  {}\n  {}\n", style("Same run without the questions:").dim(), style(cmd.join(" ")).cyan());
-    if !Confirm::with_theme(&t).with_prompt("Start").default(true).interact()? {
-        bail!("aborted");
-    }
-    eprintln!();
-    Ok(())
+    })
 }
 
 /// All of `names`, the first few, or the ones ticked; nothing to ask for a single task (no names).
@@ -325,39 +356,43 @@ fn pick_tasks(t: &ColorfulTheme, names: Vec<String>) -> Result<Tasks> {
     })
 }
 
-/// Fill the answers into `a`; returns the equivalent command line.
-fn apply(a: &mut RunArgs, ans: Answers) -> Vec<String> {
-    let mut cmd: Vec<String> = vec!["hbench".into(), "run".into()];
+/// Fill the answers into `a`; returns the equivalent command line: `typed`, the command as typed, with them added.
+fn apply(a: &mut RunArgs, ans: Answers, mut cmd: Vec<String>) -> Vec<String> {
     match ans.source {
         Source::Path(p) => {
             cmd.extend(["-p".into(), shell_quote(&p)]);
             a.path = Some(p.into());
         }
-        Source::Dataset { flag, registry, dataset } => {
-            cmd.extend(["-d".into(), dataset.clone(), flag.into(), shell_quote(&registry)]);
+        Source::Dataset { registry, dataset } => {
+            cmd.extend(["-d".into(), dataset.clone()]);
             a.dataset = Some(dataset);
-            match flag {
-                "--registry-path" => a.registry.registry_path = Some(PathBuf::from(registry)),
-                "--registry-url" => a.registry.registry_url = Some(registry),
-                _ => a.registry.registry = Some(registry),
+            if let Some((flag, registry)) = registry {
+                cmd.extend([flag.into(), shell_quote(&registry)]);
+                match flag {
+                    "--registry-path" => a.registry.registry_path = Some(PathBuf::from(registry)),
+                    "--registry-url" => a.registry.registry_url = Some(registry),
+                    _ => a.registry.registry = Some(registry),
+                }
             }
         }
     }
     match ans.tasks {
-        Tasks::All => {}
-        Tasks::First(n) => {
+        None | Some(Tasks::All) => {}
+        Some(Tasks::First(n)) => {
             cmd.extend(["-l".into(), n.to_string()]);
             a.n_tasks = Some(n);
         }
-        Tasks::Pick(names) => {
+        Some(Tasks::Pick(names)) => {
             for n in &names {
                 cmd.extend(["-i".into(), shell_quote(n)]);
             }
             a.include = names;
         }
     }
-    cmd.extend(["-a".into(), ans.agent.clone()]);
-    a.agent = Some(ans.agent);
+    if let Some(agent) = ans.agent {
+        cmd.extend(["-a".into(), agent.clone()]);
+        a.agent = Some(agent);
+    }
     if let Some(m) = ans.model {
         cmd.extend(["-m".into(), shell_quote(&m)]);
         a.models = vec![m];
@@ -461,36 +496,53 @@ mod tests {
         a
     }
 
+    fn typed(words: &[&str]) -> Vec<String> {
+        words.iter().map(|w| w.to_string()).collect()
+    }
+
     #[test]
     fn answers_fill_the_run_args() {
         let mut a = run_args();
         let ans = Answers {
-            source: Source::Dataset { flag: "--registry", registry: DEFAULT_REGISTRY.into(), dataset: "terminal-bench@2.0.1".into() },
-            tasks: Tasks::First(3),
-            agent: "codex".into(),
+            source: Source::Dataset { registry: Some(("--registry", DEFAULT_REGISTRY.into())), dataset: "terminal-bench@2.0.1".into() },
+            tasks: Some(Tasks::First(3)),
+            agent: Some("codex".into()),
             model: Some("openai/gpt-5".into()),
         };
-        let cmd = apply(&mut a, ans).join(" ");
+        let cmd = apply(&mut a, ans, typed(&["hbench", "run"])).join(" ");
         assert_eq!(cmd, "hbench run -d terminal-bench@2.0.1 --registry oci://ghcr.io/node-q/hbench-datasets -l 3 -a codex -m openai/gpt-5");
         assert_eq!((a.dataset.as_deref(), a.registry.registry.as_deref()), (Some("terminal-bench@2.0.1"), Some(DEFAULT_REGISTRY)));
         assert_eq!((a.agent.as_deref(), a.models.as_slice(), a.n_tasks), (Some("codex"), &["openai/gpt-5".to_string()][..], Some(3)));
 
         let mut a = run_args();
         let ans = Answers {
-            source: Source::Dataset { flag: "--registry-url", registry: "https://x/registry.json".into(), dataset: "tb@2.0".into() },
-            tasks: Tasks::Pick(vec!["fix-git".into(), "a b".into()]),
-            agent: "oracle".into(),
+            source: Source::Dataset { registry: Some(("--registry-url", "https://x/registry.json".into())), dataset: "tb@2.0".into() },
+            tasks: Some(Tasks::Pick(vec!["fix-git".into(), "a b".into()])),
+            agent: Some("oracle".into()),
             model: None,
         };
         assert_eq!(
-            apply(&mut a, ans).join(" "),
+            apply(&mut a, ans, typed(&["hbench", "run"])).join(" "),
             "hbench run -d tb@2.0 --registry-url https://x/registry.json -i fix-git -i 'a b' -a oracle"
         );
         assert_eq!((a.registry.registry_url.as_deref(), a.include.len(), a.n_tasks), (Some("https://x/registry.json"), 2, None));
 
         let mut a = run_args();
-        let ans = Answers { source: Source::Path("my tasks".into()), tasks: Tasks::All, agent: "oracle".into(), model: None };
-        assert_eq!(apply(&mut a, ans).join(" "), "hbench run -p 'my tasks' -a oracle");
+        let ans = Answers { source: Source::Path("my tasks".into()), tasks: Some(Tasks::All), agent: Some("oracle".into()), model: None };
+        assert_eq!(apply(&mut a, ans, typed(&["hbench", "run"])).join(" "), "hbench run -p 'my tasks' -a oracle");
         assert_eq!(a.path, Some(PathBuf::from("my tasks")));
+    }
+
+    #[test]
+    fn flags_on_the_command_line_are_kept_and_shown() {
+        let words = ["hbench", "run", "-n", "4", "--registry", "oci://r.example/ns", "-a", "claude-code", "-m", "anthropic/x", "-l", "2"];
+        let crate::Cmd::Run(mut a) = crate::Cli::parse_from(words).cmd else { panic!() };
+        let ans = Answers { source: Source::Dataset { registry: None, dataset: "tb@2.0".into() }, tasks: None, agent: None, model: None };
+        assert_eq!(
+            apply(&mut a, ans, typed(&words)).join(" "),
+            "hbench run -n 4 --registry oci://r.example/ns -a claude-code -m anthropic/x -l 2 -d tb@2.0"
+        );
+        assert_eq!((a.dataset.as_deref(), a.registry.registry.as_deref()), (Some("tb@2.0"), Some("oci://r.example/ns")));
+        assert_eq!((a.agent.as_deref(), a.models.as_slice(), a.n_tasks), (Some("claude-code"), &["anthropic/x".to_string()][..], Some(2)));
     }
 }
