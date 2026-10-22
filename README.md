@@ -41,8 +41,8 @@ hbench run     # pick a dataset, tasks, agent and model
 hbench view    # see the results in your browser
 ```
 
-`hbench run` asks a few questions, then runs. It also prints the same run as one command, to skip the questions
-next time.
+Pick the `oracle` agent first: it runs each task's own solution, so it needs no API key and checks your setup. For
+a real agent, export its key first (see [Agents](#agents)). Every run is saved in `jobs/`.
 
 ## Usage
 
