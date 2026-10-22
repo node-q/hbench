@@ -715,6 +715,10 @@ struct RunArgs {
     #[arg(long, help_heading = "Agent")]
     skip_preflight: bool,
 
+    /// Start each trial's container from an image of it as agent setup left it, committed by the first trial
+    /// with the same image, agent, options and hbench version (experimental; see `hbench cache clean`).
+    #[arg(long, help_heading = "Environment")]
+    cache_agent_setup: bool,
     /// Environment (container) env var KEY=VALUE, repeatable.
     #[arg(long = "ee", alias = "environment-env", value_parser = parse_kv, help_heading = "Environment")]
     env_env: Vec<(String, String)>,
@@ -966,6 +970,7 @@ fn build_job_config(a: &RunArgs) -> Result<JobConfig> {
     cfg.verifier.env.extend(a.verifier_env.iter().cloned());
     cfg.verifier.disable |= a.disable_verification;
     cfg.install_only |= a.install_only;
+    cfg.environment.cache_agent_setup |= a.cache_agent_setup;
     cfg.quiet |= a.quiet;
     cfg.artifacts.extend(a.artifact.iter().cloned().map(Artifact::Path));
     cfg.extra_instructions.extend(a.extra_instruction.iter().cloned());
@@ -1784,6 +1789,7 @@ mod tests {
             "--no-delete",
             "--artifact",
             "/app/x",
+            "--cache-agent-setup",
         ]);
         let Cmd::Run(a) = cli.cmd else { panic!() };
         let c = build_job_config(&a).unwrap();
@@ -1791,7 +1797,7 @@ mod tests {
         assert_eq!(c.agents[1].model_name.as_deref(), Some("anthropic/b"));
         assert_eq!(c.agents[0].kwargs["max_turns"], 5);
         assert_eq!(c.agents[0].env["X"], "1");
-        assert_eq!((c.n_attempts, c.environment.delete), (3, false));
+        assert_eq!((c.n_attempts, c.environment.delete, c.environment.cache_agent_setup), (3, false, true));
         assert_eq!(c.datasets[0].task_names.as_ref().unwrap(), &["t*"]);
         assert_eq!(c.artifacts, vec![Artifact::Path("/app/x".into())]);
     }
