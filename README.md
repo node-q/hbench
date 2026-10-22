@@ -69,7 +69,7 @@ The full docs are at [nodeq.tech/docs](https://nodeq.tech/docs). Good places to 
 # Run
 hbench run                                                # interactive
 hbench run -p examples/tasks/hello-world                  # a local task
-hbench run -d terminal-bench@2.0 --registry oci://ghcr.io/node-q/hbench-datasets \
+hbench run -d terminal-bench@2.0.1 \
   -a claude-code -m anthropic/claude-opus-5-5             # a dataset, with Claude Code
 hbench run -c job.yaml                                    # from a job config (YAML/JSON)
 

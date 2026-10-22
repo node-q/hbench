@@ -12,9 +12,20 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-/// There is no default registry: registry datasets name one with `--registry-url` / `--registry-path` or
-/// `--registry` (or a dataset's `registry_url` / `registry_path` / `registry` in a job config).
-pub const NO_REGISTRY: &str = "no dataset registry configured: pass --registry-url or --registry-path, or --registry oci://<registry>/<namespace> or oci-layout:<dir> (in a job config, set the dataset's registry_url, registry_path or registry)";
+/// The OCI registry a named dataset comes from when it names none, unless `$HBENCH_REGISTRY` names another.
+pub const DEFAULT_REGISTRY: &str = "oci://ghcr.io/node-q/hbench-datasets";
+const DEFAULT_REGISTRY_ENV: &str = "HBENCH_REGISTRY";
+
+pub fn default_registry() -> String {
+    std::env::var(DEFAULT_REGISTRY_ENV).ok().filter(|r| !r.trim().is_empty()).unwrap_or_else(|| DEFAULT_REGISTRY.into())
+}
+
+/// Point a named dataset that names no registry at [`default_registry`].
+pub fn use_default_registry(d: &mut DatasetConfig) {
+    if d.name.is_some() && d.path.is_none() && d.registry.is_none() && d.registry_url.is_none() && d.registry_path.is_none() {
+        d.registry = Some(default_registry());
+    }
+}
 
 #[derive(Debug, Deserialize)]
 pub struct Dataset {
@@ -35,11 +46,11 @@ pub struct RegistryTask {
     pub path: String,
 }
 
-/// The datasets of the registry at `path` (preferred) or `url`; an error when neither is given.
+/// The datasets of the registry.json at `path` (preferred) or `url`; an error when neither is given.
 pub fn load(url: Option<&str>, path: Option<&Path>) -> Result<Vec<Dataset>> {
     let raw = match (path, url.filter(|u| !u.trim().is_empty())) {
         (Some(p), _) => std::fs::read_to_string(p).with_context(|| format!("reading {}", p.display()))?,
-        (None, None) => bail!(NO_REGISTRY),
+        (None, None) => bail!("a registry.json needs a URL or a path"),
         (None, Some(url)) => {
             // Curl instead of an HTTP client crate.
             let out = Command::new("curl").args(["-fsSL", "--max-time", "60", url]).output().context("running curl")?;
@@ -122,7 +133,7 @@ pub async fn dataset_tasks(d: &DatasetConfig, disable_verification: bool) -> Res
         return Ok(dirs.into_iter().map(|t| TaskRef { path: Some(t), source: source.clone(), ..Default::default() }).collect());
     }
     let name = d.name.as_deref().context("dataset needs path or name")?;
-    if d.registry.is_some() {
+    if d.registry_url.is_none() && d.registry_path.is_none() {
         return filter_names(crate::oci::dataset_tasks(d).await?, TaskRef::display_name, d);
     }
     let regs = load(d.registry_url.as_deref(), d.registry_path.as_deref())?;
@@ -266,13 +277,22 @@ mod tests {
     use crate::config::DatasetConfig;
 
     #[tokio::test]
-    async fn registry_datasets_need_a_registry() {
-        let e = super::load(None, None).unwrap_err().to_string();
-        assert!(e.starts_with("no dataset registry configured: pass --registry-url or --registry-path"), "{e}");
-        assert_eq!(super::load(Some(" "), None).unwrap_err().to_string(), super::NO_REGISTRY);
+    async fn a_named_dataset_uses_the_default_registry_unless_it_names_one() {
+        assert_eq!(super::load(Some(" "), None).unwrap_err().to_string(), "a registry.json needs a URL or a path");
         let named = DatasetConfig { name: Some("terminal-bench".into()), version: Some("2.0".into()), ..Default::default() };
-        assert_eq!(super::dataset_tasks(&named, false).await.unwrap_err().to_string(), super::NO_REGISTRY);
-        // With a local registry.json the same reference resolves.
+        let mut defaulted = named.clone();
+        super::use_default_registry(&mut defaulted);
+        assert_eq!(defaulted.registry, Some(super::default_registry()));
+        for mut chosen in [
+            DatasetConfig { registry: Some("oci-layout:./datasets".into()), ..named.clone() },
+            DatasetConfig { registry_url: Some("https://r/registry.json".into()), ..named.clone() },
+            DatasetConfig { registry_path: Some("registry.json".into()), ..named.clone() },
+            DatasetConfig { path: Some("tasks".into()), ..Default::default() },
+        ] {
+            let before = chosen.clone();
+            super::use_default_registry(&mut chosen);
+            assert_eq!(chosen, before);
+        }
         let dir = std::env::temp_dir().join(format!("hbench-reg-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let reg = dir.join("registry.json");

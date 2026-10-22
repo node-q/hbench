@@ -5,10 +5,11 @@ and dataset formats, the output, troubleshooting and development.
 
 ## Running
 
-hbench has no default dataset registry. To run a named dataset (`-d name@version`), point it at a `registry.json`
-with `--registry-url`, or at a local one with `--registry-path` (in a job config, the dataset's `registry_url` or
-`registry_path`), or at an OCI registry or OCI image layouts with `--registry` (see
-[Datasets from an OCI registry](#datasets-from-an-oci-registry)). Local task directories (`-p`) need none of them.
+A named dataset (`-d name@version`) comes from the default dataset registry, `oci://ghcr.io/node-q/hbench-datasets`,
+unless `--registry` names another OCI registry or OCI image layouts (see
+[Datasets from an OCI registry](#datasets-from-an-oci-registry)), or `--registry-url` / `--registry-path` a
+`registry.json` (in a job config, the dataset's `registry`, `registry_url` or `registry_path`). `HBENCH_REGISTRY`
+replaces the default, in the same forms as `--registry`. Local task directories (`-p`) need no registry.
 
 Docker: hbench runs every trial in Linux containers on whatever `docker` points at (`DOCKER_CONTEXT`/`DOCKER_HOST`).
 Remote ssh daemons work because files move with `docker compose cp` rather than bind mounts.
@@ -21,32 +22,24 @@ For `sweeps run`, every trial means every trial of all its sweeps.
 
 ## Datasets
 
-hbench has no built-in registry: `-d name@version` needs `--registry-url <registry-url>`, the URL of a
-`registry.json` that lists datasets (or `--registry-path` for a local file). Common datasets:
-
-| Dataset | Tasks | What it tests |
-|---|---|---|
-| `terminal-bench@2.0` | 89 | Tasks in a terminal: build, debug, configure, train |
-| `terminal-bench-sample@2.0` | 10 | A sample of Terminal-Bench 2.0, for a quick check |
-| `terminal-bench-pro@1.0` | 200 | An extended Terminal-Bench set |
-| `swebench-verified@1.0` | 500 | Real GitHub issues in Python repos, human-validated |
-| `swebenchpro@1.0` | 731 | Bugs and features in Python, JS/TS and Go repos |
-| `swebench_multilingual@1.0` | 300 | SWE-bench beyond Python |
-| `aider-polyglot@1.0` | 225 | Code editing across several languages |
-| `livecodebench@6.0` | 100 | Competitive programming |
-
-List them all:
+`hbench datasets list` lists the datasets of the default registry (`--registry`, `--registry-url` or
+`--registry-path` lists another's):
 
 ```bash
-hbench datasets list --registry-url <registry-url>
+hbench datasets list
 ```
 
 Run one:
 
 ```bash
-hbench run -d swebench-verified@1.0 \
-  --registry-url <registry-url> \
-  -a claude-code -m anthropic/claude-opus-5-5 -n 4
+hbench run -d terminal-bench@2.0.1 -a claude-code -m anthropic/claude-opus-5-5 -n 4
+```
+
+A `registry.json` lists datasets whose tasks live in git repositories:
+
+```bash
+hbench datasets list --registry-url <registry-url>
+hbench run -d <name>@<version> --registry-url <registry-url> -a claude-code -m anthropic/claude-opus-5-5
 ```
 
 ## Agents
@@ -167,10 +160,10 @@ could also change files while the tests run; it shows up in the trajectory, so r
 `--registry` reads datasets from an OCI registry, or from OCI image layouts on disk, instead of a `registry.json`:
 
 ```bash
-hbench run -d hello@1.0 --registry oci://ghcr.io/node-q/hbench-datasets -a oracle
+hbench run -d hello@1.0 --registry oci://ghcr.io/<namespace> -a oracle
 hbench datasets download hello@1.0 --registry oci-layout:./datasets    # ./datasets/hello is an OCI image layout
 hbench datasets list --registry oci-layout:./datasets
-hbench datasets list --registry oci://ghcr.io/node-q/hbench-datasets         # what its dataset index lists
+hbench datasets list --registry oci://ghcr.io/<namespace>              # what its dataset index lists
 ```
 
 - `oci://<registry>/<namespace>`: `-d <name>@<version>` is the manifest tagged `<version>` in

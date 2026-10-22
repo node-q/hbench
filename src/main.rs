@@ -618,13 +618,14 @@ enum TasksCmd {
 
 #[derive(Args)]
 struct RegistryArgs {
-    /// Dataset registry URL (a registry.json). There is no default: registry datasets need this, --registry-path or --registry.
+    /// Dataset registry URL (a registry.json), instead of the default OCI registry.
     #[arg(long)]
     registry_url: Option<String>,
     /// Local dataset registry file (a registry.json), used instead of --registry-url.
     #[arg(long)]
     registry_path: Option<PathBuf>,
     /// OCI dataset registry, oci://<registry>/<namespace>, or OCI image layouts on disk, oci-layout:<dir>.
+    /// Default: $HBENCH_REGISTRY, else oci://ghcr.io/node-q/hbench-datasets.
     #[arg(long, conflicts_with_all = ["registry_url", "registry_path"])]
     registry: Option<String>,
 }
@@ -1384,8 +1385,9 @@ async fn run() -> Result<ExitCode> {
             Ok(if r.exception_info.is_some() { ExitCode::FAILURE } else { ExitCode::SUCCESS })
         }
         Cmd::Datasets { cmd: DatasetsCmd::List(r) } => {
-            if let Some(spec) = &r.registry {
-                for d in oci::list(spec).await? {
+            if r.registry_url.is_none() && r.registry_path.is_none() {
+                let spec = r.registry.unwrap_or_else(registry::default_registry);
+                for d in oci::list(&spec).await? {
                     println!("{}@{}  ({} tasks)  {}", d.config.name, d.config.version, d.layers.len(), d.config.description);
                 }
                 return Ok(ExitCode::SUCCESS);

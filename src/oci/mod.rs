@@ -189,12 +189,13 @@ fn require_version(d: &DatasetConfig, name: &str) -> Result<String> {
 }
 
 /// Set each OCI dataset's `digest` to the manifest its tag resolves to, through `./hbench.lock` as `mode` says.
-/// A dataset that already has a digest keeps it.
+/// A dataset that already has a digest keeps it, and a named dataset that names no registry gets the default one.
 pub async fn pin_datasets(datasets: &mut [DatasetConfig], mode: LockMode) -> Result<()> {
     pin_datasets_at(Path::new(lockfile::FILE), datasets, mode).await
 }
 
 async fn pin_datasets_at(path: &Path, datasets: &mut [DatasetConfig], mode: LockMode) -> Result<()> {
+    datasets.iter_mut().for_each(crate::registry::use_default_registry);
     let mut oci: Vec<&mut DatasetConfig> = datasets.iter_mut().filter(|d| d.registry.is_some()).collect();
     if oci.is_empty() {
         return Ok(());
@@ -268,7 +269,7 @@ async fn open(store: &Store, repository: &str, digest: &str) -> Result<Dataset> 
     Dataset::new(&manifest, &config).with_context(|| reference.clone())
 }
 
-/// The tasks of OCI dataset `d` (its registry set), each one a layer of the dataset's manifest.
+/// The tasks of OCI dataset `d` (its registry, or the default one), each one a layer of the dataset's manifest.
 pub async fn dataset_tasks(d: &DatasetConfig) -> Result<Vec<TaskRef>> {
     let mut d = d.clone();
     pin_datasets(std::slice::from_mut(&mut d), LockMode::Read).await?;
