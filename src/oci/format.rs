@@ -22,9 +22,16 @@ pub const SOURCE: &str = "org.opencontainers.image.source";
 pub const REVISION: &str = "org.opencontainers.image.revision";
 pub const CREATED: &str = "org.opencontainers.image.created";
 
+/// A registry's list of its datasets: the manifest tagged `latest` in `<namespace>/index`.
+pub const DATASET_INDEX_REPOSITORY: &str = "index";
+pub const DATASET_INDEX_TAG: &str = "latest";
+pub const DATASET_INDEX_ARTIFACT_TYPE: &str = "application/vnd.hbench.dataset-index.v1";
+pub const DATASET_INDEX_MEDIA_TYPE: &str = "application/vnd.hbench.dataset-index.v1+json";
+
 const MIB: u64 = 1024 * 1024;
 pub const MAX_MANIFEST_BYTES: u64 = 4 * MIB;
 pub const MAX_CONFIG_BYTES: u64 = 4 * MIB;
+pub const MAX_DATASET_INDEX_BYTES: u64 = 4 * MIB;
 
 /// The config blob, as `assets/schemas/dataset-config.v1.json` defines it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -89,6 +96,69 @@ pub struct Layer {
 pub struct Dataset {
     pub config: ConfigBlob,
     pub layers: Vec<Layer>,
+}
+
+/// The JSON layer of a dataset index, as `assets/schemas/dataset-index.v1.json` defines it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DatasetIndex {
+    pub schema_version: u32,
+    pub datasets: Vec<IndexEntry>,
+}
+
+/// A dataset version an index lists: `<namespace>/<name>@<digest>`, tagged `<version>`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IndexEntry {
+    pub name: String,
+    pub version: String,
+    pub digest: String,
+}
+
+/// The layer that holds a dataset index, refused unless `bytes` is an OCI image manifest of the index artifact
+/// type with exactly one layer of the index media type.
+pub fn parse_index_manifest(bytes: &[u8]) -> Result<Descriptor> {
+    let m: ImageManifest = serde_json::from_slice(bytes).context("not an OCI image manifest")?;
+    let media_type = m.media_type().as_ref().map(ToString::to_string);
+    if m.schema_version() != 2 || media_type.as_deref() != Some(MANIFEST_MEDIA_TYPE) {
+        bail!("not an OCI image manifest (schemaVersion 2, mediaType {MANIFEST_MEDIA_TYPE})");
+    }
+    let artifact_type = m.artifact_type().as_ref().map(ToString::to_string);
+    if artifact_type.as_deref() != Some(DATASET_INDEX_ARTIFACT_TYPE) {
+        bail!(
+            "not an hbench dataset index: artifactType is {}, not {DATASET_INDEX_ARTIFACT_TYPE}",
+            artifact_type.as_deref().unwrap_or("unset")
+        );
+    }
+    match m.layers().as_slice() {
+        [layer] if layer.media_type().to_string() == DATASET_INDEX_MEDIA_TYPE => Ok(layer.clone()),
+        _ => bail!("a dataset index has exactly one layer, of mediaType {DATASET_INDEX_MEDIA_TYPE}"),
+    }
+}
+
+/// A dataset index layer, refused unless its schema version is 1 and every entry names a valid repository
+/// component, version and digest, with no name@version twice.
+pub fn parse_dataset_index(bytes: &[u8]) -> Result<DatasetIndex> {
+    let index: DatasetIndex = serde_json::from_slice(bytes).context("not a dataset index")?;
+    if index.schema_version != 1 {
+        bail!("dataset index schema_version is {}, not 1", index.schema_version);
+    }
+    let mut seen = BTreeSet::new();
+    for e in &index.datasets {
+        if !super::is_repository_component(&e.name) || e.name == DATASET_INDEX_REPOSITORY {
+            bail!("dataset index: {:?} is not a dataset name", e.name);
+        }
+        if !super::is_tag(&e.version) {
+            bail!("dataset index: {}'s version {:?} is not a tag", e.name, e.version);
+        }
+        if !is_sha256_digest(&e.digest) {
+            bail!("dataset index: {}@{}'s digest {:?} is not a sha256 digest", e.name, e.version, e.digest);
+        }
+        if !seen.insert((e.name.as_str(), e.version.as_str())) {
+            bail!("dataset index lists {}@{} twice", e.name, e.version);
+        }
+    }
+    Ok(index)
 }
 
 pub fn is_sha256_digest(s: &str) -> bool {

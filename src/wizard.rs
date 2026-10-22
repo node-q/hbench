@@ -8,7 +8,6 @@ use anyhow::{Context, Result, bail};
 use dialoguer::console::{Term, style};
 use dialoguer::theme::ColorfulTheme;
 use dialoguer::{Confirm, Input, MultiSelect, Select};
-use futures_util::future::join_all;
 use std::path::{Path, PathBuf};
 
 /// Same logo as the README.
@@ -33,9 +32,6 @@ const TOP_AGENTS: &[(&str, &str, Option<&str>)] = &[
 
 /// node-q's dataset registry, offered first.
 const NODEQ_REGISTRY: &str = "oci://ghcr.io/node-q/hbench-datasets";
-// ponytail: an OCI registry can't list its repositories (GHCR has no public catalog), so node-q's dataset names are
-// listed here; add one when node-q/hbench-datasets publishes it ("Another dataset" reaches the rest meanwhile).
-const NODEQ_DATASETS: &[&str] = &["terminal-bench", "humaneval-plus"];
 
 enum Source {
     Path(String),
@@ -106,28 +102,24 @@ async fn pick_oci_version(t: &ColorfulTheme, registry: &str, name: &str) -> Resu
     Ok((format!("{name}@{v}"), tasks))
 }
 
-/// Pick a dataset in OCI registry `registry` (`oci://` or `oci-layout:`): from `known` names, or any other by name.
-async fn pick_oci(t: &ColorfulTheme, registry: &str, known: &[&str]) -> Result<(String, Vec<String>)> {
-    // Every name@version with its tasks; a layout dir lists itself, a registry only the known names.
-    let found: Vec<(String, Vec<String>)> = if registry.starts_with(oci::LAYOUT_SCHEME) {
-        busy("reading the datasets", oci::list(registry))
-            .await?
-            .into_iter()
-            .map(|d| (format!("{}@{}", d.config.name, d.config.version), d.layers.into_iter().map(|l| l.name).collect()))
-            .collect()
+/// Pick a dataset in OCI registry `registry` (`oci://` or `oci-layout:`): one it lists (a layout dir lists itself,
+/// a registry its dataset index), or any other by name.
+async fn pick_oci(t: &ColorfulTheme, registry: &str) -> Result<(String, Vec<String>)> {
+    let listed = if registry.starts_with(oci::LAYOUT_SCHEME) {
+        busy("reading the datasets", oci::list(registry)).await?
     } else {
-        busy("looking up datasets", async {
-            let versions =
-                join_all(known.iter().map(|n| async move { (n.to_string(), oci::versions(registry, n).await.unwrap_or_default()) })).await;
-            let ids: Vec<(String, String)> = versions.into_iter().flat_map(|(n, vs)| vs.into_iter().map(move |v| (n.clone(), v))).collect();
-            join_all(ids.iter().map(|(n, v)| async move { oci_tasks(registry, n, v).await.ok().map(|ts| (format!("{n}@{v}"), ts)) }))
-                .await
-                .into_iter()
-                .flatten()
-                .collect()
-        })
-        .await
+        match busy("reading the dataset index", oci::indexed(registry)).await {
+            Ok(datasets) => datasets.unwrap_or_default(),
+            Err(e) => {
+                eprintln!("  {}", style(format!("could not read {registry}'s dataset index: {e:#}")).dim());
+                vec![]
+            }
+        }
     };
+    let found: Vec<(String, Vec<String>)> = listed
+        .into_iter()
+        .map(|d| (format!("{}@{}", d.config.name, d.config.version), d.layers.into_iter().map(|l| l.name).collect()))
+        .collect();
     let mut labels: Vec<String> = found.iter().map(|(id, ts)| format!("{id:<28}{}", style(format!("{} tasks", ts.len())).dim())).collect();
     let other = !registry.starts_with(oci::LAYOUT_SCHEME);
     if other {
@@ -162,7 +154,7 @@ async fn ask(a: &mut RunArgs) -> Result<()> {
     ];
     let (source, tasks) = match Select::with_theme(&t).with_prompt("What to run").items(&sources).default(0).interact()? {
         0 => {
-            let (dataset, tasks) = pick_oci(&t, NODEQ_REGISTRY, NODEQ_DATASETS).await?;
+            let (dataset, tasks) = pick_oci(&t, NODEQ_REGISTRY).await?;
             (Source::Dataset { flag: "--registry", registry: NODEQ_REGISTRY.into(), dataset }, tasks)
         }
         1 => {
@@ -190,7 +182,7 @@ async fn ask(a: &mut RunArgs) -> Result<()> {
                 .with_prompt("Registry")
                 .validate_with(|s: &String| oci::Location::parse(s).map(|_| ()).map_err(|e| e.to_string()))
                 .interact_text()?;
-            let (dataset, tasks) = pick_oci(&t, &r, &[]).await?;
+            let (dataset, tasks) = pick_oci(&t, &r).await?;
             (Source::Dataset { flag: "--registry", registry: r, dataset }, tasks)
         }
         _ => {

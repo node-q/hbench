@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/node-q/hbench/blob/master/assets/schemas/dataset-index.v1.json",
+  "title": "hbench dataset index, v1",
+  "description": "The one layer (media type application/vnd.hbench.dataset-index.v1+json) of a registry's dataset index: an OCI image manifest with artifactType application/vnd.hbench.dataset-index.v1, tagged latest in <namespace>/index. It lists the dataset versions under <namespace>, so that `hbench datasets list --registry oci://<registry>/<namespace>` can name them; hbench opens each one by its digest and checks its name and version.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "datasets"],
+  "properties": {
+    "schema_version": {
+      "description": "Always 1.",
+      "const": 1
+    },
+    "datasets": {
+      "description": "Every listed dataset version, at most once each.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "version", "digest"],
+        "properties": {
+          "name": {
+            "description": "Dataset name: the repository <namespace>/<name>. Not \"index\".",
+            "type": "string",
+            "pattern": "^[a-z0-9]+((\\.|_|__|-+)[a-z0-9]+)*$"
+          },
+          "version": {
+            "description": "The tag of the dataset version in its repository.",
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$"
+          },
+          "digest": {
+            "description": "The digest of the dataset's manifest, which the tag names.",
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          }
+        }
+      }
+    }
+  }
+}
