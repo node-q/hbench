@@ -359,8 +359,10 @@ npm run dev                                    # hot reload; proxies /api to `hb
 - `scripts/install-matrix.sh`: installs every installed agent into a real container (`install_only`).
 
 CI (`.github/workflows/ci.yml`) runs on GitHub-hosted runners: build + `cargo test` on Linux and macOS, `cargo fmt
---check` and clippy, `cargo audit`, a check that the committed `viewer/dist` matches `viewer/src`, and `scripts/e2e.sh`
-against a real Docker daemon. On Linux it also runs the OCI tests against two local `registry:3` containers
+--check` and clippy, `cargo audit`, a check that the committed `viewer/dist` matches `viewer/src`, `scripts/e2e.sh`
+against a real Docker daemon, and the example tasks through
+[node-q/hbench-action](https://github.com/node-q/hbench-action) with the latest release: every one must score 1 with
+the oracle and 0 with `nop`. On Linux it also runs the OCI tests against two local `registry:3` containers
 (`HBENCH_TEST_OCI_REGISTRY=localhost:5000 cargo test oci::tests`), the second taking basic auth with a password
 generated for the run (`HBENCH_TEST_OCI_AUTH_REGISTRY=localhost:5001`,
 `HBENCH_TEST_OCI_AUTH_CREDENTIALS=<user>:<password>`).
