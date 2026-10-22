@@ -154,6 +154,67 @@ async fn pick_oci(t: &ColorfulTheme, registry: &str) -> Result<(String, Vec<Stri
     }
 }
 
+/// The `hbench run` flag and value for a registry as typed: an OCI registry (`oci://`, or a bare
+/// `<host>/<namespace>`) or a directory of OCI image layouts goes to `--registry`, a registry.json to
+/// `--registry-url` (http or https) or `--registry-path` (a file).
+fn registry_flag(typed: &str) -> Result<(&'static str, String)> {
+    let typed = typed.trim();
+    if typed.starts_with(oci::REGISTRY_SCHEME) || typed.starts_with(oci::LAYOUT_SCHEME) {
+        oci::Location::parse(typed)?;
+        return Ok(("--registry", typed.to_string()));
+    }
+    if typed.starts_with("https://") || typed.starts_with("http://") {
+        return Ok(("--registry-url", typed.to_string()));
+    }
+    let path = Path::new(typed);
+    if path.is_file() {
+        return Ok(("--registry-path", typed.to_string()));
+    }
+    if path.is_dir() {
+        let holds_layouts =
+            std::fs::read_dir(path).with_context(|| format!("reading {typed}"))?.flatten().any(|e| e.path().join("oci-layout").is_file());
+        if holds_layouts {
+            return Ok(("--registry", format!("{}{typed}", oci::LAYOUT_SCHEME)));
+        }
+        if path.join("oci-layout").is_file() {
+            bail!("{typed} is one OCI image layout; give the directory that holds it");
+        }
+        bail!("{typed} holds no OCI image layouts (<dir>/<dataset>/oci-layout); for a folder of tasks, pick \"Tasks in a local folder\"");
+    }
+    if typed.ends_with(".json") {
+        bail!("{typed}: no such file");
+    }
+    let host = typed.split('/').next().unwrap_or_default();
+    let looks_like_path = typed.starts_with(['.', '/', '~']);
+    let looks_like_host =
+        host == "localhost" || host.contains(':') || (host.contains('.') && !host.starts_with('.') && !host.ends_with('.'));
+    let spec = format!("{}{typed}", oci::REGISTRY_SCHEME);
+    if !looks_like_path && looks_like_host && oci::Location::parse(&spec).is_ok() {
+        return Ok(("--registry", spec));
+    }
+    bail!(
+        "{typed:?} is not a registry: give oci://<registry>/<namespace> (or <registry>/<namespace>), a directory of OCI image layouts, or a registry.json's URL or path"
+    )
+}
+
+/// Pick a dataset in the registry.json at `registry` (`flag` says whether it is a URL or a path), with its task names.
+async fn pick_registry_json(t: &ColorfulTheme, flag: &str, registry: &str) -> Result<(String, Vec<String>)> {
+    let is_path = flag == "--registry-path";
+    let datasets = busy("reading the registry", async {
+        if is_path { registry::load(None, Some(Path::new(registry))) } else { registry::load(Some(registry), None) }
+    })
+    .await?;
+    if datasets.is_empty() {
+        bail!("registry {registry} has no datasets");
+    }
+    let labels: Vec<String> = datasets
+        .iter()
+        .map(|d| format!("{:<28}{}", format!("{}@{}", d.name, d.version), style(format!("{} tasks", d.tasks.len())).dim()))
+        .collect();
+    let d = &datasets[Select::with_theme(t).with_prompt("Dataset").items(&labels).default(0).max_length(12).interact()?];
+    Ok((format!("{}@{}", d.name, d.version), d.tasks.iter().map(|t| t.name.clone()).collect()))
+}
+
 async fn ask(a: &mut RunArgs) -> Result<()> {
     let t = ColorfulTheme::default();
     eprintln!();
@@ -166,8 +227,7 @@ async fn ask(a: &mut RunArgs) -> Result<()> {
     let sources = [
         format!("{:<26}{}", "Default datasets", style(default_registry.trim_start_matches(oci::REGISTRY_SCHEME)).dim()),
         format!("{:<26}{}", "Tasks in a local folder", style("a task, or a folder of tasks").dim()),
-        format!("{:<26}{}", "Another OCI registry", style("oci://<registry>/<namespace> or oci-layout:<dir>").dim()),
-        format!("{:<26}{}", "A registry.json", style("URL or path").dim()),
+        format!("{:<26}{}", "Another registry", style("an OCI registry or layout, or a registry.json (URL or path)").dim()),
     ];
     let (source, tasks) = match Select::with_theme(&t).with_prompt("What to run").items(&sources).default(0).interact()? {
         0 => {
@@ -194,32 +254,15 @@ async fn ask(a: &mut RunArgs) -> Result<()> {
             };
             (Source::Path(p), tasks)
         }
-        2 => {
-            let r: String = Input::with_theme(&t)
-                .with_prompt("Registry")
-                .validate_with(|s: &String| oci::Location::parse(s).map(|_| ()).map_err(|e| e.to_string()))
-                .interact_text()?;
-            let (dataset, tasks) = pick_oci(&t, &r).await?;
-            (Source::Dataset { flag: "--registry", registry: r, dataset }, tasks)
-        }
         _ => {
-            let r: String = Input::with_theme(&t).with_prompt("registry.json (URL or path)").interact_text()?;
-            let is_path = Path::new(&r).is_file();
-            let datasets = busy("reading the registry", async {
-                if is_path { registry::load(None, Some(Path::new(&r))) } else { registry::load(Some(&r), None) }
-            })
-            .await?;
-            if datasets.is_empty() {
-                bail!("registry {r} has no datasets");
-            }
-            let labels: Vec<String> = datasets
-                .iter()
-                .map(|d| format!("{:<28}{}", format!("{}@{}", d.name, d.version), style(format!("{} tasks", d.tasks.len())).dim()))
-                .collect();
-            let d = &datasets[Select::with_theme(&t).with_prompt("Dataset").items(&labels).default(0).max_length(12).interact()?];
-            let flag = if is_path { "--registry-path" } else { "--registry-url" };
-            let tasks = d.tasks.iter().map(|t| t.name.clone()).collect();
-            (Source::Dataset { flag, registry: r, dataset: format!("{}@{}", d.name, d.version) }, tasks)
+            let typed: String = Input::with_theme(&t)
+                .with_prompt("Registry")
+                .validate_with(|s: &String| registry_flag(s).map(|_| ()).map_err(|e| e.to_string()))
+                .interact_text()?;
+            let (flag, registry) = registry_flag(&typed)?;
+            let (dataset, tasks) =
+                if flag == "--registry" { pick_oci(&t, &registry).await? } else { pick_registry_json(&t, flag, &registry).await? };
+            (Source::Dataset { flag, registry, dataset }, tasks)
         }
     };
     let tasks = pick_tasks(&t, tasks)?;
@@ -379,6 +422,38 @@ mod tests {
         for (p, _) in PROVIDERS {
             assert!(agents::model_connection::provider(p).is_some(), "{p} has no model_connection entry");
         }
+    }
+
+    #[test]
+    fn a_typed_registry_goes_to_the_flag_its_kind_takes() {
+        let dir = std::env::temp_dir().join(format!("hbench-wizard-{}", uuid::Uuid::new_v4().simple()));
+        let layouts = dir.join("layouts");
+        std::fs::create_dir_all(layouts.join("hello")).unwrap();
+        std::fs::write(layouts.join("hello/oci-layout"), r#"{"imageLayoutVersion":"1.0.0"}"#).unwrap();
+        let tasks = dir.join("tasks");
+        std::fs::create_dir_all(&tasks).unwrap();
+        let registry_json = dir.join("registry.json");
+        std::fs::write(&registry_json, "[]").unwrap();
+        let text = |p: &Path| p.display().to_string();
+
+        let cases = [
+            ("oci://ghcr.io/node-q/hbench-datasets", ("--registry", "oci://ghcr.io/node-q/hbench-datasets".to_string())),
+            ("  ghcr.io/node-q/hbench-datasets ", ("--registry", "oci://ghcr.io/node-q/hbench-datasets".into())),
+            ("localhost:5000/team", ("--registry", "oci://localhost:5000/team".into())),
+            ("https://example.com/registry.json", ("--registry-url", "https://example.com/registry.json".into())),
+            (&text(&registry_json), ("--registry-path", text(&registry_json))),
+            (&text(&layouts), ("--registry", format!("oci-layout:{}", text(&layouts)))),
+        ];
+        for (typed, expected) in cases {
+            assert_eq!(registry_flag(typed).unwrap(), expected, "{typed}");
+        }
+        let layout_spec = format!("oci-layout:{}", text(&layouts));
+        assert_eq!(registry_flag(&layout_spec).unwrap(), ("--registry", layout_spec.clone()));
+
+        for typed in [text(&tasks), text(&layouts.join("hello")), "no-such-registry".into(), "oci://".into(), "./missing.json".into()] {
+            assert!(registry_flag(&typed).is_err(), "{typed} should be refused");
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     fn run_args() -> Box<RunArgs> {
