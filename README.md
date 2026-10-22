@@ -29,6 +29,8 @@ You need Docker, on Linux or macOS.
 curl -fsSL https://nodeq.tech/install.sh | sh
 ```
 
+Later, `hbench update` installs the newest release.
+
 Or build from source:
 
 ```bash

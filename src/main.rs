@@ -26,6 +26,7 @@ mod task;
 mod tools;
 mod traces;
 mod trial;
+mod update;
 mod viewer;
 mod wizard;
 
@@ -146,6 +147,8 @@ enum Cmd {
         /// Target shell.
         shell: clap_complete::Shell,
     },
+    /// Install the latest release (runs `curl -fsSL https://nodeq.tech/install.sh | sh`).
+    Update,
 }
 
 #[derive(Args)]
@@ -1203,8 +1206,13 @@ async fn main() -> ExitCode {
 async fn run() -> Result<ExitCode> {
     redact::register_host_env();
     let ok = |r: Result<()>| r.map(|_| ExitCode::SUCCESS);
-    match Cli::parse().cmd {
+    let cli = Cli::parse();
+    if !matches!(cli.cmd, Cmd::Completions { .. } | Cmd::Update) {
+        update::notify();
+    }
+    match cli.cmd {
         Cmd::Exec(a) => ok(exec::run(*a).await),
+        Cmd::Update => update::run(),
         Cmd::Completions { shell } => {
             clap_complete::generate(shell, &mut Cli::command(), "hbench", &mut std::io::stdout());
             Ok(ExitCode::SUCCESS)

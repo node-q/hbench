@@ -97,6 +97,8 @@ Credentials are read from the host environment or `--ae KEY=VALUE` (`agent.env` 
 
 `hbench agents schema <agent>` lists an agent's kwargs; `src/agents/model_connection.rs` has every provider's key names.
 Other hbench variables: `DOCKER_CONTEXT`/`DOCKER_HOST` (which daemon), `HBENCH_EGRESS_METHOD=proxy` (see below).
+`HBENCH_NO_UPDATE_CHECK=1` stops the daily check for a newer release, which suggests `hbench update` (also off when `CI` is set or stderr is not a
+terminal); hbench reads the last result from `~/.cache/hbench/latest-release.json` and refreshes it in the background.
 
 ## Task format
 
