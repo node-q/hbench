@@ -265,7 +265,7 @@ pub async fn run_job(
     std::fs::create_dir_all(&job_dir)?;
     let (job_id, prior_retries) = carried_over(&job_dir);
     std::fs::write(job_dir.join("config.json"), serde_json::to_string_pretty(&cfg.config_json())?)?;
-    let log = crate::env::TrialLog::create(&job_dir.join("job.log"))?;
+    let log = crate::env::TrialLog::create(&job_dir.join("job.log"), "job")?;
     log.line(&format!("job {} started ({} agent config(s))", cfg.job_name, cfg.agents.len()));
     for key in cfg.unread_settings() {
         let why = if key == "environment.override_storage_mb" { "hbench does not limit a trial's disk" } else { "hbench ignores it" };
@@ -325,7 +325,7 @@ pub async fn run_job(
         ));
     }
     // On a terminal: one line per finished trial and a status line redrawn in place; otherwise plain log lines.
-    let live = !cfg.quiet && std::io::stderr().is_terminal();
+    let live = !cfg.quiet && !crate::observe::enabled() && std::io::stderr().is_terminal();
     if live {
         eprintln!(
             "{}",
@@ -518,11 +518,11 @@ fn use_color() -> bool {
     std::env::var_os("NO_COLOR").is_none() && std::io::stdout().is_terminal()
 }
 
-fn use_color_on_stderr() -> bool {
+pub(crate) fn use_color_on_stderr() -> bool {
     std::env::var_os("NO_COLOR").is_none() && std::io::stderr().is_terminal()
 }
 
-fn paint_if(color: bool, code: &str, t: &str) -> String {
+pub(crate) fn paint_if(color: bool, code: &str, t: &str) -> String {
     if color { format!("\x1b[{code}m{t}\x1b[0m") } else { t.to_string() }
 }
 

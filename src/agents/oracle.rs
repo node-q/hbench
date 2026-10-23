@@ -4,6 +4,7 @@ use super::{Agent, AgentArgs, AgentContext, AgentCtx};
 use crate::task::resolve_env_vars;
 use anyhow::{Result, bail};
 use std::collections::BTreeMap;
+use std::time::Duration;
 
 pub struct Oracle {
     args: AgentArgs,
@@ -50,6 +51,9 @@ impl Agent for Oracle {
         env.insert("DEBIAN_FRONTEND".into(), "noninteractive".into());
         env.extend(resolve_env_vars(&task.config.solution.env)?);
         let r = cx.env.exec("(/solution/solve.sh) > /logs/agent/oracle.txt 2>&1", cx.user.as_deref(), &env, None).await?;
+        if crate::observe::enabled() {
+            let _ = cx.env.exec_root("tail -n 200 /logs/agent/oracle.txt", Some(Duration::from_secs(60))).await;
+        }
         if r.code != 0 {
             std::fs::create_dir_all(&cx.logs_dir)?;
             std::fs::write(cx.logs_dir.join("exit-code.txt"), r.code.to_string())?;

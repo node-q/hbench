@@ -16,6 +16,7 @@ mod job;
 mod manifest;
 mod metrics;
 mod migrate;
+mod observe;
 mod oci;
 mod redact;
 mod registry;
@@ -332,6 +333,9 @@ enum JobsCmd {
         /// Exit 1 if any trial errored.
         #[arg(long)]
         fail_on_error: bool,
+        /// Print every trial's log and command output as it runs, each line under the trial's name.
+        #[arg(short = 'o', long)]
+        observe: bool,
     },
     /// Print a job's stats.
     Summary {
@@ -786,6 +790,9 @@ struct RunArgs {
     /// No per-trial progress lines.
     #[arg(long, help_heading = "Output")]
     quiet: bool,
+    /// Print every trial's log and command output as it runs, each line under the trial's name.
+    #[arg(short = 'o', long, help_heading = "Output")]
+    observe: bool,
     /// Exit 1 if any trial errored (default: only when every trial errored).
     #[arg(long, help_heading = "Output")]
     fail_on_error: bool,
@@ -1239,6 +1246,9 @@ async fn run() -> Result<ExitCode> {
             Ok(ExitCode::SUCCESS)
         }
         Cmd::Run(mut a) | Cmd::Jobs { cmd: JobsCmd::Start(mut a) } => {
+            if a.observe {
+                observe::enable();
+            }
             if a.config.is_none() && a.path.is_none() && a.dataset.is_none() && std::io::IsTerminal::is_terminal(&std::io::stdin()) {
                 wizard::fill(&mut a).await?;
             }
@@ -1279,7 +1289,10 @@ async fn run() -> Result<ExitCode> {
                 a.diff.iter().map(|p| config::SourceJob { action: "diff".into(), kind: None, job_id: None, path: p.clone() }).collect();
             Ok(job_exit_code(&run_with_ctrl_c(cfg, Some(trials), &[]).await?.stats, a.fail_on_error))
         }
-        Cmd::Jobs { cmd: JobsCmd::Resume { path, filter_error_types, skip_preflight, fail_on_error } } => {
+        Cmd::Jobs { cmd: JobsCmd::Resume { path, filter_error_types, skip_preflight, fail_on_error, observe } } => {
+            if observe {
+                observe::enable();
+            }
             let cfg = job::load_config(&path)?;
             preflight_agents(&cfg)?;
             if !skip_preflight {
