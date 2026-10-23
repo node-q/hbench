@@ -52,7 +52,7 @@ struct Cli {
 enum Cmd {
     /// Run a job (alias of `jobs start`).
     Run(Box<RunArgs>),
-    /// Jobs: start, resume, summary, regrade.
+    /// Jobs: start, resume, summary, verify, regrade.
     Jobs {
         #[command(subcommand)]
         cmd: JobsCmd,
@@ -418,9 +418,11 @@ enum TrialsCmd {
 
 #[derive(Subcommand)]
 enum DatasetsCmd {
-    /// List datasets in a registry (--registry-url, --registry-path, --registry oci-layout:<dir>, or --registry oci://... with a dataset index).
+    /// List the datasets in a registry: the default OCI registry, or the one --registry, --registry-url or
+    /// --registry-path names. An oci:// registry is listed from its dataset index.
     List(RegistryArgs),
-    /// Download a registry dataset's tasks into the cache (or --output-dir); needs --registry-url, --registry-path or --registry.
+    /// Download a registry dataset's tasks into the cache (or --output-dir), from the default OCI registry unless
+    /// --registry, --registry-url or --registry-path names another.
     Download {
         /// Dataset, name[@version].
         dataset: String,
@@ -662,7 +664,8 @@ struct RunArgs {
     /// Local task dir, or a dir of task dirs.
     #[arg(short = 'p', long = "path", help_heading = "Selection")]
     path: Option<PathBuf>,
-    /// Registry dataset, name[@version]. Needs --registry-url, --registry-path or --registry.
+    /// Registry dataset, name[@version], from --registry, --registry-url or --registry-path, else from
+    /// $HBENCH_REGISTRY, else from oci://ghcr.io/node-q/hbench-datasets.
     #[arg(short = 'd', long = "dataset", help_heading = "Selection")]
     dataset: Option<String>,
     #[command(flatten, next_help_heading = "Selection")]

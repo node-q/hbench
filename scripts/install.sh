@@ -4,7 +4,7 @@
 # HBENCH_VERSION=vX.Y.Z pins a release; the default is the latest release of node-q/hbench.
 set -eu
 REPO=node-q/hbench
-# nodeq.tech/install.sh fills this in with the version Harness Playground's arenas use.
+# A site serving this script may fill in a default release here; HBENCH_VERSION still overrides it.
 DEFAULT_VERSION=
 DIR=${HBENCH_INSTALL_DIR:-$HOME/.local/bin}
 

@@ -80,7 +80,8 @@ hbench jobs resume -p jobs/<job>
 
 # Tasks and datasets
 hbench init <org/name>                                    # a new task
-hbench check <tasks>                                      # check tasks
+hbench tasks check -p <tasks>                             # validate tasks: config, files, tests
+hbench check <tasks>                                      # review tasks against a rubric, with claude-code
 hbench datasets list|download
 
 # Other
