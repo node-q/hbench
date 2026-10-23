@@ -53,7 +53,7 @@ struct Cli {
 enum Cmd {
     /// Run a job (alias of `jobs start`).
     Run(Box<RunArgs>),
-    /// Jobs: start, resume, summary, regrade.
+    /// Jobs: start, resume, summary, verify, regrade.
     Jobs {
         #[command(subcommand)]
         cmd: JobsCmd,
@@ -438,9 +438,11 @@ enum TrialsCmd {
 
 #[derive(Subcommand)]
 enum DatasetsCmd {
-    /// List datasets in a registry (--registry-url, --registry-path, --registry oci-layout:<dir>, or --registry oci://... with a dataset index).
+    /// List the datasets in a registry: the default OCI registry, or the one --registry, --registry-url or
+    /// --registry-path names. An oci:// registry is listed from its dataset index.
     List(RegistryArgs),
-    /// Download a registry dataset's tasks into the cache (or --output-dir); needs --registry-url, --registry-path or --registry.
+    /// Download a registry dataset's tasks into the cache (or --output-dir), from the default OCI registry unless
+    /// --registry, --registry-url or --registry-path names another.
     Download {
         /// Dataset, name[@version].
         dataset: String,
@@ -682,7 +684,8 @@ struct RunArgs {
     /// Local task dir, or a dir of task dirs.
     #[arg(short = 'p', long = "path", help_heading = "Selection")]
     path: Option<PathBuf>,
-    /// Registry dataset, name[@version]. Needs --registry-url, --registry-path or --registry.
+    /// Registry dataset, name[@version], from --registry, --registry-url or --registry-path, else from
+    /// $HBENCH_REGISTRY, else from oci://ghcr.io/node-q/hbench-datasets.
     #[arg(short = 'd', long = "dataset", help_heading = "Selection")]
     dataset: Option<String>,
     #[command(flatten, next_help_heading = "Selection")]
@@ -1125,18 +1128,26 @@ pub fn cancel_on_signal(trials: impl Fn() -> Vec<String> + Send + 'static) -> to
         if sigs.recv().await.is_none() {
             return;
         }
-        eprintln!("\ncancelling: tearing down containers (signal again to force quit)...");
+        eprintln!("{}cancelling: tearing down containers (signal again to force quit)...", over_status_line());
         let _ = tx.send(true);
         if sigs.recv().await.is_some() {
-            eprintln!("force quit: removing this run's compose projects (signal again to skip)...");
+            eprintln!("{}force quit: removing this run's compose projects (signal again to skip)...", over_status_line());
             tokio::select! {
                 _ = force_cleanup(trials()) => {}
                 _ = sigs.recv() => {}
             }
+            let mut stderr = std::io::stderr().lock();
+            let _ = std::io::Write::write_all(&mut stderr, over_status_line().as_bytes());
             std::process::exit(130);
         }
     });
     rx
+}
+
+/// Start of a line printed while the live status line may be on screen: it wipes that line (and an
+/// echoed `^C`) on a terminal.
+fn over_status_line() -> &'static str {
+    job::clear_line(std::io::IsTerminal::is_terminal(&std::io::stderr()))
 }
 
 /// Best effort, bounded: `docker compose down` every project named after one of `trials`.

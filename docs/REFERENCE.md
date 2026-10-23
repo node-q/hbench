@@ -66,7 +66,7 @@ The most used ones:
 | Agent | What it runs | Model (`-m`) | Useful options (`--ak`) |
 |---|---|---|---|
 | `claude-code` | Anthropic's Claude Code; an API key or a subscription token (`claude setup-token`) | `anthropic/claude-opus-5-5` | `reasoning_effort`, `max_turns`, `max_budget_usd` |
-| `codex` | OpenAI's Codex CLI | `openai/gpt-5` | `reasoning_effort`, `web_search` |
+| `codex` | OpenAI's Codex CLI | `openai/gpt-6.1-sol` | `reasoning_effort`, `web_search` |
 | `gemini-cli` | Google's Gemini CLI | `google/gemini-3-pro` | `reasoning_effort`, `sandbox` |
 | `opencode` | opencode, with any provider's model | `<provider>/<model>` | `variant` |
 | `terminus-2` | A minimal tmux-based agent, with any provider's model | `<provider>/<model>` | `max_turns`, `temperature` |
@@ -89,6 +89,8 @@ Credentials are read from the host environment or `--ae KEY=VALUE` (`agent.env` 
 | `analyze`, `check` | run `claude-code` by default (`-a` picks another agent), so they need an Anthropic credential, usually `ANTHROPIC_API_KEY` | |
 
 `hbench agents schema <agent>` lists an agent's kwargs; `src/agents/model_connection.rs` has every provider's key names.
+With a ChatGPT login (`CODEX_AUTH_JSON_PATH`, `CODEX_FORCE_AUTH_JSON`), codex takes only the model names Codex lists, such as
+`gpt-6.1-sol` or `gpt-5.6-sol`; an API alias such as `gpt-5.6` fails there with HTTP 400.
 Other hbench variables: `DOCKER_CONTEXT`/`DOCKER_HOST` (which daemon), `HBENCH_EGRESS_METHOD=proxy` (see below).
 `HBENCH_NO_UPDATE_CHECK=1` stops the daily check for a newer release, which suggests `hbench update` (also off when `CI` is set or stderr is not a
 terminal); hbench reads the last result from `~/.cache/hbench/latest-release.json` and refreshes it in the background.
