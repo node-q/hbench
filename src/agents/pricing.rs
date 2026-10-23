@@ -1,4 +1,4 @@
-//! Token pricing from the bundled model price table (assets/litellm, pinned to 1.93.0): per-token
+//! Token pricing from the bundled model price table (assets/litellm, pinned to 1.106.2): per-token
 //! input/output/cache rates, with tiered rates above a prompt-size threshold; text tokens only.
 
 use serde_json::{Map, Value};
@@ -100,10 +100,10 @@ mod tests {
     use super::*;
     #[test]
     fn price_table_costs() {
-        // claude-opus-4-1: in 1.5e-5, out 7.5e-5, cache read 1.5e-6, cache write 1.875e-5.
-        let (p, c) = cost_per_token("claude-opus-4-1", 1_000_000, 100_000, 100_000, 400_000).unwrap();
-        assert!((p - (500_000.0 * 1.5e-5 + 400_000.0 * 1.5e-6 + 100_000.0 * 1.875e-5)).abs() < 1e-9);
-        assert!((c - 100_000.0 * 7.5e-5).abs() < 1e-9);
+        // claude-opus-5-5: in 4e-6, out 2e-5, cache read 2e-7, cache write 5e-6.
+        let (p, c) = cost_per_token("claude-opus-5-5", 1_000_000, 100_000, 100_000, 400_000).unwrap();
+        assert!((p - (500_000.0 * 4e-6 + 400_000.0 * 2e-7 + 100_000.0 * 5e-6)).abs() < 1e-9);
+        assert!((c - 100_000.0 * 2e-5).abs() < 1e-9);
         // gemini-2.5-pro tiers above 200k prompt tokens.
         let (p, c) = cost_per_token("gemini-2.5-pro", 300_000, 1_000, 0, 0).unwrap();
         assert!((p - 300_000.0 * 2.5e-6).abs() < 1e-9 && (c - 1_000.0 * 1.5e-5).abs() < 1e-9);
