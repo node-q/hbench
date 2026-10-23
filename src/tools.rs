@@ -17,8 +17,8 @@ pub async fn start_env(path: &Path, all: bool, interactive: bool, agent: Option<
     for d in ["agent", "verifier", "artifacts"] {
         std::fs::create_dir_all(tmp.join(d))?;
     }
-    let log = TrialLog::create(&tmp.join("trial.log"))?;
     let session = format!("{}__{}__env", task.dir_name(), &uuid::Uuid::new_v4().simple().to_string()[..12]);
+    let log = TrialLog::create(&tmp.join("trial.log"), &session)?;
     let ec = task.config.environment.clone();
     let spec = EnvSpec {
         project: crate::env::sanitize(&session, false),

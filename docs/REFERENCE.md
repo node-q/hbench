@@ -346,6 +346,11 @@ Agent setup is hardened so environment problems aren't charged to the agent:
 
 ## Troubleshooting
 
+- **Watching a run**: `-o`/`--observe` (on `run` and `jobs resume`) prints every trial's `trial.log` lines and
+  each command's output as it happens, every line under the trial's name, redacted like `trial.log`. A command
+  shows its first line, and a nonzero exit its code. The oracle's and the verifier's output, which go to files in the
+  container, show their last 200 lines when they finish. With several trials at once their lines interleave, so
+  `-n 1` reads best. The live status line is off while observing.
 - **Docker unreachable** (`docker version` timed out / daemon unreachable): hbench talks to whatever `docker` uses.
   Check `docker context ls`, `DOCKER_CONTEXT` and `DOCKER_HOST`; for an ssh context, make sure the remote daemon is up
   and an existing ssh connection isn't stale.

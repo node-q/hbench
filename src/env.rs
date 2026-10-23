@@ -200,16 +200,32 @@ pub fn private_temp_file(prefix: &str, content: &[u8]) -> Result<std::path::Path
     Ok(path)
 }
 
-/// Append-only per-trial log (trial.log).
-pub struct TrialLog(Mutex<std::fs::File>);
+/// Append-only per-trial log (trial.log), and with `--observe` stderr, under `who`.
+pub struct TrialLog {
+    file: Mutex<std::fs::File>,
+    who: String,
+}
 impl TrialLog {
-    pub fn create(path: &Path) -> Result<Arc<TrialLog>> {
+    pub fn create(path: &Path, who: &str) -> Result<Arc<TrialLog>> {
         let f = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
-        Ok(Arc::new(TrialLog(Mutex::new(f))))
+        Ok(Arc::new(TrialLog { file: Mutex::new(f), who: who.to_string() }))
     }
     pub fn line(&self, s: &str) {
+        self.record(s);
+        if crate::observe::enabled() {
+            crate::observe::print(&self.who, s);
+        }
+    }
+    /// trial.log only: for what `--observe` has already printed as it came.
+    pub fn record(&self, s: &str) {
         let ts = chrono::Utc::now().format("%H:%M:%S%.3f");
-        let _ = writeln!(self.0.lock().unwrap(), "[{ts}] {}", crate::redact::text(s));
+        let _ = writeln!(self.file.lock().unwrap(), "[{ts}] {}", crate::redact::text(s));
+    }
+    pub fn who(&self) -> &str {
+        &self.who
+    }
+    pub fn observer(&self) -> Option<crate::observe::Lines> {
+        crate::observe::enabled().then(|| crate::observe::Lines::new(&self.who))
     }
 }
 
@@ -482,12 +498,24 @@ fn transient_docker_error(stderr: &str) -> bool {
 const OUTPUT_HEAD: usize = 1 << 20;
 const OUTPUT_TAIL: usize = 8 << 20;
 
-async fn read_capped(mut r: impl tokio::io::AsyncRead + Unpin, head_cap: usize, tail_cap: usize) -> std::io::Result<String> {
+async fn read_capped(
+    mut r: impl tokio::io::AsyncRead + Unpin,
+    head_cap: usize,
+    tail_cap: usize,
+    mut observer: Option<crate::observe::Lines>,
+) -> std::io::Result<String> {
     use tokio::io::AsyncReadExt;
     let (mut head, mut rest, mut dropped) = (Vec::new(), Vec::new(), 0usize);
     let mut buf = vec![0u8; 64 * 1024];
     loop {
         let n = r.read(&mut buf).await?;
+        if let Some(o) = observer.as_mut() {
+            if n == 0 {
+                o.finish();
+            } else {
+                o.feed(&buf[..n]);
+            }
+        }
         let k = (head_cap - head.len()).min(n);
         head.extend_from_slice(&buf[..k]);
         rest.extend_from_slice(&buf[k..n]);
@@ -785,7 +813,10 @@ impl DockerEnv {
 
     async fn run_cmd(&self, mut c: Command, timeout: Option<Duration>, label: &str, stdin: Option<Vec<u8>>) -> Result<ExecResult> {
         c.stdin(if stdin.is_some() { Stdio::piped() } else { Stdio::null() }).stdout(Stdio::piped()).stderr(Stdio::piped());
-        self.log.line(&format!("$ {label}"));
+        self.log.record(&format!("$ {label}"));
+        if crate::observe::enabled() {
+            crate::observe::command(self.log.who(), label);
+        }
         for attempt in 1.. {
             let r = self.spawn_once(&mut c, timeout, label, stdin.clone()).await?;
             if attempt < SSH_ATTEMPTS && ssh_not_connected(&r) {
@@ -807,7 +838,11 @@ impl DockerEnv {
         }
         let (stdout, stderr) = (child.stdout.take().unwrap(), child.stderr.take().unwrap());
         let out = async {
-            tokio::try_join!(child.wait(), read_capped(stdout, OUTPUT_HEAD, OUTPUT_TAIL), read_capped(stderr, OUTPUT_HEAD, OUTPUT_TAIL))
+            tokio::try_join!(
+                child.wait(),
+                read_capped(stdout, OUTPUT_HEAD, OUTPUT_TAIL, self.log.observer()),
+                read_capped(stderr, OUTPUT_HEAD, OUTPUT_TAIL, self.log.observer())
+            )
         };
         let (status, stdout, stderr) = match timeout {
             Some(t) => match tokio::time::timeout(t, out).await {
@@ -820,7 +855,10 @@ impl DockerEnv {
             None => out.await?,
         };
         let r = ExecResult { code: status.code().unwrap_or(-1), stdout, stderr };
-        self.log.line(&format!("exit={} stdout:\n{}stderr:\n{}", r.code, tail(&r.stdout, 20000), tail(&r.stderr, 20000)));
+        self.log.record(&format!("exit={} stdout:\n{}stderr:\n{}", r.code, tail(&r.stdout, 20000), tail(&r.stderr, 20000)));
+        if crate::observe::enabled() {
+            crate::observe::exit(self.log.who(), r.code);
+        }
         Ok(r)
     }
 
@@ -1382,9 +1420,9 @@ mod tests {
     #[tokio::test]
     async fn caps_command_output() {
         let data = format!("{}{}{}", "a".repeat(10), "b".repeat(170), "c".repeat(20));
-        let s = read_capped(data.as_bytes(), 10, 20).await.unwrap();
+        let s = read_capped(data.as_bytes(), 10, 20, None).await.unwrap();
         assert_eq!(s, format!("{}\n[hbench: 170 bytes of output dropped]\n{}", "a".repeat(10), "c".repeat(20)));
-        assert_eq!(read_capped(&b"short"[..], 10, 20).await.unwrap(), "short");
+        assert_eq!(read_capped(&b"short"[..], 10, 20, None).await.unwrap(), "short");
     }
 
     #[test]
