@@ -2,10 +2,11 @@ name: Release
 
 # Bump `version` in Cargo.toml, commit, then: git tag vX.Y.Z && git push origin vX.Y.Z
 #
-# The build jobs run the tests and build every binary on GitHub-hosted runners, with no
-# secrets and a read-only token, and attest each archive's build provenance. Only the
-# publish job can write: it creates this repo's release, which
-# `curl -fsSL https://nodeq.tech/install.sh | sh` downloads from.
+# Each build job builds one binary on a GitHub-hosted runner, with no secrets and a read-only
+# token, and attests its archive's build provenance. The ci job waits for ci.yml's run on the
+# tagged commit, so only a commit that passed CI on master is released. Only the publish job
+# can write: it creates this repo's release, which `curl -fsSL https://nodeq.tech/install.sh | sh`
+# downloads from.
 on:
   push:
     tags: ["v[0-9]+.[0-9]+.[0-9]+*"]
@@ -17,24 +18,48 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  ci:
+    name: CI passed on this commit
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+    steps:
+      - name: Wait for ci.yml on the tagged commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          while :; do
+            run=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&event=push&per_page=1" \
+              --jq '.workflow_runs[0] | select(.) | "\(.status) \(.conclusion) \(.html_url)"') || run="unreadable"
+            case "$run" in
+              "completed success "*) echo "CI passed: ${run##* }"; exit 0 ;;
+              completed*) echo "::error::CI did not pass on $GITHUB_SHA: $run"; exit 1 ;;
+              "") [ "$SECONDS" -lt 120 ] || { echo "::error::ci.yml never ran on a push of $GITHUB_SHA: tag a commit on master"; exit 1; } ;;
+            esac
+            [ "$SECONDS" -lt 2700 ] || { echo "::error::CI on $GITHUB_SHA still not finished after 45 minutes: $run"; exit 1; }
+            sleep 30
+          done
+
   build:
-    name: Build (${{ matrix.os }})
+    name: Build (${{ matrix.target }})
     strategy:
       matrix:
         include:
-          - os: Linux
+          - target: x86_64-unknown-linux-musl
             runner: ubuntu-24.04
-            targets: x86_64-unknown-linux-musl aarch64-unknown-linux-musl
-          - os: macOS
+          - target: aarch64-unknown-linux-musl
+            runner: ubuntu-24.04
+          - target: aarch64-apple-darwin
             runner: macos-15
-            targets: aarch64-apple-darwin x86_64-apple-darwin
+          - target: x86_64-apple-darwin
+            runner: macos-15
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
       id-token: write
       attestations: write
     env:
-      TARGETS: ${{ matrix.targets }}
+      TARGET: ${{ matrix.target }}
       # ring (TLS for OCI registries) is the one dependency with C code: clang compiles it for both
       # musl arches and the toolchain's llvm-ar archives it, and rust-lld links static binaries,
       # without musl-tools or a cross gcc.
@@ -59,43 +84,36 @@ jobs:
         uses: ./.github/actions/setup-rust
         with:
           components: llvm-tools
+          targets: ${{ matrix.target }}
       - name: Put the toolchain's llvm-ar on PATH
         run: echo "$(rustc --print sysroot)/lib/rustlib/$(rustc --print host-tuple)/bin" >> "$GITHUB_PATH"
-      - name: Add the build targets
-        run: for t in $TARGETS; do rustup target add "$t"; done
-      - name: Run unit tests
-        run: cargo test --locked
-      - name: Build release binaries
+      - name: Build the release binary
         run: |
           # Keep the runner's home (checkout, cargo registry, toolchain) out of panic and debug paths.
           export RUSTFLAGS="--remap-path-prefix=$HOME=/build --remap-path-prefix=$PWD=/build/hbench"
-          for target in $TARGETS; do
-            cargo build --release --locked --target "$target"
-          done
-      - name: Package release archives
+          cargo build --release --locked --target "$TARGET"
+      - name: Package the release archive
         run: |
           rm -rf dist && mkdir dist
-          for target in $TARGETS; do
-            name="hbench-$GITHUB_REF_NAME-$target"
-            mkdir "dist/$name"
-            cp "target/$target/release/hbench" README.md LICENSE "dist/$name/"
-            tar -C dist -czf "dist/$name.tar.gz" "$name"
-          done
+          name="hbench-$GITHUB_REF_NAME-$TARGET"
+          mkdir "dist/$name"
+          cp "target/$TARGET/release/hbench" README.md LICENSE "dist/$name/"
+          tar -C dist -czf "dist/$name.tar.gz" "$name"
       - name: Attest build provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: dist/*.tar.gz
-      - name: Upload archives
+      - name: Upload the archive
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: dist-${{ matrix.os }}
+          name: dist-${{ matrix.target }}
           path: dist/*.tar.gz
           if-no-files-found: error
           retention-days: 7
 
   publish:
     name: Publish
-    needs: build
+    needs: [ci, build]
     runs-on: ubuntu-24.04
     # Only v* tags can deploy to this environment, so no other ref gets this job's write token.
     environment: release

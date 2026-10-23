@@ -292,7 +292,7 @@ impl Trial {
         }
         std::fs::write(dir.join("config.json"), serde_json::to_string_pretty(&cfg.config_json())?)?;
         std::fs::write(dir.join("lock.json"), serde_json::to_string_pretty(&trial_lock(&cfg))?)?;
-        let log = TrialLog::create(&dir.join("trial.log"))?;
+        let log = TrialLog::create(&dir.join("trial.log"), &cfg.trial_name)?;
         let result = TrialResult::new(cfg.clone(), &task, &dir);
         Ok(Trial {
             cfg,
@@ -1306,6 +1306,9 @@ impl Trial {
         }
         venv.extend(resolve_env_vars(&self.cfg.verifier.env)?);
         env.exec(&format!("({script}) > /logs/verifier/test-stdout.txt 2>&1"), user, &venv, None).await?;
+        if crate::observe::enabled() {
+            let _ = env.exec_root("tail -n 200 /logs/verifier/test-stdout.txt", Some(Duration::from_secs(60))).await;
+        }
         let vdir = self.dir.join("verifier");
         env.download_dir(MAIN, "/logs/verifier", &vdir).await.map_err(|e| {
             kind_err(ErrorKind::DownloadVerifierDir, format!("Failed to download verifier directory from environment: {e:#}"))
