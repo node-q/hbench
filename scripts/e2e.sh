@@ -5,7 +5,10 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 cargo build -q
 BIN=target/debug/hbench
-JOBS=$(mktemp -d)
+# E2E_JOBS_DIR keeps the job dirs somewhere known (CI uploads it when a run fails).
+JOBS=${E2E_JOBS_DIR:-$(mktemp -d)}
+mkdir -p "$JOBS"
+trap 'rc=$?; [ $rc = 0 ] || echo "e2e failed (exit $rc); job dirs: $JOBS" >&2' EXIT
 
 $BIN run -p tests/fixtures -a oracle -n 4 -k 2 --jobs-dir "$JOBS" --job-name fixtures
 
@@ -23,20 +26,31 @@ expect = {
     "no-network":      ({"reward": 1.0}, None),
     "compose-sidecar": ({"reward": 1.0}, None),
     "prebuilt":        ({"reward": 1.0}, None),
+    "planted-reward":  ({"reward": 1.0}, None),
 }
-seen = {}
-for r in job.glob("*/result.json"):
+def explain(trial):
+    """What a failed trial left behind: its exception, the end of its log, and the verifier's output."""
+    out = []
+    for name in ("exception.txt", "trial.log", "verifier/test-stdout.txt"):
+        p = trial / name
+        if p.exists():
+            out.append(f"--- {name} (tail)\n" + "\n".join(p.read_text(errors="replace").splitlines()[-30:]))
+    return "\n".join(out)
+seen, bad = {}, []
+for r in sorted(job.glob("*/result.json")):
     d = json.loads(r.read_text())
     task = d["task_name"]
     rewards = (d["verifier_result"] or {}).get("rewards")
     exc = (d["exception_info"] or {}).get("exception_type")
     want_r, want_e = expect[task]
-    assert (rewards, exc) == (want_r, want_e), f"{task}: got {rewards} {exc}, want {want_r} {want_e}"
+    if (rewards, exc) != (want_r, want_e):
+        bad.append(f"{r.parent.name}: got {rewards} {exc}, want {want_r} {want_e}\n{explain(r.parent)}")
     seen[task] = seen.get(task, 0) + 1
+assert not bad, "\n\n".join(bad)
 assert seen == {t: 2 for t in expect}, seen
 res = json.loads((job / "result.json").read_text())
 s = res["stats"]
-assert res["finished_at"] and s["n_completed_trials"] == 20 and s["n_errored_trials"] == 8, s
+assert res["finished_at"] and s["n_completed_trials"] == 22 and s["n_errored_trials"] == 8, s
 ev = s["evals"]["oracle__fixtures"]
 assert ev["exception_stats"].keys() == {"AgentTimeoutError", "RewardFileNotFoundError"}, ev
 print("fixture assertions OK")
@@ -60,9 +74,14 @@ EOF
 # Docker Desktop included; E2E_REQUIRE_NFT insists on it) and under the proxy-only fallback.
 if docker info --format '{{.OperatingSystem}}' | grep -q 'Docker Desktop'; then model_host=host.docker.internal; else model_host=172.17.0.1; fi
 model_port=18080
-python3 -m http.server "$model_port" --bind 0.0.0.0 --directory "$JOBS" >/dev/null 2>&1 &
+# An empty dir: the stand-in must not serve the job dirs to whoever can reach the port.
+mkdir -p "$JOBS/model-standin"
+python3 -m http.server "$model_port" --bind 0.0.0.0 --directory "$JOBS/model-standin" >"$JOBS/model-standin.log" 2>&1 &
 model_pid=$!
-trap 'kill $model_pid 2>/dev/null' EXIT
+trap 'rc=$?; kill $model_pid 2>/dev/null; [ $rc = 0 ] || echo "e2e failed (exit $rc); job dirs: $JOBS" >&2' EXIT
+# A stand-in that never came up would read as blocked, not as a pass, but fail here with the reason.
+for _ in $(seq 50); do curl -fs -o /dev/null "http://127.0.0.1:$model_port/" && break; sleep 0.1; done
+curl -fs -o /dev/null "http://127.0.0.1:$model_port/" || { cat "$JOBS/model-standin.log"; exit 1; }
 default_method=${E2E_REQUIRE_NFT:+nft+proxy}
 runs="false true true:proxy"
 for run in $runs; do

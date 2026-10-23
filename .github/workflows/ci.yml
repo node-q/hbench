@@ -174,9 +174,19 @@ jobs:
       - name: Set up Rust toolchain
         uses: ./.github/actions/setup-rust
       - name: Run the e2e suite
+        # Its own timeout, below the job's, so a hang still leaves time to upload the job dirs.
+        timeout-minutes: 30
         run: scripts/e2e.sh
         env:
           E2E_REQUIRE_NFT: "1"
+          E2E_JOBS_DIR: ${{ runner.temp }}/e2e-jobs
+      - name: Upload the e2e job dirs
+        if: failure() || cancelled()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: e2e-jobs
+          path: ${{ runner.temp }}/e2e-jobs
+          retention-days: 7
 
   hbench-action-smoke-test:
     name: hbench-action smoke test

@@ -1,7 +1,8 @@
 #!/bin/bash
 # Run under an allowlist of pypi.org, *.python.org and the model host ($MODEL_PROBE, host:port).
 # Bash only (the image has no curl). A bare TCP connect can succeed under the egress proxy;
-# only a real HTTP exchange proves reachability.
+# only a real HTTP answer proves reachability. The proxy answers 403 for a denied host and 5xx when
+# it can't reach an allowed one, so only what a live server sends (2xx, 3xx, 404) counts.
 probe() {
   local host=$1 port=$2 via_host=$1 via_port=$2 target=/ status
   if [ -n "${http_proxy:-}" ]; then
@@ -10,7 +11,7 @@ probe() {
     via_host=${hp%:*} via_port=${hp##*:} target="http://$host:$port/"
   fi
   status=$(timeout 8 bash -c "exec 3<>/dev/tcp/$via_host/$via_port; printf 'GET $target HTTP/1.0\r\nHost: $host\r\n\r\n' >&3; head -n1 <&3" 2>/dev/null | awk '{print $2}')
-  case "$status" in '' | 403) echo "$host blocked" ;; *) echo "$host reachable" ;; esac
+  case "$status" in 2?? | 3?? | 404) echo "$host reachable" ;; *) echo "$host blocked" ;; esac
 }
 # A DNS query over TCP straight to 1.1.1.1, past any proxy: no answer means it was blocked.
 dns() {
