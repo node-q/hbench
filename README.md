@@ -116,5 +116,7 @@ Apache-2.0. See [LICENSE](LICENSE).
 hbench is built and maintained by [node-q](https://nodeq.tech). See the
 [contributors graph](https://github.com/node-q/hbench/graphs/contributors) for everyone who has contributed.
 
-Report bugs and request features in [GitHub issues](https://github.com/node-q/hbench/issues). The full reference is
-in [docs/REFERENCE.md](docs/REFERENCE.md); to add an agent, see [docs/ADDING_AN_AGENT.md](docs/ADDING_AN_AGENT.md).
+Report bugs and request features in [GitHub issues](https://github.com/node-q/hbench/issues). Ask questions in
+[#support on Discord](https://discord.com/channels/1562896153710690495/1563027997995442176), and follow new releases in [#announcements](https://discord.com/channels/1562896153710690495/1563071156527833210).
+The full reference is in [docs/REFERENCE.md](docs/REFERENCE.md); to add an agent, see
+[docs/ADDING_AN_AGENT.md](docs/ADDING_AN_AGENT.md).
