@@ -97,7 +97,7 @@ Useful options: `-l 5` runs only 5 tasks, `-k 3` runs each task 3 times, `-n 4` 
 | Agent | What it runs | Example model (`-m`) | Key |
 |---|---|---|---|
 | `claude-code` | Claude Code | `anthropic/claude-opus-5-5` | `ANTHROPIC_API_KEY` |
-| `codex` | OpenAI Codex CLI | `openai/gpt-5` | `OPENAI_API_KEY` |
+| `codex` | OpenAI Codex CLI | `openai/gpt-6.1-sol` | `OPENAI_API_KEY` |
 | `gemini-cli` | Google Gemini CLI | `google/gemini-3-pro` | `GEMINI_API_KEY` |
 | `deepseek-harness` | DeepSeek's harness ([dsh](https://github.com/deepseek-ai/deepseek-harness)) | `deepseek/deepseek-v4-flash` | `DEEPSEEK_API_KEY` |
 | `cursor-cli` | Cursor CLI | `<provider>/<model>` | `CURSOR_API_KEY` |
