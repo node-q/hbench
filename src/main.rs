@@ -53,7 +53,7 @@ struct Cli {
 enum Cmd {
     /// Run a job (alias of `jobs start`).
     Run(Box<RunArgs>),
-    /// Jobs: start, resume, summary, verify, regrade.
+    /// Jobs: start, resume, summary, verify, regrade, upload.
     Jobs {
         #[command(subcommand)]
         cmd: JobsCmd,
