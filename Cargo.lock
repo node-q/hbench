@@ -656,6 +656,7 @@ dependencies = [
  "oci-client",
  "oci-spec",
  "regex",
+ "reqwest",
  "rustls",
  "serde",
  "serde_ignored",

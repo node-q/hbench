@@ -13,6 +13,7 @@ mod fmt;
 mod fsutil;
 mod integrity;
 mod job;
+mod job_upload;
 mod manifest;
 mod metrics;
 mod migrate;
@@ -357,6 +358,25 @@ enum JobsCmd {
         /// Job dir (same as the positional argument).
         #[arg(short = 'p', long = "job-path")]
         job_path: Option<PathBuf>,
+    },
+    /// Send a finished job to a server that takes one: its folder as a gzipped tar in a POST, after checking it
+    /// against its manifest.json. Prints the server's answer; exit 1 if it refused the job.
+    Upload {
+        /// Job dir.
+        #[arg(required_unless_present = "job_path", conflicts_with = "job_path")]
+        path: Option<PathBuf>,
+        /// Job dir (same as the positional argument).
+        #[arg(short = 'p', long = "job-path")]
+        job_path: Option<PathBuf>,
+        /// Where to POST the job.
+        #[arg(long)]
+        url: String,
+        /// Environment variable holding a token, sent as `Authorization: Bearer <token>`.
+        #[arg(long, value_name = "VAR")]
+        token_env: Option<String>,
+        /// Another request header, `Name: value` (repeatable).
+        #[arg(short = 'H', long = "header", value_name = "HEADER")]
+        headers: Vec<String>,
     },
     /// Re-run (separate) verification against a finished job's recorded outputs.
     Regrade {
@@ -1312,6 +1332,14 @@ async fn run() -> Result<ExitCode> {
             } else {
                 job::print_summary(&serde_json::from_str(&s).with_context(|| format!("parsing {}", p.display()))?, &path);
             }
+            Ok(ExitCode::SUCCESS)
+        }
+        Cmd::Jobs { cmd: JobsCmd::Upload { path, job_path, url, token_env, headers } } => {
+            let job = path.or(job_path).context("pass a job dir")?;
+            let upload = job_upload::Upload { job: job.clone(), url: url.clone(), token_env, headers };
+            let done = job_upload::run(&upload).await?;
+            eprintln!("uploaded {} ({:.1} MB) to {url}", job.display(), done.bytes as f64 / 1e6);
+            println!("{}", done.response);
             Ok(ExitCode::SUCCESS)
         }
         Cmd::Jobs { cmd: JobsCmd::Verify { path, job_path } } => {
