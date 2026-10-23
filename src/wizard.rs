@@ -10,8 +10,8 @@ use dialoguer::theme::ColorfulTheme;
 use dialoguer::{Confirm, Input, MultiSelect, Select};
 use std::path::{Path, PathBuf};
 
-/// Same logo as the README.
-const LOGO: &str = "\
+/// Same logo as the README; also above `hbench`'s top-level help.
+pub const LOGO: &str = "\
 ██╗  ██╗██████╗ ███████╗███╗   ██╗ ██████╗██╗  ██╗
 ██║  ██║██╔══██╗██╔════╝████╗  ██║██╔════╝██║  ██║
 ███████║██████╔╝█████╗  ██╔██╗ ██║██║     ███████║
