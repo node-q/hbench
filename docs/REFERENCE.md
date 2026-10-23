@@ -67,7 +67,7 @@ The most used ones:
 |---|---|---|---|
 | `claude-code` | Anthropic's Claude Code; an API key or a subscription token (`claude setup-token`) | `anthropic/claude-opus-5-5` | `reasoning_effort`, `max_turns`, `max_budget_usd` |
 | `codex` | OpenAI's Codex CLI | `openai/gpt-6.1-sol` | `reasoning_effort`, `web_search` |
-| `gemini-cli` | Google's Gemini CLI | `google/gemini-3-pro` | `reasoning_effort`, `sandbox` |
+| `gemini-cli` | Google's Gemini CLI | `google/gemini-3.1-pro-preview` | `reasoning_effort`, `sandbox` |
 | `opencode` | opencode, with any provider's model | `<provider>/<model>` | `variant` |
 | `terminus-2` | A minimal tmux-based agent, with any provider's model | `<provider>/<model>` | `max_turns`, `temperature` |
 | `deepseek-harness` | DeepSeek's own harness ([`dsh`](https://github.com/deepseek-ai/deepseek-harness)) | `deepseek/deepseek-v4-flash` | `reasoning_effort` |

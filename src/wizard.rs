@@ -23,7 +23,7 @@ pub const LOGO: &str = "\
 const TOP_AGENTS: &[(&str, &str, Option<&str>)] = &[
     ("claude-code", "Claude Code · Anthropic", Some("anthropic/claude-opus-5-5")),
     ("codex", "Codex · OpenAI", Some("openai/gpt-6.1-sol")),
-    ("gemini-cli", "Gemini CLI · Google", Some("google/gemini-3-pro")),
+    ("gemini-cli", "Gemini CLI · Google", Some("google/gemini-3.1-pro-preview")),
     ("opencode", "OpenCode · any provider", None),
     ("terminus-2", "Terminus 2 · any provider", None),
     ("deepseek-harness", "DeepSeek harness", Some("deepseek/deepseek-v4-flash")),
@@ -36,10 +36,10 @@ const TOP_AGENTS: &[(&str, &str, Option<&str>)] = &[
 const PROVIDERS: &[(&str, &[&str])] = &[
     ("anthropic", &["claude-opus-5-5", "claude-fable-5-1", "claude-sonnet-5-5", "claude-haiku-5-5"]),
     ("openai", &["gpt-6.1-sol", "gpt-6-astra", "gpt-6-luna", "gpt-5.6-sol"]),
-    ("google", &["gemini-3-pro", "gemini-3.5-flash"]),
+    ("google", &["gemini-3.1-pro-preview", "gemini-3.8-flash", "gemini-3.5-flash"]),
     ("deepseek", &["deepseek-v4-flash", "deepseek-v4-pro"]),
     ("moonshot", &["kimi-k2.6"]),
-    ("xai", &["grok-4"]),
+    ("xai", &["grok-4.7"]),
     ("mistral", &["devstral-latest", "mistral-large-latest"]),
     ("openrouter", &[]),
     ("ollama", &[]),
