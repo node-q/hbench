@@ -346,6 +346,19 @@ Agent setup is hardened so environment problems aren't charged to the agent:
 - apt installs fall back to the image's sources minus the `*-security` suites. This matters for EOL releases like
   Debian bullseye, whose security index lists packages that are gone from the mirror.
 
+### Uploading a job
+
+`hbench jobs upload` sends a finished job to a server that takes one: the job folder as a gzipped tar (the same
+archive `tar czf job.tgz -C jobs <job>` makes) in one POST. It checks the job against its `manifest.json` first and
+sends nothing if a file changed. `--token-env` names an environment variable whose value goes out as
+`Authorization: Bearer …`, so the token stays off the command line; `-H` adds any other header. It prints the
+server's answer and exits 1 with the server's reason if it refused the job.
+
+```bash
+export UPLOAD_TOKEN=…
+hbench jobs upload -p jobs/<job> --url https://example.com/api/uploads --token-env UPLOAD_TOKEN -H 'run-token: …'
+```
+
 ## Troubleshooting
 
 - **Watching a run**: `-o`/`--observe` (on `run` and `jobs resume`) prints every trial's `trial.log` lines and
