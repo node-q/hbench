@@ -11,6 +11,7 @@ x86_64/aarch64 Linux (musl) and x86_64/arm64 macOS binaries, one per job. It pub
 on the tagged commit's push to `master` (unit tests on Linux and macOS, E2E, lint, audit), waiting for that run if it
 is still going, so a tag on a commit CI never ran on, or one it failed, publishes nothing. Each `.tar.gz` gets a build provenance
 attestation; check one with `gh attestation verify hbench-v0.2.0-<target>.tar.gz -R node-q/hbench`. A separate publish
-job, in the `release` environment, creates the GitHub release with the archives, `SHA256SUMS` and generated notes. Tags
+job, in the `release` environment, creates the GitHub release with the archives, the tagged commit's `scripts/install.sh`
+(so `releases/latest/download/install.sh` is always the latest release's), `SHA256SUMS` and generated notes. Tags
 with a suffix (`v0.2.0-rc.1`) are published as prereleases, which the install script skips unless `HBENCH_VERSION`
 names one.

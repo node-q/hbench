@@ -26,7 +26,7 @@ Run coding agents (Claude Code, Codex, Gemini CLI and more) on benchmark tasks, 
 You need Docker, on Linux or macOS.
 
 ```bash
-curl -fsSL https://nodeq.tech/install.sh | sh
+curl -fsSL https://github.com/node-q/hbench/releases/latest/download/install.sh | sh
 ```
 
 Later, `hbench update` installs the newest release.

@@ -149,7 +149,7 @@ enum Cmd {
         /// Target shell.
         shell: clap_complete::Shell,
     },
-    /// Install the latest release (runs `curl -fsSL https://nodeq.tech/install.sh | sh`).
+    /// Install the latest release (runs `curl -fsSL https://github.com/node-q/hbench/releases/latest/download/install.sh | sh`).
     Update,
 }
 
