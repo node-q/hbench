@@ -8,7 +8,7 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, SystemTime};
 
 const LATEST_URL: &str = "https://api.github.com/repos/node-q/hbench/releases/latest";
-const INSTALL: &str = "curl -fsSL https://nodeq.tech/install.sh | sh";
+const INSTALL: &str = "curl -fsSL https://github.com/node-q/hbench/releases/latest/download/install.sh | sh";
 const MAX_AGE: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// Prints a notice on stderr when the cached latest release is newer than this build, then refreshes a stale cache.

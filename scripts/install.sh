@@ -1,6 +1,6 @@
 #!/bin/sh
 # Install hbench into HBENCH_INSTALL_DIR (default ~/.local/bin).
-#   curl -fsSL https://nodeq.tech/install.sh | sh
+#   curl -fsSL https://github.com/node-q/hbench/releases/latest/download/install.sh | sh
 # HBENCH_VERSION=vX.Y.Z pins a release; the default is the latest release of node-q/hbench.
 set -eu
 REPO=node-q/hbench

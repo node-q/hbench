@@ -5,8 +5,8 @@ name: Release
 # Each build job builds one binary on a GitHub-hosted runner, with no secrets and a read-only
 # token, and attests its archive's build provenance. The ci job waits for ci.yml's run on the
 # tagged commit, so only a commit that passed CI on master is released. Only the publish job
-# can write: it creates this repo's release, which `curl -fsSL https://nodeq.tech/install.sh | sh`
-# downloads from.
+# can write: it creates this repo's release, with the tagged commit's scripts/install.sh beside
+# the archives, so `curl -fsSL https://github.com/node-q/hbench/releases/latest/download/install.sh | sh` installs the latest release.
 on:
   push:
     tags: ["v[0-9]+.[0-9]+.[0-9]+*"]
@@ -126,9 +126,18 @@ jobs:
           pattern: dist-*
           merge-multiple: true
           path: dist
+      - name: Check out install.sh
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts/install.sh
+          sparse-checkout-cone-mode: false
+          path: src
+      - name: Add install.sh
+        run: cp src/scripts/install.sh dist/install.sh
       - name: Generate checksums
         working-directory: dist
-        run: sha256sum -- *.tar.gz | tee SHA256SUMS
+        run: sha256sum -- *.tar.gz install.sh | tee SHA256SUMS
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -136,4 +145,4 @@ jobs:
         run: |
           flags=(--verify-tag --title "hbench $GITHUB_REF_NAME" --generate-notes)
           [ "$PRERELEASE" = true ] && flags+=(--prerelease)
-          gh release create "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" "${flags[@]}" dist/*.tar.gz dist/SHA256SUMS
+          gh release create "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" "${flags[@]}" dist/*.tar.gz dist/install.sh dist/SHA256SUMS
