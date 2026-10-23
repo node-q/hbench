@@ -3,8 +3,8 @@
 # oracle agent and asserts each trial's outcome, then checks no containers leak.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-cargo build --release -q
-BIN=target/release/hbench
+cargo build -q
+BIN=target/debug/hbench
 JOBS=$(mktemp -d)
 
 $BIN run -p tests/fixtures -a oracle -n 4 -k 2 --jobs-dir "$JOBS" --job-name fixtures
