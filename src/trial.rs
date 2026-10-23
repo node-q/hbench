@@ -996,6 +996,11 @@ impl Trial {
         }
         if !self.cfg.verifier.disable {
             let t = TimingInfo::start();
+            if !separate {
+                // The agent could write here; a planted reward.json would outrank test.sh's reward.txt.
+                self.env().empty_dirs(&["/logs/verifier"], true).await?;
+                self.env().empty_dirs(&["/tests"], false).await?;
+            }
             let r = self.verify(None, &self.dir.join("artifacts")).await;
             self.result.verifier = Some(t.finish());
             if !separate {
