@@ -1108,18 +1108,26 @@ pub fn cancel_on_signal(trials: impl Fn() -> Vec<String> + Send + 'static) -> to
         if sigs.recv().await.is_none() {
             return;
         }
-        eprintln!("\ncancelling: tearing down containers (signal again to force quit)...");
+        eprintln!("{}cancelling: tearing down containers (signal again to force quit)...", over_status_line());
         let _ = tx.send(true);
         if sigs.recv().await.is_some() {
-            eprintln!("force quit: removing this run's compose projects (signal again to skip)...");
+            eprintln!("{}force quit: removing this run's compose projects (signal again to skip)...", over_status_line());
             tokio::select! {
                 _ = force_cleanup(trials()) => {}
                 _ = sigs.recv() => {}
             }
+            let mut stderr = std::io::stderr().lock();
+            let _ = std::io::Write::write_all(&mut stderr, over_status_line().as_bytes());
             std::process::exit(130);
         }
     });
     rx
+}
+
+/// Start of a line printed while the live status line may be on screen: it wipes that line (and an
+/// echoed `^C`) on a terminal.
+fn over_status_line() -> &'static str {
+    job::clear_line(std::io::IsTerminal::is_terminal(&std::io::stderr()))
 }
 
 /// Best effort, bounded: `docker compose down` every project named after one of `trials`.
