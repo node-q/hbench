@@ -34,7 +34,7 @@ mod wizard;
 use crate::config::{AgentConfig, DatasetConfig, JobConfig, SourceTrial, TaskRef, TrialConfig};
 use crate::task::{Artifact, Task};
 use anyhow::{Context, Result, bail};
-use clap::{Args, CommandFactory, Parser, Subcommand};
+use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -1234,7 +1234,9 @@ async fn main() -> ExitCode {
 async fn run() -> Result<ExitCode> {
     redact::register_host_env();
     let ok = |r: Result<()>| r.map(|_| ExitCode::SUCCESS);
-    let cli = Cli::parse();
+    let logo = clap::builder::styling::AnsiColor::Cyan.on_default().bold();
+    let matches = Cli::command().before_help(format!("{logo}{}{logo:#}", wizard::LOGO)).get_matches();
+    let cli = Cli::from_arg_matches(&matches).unwrap_or_else(|e| e.exit());
     if !matches!(cli.cmd, Cmd::Completions { .. } | Cmd::Update) {
         update::notify();
     }
