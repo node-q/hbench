@@ -458,8 +458,8 @@ mod tests {
             (fm.total_prompt_tokens, fm.total_completion_tokens, fm.total_cached_tokens, fm.total_steps),
             (Some(5000 + 5012), Some(105), Some(9000), Some(3))
         );
-        // LiteLLM deepseek/deepseek-v4-flash: in 1.4e-7, out 2.8e-7, cache read 2.8e-9, no cache-write price (-> 0).
-        let want = (1000.0 + 10.0) * 1.4e-7 + 9000.0 * 2.8e-9 + 105.0 * 2.8e-7;
+        // LiteLLM deepseek/deepseek-v4-flash: in 3e-7, out 1.2e-6, cache read 6e-9, cache write 0.
+        let want = (1000.0 + 10.0) * 3e-7 + 9000.0 * 6e-9 + 105.0 * 1.2e-6;
         assert!((fm.total_cost_usd.unwrap() - want).abs() < 1e-12, "{:?} vs {want}", fm.total_cost_usd);
     }
 }

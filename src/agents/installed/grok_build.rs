@@ -598,26 +598,26 @@ mod tests {
 
     #[test]
     fn litellm_estimate() {
-        // xai/grok-4-0709: in 3e-6 (6e-6 above 128k), out 1.5e-5, no cache rates; cache writes billed at input rate.
+        // xai/grok-4.7: in 2e-6 (4e-6 from 200k), out 6e-6, cache read 5e-7, no cache-write rate; cache writes billed at input rate.
         let rec = |u: Value| json!({"type": "usage", "usage": u}).to_string();
         let a = json!({"input_tokens": 1000, "output_tokens": 100, "cache_read_input_tokens": 200, "cache_creation_input_tokens": 50});
-        let b = json!({"input_tokens": 128_000});
-        let want = 1000.0 * 3e-6 + 100.0 * 1.5e-5 + 50.0 * 3e-6 + 128_000.0 * 6e-6; // second call tiers at the xAI boundary
+        let b = json!({"input_tokens": 200_000});
+        let want = 1000.0 * 2e-6 + 200.0 * 5e-7 + 100.0 * 6e-6 + 50.0 * 2e-6 + 200_000.0 * 4e-6; // second call tiers at the xAI boundary
         let end = |u: Value| json!({"type": "end", "usage": u}).to_string();
         let out = [
             rec(a.clone()),
             rec(b.clone()),
-            end(json!({"input_tokens": 129_000, "output_tokens": 100, "cache_read_input_tokens": 200, "cache_creation_input_tokens": 50})),
+            end(json!({"input_tokens": 201_000, "output_tokens": 100, "cache_read_input_tokens": 200, "cache_creation_input_tokens": 50})),
         ]
         .join("\n");
-        let c = usage_from_output(&out, Some("xai/grok-4-0709")).unwrap().cost_usd.unwrap();
+        let c = usage_from_output(&out, Some("xai/grok-4.7")).unwrap().cost_usd.unwrap();
         assert!((c - want).abs() < 1e-9, "{c} vs {want}");
         // Terminal total differs from the per-call sum (subagents): no estimate. Unpriced model: None.
         let sub = [rec(a.clone()), end(json!({"input_tokens": 5000}))].join("\n");
-        assert_eq!(usage_from_output(&sub, Some("xai/grok-4-0709")).unwrap().cost_usd, None);
+        assert_eq!(usage_from_output(&sub, Some("xai/grok-4.7")).unwrap().cost_usd, None);
         assert_eq!(usage_from_output(&rec(a.clone()), Some("xai/not-a-model")).unwrap().cost_usd, None);
         let incomplete = [rec(a), json!({"type": "end", "usage_is_incomplete": true}).to_string()].join("\n");
-        assert_eq!(usage_from_output(&incomplete, Some("xai/grok-4-0709")).unwrap().cost_usd, None);
+        assert_eq!(usage_from_output(&incomplete, Some("xai/grok-4.7")).unwrap().cost_usd, None);
     }
 
     #[test]

@@ -447,14 +447,14 @@ mod tests {
 
     #[test]
     fn litellm_cost_estimate() {
-        // moonshotai/kimi-k3 has no price-table entry: cost stays None.
-        assert_eq!(usage(&logs(Some(WIRE), Some(STREAM)), Some("moonshot/kimi-k2.6")).unwrap().cost_usd, None);
-        // moonshotai/x is priced as moonshot/x: in 6e-7, out 2.5e-6, cache read 1.5e-7.
-        let wire = WIRE.replace("moonshotai/kimi-k3", "moonshotai/kimi-k2-0905-preview");
-        let c = usage(&logs(Some(&wire), Some(STREAM)), None).unwrap().cost_usd.unwrap();
-        let want = 19745.0 * 6e-7 + 86.0 * 2.5e-6 + 126.0 * 6e-7 + 19744.0 * 1.5e-7 + 29.0 * 2.5e-6;
+        // moonshotai/not-a-model has no price-table entry: cost stays None.
+        let unpriced = WIRE.replace("moonshotai/kimi-k3", "moonshotai/not-a-model");
+        assert_eq!(usage(&logs(Some(&unpriced), Some(STREAM)), Some("moonshot/kimi-k2.6")).unwrap().cost_usd, None);
+        // moonshotai/x is priced as moonshot/x: in 3e-6, out 1.5e-5, cache read 3e-7.
+        let c = usage(&logs(Some(WIRE), Some(STREAM)), None).unwrap().cost_usd.unwrap();
+        let want = 19745.0 * 3e-6 + 86.0 * 1.5e-5 + 126.0 * 3e-6 + 19744.0 * 3e-7 + 29.0 * 1.5e-5;
         assert!((c - want).abs() < 1e-12, "{c} vs {want}");
-        assert_eq!(pricing_key("kimi-k2-0905-preview").as_deref(), Some("moonshot/kimi-k2-0905-preview"));
+        assert_eq!(pricing_key("kimi-k3").as_deref(), Some("moonshot/kimi-k3"));
         assert_eq!(pricing_key("openrouter/kimi-k2.5"), None);
     }
 

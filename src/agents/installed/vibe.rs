@@ -542,8 +542,8 @@ mod tests {
         assert!(
             agent(json!({"max_price": "2.50"}), &[("VIBE_INPUT_PRICE", "0"), ("VIBE_OUTPUT_PRICE", "0")], Some("m")).config_toml().is_err()
         );
-        // Price-table fallback (mistral/devstral-medium-2507: in 4e-7, out 2e-6 per token) makes --max-price enforceable.
-        let p = agent(json!({"max_price": "2.50"}), &[], Some("mistral/devstral-medium-2507"));
+        // Price-table fallback (mistral/devstral-medium-latest: in 4e-7, out 2e-6 per token) makes --max-price enforceable.
+        let p = agent(json!({"max_price": "2.50"}), &[], Some("mistral/devstral-medium-latest"));
         let (i, o) = p.pricing().unwrap().unwrap();
         assert!((i - 0.4).abs() < 1e-9 && (o - 2.0).abs() < 1e-9);
         assert!(p.config_toml().unwrap().contains("input_price = "));
