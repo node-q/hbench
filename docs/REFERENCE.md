@@ -344,6 +344,20 @@ Agent setup is hardened so environment problems aren't charged to the agent:
 - apt installs fall back to the image's sources minus the `*-security` suites. This matters for EOL releases like
   Debian bullseye, whose security index lists packages that are gone from the mirror.
 
+## Compatibility
+
+The releases of one results epoch (`lock.json`'s `hbench.results_epoch`, 0.2 today) are backward compatible: a newer
+one only adds. Within an epoch:
+
+- No flag of `hbench` or its subcommands, job config key or agent kwarg is removed or renamed, and each keeps its meaning.
+- The files a job writes (`config.json`, `lock.json`, `result.json`, `manifest.json`, `trials.json` and each trial's) keep
+  every field, with the same meaning.
+- A task's checksum is computed the same way, so trials of one task from different releases match, and `run --diff`
+  reuses them.
+- A trial is graded the same way, so its rewards mean the same under any release of the epoch.
+
+A release that breaks any of these starts a new results epoch, and its release notes say so.
+
 ## Troubleshooting
 
 - **Watching a run**: `-o`/`--observe` (on `run` and `jobs resume`) prints every trial's `trial.log` lines and
