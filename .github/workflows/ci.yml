@@ -180,6 +180,8 @@ jobs:
         env:
           E2E_REQUIRE_NFT: "1"
           E2E_JOBS_DIR: ${{ runner.temp }}/e2e-jobs
+          # The registry the dataset commands push to and pull from; the same pin as the OCI tests above.
+          E2E_REGISTRY_IMAGE: registry:3@sha256:ddf754342cfc8acc51a56d5d0ab6af06826461864460636d8bd5c546dab2a7b8
       - name: Upload the e2e job dirs
         if: failure() || cancelled()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
