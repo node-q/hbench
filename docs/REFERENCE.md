@@ -397,7 +397,13 @@ npm run dev                                    # hot reload; proxies /api to `hb
 - `cargo test`: unit tests for every module and agent.
 - `scripts/e2e.sh`: a fixture suite against a real docker daemon. It covers timeouts, missing rewards, reward.json,
   users/env, no-network, compose sidecars, prebuilt images, egress allowlists, and secrets (kept off command lines
-  and scrubbed from the job), and checks for leaked containers.
+  and scrubbed from the job). It then runs every other command of the CLI against the job dirs those runs left, the
+  example tasks, and inputs it makes on the spot: `jobs` (summary, verify, resume, regrade, upload to a stand-in
+  server), `trials`, `traces`, `datasets` (an OCI layout, a `registry:3` container it starts, a registry.json over a
+  local git checkout), the authoring commands, `tasks migrate` on a Terminal-Bench v1 task that is then run, `sweeps`,
+  `exec`, `analyze` and `check` with the nop agent, `tasks start-env`, `cache clean --dry`, and the viewer's API.
+  Last, it checks for leaked containers. Not covered: `hbench update` (it would install a release over the binary
+  under test) and the interactive paths (the `run` wizard, a real `trials handoff`, the `start-env` shell).
 - `scripts/install-matrix.sh`: installs every installed agent into a real container (`install_only`).
 
 CI (`.github/workflows/ci.yml`) runs on GitHub-hosted runners: build + `cargo test` on Linux and macOS, `cargo fmt
