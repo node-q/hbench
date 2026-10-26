@@ -1658,6 +1658,10 @@ impl Agent for Terminus2 {
     fn version(&self) -> Option<String> {
         Some(VERSION.into())
     }
+    /// Room for tmux's whole install budget and a retry after it.
+    fn setup_timeout_sec(&self) -> f64 {
+        900.0
+    }
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
         let mut t = self.new_session();
         t.start(cx).await?;
@@ -1671,7 +1675,7 @@ impl Agent for Terminus2 {
 
 #[cfg(test)]
 mod tests {
-    use super::tmux::MAX_COMMAND_LENGTH;
+    use super::tmux::{INSTALL_BUDGET, MAX_COMMAND_LENGTH};
     use super::*;
     use crate::agents::llm::Usage;
     use std::collections::VecDeque;
@@ -2213,6 +2217,38 @@ mod tests {
             sh.commands(),
             vec!["tmux send-keys -t test-session -- make '; tmux wait -S done' Enter", "timeout 30.0s tmux wait done"]
         );
+    }
+
+    /// An apt image without tmux, whose apt-get fails on a lock.
+    #[derive(Default)]
+    struct LockedApt(Mutex<Vec<(String, Option<Duration>)>>);
+
+    #[async_trait::async_trait]
+    impl Shell for LockedApt {
+        async fn sh(&self, cmd: &str, _root: bool, t: Option<Duration>) -> Result<ExecResult> {
+            self.0.lock().unwrap().push((cmd.to_string(), t));
+            let (code, stderr) = if cmd.starts_with("which apt-get") {
+                (0, "")
+            } else if cmd.contains("hb_apt_install") {
+                (100, "Reading package lists...\nE: Could not get lock /var/lib/apt/lists/lock. It is held by process 43 (apt-get)\n")
+            } else if cmd.contains("tmux new-session") {
+                (127, "bash: line 1: tmux: command not found\n")
+            } else {
+                (1, "")
+            };
+            Ok(ExecResult { code, stdout: String::new(), stderr: stderr.into() })
+        }
+    }
+
+    #[tokio::test]
+    async fn tmux_setup_error_quotes_the_failed_install() {
+        let sh = LockedApt::default();
+        let err = tmux().start(&sh).await.unwrap_err().to_string();
+        assert!(err.contains("(installing tmux failed: exit 100: Reading package lists...\nE: Could not get lock"), "{err}");
+        let calls = sh.0.lock().unwrap();
+        let installs: Vec<_> = calls.iter().filter(|(c, _)| c.contains("hb_apt_install")).collect();
+        assert!(installs[0].0.ends_with("hb_apt_install tmux"));
+        assert!(installs.iter().all(|(_, t)| t.is_some_and(|t| t <= INSTALL_BUDGET)));
     }
 
     #[tokio::test]
