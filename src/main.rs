@@ -726,6 +726,9 @@ struct RunArgs {
     /// Per-agent cap on concurrent agent runs.
     #[arg(long, help_heading = "Agent")]
     n_concurrent_agent: Option<usize>,
+    /// Most the agent may spend per trial, in USD (agent.max_cost_usd).
+    #[arg(long, help_heading = "Agent")]
+    max_cost_usd: Option<f64>,
     /// Skill dir uploaded to /hbench/skills (repeatable).
     #[arg(long, help_heading = "Agent")]
     skill: Vec<String>,
@@ -1008,9 +1011,13 @@ fn build_job_config(a: &RunArgs) -> Result<JobConfig> {
 }
 
 /// `-a`/`-m` replace the config's agents with one per model, based on its first agent; `--ak`, `--ae`,
-/// `--skill` and `--n-concurrent-agent` apply to every agent.
+/// `--skill`, `--n-concurrent-agent` and `--max-cost-usd` apply to every agent.
 fn apply_agent_flags(cfg: &mut JobConfig, a: &RunArgs) {
-    let has_overrides = !a.agent_kwargs.is_empty() || !a.agent_env.is_empty() || a.n_concurrent_agent.is_some() || !a.skill.is_empty();
+    let has_overrides = !a.agent_kwargs.is_empty()
+        || !a.agent_env.is_empty()
+        || a.n_concurrent_agent.is_some()
+        || a.max_cost_usd.is_some()
+        || !a.skill.is_empty();
     if a.agent.is_some() || !a.models.is_empty() || (has_overrides && cfg.agents.is_empty()) {
         let base = cfg.agents.first().cloned().unwrap_or_default();
         let base = AgentConfig { name: a.agent.clone().or(base.name), ..base };
@@ -1025,6 +1032,9 @@ fn apply_agent_flags(cfg: &mut JobConfig, a: &RunArgs) {
         c.env.extend(a.agent_env.iter().cloned());
         if a.n_concurrent_agent.is_some() {
             c.n_concurrent = a.n_concurrent_agent;
+        }
+        if a.max_cost_usd.is_some() {
+            c.max_cost_usd = a.max_cost_usd;
         }
         c.skills.extend(a.skill.iter().cloned());
     }
@@ -1863,12 +1873,12 @@ mod tests {
             let Cmd::Run(a) = Cli::parse_from(args).cmd else { panic!() };
             build_job_config(&a).unwrap()
         };
-        let c = cfg(&["--ak", "max_turns=5", "--ae", "X=1", "--skill", "/skills/s", "--n-concurrent-agent", "2"]);
+        let c = cfg(&["--ak", "max_turns=5", "--ae", "X=1", "--skill", "/skills/s", "--n-concurrent-agent", "2", "--max-cost-usd", "1.5"]);
         let agents: Vec<(&str, Option<&str>)> = c.agents.iter().map(|a| (a.name(), a.model_name.as_deref())).collect();
         assert_eq!(agents, [("claude-code", Some("anthropic/a")), ("codex", Some("openai/b"))]);
         for a in &c.agents {
             assert_eq!((&a.kwargs["max_turns"], a.env["X"].as_str(), a.n_concurrent), (&Value::from(5), "1", Some(2)));
-            assert_eq!(a.skills, ["/skills/s"]);
+            assert_eq!((a.skills.as_slice(), a.max_cost_usd), (["/skills/s".to_string()].as_slice(), Some(1.5)));
         }
         let c = cfg(&["-m", "anthropic/c", "--ak", "max_turns=5"]);
         let agents: Vec<(&str, Option<&str>)> = c.agents.iter().map(|a| (a.name(), a.model_name.as_deref())).collect();

@@ -279,6 +279,8 @@ pub struct Trial {
     agent_env: Option<BTreeMap<String, String>>,
     /// Print a stderr line as the trial enters each phase.
     pub progress: bool,
+    /// What the agent's runs have reported spending so far, in USD, summed over steps.
+    agent_cost_usd: f64,
 }
 
 impl Trial {
@@ -309,6 +311,7 @@ impl Trial {
             bridge: None,
             agent_env: None,
             progress: false,
+            agent_cost_usd: 0.0,
         })
     }
 
@@ -414,6 +417,16 @@ impl Trial {
         })
     }
 
+    /// Adds a run's reported cost to the trial's, and fails once that is over `agent.max_cost_usd`: the check after
+    /// the run, which is the only one for agents whose spend hbench cannot see while they run.
+    fn charge(&mut self, ctx: &AgentContext) -> Result<()> {
+        self.agent_cost_usd += ctx.cost_usd.unwrap_or(0.0);
+        if self.cfg.agent.max_cost_usd.is_some() && ctx.cost_usd.is_none() {
+            self.log.line("the agent reported no cost, so agent.max_cost_usd could not be checked");
+        }
+        over_cost_limit(self.agent_cost_usd, self.cfg.agent.max_cost_usd)
+    }
+
     fn record(&mut self, e: &anyhow::Error) {
         self.log.line(&format!("exception: {e:?}"));
         if self.result.exception_info.is_some() {
@@ -428,7 +441,9 @@ impl Trial {
     }
 
     fn agent_ctx(&self, user: Option<String>, step: Option<&StepConfig>) -> Result<AgentCtx<'_>> {
-        self.ctx_with(user, step, self.target_env()?, "agent")
+        let mut cx = self.ctx_with(user, step, self.target_env()?, "agent")?;
+        cx.cost_budget_usd = self.cfg.agent.max_cost_usd.map(|limit| (limit - self.agent_cost_usd).max(0.0));
+        Ok(cx)
     }
 
     fn target_env(&self) -> Result<BTreeMap<String, String>> {
@@ -445,7 +460,14 @@ impl Trial {
         overlay: BTreeMap<String, String>,
         logs: &str,
     ) -> Result<AgentCtx<'_>> {
-        Ok(AgentCtx { env: self.env(), user, overlay, logs_dir: self.dir.join(logs), step: step.map(|s| s.name.clone()) })
+        Ok(AgentCtx {
+            env: self.env(),
+            user,
+            overlay,
+            logs_dir: self.dir.join(logs),
+            step: step.map(|s| s.name.clone()),
+            cost_budget_usd: None,
+        })
     }
 
     /// Simulated-user execs see user env < bridge (target ACP) env < target env.
@@ -546,6 +568,9 @@ impl Trial {
             }
             if self.cfg.agent.load_trajectory.is_some() {
                 bail!("agent.load_trajectory cannot be combined with user_agent.");
+            }
+            if self.cfg.agent.max_cost_usd.is_some() || u.agent.max_cost_usd.is_some() {
+                bail!("max_cost_usd cannot be combined with user_agent.");
             }
             if agent.acp_command().is_none() {
                 bail!("Agent '{}' does not support the '{}' bridge.", self.cfg.agent.name(), u.bridge.kind);
@@ -975,6 +1000,7 @@ impl Trial {
         let instruction = self.instruction(None)?;
         let (mut ctx, timing, r) = self.agent_phase(&instruction, None, false).await;
         self.result.agent_execution = Some(timing);
+        let ran_clean = r.is_ok();
         let mut fatal = None;
         if let Err(e) = r {
             if error_kind(&e).is_agent_run_error() && !unstopped(&e) {
@@ -984,6 +1010,11 @@ impl Trial {
             }
         }
         self.sync_agent_output(&mut ctx).await;
+        if let Err(e) = self.charge(&ctx)
+            && ran_clean
+        {
+            self.record(&e);
+        }
         self.result.agent_result = Some(ctx);
         if let Some(e) = fatal {
             let _ = self.collect_artifacts(&self.dir.join("artifacts"), None, false).await;
@@ -1081,10 +1112,17 @@ impl Trial {
         let (mut ctx, timing, r) = self.agent_phase(&instruction, Some(step), resume).await;
         sr.agent_execution = Some(timing);
         let unverifiable = r.as_ref().err().is_some_and(unstopped);
+        let ran_clean = r.is_ok();
         if let Err(e) = r {
             sr.exception_info = Some(ExceptionInfo::from(&e));
         }
         self.sync_agent_output(&mut ctx).await;
+        if let Err(e) = self.charge(&ctx)
+            && ran_clean
+        {
+            self.log.line(&format!("step {}: {e:#}", step.name));
+            sr.exception_info = Some(ExceptionInfo::from(&e));
+        }
         sr.agent_result = Some(ctx);
         if unverifiable {
             self.log.line(&format!("step {}: the agent's processes could not be stopped; not verifying", step.name));
@@ -1127,6 +1165,10 @@ impl Trial {
             && let Err(e) = self.env().empty_dirs(&[crate::task::CONVENTION_ARTIFACTS], true).await
         {
             self.log.line(&format!("clearing /logs/artifacts failed: {e:#}"));
+        }
+        if self.cfg.agent.max_cost_usd.is_some_and(|limit| self.agent_cost_usd >= limit) {
+            self.log.line(&format!("step {} reached agent.max_cost_usd; aborting remaining steps", step.name));
+            return Ok(StepEnd::Stop);
         }
         let stop = (sr.exception_info.is_some() && sr.verifier_result.is_none())
             || (!self.cfg.verifier.disable && min_reward_failure(sr.verifier_result.as_ref(), step.min_reward.as_ref()));
@@ -1392,6 +1434,17 @@ pub fn trial_lock(c: &TrialConfig) -> Value {
     }))
 }
 
+/// `AgentCostLimitError` when what the agent spent is over its limit.
+fn over_cost_limit(spent: f64, limit: Option<f64>) -> Result<()> {
+    match limit {
+        Some(l) if spent > l => Err(kind_err(
+            ErrorKind::AgentCostLimit,
+            format!("Agent spent ${spent:.4}, over its ${l:.4} limit (agent.max_cost_usd, checked after the run)"),
+        )),
+        _ => Ok(()),
+    }
+}
+
 async fn cancellable<T>(mut cancel: watch::Receiver<bool>, fut: impl Future<Output = Result<T>>) -> Result<T> {
     tokio::select! {
         r = fut => r,
@@ -1589,6 +1642,20 @@ mod tests {
         assert_eq!(lock["prompt_template"]["digest"], sha256_prefixed(b"Fix it: {{ instruction }}"));
         assert!(trial_lock(&cfg(serde_json::json!({}))).get("prompt_template").is_none());
         assert_eq!(lock["hbench"]["version"], env!("CARGO_PKG_VERSION"));
+    }
+
+    #[test]
+    fn cost_limit_is_recorded_and_checked_after_the_run() {
+        let d = tmp("lock-cost");
+        let cfg: TrialConfig = serde_json::from_value(serde_json::json!({
+            "task": {"path": d}, "trial_name": "t", "trials_dir": d, "agent": {"name": "claude-code", "max_cost_usd": 0.5},
+        }))
+        .unwrap();
+        assert_eq!(trial_lock(&cfg)["agent"]["max_cost_usd"], 0.5);
+        assert!(over_cost_limit(0.5, Some(0.5)).is_ok() && over_cost_limit(9.0, None).is_ok());
+        let e = over_cost_limit(0.61, Some(0.5)).unwrap_err();
+        assert_eq!(error_kind(&e), ErrorKind::AgentCostLimit);
+        assert_eq!(e.to_string(), "Agent spent $0.6100, over its $0.5000 limit (agent.max_cost_usd, checked after the run)");
     }
 
     #[test]

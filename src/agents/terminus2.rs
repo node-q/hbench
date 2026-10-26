@@ -4,7 +4,7 @@
 //! trajectories) to the agent logs dir; the pane log and asciinema recording land in /logs/agent.
 
 use super::llm::{Chat, ChatClient, Llm, LlmConfig, LlmError, LlmResponse, content_text};
-use super::{Agent, AgentArgs, AgentContext, AgentCtx, ModelUsage};
+use super::{Agent, AgentArgs, AgentContext, AgentCtx, ModelUsage, check_cost_budget};
 use crate::agents::installed::{APT_INSTALL_FN, pins};
 use crate::env::{ExecResult, quote};
 use crate::fmt::{float_with_point, truthy};
@@ -867,6 +867,8 @@ pub struct Terminus2 {
     llm: Box<dyn Llm>,
     max_episodes: i64,
     session: Option<Tmux>,
+    /// The run's `AgentCtx::cost_budget_usd`, checked before each episode's model calls.
+    cost_budget_usd: Option<f64>,
     // Per-run state (reset by `reset_per_run_state`; multi-step trials reuse the instance).
     chat: Chat,
     pending_completion: bool,
@@ -918,6 +920,7 @@ impl Terminus2 {
             model_name,
             llm,
             session: None,
+            cost_budget_usd: None,
             pending_completion: false,
             api_request_times: vec![],
             n_episodes: 0,
@@ -1096,6 +1099,7 @@ impl Terminus2 {
     async fn run_agent_loop(&mut self, initial_prompt: String, orig: &str, sh: &dyn Shell, ctx: &mut AgentContext) -> Result<()> {
         let mut prompt = initial_prompt;
         for episode in 0..self.max_episodes {
+            check_cost_budget(self.totals().3, self.cost_budget_usd)?;
             self.n_episodes = episode + 1;
             if !self.tmux()?.is_alive(sh).await? {
                 return Ok(());
@@ -1665,6 +1669,7 @@ impl Agent for Terminus2 {
         Ok(())
     }
     async fn run(&mut self, instruction: &str, cx: &AgentCtx<'_>, ctx: &mut AgentContext, _resume: bool) -> Result<()> {
+        self.cost_budget_usd = cx.cost_budget_usd;
         self.run_with(instruction, cx, ctx).await
     }
 }
@@ -1926,6 +1931,21 @@ mod tests {
     fn cmd_json(keys: &str, complete: bool) -> String {
         json!({"analysis": "looking", "plan": "act", "commands": [{"keystrokes": keys, "duration": 0.01}], "task_complete": complete})
             .to_string()
+    }
+
+    #[tokio::test]
+    async fn stops_before_the_call_after_the_cost_budget_is_reached() {
+        let llm = MockLlm::new((0..5).map(|_| reply(&cmd_json("ls\n", false))).collect());
+        let (mut t, logs) = agent(json!({}), &llm);
+        t.cost_budget_usd = Some(0.015);
+        let mut ctx = AgentContext::default();
+        let e = t.run_with("Loop forever", &MockShell::default(), &mut ctx).await.unwrap_err();
+        assert_eq!(crate::env::error_kind(&e), crate::env::ErrorKind::AgentCostLimit);
+        assert_eq!(e.to_string(), "Agent stopped after spending $0.0200 of its $0.0150 budget (agent.max_cost_usd)");
+        assert_eq!(llm.prompts().len(), 2);
+        assert!((ctx.cost_usd.unwrap() - 0.02).abs() < 1e-12);
+        let traj: Value = serde_json::from_str(&std::fs::read_to_string(logs.join("trajectory.json")).unwrap()).unwrap();
+        assert!((traj["final_metrics"]["total_cost_usd"].as_f64().unwrap() - 0.02).abs() < 1e-12);
     }
 
     #[tokio::test]

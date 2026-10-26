@@ -66,6 +66,7 @@ pub async fn start_env(path: &Path, all: bool, interactive: bool, agent: Option<
                 overlay,
                 logs_dir: tmp.join("agent"),
                 step: None,
+                cost_budget_usd: None,
             };
             ag.setup(&cx).await?;
             eprintln!("agent setup complete");

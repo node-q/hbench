@@ -11,7 +11,7 @@ pub mod pricing;
 pub mod terminus2;
 
 use crate::config::AgentConfig;
-use crate::env::{DockerEnv, ExecResult};
+use crate::env::{DockerEnv, ErrorKind, ExecResult, kind_err};
 use crate::task::Task;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
@@ -66,6 +66,8 @@ pub struct AgentCtx<'a> {
     /// Host dir mirrored to /logs/agent.
     pub logs_dir: PathBuf,
     pub step: Option<String>,
+    /// What the run may still spend, in USD: `agent.max_cost_usd` less the cost of earlier steps.
+    pub cost_budget_usd: Option<f64>,
 }
 
 impl AgentCtx<'_> {
@@ -128,6 +130,18 @@ pub trait Agent: Send + Sync {
     }
     /// Fill usage from downloaded logs when run() left the context empty.
     fn collect_usage(&self, _logs_dir: &std::path::Path, _ctx: &mut AgentContext) {}
+}
+
+/// `AgentCostLimitError` once `spent` reaches `budget`. Agents that price their own model calls check it before
+/// each call, so the call that crosses the budget completes and the next one is never made.
+pub fn check_cost_budget(spent: f64, budget: Option<f64>) -> Result<()> {
+    match budget {
+        Some(b) if spent >= b => Err(kind_err(
+            ErrorKind::AgentCostLimit,
+            format!("Agent stopped after spending ${spent:.4} of its ${b:.4} budget (agent.max_cost_usd)"),
+        )),
+        _ => Ok(()),
+    }
 }
 
 /// Common per-agent inputs.
@@ -248,6 +262,15 @@ pub fn create(cfg: &AgentConfig, logs_dir: PathBuf, task: Arc<Task>, load_trajec
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cost_budget_stops_at_the_limit() {
+        assert!(check_cost_budget(5.0, None).is_ok());
+        assert!(check_cost_budget(0.99, Some(1.0)).is_ok());
+        let e = check_cost_budget(1.0, Some(1.0)).unwrap_err();
+        assert_eq!(crate::env::error_kind(&e), ErrorKind::AgentCostLimit);
+        assert_eq!(e.to_string(), "Agent stopped after spending $1.0000 of its $1.0000 budget (agent.max_cost_usd)");
+    }
 
     #[test]
     fn options_come_from_the_schema() {

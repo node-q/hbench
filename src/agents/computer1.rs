@@ -11,7 +11,7 @@
 
 use super::llm::{ChatClient, Llm, LlmConfig, LlmError, LlmResponse, add_anthropic_caching, api_err, lookup_model_info};
 use super::terminus2::{Kw, Shell, fill_template, limit_output_length, now, quote_repr};
-use super::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx, ModelUsage};
+use super::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx, ModelUsage, check_cost_budget};
 use crate::env::{ErrorKind, error_kind, quote};
 use crate::fmt::float_with_point;
 use anyhow::{Result, anyhow, bail};
@@ -1232,6 +1232,8 @@ pub struct Computer1 {
     native: Option<native::Native>,
     /// Native providers: whether any turn reported usage (the context stays unset otherwise).
     usage_seen: bool,
+    /// The run's `AgentCtx::cost_budget_usd`, checked before each turn's model calls.
+    cost_budget_usd: Option<f64>,
 }
 
 pub fn create(args: AgentArgs) -> Result<AgentBox> {
@@ -1316,6 +1318,7 @@ impl Computer1 {
             provider: "litellm".into(),
             native: None,
             usage_seen: false,
+            cost_budget_usd: None,
         }
     }
 
@@ -1601,9 +1604,9 @@ impl Computer1 {
         if sh.sh(&format!("test -f {}", quote(&self.io_path(FINAL_ANSWER))), false, Some(Duration::from_secs(10))).await?.code == 0 {
             return Ok(());
         }
-        // Native providers have no chat history to ask: write an empty answer.
-        let text =
-            if self.native.is_some() { String::new() } else { self.extract_text_fallback(sh, instruction).await.unwrap_or_default() };
+        // Native providers have no chat history to ask, and a spent budget allows no more calls: write an empty answer.
+        let ask = self.native.is_none() && check_cost_budget(self.chat.total_cost, self.cost_budget_usd).is_ok();
+        let text = if ask { self.extract_text_fallback(sh, instruction).await.unwrap_or_default() } else { String::new() };
         self.write_final_answer(sh, &text).await
     }
 
@@ -1782,6 +1785,10 @@ impl Computer1 {
         self.dump_trajectory();
         let mut prompt = self.turn(&text, &initial_ref, "(no content)");
         for episode in 0..self.opts.max_turns.unwrap_or(1_000_000) {
+            if let Err(e) = check_cost_budget(self.chat.total_cost, self.cost_budget_usd) {
+                self.early_termination_reason = Some("cost_limit_reached".into());
+                return Err(e);
+            }
             self.n_episodes = episode + 1;
             if !self.desktop()?.is_alive(sh).await {
                 self.early_termination_reason = Some("runtime_session_dead".into());
@@ -2001,6 +2008,7 @@ impl Agent for Computer1 {
         Ok(())
     }
     async fn run(&mut self, instruction: &str, cx: &AgentCtx<'_>, ctx: &mut AgentContext, _resume: bool) -> Result<()> {
+        self.cost_budget_usd = cx.cost_budget_usd;
         self.run_with(instruction, cx, ctx).await
     }
 }
@@ -2262,6 +2270,27 @@ mod tests {
             json!({"tool_call_id": "call_3_task_complete", "function_name": "mark_task_complete", "arguments": {"result": "42"}})
         );
         assert_eq!(t["extra"]["early_termination_reason"], "task_complete");
+    }
+
+    #[tokio::test]
+    async fn cost_budget_stops_the_loop_without_a_fallback_call() {
+        let llm = MockLlm::default();
+        let wait = || {
+            let mut r = reply(r#"{"action": {"type": "wait"}}"#).unwrap();
+            r.usage.as_mut().unwrap().cost_usd = 0.25;
+            Ok(r)
+        };
+        *llm.replies.lock().unwrap() = VecDeque::from(vec![wait(), wait(), wait()]);
+        let (mut c, _) = agent(json!({"enable_episode_logging": false}), &llm);
+        c.cost_budget_usd = Some(0.5);
+        let sh = MockShell::default();
+        let mut ctx = AgentContext::default();
+        let e = c.run_with("t", &sh, &mut ctx).await.unwrap_err();
+        assert_eq!(error_kind(&e), ErrorKind::AgentCostLimit);
+        assert_eq!(llm.seen.lock().unwrap().len(), 2);
+        assert_eq!(ctx.cost_usd, Some(0.5));
+        assert_eq!(ctx.metadata.as_ref().unwrap()["early_termination_reason"], "cost_limit_reached");
+        assert!(sh.log.lock().unwrap().iter().any(|c| c.ends_with("| base64 -d > /logs/agent/final_answer.txt")));
     }
 
     #[tokio::test]

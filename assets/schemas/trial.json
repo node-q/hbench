@@ -118,6 +118,19 @@
           "default": null,
           "title": "Max Timeout Sec"
         },
+        "max_cost_usd": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Most the agent may spend in a trial, in USD, as its reported cost counts it. terminus-2 and computer-1 stop before the model call after the one that reaches it; for other agents it is checked after the run. Over the limit, the trial ends with AgentCostLimitError.",
+          "title": "Max Cost Usd"
+        },
         "resume_trajectory": {
           "default": false,
           "description": "For multi-step tasks, resume the agent's native session from the previous step instead of starting a fresh conversation on each step. Requires an agent with native resume support (capabilities.resume); the trial fails fast otherwise. No effect on single-step tasks.",

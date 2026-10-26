@@ -120,6 +120,10 @@ pub struct AgentConfig {
     pub override_timeout_sec: Option<f64>,
     pub override_setup_timeout_sec: Option<f64>,
     pub max_timeout_sec: Option<f64>,
+    /// Most the agent may spend in a trial, in USD, as its reported cost counts it. Agents that price their own
+    /// model calls stop when they reach it; for the others it is checked after the run.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_cost_usd: Option<f64>,
     pub resume_trajectory: bool,
     /// Seed the agent's session from a native (.jsonl) or ATIF (.json) trajectory.
     pub load_trajectory: Option<String>,
@@ -399,6 +403,7 @@ impl Default for RetryConfig {
             exclude_exceptions: Some(
                 [
                     "AgentTimeoutError",
+                    "AgentCostLimitError",
                     "VerifierTimeoutError",
                     "RewardFileNotFoundError",
                     "RewardFileEmptyError",
@@ -682,6 +687,9 @@ impl JobConfig {
                 bail!("agent import_path is not supported; use a built-in agent name");
             }
             normalize_hosts(&a.extra_allowed_hosts)?;
+            if a.max_cost_usd.is_some_and(|c| !(c.is_finite() && c > 0.0)) {
+                bail!("agent max_cost_usd must be a positive number of US dollars");
+            }
             if let Some(n) = a.n_concurrent
                 && n > self.n_concurrent_trials
             {
@@ -706,6 +714,9 @@ impl JobConfig {
             }
             if self.agents.iter().any(|a| a.load_trajectory.is_some()) {
                 bail!("agent.load_trajectory cannot be combined with user_agent.");
+            }
+            if u.agent.max_cost_usd.is_some() || self.agents.iter().any(|a| a.max_cost_usd.is_some()) {
+                bail!("max_cost_usd cannot be combined with user_agent.");
             }
         }
         for d in &self.datasets {
@@ -1015,12 +1026,30 @@ mod tests {
     #[test]
     fn retry_policy() {
         let r = RetryConfig { max_retries: 2, ..Default::default() };
-        assert!(!r.should_retry("AgentTimeoutError") && !r.should_retry("CancelledError"));
+        assert!(!r.should_retry("AgentTimeoutError") && !r.should_retry("AgentCostLimitError") && !r.should_retry("CancelledError"));
         assert!(r.should_retry("ApiRateLimitError") && r.should_retry("RuntimeError"));
         let inc = RetryConfig { include_exceptions: Some(["ApiRateLimitError".to_string()].into()), ..Default::default() };
         assert!(inc.should_retry("ApiRateLimitError") && !inc.should_retry("RuntimeError"));
         let b = RetryConfig { wait_multiplier: 2.0, max_wait_sec: 5.0, ..Default::default() };
         assert_eq!((b.backoff_sec(0), b.backoff_sec(2), b.backoff_sec(9)), (1.0, 4.0, 5.0));
+    }
+
+    #[test]
+    fn max_cost_usd_is_positive_and_recorded() {
+        let cfg = |v: Value| -> JobConfig { strict_value(v).unwrap() };
+        let ok = cfg(serde_json::json!({"agents": [{"name": "terminus-2", "max_cost_usd": 2.5}], "tasks": [{"path": "/t/a"}]}));
+        assert!(ok.validate().is_ok());
+        assert_eq!(ok.config_json()["agents"], serde_json::json!([{"name": "terminus-2", "max_cost_usd": 2.5}]));
+        assert!(serde_json::to_value(AgentConfig::default()).unwrap().get("max_cost_usd").is_none());
+        for bad in [0.0, -1.0] {
+            let err = cfg(serde_json::json!({"agents": [{"name": "nop", "max_cost_usd": bad}]})).validate().unwrap_err();
+            assert!(err.to_string().contains("max_cost_usd must be a positive number"), "{err}");
+        }
+        let bridged = cfg(serde_json::json!({
+            "agents": [{"name": "nop", "max_cost_usd": 1.0}],
+            "user_agent": {"name": "nop", "bridge": {"kind": "acp"}},
+        }));
+        assert!(bridged.validate().unwrap_err().to_string().contains("cannot be combined with user_agent"));
     }
 
     #[test]

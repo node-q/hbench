@@ -75,6 +75,30 @@ The most used ones:
 
 `hbench agents schema <agent>` lists every option of an agent, with its type and default.
 
+### Cost limit
+
+`--max-cost-usd 2` (`agent.max_cost_usd` in a job config) caps what the agent may spend in a trial, in US dollars, as
+hbench counts its cost (`cost_usd` in `result.json`). The limit is recorded with the agent's config in the trial's
+`config.json`, `lock.json` and `result.json`. A trial over it ends with `AgentCostLimitError`, unless the run had
+already failed for another reason: as after a timeout, the verifier still grades what the agent left, and the trial is
+not retried by default. In a multi-step task the
+limit covers all steps together: each step may spend what the earlier ones left, and no step runs after the one that
+reaches it.
+
+Whether hbench can stop the agent at the limit depends on whether it sees the spend while the agent runs:
+
+- `terminus-2` and `computer-1` (with its default chat-completions provider) call the model from hbench and price
+  every call. They check the budget before each turn: the turn that reaches the limit completes, and the agent stops
+  before its next model call. A trial can therefore go over the limit by one turn's calls, a summarization included.
+- Every other agent runs its own CLI or SDK in the container, and hbench reads its cost from its logs once it exits.
+  For these agents the limit is checked after the run: the trial still ends with `AgentCostLimitError`, but the money
+  is already spent, and only the agent timeout bounds the run. Some agents have a cap of their own that does stop
+  them, such as `claude-code`'s `--ak max_budget_usd=…`.
+- A run that reports no cost (a model missing from the price table, `computer-1`'s native providers, an agent whose
+  logs give no cost) cannot be checked at all; `trial.log` says so.
+
+`max_cost_usd` cannot be combined with `user_agent`.
+
 ### Environment variables
 
 Credentials are read from the host environment or `--ae KEY=VALUE` (`agent.env` in a job config).

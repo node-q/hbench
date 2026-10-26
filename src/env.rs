@@ -58,6 +58,7 @@ error_kinds! {
     AgentSetup => "AgentSetupError",
     AgentSetupTimeout => "AgentSetupTimeoutError",
     AgentTimeout => "AgentTimeoutError",
+    AgentCostLimit => "AgentCostLimitError",
     NonZeroAgentExitCode => "NonZeroAgentExitCodeError",
     AgentAuthentication => "AgentAuthenticationError",
     AgentSafetyRefusal => "AgentSafetyRefusalError",
@@ -86,12 +87,13 @@ error_kinds! {
 }
 
 impl ErrorKind {
-    /// Agent errors that are recorded while the verifier still runs (the agent timeout, non-zero
-    /// exit and classified agent/API failure family).
+    /// Agent errors that are recorded while the verifier still runs (the agent timeout and cost limit,
+    /// non-zero exit and classified agent/API failure family).
     pub fn is_agent_run_error(&self) -> bool {
         use ErrorKind::*;
         match self {
             AgentTimeout
+            | AgentCostLimit
             | NonZeroAgentExitCode
             | AgentAuthentication
             | AgentSafetyRefusal
@@ -1465,12 +1467,13 @@ mod tests {
 
     #[test]
     fn error_kind_names_round_trip() {
-        for s in ["AgentTimeoutError", "CancelledError", "RateLimitError", "ApiUsageLimitError"] {
+        for s in ["AgentTimeoutError", "AgentCostLimitError", "CancelledError", "RateLimitError", "ApiUsageLimitError"] {
             assert_eq!(ErrorKind::from(s).as_str(), s);
         }
         assert_eq!(ErrorKind::from("AgentTimeoutError"), ErrorKind::AgentTimeout);
         assert_eq!(ErrorKind::from("ApiRateLimitError"), ErrorKind::ApiRateLimit);
         assert!(ErrorKind::ApiRateLimit.is_agent_run_error() && ErrorKind::ContextWindowExceeded.is_agent_run_error());
+        assert!(ErrorKind::AgentCostLimit.is_agent_run_error());
         assert!(!ErrorKind::Runtime.is_agent_run_error() && !ErrorKind::from("RateLimitError").is_agent_run_error());
         assert_eq!(error_kind(&anyhow!("plain")), ErrorKind::Runtime);
     }
