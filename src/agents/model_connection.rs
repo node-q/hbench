@@ -1,5 +1,6 @@
 //! Declarative model credentials and endpoint resolution.
 
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 pub struct ProviderAccess {
@@ -207,6 +208,27 @@ pub fn resolve(model: Option<&str>, spec: Spec, get: &EnvLookup) -> Resolved {
     }
 }
 
+impl Resolved {
+    /// `Some(true)` when no base URL was configured and the provider has a built-in endpoint, `Some(false)`
+    /// when one was configured, `None` when hbench knows no endpoint for the provider.
+    pub fn uses_default_endpoint(&self) -> Option<bool> {
+        if self.configured_base_url.is_some() {
+            return Some(false);
+        }
+        self.provider.as_deref().and_then(provider).and_then(|p| p.base_url).map(|_| true)
+    }
+}
+
+/// What lock.json and result.json record about where a trial's model was served: whether it was the
+/// provider's built-in endpoint, and the labels the run declared. Never a URL, host or credential.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ModelEndpoint {
+    /// `true`: the provider's built-in endpoint; `false`: a base URL override; `None`: hbench can't tell.
+    pub default: Option<bool>,
+    pub model_served_by: Option<String>,
+    pub model_quantization: Option<String>,
+}
+
 /// Rewrite provider env aliases to each provider's canonical (first) name.
 pub fn with_canonical_provider_envs(mut r: Resolved) -> Resolved {
     let Some(s) = r.provider.as_deref().and_then(provider) else { return r };
@@ -259,5 +281,20 @@ mod tests {
         assert_eq!(r.provider.as_deref(), Some("openai"));
         let r = resolve(Some("myprov/m"), pass, &getter(&[("MYPROV_BASE_URL", "http://y")]));
         assert_eq!(r.env["MYPROV_BASE_URL"], "http://y");
+    }
+
+    #[test]
+    fn default_endpoint_unless_a_base_url_is_configured() {
+        let used = |model: &str, vars: &'static [(&'static str, &'static str)]| {
+            resolve(Some(model), Spec::default(), &getter(vars)).uses_default_endpoint()
+        };
+        assert_eq!(used("openai/gpt-6.1-sol", &[("OPENAI_API_KEY", "k")]), Some(true));
+        assert_eq!(used("openai/gpt-6.1-sol", &[]), Some(true));
+        assert_eq!(used("openai/gpt-6.1-sol", &[("OPENAI_BASE_URL", "http://100.67.202.9:1234/v1")]), Some(false));
+        assert_eq!(used("openai/gpt-6.1-sol", &[("OPENAI_API_BASE", "http://h/v1")]), Some(false));
+        assert_eq!(used("openai/gpt-6.1-sol", &[("OPENAI_BASE_URL", "")]), Some(true));
+        assert_eq!(used("ollama/llama3", &[]), None);
+        assert_eq!(used("myprov/m", &[("MYPROV_BASE_URL", "http://y")]), Some(false));
+        assert_eq!(used("myprov/m", &[]), None);
     }
 }

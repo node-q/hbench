@@ -1994,6 +1994,9 @@ impl Agent for Computer1 {
     fn version(&self) -> Option<String> {
         Some(VERSION.into())
     }
+    fn uses_default_endpoint(&self) -> Option<bool> {
+        self.llm.uses_default_endpoint()
+    }
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
         let mut d = self.new_desktop();
         d.start(cx).await?;

@@ -773,7 +773,7 @@ mod tests {
             source: None,
             task_checksum: String::new(),
             config: cfg,
-            agent_info: AgentInfo { name: "oracle".into(), version: "1.0.0".into(), model_info: None },
+            agent_info: AgentInfo { name: "oracle".into(), version: "1.0.0".into(), model_info: None, model_endpoint: None },
             agent_result: None,
             verifier_result: reward
                 .map(|r| VerifierResult { rewards: Some([("reward".into(), serde_json::Number::from_f64(r).unwrap())].into()) }),

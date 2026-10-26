@@ -109,6 +109,12 @@ impl ClaudeCode {
         self.args.get_env("AWS_BEARER_TOKEN_BEDROCK").is_some() || env_flag_enabled(self.args.get_env("CLAUDE_CODE_USE_BEDROCK"))
     }
 
+    /// The `config` settings' `env` sets an endpoint (`ANTHROPIC_BASE_URL`, ...).
+    fn settings_set_endpoint(&self) -> bool {
+        let env = self.settings.as_ref().and_then(|s| s.get("env")).and_then(Value::as_object);
+        env.is_some_and(|e| e.keys().any(|k| crate::config::is_endpoint_key(k)))
+    }
+
     fn resolved_model(&self) -> Option<String> {
         let m = self.args.model_name.clone()?;
         if self.use_bedrock() {
@@ -315,6 +321,16 @@ impl Agent for ClaudeCode {
     }
     fn version(&self) -> Option<String> {
         self.version.clone()
+    }
+    /// API key and subscription OAuth both reach Anthropic's API; Bedrock and Vertex are not its endpoint.
+    fn uses_default_endpoint(&self) -> Option<bool> {
+        if self.use_bedrock() || env_flag_enabled(self.args.get_env("CLAUDE_CODE_USE_VERTEX")) {
+            return None;
+        }
+        if self.settings_set_endpoint() {
+            return Some(false);
+        }
+        connection(&self.args, SPEC).uses_default_endpoint()
     }
     fn supports_resume(&self) -> bool {
         true
@@ -557,6 +573,21 @@ mod tests {
 
     fn agent(kwargs: Value, env: &[(&str, &str)], model: Option<&str>) -> Result<ClaudeCode> {
         ClaudeCode::new(common::test_args(kwargs, env, model))
+    }
+
+    #[test]
+    fn default_endpoint() {
+        let used = |kwargs: Value, env: &[(&str, &str)]| {
+            let mut env = env.to_vec();
+            env.insert(0, ("ANTHROPIC_BASE_URL", ""));
+            agent(kwargs, &env, Some("anthropic/claude-x")).unwrap().uses_default_endpoint()
+        };
+        assert_eq!(used(json!({}), &[("ANTHROPIC_API_KEY", "sk")]), Some(true));
+        assert_eq!(used(json!({}), &[("CLAUDE_CODE_OAUTH_TOKEN", "oat"), ("CLAUDE_FORCE_OAUTH", "1")]), Some(true));
+        assert_eq!(used(json!({}), &[("ANTHROPIC_BASE_URL", "http://10.0.0.5:4000")]), Some(false));
+        assert_eq!(used(json!({"config": {"env": {"ANTHROPIC_BASE_URL": "http://gw"}}}), &[]), Some(false));
+        assert_eq!(used(json!({}), &[("CLAUDE_CODE_USE_BEDROCK", "1")]), None);
+        assert_eq!(used(json!({}), &[("CLAUDE_CODE_USE_VERTEX", "true")]), None);
     }
 
     #[test]

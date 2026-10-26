@@ -439,6 +439,17 @@ impl Agent for Codex {
     fn version(&self) -> Option<String> {
         self.version.clone()
     }
+    /// An auth.json (ChatGPT login) or a `model_provider` in `config` may route elsewhere, so neither is
+    /// taken for the OpenAI API.
+    fn uses_default_endpoint(&self) -> Option<bool> {
+        if connection(&self.args, SPEC).configured_base_url.is_some() || self.base_config.contains_key("openai_base_url") {
+            return Some(false);
+        }
+        if self.base_config.contains_key("model_provider") || !matches!(self.auth_json_path(), Ok(None)) {
+            return None;
+        }
+        Some(true)
+    }
     fn supports_resume(&self) -> bool {
         true
     }
@@ -669,6 +680,25 @@ mod tests {
 
     fn agent(kwargs: Value, env: &[(&str, &str)], model: Option<&str>) -> Result<Codex> {
         Codex::new(common::test_args(kwargs, env, model))
+    }
+
+    #[test]
+    fn default_endpoint() {
+        let used = |kwargs: Value, env: &[(&str, &str)]| {
+            let mut env = env.to_vec();
+            env.insert(0, ("OPENAI_BASE_URL", ""));
+            agent(kwargs, &env, Some("openai/gpt-6.1-sol")).unwrap().uses_default_endpoint()
+        };
+        let auth = std::env::temp_dir().join(format!("hbench-codex-auth-{}.json", uuid::Uuid::new_v4()));
+        std::fs::write(&auth, "{}").unwrap();
+        if std::env::var("CODEX_AUTH_JSON_PATH").is_err() && std::env::var("CODEX_FORCE_AUTH_JSON").is_err() {
+            assert_eq!(used(json!({}), &[("OPENAI_API_KEY", "sk")]), Some(true));
+            assert_eq!(used(json!({"config": {"model_provider": "oss"}}), &[]), None);
+        }
+        assert_eq!(used(json!({}), &[("CODEX_AUTH_JSON_PATH", auth.to_str().unwrap())]), None);
+        assert_eq!(used(json!({}), &[("OPENAI_BASE_URL", "http://100.67.202.9:1234/v1")]), Some(false));
+        assert_eq!(used(json!({"config": {"openai_base_url": "http://gw/v1"}}), &[]), Some(false));
+        std::fs::remove_file(&auth).unwrap();
     }
 
     #[test]

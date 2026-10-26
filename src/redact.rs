@@ -48,10 +48,11 @@ pub fn register(v: &str) {
 }
 
 /// Whether a variable's value is a secret, by its name: `*_KEY`, `*TOKEN`, `*SECRET*`, ... but not
-/// `GIT_AUTHOR_NAME` or `TOKENIZER`, which would scrub names and model ids everywhere.
+/// `GIT_AUTHOR_NAME` or `TOKENIZER`, which would scrub names and model ids everywhere. Model endpoints
+/// (`*_BASE_URL`, `base_url`, ...) count too: they can reveal private infrastructure.
 fn secret_name(k: &str) -> bool {
     let u = k.to_ascii_uppercase();
-    crate::config::is_sensitive_key(k) && !u.contains("AUTHOR") && !u.contains("TOKENIZER")
+    (crate::config::is_sensitive_key(k) && !u.contains("AUTHOR") && !u.contains("TOKENIZER")) || crate::config::is_endpoint_key(k)
 }
 
 /// Register the values of the sensitive keys in an env map.
@@ -244,7 +245,7 @@ mod tests {
     }
 
     #[test]
-    fn registers_only_sensitive_keys() {
+    fn registers_only_sensitive_keys_and_endpoints() {
         let _g = test_lock();
         reset();
         let env: std::collections::BTreeMap<String, String> = [
@@ -256,10 +257,12 @@ mod tests {
         .map(|(k, v)| (k.into(), v.into()))
         .collect();
         register_env(&env);
-        register_json(&serde_json::json!({"model": {"api_key": "nested-secret-123", "name": "gpt-long-name"}}));
+        register_json(
+            &serde_json::json!({"model": {"api_key": "nested-secret-123", "name": "gpt-long-name", "base_url": "http://10.9.8.7/v1"}}),
+        );
         assert_eq!(
-            text("sk-proj-abcdefgh https://api.example.com/v1 Ada Lovelace nested-secret-123 gpt-long-name"),
-            "[REDACTED] https://api.example.com/v1 Ada Lovelace [REDACTED] gpt-long-name"
+            text("sk-proj-abcdefgh https://api.example.com/v1/chat Ada Lovelace nested-secret-123 gpt-long-name http://10.9.8.7/v1"),
+            "[REDACTED] [REDACTED]/chat Ada Lovelace [REDACTED] gpt-long-name [REDACTED]"
         );
     }
 

@@ -232,6 +232,8 @@ pub struct Endpoint {
     /// Model name sent to the provider (provider prefix stripped).
     pub model: String,
     pub provider: String,
+    /// No base URL override (`api_base`, a provider env) was given: `url` is the provider's built-in one.
+    pub builtin: bool,
 }
 
 /// Default base URLs for providers `model_connection` doesn't list.
@@ -256,12 +258,9 @@ pub fn resolve_endpoint(model: &str, api_base: Option<&str>, responses: bool, ge
     let sent = model.split_once('/').map(|(_, m)| m).unwrap_or(model).to_string();
     let upper = provider.to_uppercase().replace('-', "_");
     let key = conn.api_key.clone().or_else(|| get(&format!("{upper}_API_KEY")));
-    let base = api_base
-        .map(String::from)
-        .or(conn.configured_base_url.clone())
-        .or_else(|| get(&format!("{upper}_API_BASE")))
-        .or_else(|| default_base(&provider).map(String::from))
-        .map(|b| b.trim_end_matches('/').to_string());
+    let configured = api_base.map(String::from).or(conn.configured_base_url.clone()).or_else(|| get(&format!("{upper}_API_BASE")));
+    let builtin = configured.is_none();
+    let base = configured.or_else(|| default_base(&provider).map(String::from)).map(|b| b.trim_end_matches('/').to_string());
     let mut headers: Vec<(String, String)> = vec![];
     let h = |k: &str, v: String| (k.to_string(), v);
     match provider.as_str() {
@@ -281,7 +280,7 @@ pub fn resolve_endpoint(model: &str, api_base: Option<&str>, responses: bool, ge
             } else {
                 format!("{b}/v1/messages")
             };
-            return Ok(Endpoint { api: Api::Anthropic, url, headers, model: sent, provider });
+            return Ok(Endpoint { api: Api::Anthropic, url, headers, model: sent, provider, builtin });
         }
         "amazon-bedrock" | "vertex_ai" | "sagemaker" => {
             bail!(
@@ -299,7 +298,7 @@ pub fn resolve_endpoint(model: &str, api_base: Option<&str>, responses: bool, ge
             headers.push(h("api-key", k));
         }
         let url = format!("{b}/openai/deployments/{sent}/chat/completions?api-version={ver}");
-        return Ok(Endpoint { api: Api::Chat, url, headers, model: sent, provider });
+        return Ok(Endpoint { api: Api::Chat, url, headers, model: sent, provider, builtin });
     }
     if provider == "google" && !b.contains("/openai") {
         b += "/v1beta/openai";
@@ -311,7 +310,7 @@ pub fn resolve_endpoint(model: &str, api_base: Option<&str>, responses: bool, ge
         headers.push(h("authorization", format!("Bearer {k}")));
     }
     let (api, url) = if responses { (Api::Responses, format!("{b}/responses")) } else { (Api::Chat, format!("{b}/chat/completions")) };
-    Ok(Endpoint { api, url, headers, model: sent, provider })
+    Ok(Endpoint { api, url, headers, model: sent, provider, builtin })
 }
 
 /// LLM client constructor arguments.
@@ -342,6 +341,10 @@ pub trait Llm: Send + Sync {
     ) -> Result<LlmResponse, LlmError>;
     fn context_limit(&self) -> i64;
     fn output_limit(&self) -> Option<i64>;
+    /// See [`super::Agent::uses_default_endpoint`].
+    fn uses_default_endpoint(&self) -> Option<bool> {
+        None
+    }
     fn count_tokens(&self, messages: &[Value]) -> i64 {
         approx_tokens(messages)
     }
@@ -952,6 +955,9 @@ impl Llm for ChatClient {
     fn output_limit(&self) -> Option<i64> {
         self.info.and_then(|i| i.max_output_tokens)
     }
+    fn uses_default_endpoint(&self) -> Option<bool> {
+        Some(self.ep.builtin)
+    }
     async fn complete(&self, messages: Vec<Value>, kw: &Map<String, Value>) -> Result<LlmResponse, LlmError> {
         let mut p = self.build_params(messages, kw, false);
         // Fable/Mythos think adaptively; an explicit budget is rejected.
@@ -1180,6 +1186,22 @@ mod tests {
         let e = resolve_endpoint("myprov/x", None, false, &env(&[("MYPROV_BASE_URL", "http://m"), ("MYPROV_API_KEY", "mk")])).unwrap();
         assert_eq!(e.url, "http://m/chat/completions");
         assert!(e.headers.contains(&("authorization".into(), "Bearer mk".into())));
+    }
+
+    #[test]
+    fn builtin_endpoint_unless_overridden() {
+        let builtin = |model: &str, api_base: Option<&str>, vars: &'static [(&'static str, &'static str)]| {
+            resolve_endpoint(model, api_base, false, &env(vars)).unwrap().builtin
+        };
+        assert!(builtin("openai/gpt-6.1-sol", None, &[("OPENAI_API_KEY", "k")]));
+        assert!(builtin("anthropic/claude-x", None, &[("CLAUDE_CODE_OAUTH_TOKEN", "oat")]));
+        assert!(builtin("ollama/llama3", None, &[]));
+        assert!(!builtin("openai/gpt-6.1-sol", None, &[("OPENAI_BASE_URL", "http://100.67.202.9:1234/v1")]));
+        assert!(!builtin("anthropic/claude-x", None, &[("ANTHROPIC_BASE_URL", "http://proxy:8080")]));
+        assert!(!builtin("openai/gpt-6.1-sol", Some("http://gw/v1"), &[]));
+        assert!(!builtin("myprov/x", None, &[("MYPROV_API_BASE", "http://m")]));
+        let l = llm(LlmConfig { model_name: "openai/gpt-4o".into(), ..Default::default() }, &[("OPENAI_BASE_URL", "http://h/v1")]);
+        assert_eq!(l.uses_default_endpoint(), Some(false));
     }
 
     #[test]

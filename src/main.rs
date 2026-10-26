@@ -726,6 +726,12 @@ struct RunArgs {
     /// Per-agent cap on concurrent agent runs.
     #[arg(long, help_heading = "Agent")]
     n_concurrent_agent: Option<usize>,
+    /// What served the model, recorded with each trial (e.g. lmstudio, vllm, openrouter:together).
+    #[arg(long, help_heading = "Agent")]
+    model_served_by: Option<String>,
+    /// The served model's quantization, recorded with each trial (e.g. q4_k_m, fp8).
+    #[arg(long, help_heading = "Agent")]
+    model_quantization: Option<String>,
     /// Skill dir uploaded to /hbench/skills (repeatable).
     #[arg(long, help_heading = "Agent")]
     skill: Vec<String>,
@@ -1008,9 +1014,14 @@ fn build_job_config(a: &RunArgs) -> Result<JobConfig> {
 }
 
 /// `-a`/`-m` replace the config's agents with one per model, based on its first agent; `--ak`, `--ae`,
-/// `--skill` and `--n-concurrent-agent` apply to every agent.
+/// `--skill`, `--n-concurrent-agent`, `--model-served-by` and `--model-quantization` apply to every agent.
 fn apply_agent_flags(cfg: &mut JobConfig, a: &RunArgs) {
-    let has_overrides = !a.agent_kwargs.is_empty() || !a.agent_env.is_empty() || a.n_concurrent_agent.is_some() || !a.skill.is_empty();
+    let has_overrides = !a.agent_kwargs.is_empty()
+        || !a.agent_env.is_empty()
+        || a.n_concurrent_agent.is_some()
+        || !a.skill.is_empty()
+        || a.model_served_by.is_some()
+        || a.model_quantization.is_some();
     if a.agent.is_some() || !a.models.is_empty() || (has_overrides && cfg.agents.is_empty()) {
         let base = cfg.agents.first().cloned().unwrap_or_default();
         let base = AgentConfig { name: a.agent.clone().or(base.name), ..base };
@@ -1027,6 +1038,8 @@ fn apply_agent_flags(cfg: &mut JobConfig, a: &RunArgs) {
             c.n_concurrent = a.n_concurrent_agent;
         }
         c.skills.extend(a.skill.iter().cloned());
+        c.model_served_by = a.model_served_by.clone().or(c.model_served_by.take());
+        c.model_quantization = a.model_quantization.clone().or(c.model_quantization.take());
     }
 }
 

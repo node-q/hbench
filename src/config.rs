@@ -85,12 +85,45 @@ fn is_template(v: &str) -> bool {
     v.starts_with("${") && v.ends_with('}')
 }
 
-/// Persist secrets as `${KEY}` templates (when equal to the host value) or redacted.
+/// Whether a variable or kwarg holds a model endpoint (`*_BASE_URL`, `*_API_BASE`, `*_ENDPOINT`, `*_HOST`,
+/// `base_url`), whose value can reveal private infrastructure.
+pub fn is_endpoint_key(k: &str) -> bool {
+    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let re = RE.get_or_init(|| regex::Regex::new(r"(?i)(BASE_?URL|API_BASE|ENDPOINT(_URL)?|_HOST)$").unwrap());
+    re.is_match(k) && !k.to_ascii_uppercase().contains("ALLOW")
+}
+
+/// The written form of an endpoint value: its `${KEY}` template when equal to the host value, else `[set]`.
+fn endpoint_placeholder(k: &str, v: &str) -> String {
+    if v.is_empty() || is_template(v) {
+        v.to_string()
+    } else if std::env::var(k).ok().as_deref() == Some(v) {
+        format!("${{{k}}}")
+    } else {
+        ENDPOINT_SET.into()
+    }
+}
+
+/// What a written config holds in place of an endpoint it was given.
+pub const ENDPOINT_SET: &str = "[set]";
+
+/// Refuses an endpoint that a written config withheld as `[set]`, as a resumed job would read it.
+pub fn check_endpoint_given(k: &str, v: &str) -> Result<()> {
+    if v == ENDPOINT_SET && is_endpoint_key(k) {
+        bail!("{k} was not written to the job's config (it reads [set]); pass endpoints as ${{VAR}} templates to resume a job");
+    }
+    Ok(())
+}
+
+/// Persist secrets as `${KEY}` templates (when equal to the host value) or redacted, and endpoints as
+/// [`endpoint_placeholder`]s.
 fn templatize<S: serde::Serializer>(env: &BTreeMap<String, String>, s: S) -> Result<S::Ok, S::Error> {
     let out: BTreeMap<&String, String> = env
         .iter()
         .map(|(k, v)| {
-            let v = if is_template(v) || !is_sensitive_key(k) {
+            let v = if is_endpoint_key(k) {
+                endpoint_placeholder(k, v)
+            } else if is_template(v) || !is_sensitive_key(k) {
                 v.clone()
             } else if std::env::var(k).ok().as_deref() == Some(v.as_str()) {
                 format!("${{{k}}}")
@@ -104,6 +137,28 @@ fn templatize<S: serde::Serializer>(env: &BTreeMap<String, String>, s: S) -> Res
         })
         .collect();
     out.serialize(s)
+}
+
+/// Agent kwargs as written: endpoint strings (`base_url`, `api_base`, ...) become `[set]`.
+fn mask_endpoint_kwargs<S: serde::Serializer>(kwargs: &BTreeMap<String, Value>, s: S) -> Result<S::Ok, S::Error> {
+    let out: BTreeMap<&String, Value> = kwargs
+        .iter()
+        .map(|(k, v)| match v {
+            Value::String(u) if is_endpoint_key(k) && !is_template(u) => (k, Value::String(ENDPOINT_SET.into())),
+            _ => (k, v.clone()),
+        })
+        .collect();
+    out.serialize(s)
+}
+
+/// A `model_served_by` / `model_quantization` label: 1-64 of `A-Z a-z 0-9 . _ - : +`, so no URL or
+/// credential fits in one.
+fn check_model_label(field: &str, v: &str) -> Result<()> {
+    let plain = |c: char| c.is_ascii_alphanumeric() || "._-:+".contains(c);
+    if v.is_empty() || v.len() > 64 || !v.chars().all(plain) {
+        bail!("agent {field} must be 1-64 characters of letters, digits and . _ - : + (got {} characters)", v.chars().count());
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -132,10 +187,17 @@ pub struct AgentConfig {
     pub include_logs: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub exclude_logs: Vec<String>,
+    #[serde(serialize_with = "mask_endpoint_kwargs")]
     pub kwargs: BTreeMap<String, Value>,
     #[serde(deserialize_with = "env_map", serialize_with = "templatize", skip_serializing_if = "BTreeMap::is_empty")]
     pub env: BTreeMap<String, String>,
     pub mcp_servers: Vec<McpServer>,
+    /// What served the model, as the run declares it (e.g. `lmstudio`, `vllm`, `openrouter:together`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_served_by: Option<String>,
+    /// The served model's quantization, as the run declares it (e.g. `q4_k_m`, `fp8`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_quantization: Option<String>,
 }
 
 fn ser_agent_name<S: serde::Serializer>(n: &Option<String>, s: S) -> Result<S::Ok, S::Error> {
@@ -145,6 +207,14 @@ fn ser_agent_name<S: serde::Serializer>(n: &Option<String>, s: S) -> Result<S::O
 impl AgentConfig {
     pub fn name(&self) -> &str {
         self.name.as_deref().unwrap_or("oracle")
+    }
+    pub fn check_model_labels(&self) -> Result<()> {
+        for (field, v) in [("model_served_by", &self.model_served_by), ("model_quantization", &self.model_quantization)] {
+            if let Some(v) = v {
+                check_model_label(field, v)?;
+            }
+        }
+        Ok(())
     }
     /// Agents sharing a key share an n_concurrent pool.
     pub fn concurrency_key(&self) -> String {
@@ -682,6 +752,7 @@ impl JobConfig {
                 bail!("agent import_path is not supported; use a built-in agent name");
             }
             normalize_hosts(&a.extra_allowed_hosts)?;
+            a.check_model_labels()?;
             if let Some(n) = a.n_concurrent
                 && n > self.n_concurrent_trials
             {
@@ -975,6 +1046,59 @@ mod tests {
         assert_eq!(v["env"]["OTHER_TOKEN"], "abcd****jkl");
         assert_eq!(v["env"]["MAX_TOKENS"], "100");
         assert_eq!(v["env"]["REGION"], "us");
+    }
+
+    #[test]
+    fn endpoints_are_written_as_set_or_templated() {
+        // SAFETY: unique var name.
+        unsafe { std::env::set_var("HBENCH_T_BASE_URL", "http://10.1.2.3:8000/v1") };
+        let a = AgentConfig {
+            env: [
+                ("HBENCH_T_BASE_URL".into(), "http://10.1.2.3:8000/v1".into()),
+                ("OPENAI_BASE_URL".into(), "http://user:pass@100.67.202.9:1234/v1".into()),
+                ("OLLAMA_HOST".into(), "gpu-box.corp.example:11434".into()),
+                ("AZURE_OPENAI_ENDPOINT".into(), "${AZ_ENDPOINT}".into()),
+                ("HBENCH_ALLOW_INSECURE_MODEL_BASE_URL".into(), "true".into()),
+            ]
+            .into(),
+            kwargs: serde_json::from_value(serde_json::json!({"api_base": "http://10.0.0.7/v1", "base_url": "${GW}", "max_turns": 3}))
+                .unwrap(),
+            ..Default::default()
+        };
+        let v = serde_json::to_value(&a).unwrap();
+        assert_eq!(v["env"]["HBENCH_T_BASE_URL"], "${HBENCH_T_BASE_URL}");
+        assert_eq!(v["env"]["OPENAI_BASE_URL"], "[set]");
+        assert_eq!(v["env"]["OLLAMA_HOST"], "[set]");
+        assert_eq!(v["env"]["AZURE_OPENAI_ENDPOINT"], "${AZ_ENDPOINT}");
+        assert_eq!(v["env"]["HBENCH_ALLOW_INSECURE_MODEL_BASE_URL"], "true");
+        assert_eq!(v["kwargs"], serde_json::json!({"api_base": "[set]", "base_url": "${GW}", "max_turns": 3}));
+        assert!(check_endpoint_given("OPENAI_BASE_URL", "[set]").unwrap_err().to_string().contains("${VAR}"));
+        assert!(check_endpoint_given("OPENAI_BASE_URL", "http://h").is_ok() && check_endpoint_given("NOTE", "[set]").is_ok());
+        for k in ["openrouter_base_url", "LANGSMITH_ENDPOINT", "DATABRICKS_HOST", "OPENAI_API_BASE"] {
+            assert!(is_endpoint_key(k), "{k}");
+        }
+        for k in ["EGRESS_CONTROL_INITIAL_ALLOWED_HOSTS", "HOSTNAME", "MODEL"] {
+            assert!(!is_endpoint_key(k), "{k}");
+        }
+    }
+
+    #[test]
+    fn model_labels_are_short_plain_strings() {
+        let labels = |served: &str, quant: &str| AgentConfig {
+            model_served_by: Some(served.into()),
+            model_quantization: Some(quant.into()),
+            ..Default::default()
+        };
+        assert!(labels("lmstudio", "q4_k_m").check_model_labels().is_ok());
+        assert!(labels("openrouter:together", "fp8").check_model_labels().is_ok());
+        for bad in ["", "http://10.0.0.1/v1", "user@host", "lm studio", "a?key=x", &"x".repeat(65), "naïve"] {
+            let e = labels(bad, "fp8").check_model_labels().unwrap_err().to_string();
+            assert!(e.contains("model_served_by") && (bad.is_empty() || !e.contains(bad)), "{bad}: {e}");
+        }
+        assert!(labels("vllm", "q4/k").check_model_labels().unwrap_err().to_string().contains("model_quantization"));
+        let j: Result<JobConfig> =
+            strict_value(serde_json::json!({"agents": [{"name": "terminus-2", "model_served_by": "vllm", "model_quantization": "fp8"}]}));
+        assert_eq!(j.unwrap().agents[0].model_served_by.as_deref(), Some("vllm"));
     }
 
     #[test]

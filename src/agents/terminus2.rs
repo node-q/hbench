@@ -1658,6 +1658,9 @@ impl Agent for Terminus2 {
     fn version(&self) -> Option<String> {
         Some(VERSION.into())
     }
+    fn uses_default_endpoint(&self) -> Option<bool> {
+        self.llm.uses_default_endpoint()
+    }
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
         let mut t = self.new_session();
         t.start(cx).await?;
