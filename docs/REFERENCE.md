@@ -94,6 +94,15 @@ With a ChatGPT login (`CODEX_AUTH_JSON_PATH`, `CODEX_FORCE_AUTH_JSON`), codex ta
 Other hbench variables: `DOCKER_CONTEXT`/`DOCKER_HOST` (which daemon), `HBENCH_EGRESS_METHOD=proxy` (see below).
 `HBENCH_NO_UPDATE_CHECK=1` stops the daily check for a newer release, which suggests `hbench update` (also off when `CI` is set or stderr is not a
 terminal); hbench reads the last result from `~/.cache/hbench/latest-release.json` and refreshes it in the background.
+While tasks download, a progress line on stderr counts tasks and bytes and ends as a summary:
+
+```
+Downloading terminal-bench@2.0.1  █████████░░░░░░░░░░░░░░░  37/89 tasks  412 MB/1.1 GB
+✔ Downloaded terminal-bench@2.0.1 · 89 task(s) · 1.1 GB
+```
+
+`HBENCH_NO_PROGRESS=1` turns it off, as `--quiet` and `--observe` do for `hbench run`. It is also off when `CI` is set
+or stderr is not a terminal; hbench then prints one `downloading 89 task(s) from <reference>` line instead.
 
 ## Task format
 
@@ -316,6 +325,12 @@ jobs/<job>/<task>__<id>/{config.json, lock.json, result.json, trial.log, excepti
                          agent/, verifier/, artifacts/{manifest.json, logs/artifacts/...}, steps/<name>/...}
 ```
 
+`agent/trajectory.json` is the trial's trajectory in ATIF. `claude-code`, `codex` and `deepseek-harness` convert their
+native session logs into it; `terminus-2`, `computer-1`, `openhands-sdk`, `antigravity-sdk` and `nemo-agent` write it
+themselves. In a converted trajectory each agent step is one model call and its metrics are that call's alone:
+`prompt_tokens` is the whole prompt, cached and cache-written tokens included, and `cached_tokens` the cached part of
+it. A step whose call the native log reports no usage for has no metrics.
+
 `trials.json` is written only for jobs not planned from their config (`jobs regrade`, `run --diff`), so they can be
 resumed. The job's `result.json` has per-eval metrics (mean/sum/min/max/uv-script), pass@k, reward/exception stats, tokens,
 and cost. Failed trials are retried by error type (`--max-retries`, include/exclude).
@@ -326,11 +341,40 @@ the version. `manifest.json`, written last, holds the SHA-256 of the job's confi
 file its trials wrote; `hbench jobs verify -p jobs/<job>` reports any file changed, removed or added since. It shows
 the files are the ones this build wrote, not that the run was real: anyone can rebuild hbench.
 
+Each trial's `lock.json` and `result.json` (`agent_info`) record which kind of service answered the model's
+requests, never where it was:
+
+```json
+"model_endpoint": {"backend": "custom", "model_served_by": "lmstudio", "model_quantization": "q4_k_m"}
+```
+
+- `backend` is one of these values:
+  - `provider`: the provider's own API at its built-in endpoint. This includes Claude Code's subscription
+    OAuth.
+  - `bedrock` or `vertex`: Claude Code with `AWS_BEARER_TOKEN_BEDROCK`, `CLAUDE_CODE_USE_BEDROCK` or
+    `CLAUDE_CODE_USE_VERTEX`.
+  - `custom`: a base URL override was set, through a provider env such as `OPENAI_BASE_URL`, a kwarg such as
+    `api_base`, or the agent's own config (Claude Code settings' `env`, Codex `openai_base_url`).
+  - `null`: hbench can't tell. That covers Codex with an `auth.json` login or a `model_provider` in its config,
+    agents that forward the environment to a CLI that reads its own config, and agents that don't declare their
+    model access yet. `terminus-2`, `computer-1` (litellm provider), `claude-code` and `codex` record a
+    backend. Other agents record `null`.
+- `model_served_by` and `model_quantization` are what the run declares, with `agent.model_served_by` /
+  `agent.model_quantization` in a job config or `--model-served-by` / `--model-quantization`. Each is 1-64
+  letters, digits and `. _ - : +`, recorded as given. They are `null` when not declared.
+- No URL, host, IP address, port, env value or credential is recorded, not even hashed. Oracle and `nop` record
+  no `model_endpoint`.
+
 Secrets stay out of the output and off command lines:
 
 - hbench treats as secret the value of every environment variable whose name looks like one (`*_KEY`, `*TOKEN`,
   `*SECRET*`, `*PASSWORD*`, `*CREDENTIAL*`, `*AUTH*`), from the host, the agent's `env`, agent kwargs and a task's
   `env` tables. Values shorter than 8 characters are not treated as secrets.
+- Model endpoints are treated the same way, since a base URL can reveal private infrastructure. That covers the
+  value of every variable or kwarg named like one (`*_BASE_URL`, `*_API_BASE`, `*_ENDPOINT`, `*_HOST`,
+  `base_url`, `api_base`). A written `config.json` or `lock.json` keeps the name but records the value as
+  `${NAME}` when it equals the host variable, or as `[set]` otherwise. Resuming a job whose config says `[set]`
+  fails with a message that names the endpoint. Pass endpoints as `${VAR}` templates to keep a job resumable.
 - When a trial ends, these values are replaced with `[REDACTED]` in every file of the trial directory: trajectories,
   agent and verifier logs, artifacts and `result.json`. The job directory gets the same treatment when the job ends,
   and `trial.log` is scrubbed as it is written. Each value is matched raw, JSON-escaped, URL-encoded and in base64,

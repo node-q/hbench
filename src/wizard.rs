@@ -3,7 +3,7 @@
 
 use crate::config::{DatasetConfig, TaskRef};
 use crate::task::Task;
-use crate::{RunArgs, agents, auth_envs, oci, registry};
+use crate::{RunArgs, agents, oci, registry};
 use anyhow::{Context, Result, bail};
 use dialoguer::console::{Term, style};
 use dialoguer::theme::ColorfulTheme;
@@ -247,7 +247,7 @@ async fn ask(a: &mut RunArgs) -> Result<()> {
             (n, m, true)
         }
     };
-    if let Some(names) = auth_envs(&agent)
+    if let Some(names) = agents::installed::credential_envs(&agent)
         && !names.iter().any(|n| std::env::var(n).is_ok_and(|v| !v.is_empty()))
     {
         bail!("{agent} needs credentials: `export {}=...` (or one of {}), then run again", names[0], names[1..].join(", "));

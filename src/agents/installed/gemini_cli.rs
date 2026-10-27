@@ -3,8 +3,10 @@
 use super::common::parse_jsonl;
 use super::common::{NVM_LOAD, detect_version, installed_dir, nvm_load, nvm_node_install_snippet, opts, parse_bool_env, skills_dir};
 use super::pins;
-use super::{connection, ensure_system_dependencies, exec_agent, exec_root_checked, pinned_bin_wrapper_command, safe_bin_symlink_command};
-use crate::agents::model_connection::{Resolved, Spec};
+use super::{
+    connection, ensure_system_dependencies, env_lookup, exec_agent, exec_root_checked, pinned_bin_wrapper_command, safe_bin_symlink_command,
+};
+use crate::agents::model_connection::{On, Resolved, Routing, Spec, Switch};
 use crate::agents::pricing;
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
 use crate::env::quote;
@@ -13,11 +15,19 @@ use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-const SPEC: Spec = Spec {
+pub const SPEC: Spec = Spec {
     default_provider: Some("google"),
     api_key_envs: &["GEMINI_API_KEY"],
     base_url_envs: &["GOOGLE_GEMINI_BASE_URL"],
     passthrough: true,
+};
+const OAUTH_CREDS_PATH: Switch = Switch::new("GEMINI_OAUTH_CREDS_PATH", On::Set);
+const FORCE_OAUTH: Switch = Switch::new("GEMINI_FORCE_OAUTH", On::Bool);
+/// OAuth and Vertex routing have no standard Gemini API endpoint to infer.
+pub const ROUTING: Routing = Routing {
+    opaque_auth: &[OAUTH_CREDS_PATH, FORCE_OAUTH, Switch::new("GOOGLE_GENAI_USE_VERTEXAI", On::Bool)],
+    credential_envs: &["GOOGLE_APPLICATION_CREDENTIALS"],
+    ..Routing::NONE
 };
 const SECRETS_DIR: &str = "/tmp/gemini-secrets";
 
@@ -61,9 +71,7 @@ impl GeminiCli {
     /// OAuth / Vertex routing has no standard Gemini API endpoint to infer.
     fn connection(&self) -> Resolved {
         let mut c = connection(&self.args, SPEC);
-        let opaque = self.args.get_env("GEMINI_OAUTH_CREDS_PATH").is_some()
-            || ["GEMINI_FORCE_OAUTH", "GOOGLE_GENAI_USE_VERTEXAI"].iter().any(|n| parse_bool_env(self.args.get_env(n), n).unwrap_or(false));
-        if opaque {
+        if ROUTING.opaque_auth_on(&env_lookup(&self.args)) {
             c.provider = None;
             c.base_url = None;
         }
@@ -72,16 +80,16 @@ impl GeminiCli {
 
     /// GEMINI_OAUTH_CREDS_PATH=<path> or GEMINI_FORCE_OAUTH=<truthy> (~/.gemini/oauth_creds.json).
     fn oauth_creds_path(&self) -> Result<Option<PathBuf>> {
-        if let Some(p) = self.args.get_env("GEMINI_OAUTH_CREDS_PATH") {
+        if let Some(p) = self.args.get_env(OAUTH_CREDS_PATH.env) {
             if !Path::new(&p).is_file() {
-                bail!("GEMINI_OAUTH_CREDS_PATH points to non-existent file: {p}");
+                bail!("{} points to non-existent file: {p}", OAUTH_CREDS_PATH.env);
             }
             return Ok(Some(p.into()));
         }
-        if parse_bool_env(self.args.get_env("GEMINI_FORCE_OAUTH"), "GEMINI_FORCE_OAUTH")? {
+        if parse_bool_env(self.args.get_env(FORCE_OAUTH.env), FORCE_OAUTH.env)? {
             let d = PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".gemini/oauth_creds.json");
             if !d.is_file() {
-                bail!("GEMINI_FORCE_OAUTH is set but {} does not exist", d.display());
+                bail!("{} is set but {} does not exist", FORCE_OAUTH.env, d.display());
             }
             return Ok(Some(d));
         }
