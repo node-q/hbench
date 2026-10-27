@@ -19,6 +19,7 @@ mod metrics;
 mod migrate;
 mod observe;
 mod oci;
+mod progress;
 mod redact;
 mod registry;
 mod regrade;
@@ -816,7 +817,7 @@ struct RunArgs {
     /// Artifact path to collect (repeatable).
     #[arg(long, help_heading = "Output")]
     artifact: Vec<String>,
-    /// No per-trial progress lines.
+    /// No progress: no download bar, no per-trial lines.
     #[arg(long, help_heading = "Output")]
     quiet: bool,
     /// Print every trial's log and command output as it runs, each line under the trial's name.

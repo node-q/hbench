@@ -260,8 +260,13 @@ pub async fn download(tasks: &[TaskRef]) -> Result<()> {
             if let Some(p) = dir.parent() {
                 std::fs::create_dir_all(p)?;
             }
-            eprintln!("downloading {} task(s) from {url}@{commit}", ts.len());
+            let progress = crate::progress::Download::start(&url, ts.len(), 0);
+            if !progress.is_live() {
+                eprintln!("downloading {} task(s) from {url}@{commit}", ts.len());
+            }
             fetch(&dir, &url, &commit, &ts.iter().map(sparse_path).collect::<Vec<_>>())?;
+            progress.add_tasks(ts.len());
+            progress.finish();
         }
         for t in ts {
             if !local_path(t).join("task.toml").exists() {

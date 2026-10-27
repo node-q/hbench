@@ -94,6 +94,15 @@ With a ChatGPT login (`CODEX_AUTH_JSON_PATH`, `CODEX_FORCE_AUTH_JSON`), codex ta
 Other hbench variables: `DOCKER_CONTEXT`/`DOCKER_HOST` (which daemon), `HBENCH_EGRESS_METHOD=proxy` (see below).
 `HBENCH_NO_UPDATE_CHECK=1` stops the daily check for a newer release, which suggests `hbench update` (also off when `CI` is set or stderr is not a
 terminal); hbench reads the last result from `~/.cache/hbench/latest-release.json` and refreshes it in the background.
+While tasks download, a progress line on stderr counts tasks and bytes and ends as a summary:
+
+```
+Downloading terminal-bench@2.0.1  █████████░░░░░░░░░░░░░░░  37/89 tasks  412 MB/1.1 GB
+✔ Downloaded terminal-bench@2.0.1 · 89 task(s) · 1.1 GB
+```
+
+`HBENCH_NO_PROGRESS=1` turns it off, as `--quiet` and `--observe` do for `hbench run`. It is also off when `CI` is set
+or stderr is not a terminal; hbench then prints one `downloading 89 task(s) from <reference>` line instead.
 
 ## Task format
 
@@ -315,6 +324,12 @@ jobs/<job>/{config.json, lock.json, result.json, job.log, trials.json, manifest.
 jobs/<job>/<task>__<id>/{config.json, lock.json, result.json, trial.log, exception.txt,
                          agent/, verifier/, artifacts/{manifest.json, logs/artifacts/...}, steps/<name>/...}
 ```
+
+`agent/trajectory.json` is the trial's trajectory in ATIF. `claude-code`, `codex` and `deepseek-harness` convert their
+native session logs into it; `terminus-2`, `computer-1`, `openhands-sdk`, `antigravity-sdk` and `nemo-agent` write it
+themselves. In a converted trajectory each agent step is one model call and its metrics are that call's alone:
+`prompt_tokens` is the whole prompt, cached and cache-written tokens included, and `cached_tokens` the cached part of
+it. A step whose call the native log reports no usage for has no metrics.
 
 `trials.json` is written only for jobs not planned from their config (`jobs regrade`, `run --diff`), so they can be
 resumed. The job's `result.json` has per-eval metrics (mean/sum/min/max/uv-script), pass@k, reward/exception stats, tokens,

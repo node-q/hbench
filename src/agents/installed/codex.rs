@@ -1,4 +1,4 @@
-//! Codex CLI, incl. ACP target mode and load_trajectory seeding.
+//! Codex CLI, incl. ACP target mode, load_trajectory seeding and rollout -> ATIF.
 
 use super::common::parse_jsonl;
 use super::common::{
@@ -12,6 +12,7 @@ use super::{
 use crate::agents::model_connection::{On, Routing, Spec, Switch};
 use crate::agents::pricing;
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx, ModelAccess};
+use crate::atif;
 use crate::env::quote;
 use anyhow::{Result, anyhow, bail};
 use serde_json::{Value, json};
@@ -441,6 +442,204 @@ pub fn parse_rollout_usage(text: &str, model: Option<&str>) -> Option<AgentConte
     })
 }
 
+/// The text parts of a rollout `content` or tool `output`, one per line.
+fn content_text(v: &Value) -> String {
+    match v {
+        Value::String(s) => s.clone(),
+        Value::Array(parts) => parts.iter().filter_map(|p| p["text"].as_str()).collect::<Vec<_>>().join("\n"),
+        Value::Object(o) if o.contains_key("content") => content_text(&o["content"]),
+        Value::Null => String::new(),
+        other => other.to_string(),
+    }
+}
+
+/// Per-call usage as ATIF metrics; `input_tokens` already counts the cached ones.
+fn rollout_metrics(u: &Value) -> Option<atif::Metrics> {
+    let u = u.as_object()?;
+    let n = |k: &str| u.get(k).and_then(Value::as_i64);
+    let extra: serde_json::Map<String, Value> = u
+        .iter()
+        .filter(|(k, _)| !matches!(k.as_str(), "input_tokens" | "output_tokens" | "cached_input_tokens"))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    Some(atif::Metrics {
+        prompt_tokens: n("input_tokens"),
+        completion_tokens: n("output_tokens"),
+        cached_tokens: n("cached_input_tokens"),
+        extra: (!extra.is_empty()).then_some(extra),
+        ..Default::default()
+    })
+}
+
+/// Builds the agent steps of a rollout, one per model response.
+#[derive(Default)]
+struct RolloutSteps {
+    steps: Vec<atif::Step>,
+    /// The last step is an agent step whose response may still add items.
+    open: bool,
+    /// The last step got a tool output, so its response is over.
+    answered: bool,
+}
+
+impl RolloutSteps {
+    fn push(&mut self, step: atif::Step) {
+        self.steps.push(atif::Step { step_id: self.steps.len() + 1, ..step });
+        self.open = false;
+    }
+
+    fn agent(&mut self, timestamp: Option<String>, model_name: Option<String>) -> &mut atif::Step {
+        if !self.open || self.answered {
+            self.push(atif::Step {
+                timestamp,
+                source: "agent".into(),
+                model_name,
+                message: json!(""),
+                llm_call_count: Some(1),
+                ..Default::default()
+            });
+            (self.open, self.answered) = (true, false);
+        }
+        self.steps.last_mut().unwrap()
+    }
+
+    fn call(&mut self, timestamp: Option<String>, model_name: Option<String>, call: atif::ToolCall, raw: Option<(&str, &str)>) {
+        let step = self.agent(timestamp, model_name);
+        if let Some((raw_arguments, item_type)) = raw {
+            let details = step.extra.get_or_insert_default().entry("tool_call_details").or_insert_with(|| json!({}));
+            details[&call.tool_call_id] = json!({"raw_arguments": raw_arguments, "item_type": item_type});
+        }
+        step.tool_calls.get_or_insert_default().push(call);
+    }
+}
+
+/// A native rollout as an ATIF trajectory. A model response's items (reasoning, messages, tool calls) make one agent
+/// step, which ends at the `token_count` that reports its usage or when its tool outputs are in. Codex repeats the last
+/// count after a response it did not bill, so a step takes `last_token_usage` only when `total_token_usage` moved.
+/// Final metrics are [`parse_rollout_usage`]'s, cost included.
+pub fn rollout_trajectory(text: &str, version: Option<&str>, model: Option<&str>) -> Option<atif::Trajectory> {
+    let events = parse_jsonl(text);
+    let meta = events.iter().find(|e| e["type"] == "session_meta").map(|e| &e["payload"]).unwrap_or(&Value::Null);
+    let first_model = events.iter().find_map(|e| (e["type"] == "turn_context").then(|| e["payload"]["model"].as_str()).flatten());
+    let default_model = first_model.or(model.map(|m| m.rsplit('/').next().unwrap())).map(String::from);
+    let mut model_name = default_model.clone();
+    let mut b = RolloutSteps::default();
+    let mut last_total: Option<&Value> = None;
+    for e in &events {
+        let p = &e["payload"];
+        let ts = e["timestamp"].as_str().map(String::from);
+        match (e["type"].as_str().unwrap_or_default(), p["type"].as_str().unwrap_or_default()) {
+            ("turn_context", _) => {
+                if let Some(m) = p["model"].as_str() {
+                    model_name = Some(m.into());
+                }
+            }
+            ("response_item", "message") => {
+                let text = content_text(&p["content"]);
+                match p["role"].as_str() {
+                    Some("assistant") => {
+                        let step = b.agent(ts, model_name.clone());
+                        let prev = step.message.as_str().unwrap_or_default();
+                        step.message = json!(if prev.is_empty() { text } else { format!("{prev}\n\n{text}") });
+                    }
+                    role => {
+                        let source = if role == Some("user") { "user" } else { "system" };
+                        b.push(atif::Step { timestamp: ts, source: source.into(), message: json!(text), ..Default::default() });
+                    }
+                }
+            }
+            ("response_item", "reasoning") => {
+                let parts = [&p["summary"], &p["content"]].into_iter().filter_map(Value::as_array).flatten();
+                let text = parts.filter_map(|s| s["text"].as_str()).filter(|t| !t.trim().is_empty()).collect::<Vec<_>>().join("\n\n");
+                let step = b.agent(ts, model_name.clone());
+                if !text.is_empty() {
+                    step.reasoning_content = Some(match step.reasoning_content.take() {
+                        Some(prev) => format!("{prev}\n\n{text}"),
+                        None => text,
+                    });
+                }
+            }
+            ("response_item", kind @ ("function_call" | "custom_tool_call")) => {
+                let id = p["call_id"].as_str().unwrap_or_default().to_string();
+                let name = p["name"].as_str().unwrap_or_default().to_string();
+                let (raw, arguments) = if kind == "function_call" {
+                    let raw = p["arguments"].as_str().unwrap_or_default();
+                    (raw, serde_json::from_str::<Value>(raw).ok().filter(Value::is_object).unwrap_or_else(|| json!({"input": raw})))
+                } else {
+                    let raw = p["input"].as_str().unwrap_or_default();
+                    (raw, json!({"input": raw}))
+                };
+                let call = atif::ToolCall { tool_call_id: id, function_name: name, arguments, extra: None };
+                b.call(ts, model_name.clone(), call, Some((raw, kind)));
+            }
+            ("response_item", "web_search_call") => {
+                let id = p["id"].as_str().unwrap_or_default().to_string();
+                let arguments = Some(&p["action"]).filter(|a| a.is_object()).cloned().unwrap_or_else(|| json!({}));
+                b.call(
+                    ts,
+                    model_name.clone(),
+                    atif::ToolCall { tool_call_id: id, function_name: "web_search".into(), arguments, extra: None },
+                    None,
+                );
+            }
+            ("response_item", "function_call_output" | "custom_tool_call_output") => {
+                let Some(id) = p["call_id"].as_str() else { continue };
+                let has_call = |s: &atif::Step| s.tool_calls.iter().flatten().any(|c| c.tool_call_id == id);
+                let Some(i) = b.steps.iter().rposition(has_call) else { continue };
+                let extra = (p["output"]["success"] == false).then(|| serde_json::Map::from_iter([("is_error".to_string(), json!(true))]));
+                let result = atif::ObservationResult {
+                    source_call_id: Some(id.into()),
+                    content: Some(json!(content_text(&p["output"]))),
+                    extra,
+                    ..Default::default()
+                };
+                b.steps[i].observation.get_or_insert_default().results.push(result);
+                if i + 1 == b.steps.len() {
+                    b.answered = true;
+                }
+            }
+            ("event_msg", "token_count") if p["info"].is_object() => {
+                let total = &p["info"]["total_token_usage"];
+                if total.is_object() && last_total == Some(total) {
+                    continue;
+                }
+                last_total = Some(total).filter(|t| t.is_object());
+                if b.open
+                    && let Some(step) = b.steps.last_mut().filter(|s| s.metrics.is_none())
+                {
+                    step.metrics = rollout_metrics(&p["info"]["last_token_usage"]);
+                }
+                b.open = false;
+            }
+            _ => {}
+        }
+    }
+    if !b.steps.iter().any(|s| s.source == "agent") {
+        return None;
+    }
+    let usage = parse_rollout_usage(text, model).unwrap_or_default();
+    let n = b.steps.len();
+    Some(atif::Trajectory {
+        schema_version: "ATIF-v1.7".into(),
+        session_id: meta["id"].as_str().or(meta["session_id"].as_str()).map(String::from),
+        agent: atif::Agent {
+            name: "codex".into(),
+            version: meta["cli_version"].as_str().or(version).unwrap_or("unknown").into(),
+            model_name: default_model,
+            ..Default::default()
+        },
+        steps: b.steps,
+        final_metrics: Some(atif::FinalMetrics {
+            total_prompt_tokens: usage.n_input_tokens,
+            total_completion_tokens: usage.n_output_tokens,
+            total_cached_tokens: usage.n_cache_tokens,
+            total_cost_usd: usage.cost_usd,
+            total_steps: Some(n),
+            extra: None,
+        }),
+        ..Default::default()
+    })
+}
+
 #[async_trait::async_trait]
 impl Agent for Codex {
     fn name(&self) -> &str {
@@ -663,14 +862,16 @@ impl Agent for Codex {
     }
 
     fn collect_usage(&self, logs_dir: &Path, ctx: &mut AgentContext) {
-        if let Some(c) = latest_session_file(logs_dir)
-            .and_then(|p| std::fs::read_to_string(p).ok())
-            .and_then(|t| parse_rollout_usage(&t, self.args.model_name.as_deref()))
-        {
+        let Some(text) = latest_session_file(logs_dir).and_then(|p| std::fs::read_to_string(p).ok()) else { return };
+        let model = self.args.model_name.as_deref();
+        if let Some(c) = parse_rollout_usage(&text, model) {
             ctx.n_input_tokens = c.n_input_tokens;
             ctx.n_cache_tokens = c.n_cache_tokens;
             ctx.n_output_tokens = c.n_output_tokens;
             ctx.cost_usd = c.cost_usd;
+        }
+        if let Some(t) = rollout_trajectory(&text, self.version.as_deref(), model) {
+            let _ = std::fs::write(logs_dir.join("trajectory.json"), serde_json::to_string_pretty(&t).unwrap_or_default());
         }
     }
 }
@@ -751,6 +952,193 @@ not json
         std::fs::create_dir_all(dir.join("sessions/2026/09/01")).unwrap();
         std::fs::write(day.join("rollout-2026-10-10T00-00-00-a.jsonl"), text).unwrap();
         assert_eq!(latest_session_file(&dir).unwrap(), day.join("rollout-2026-10-10T00-00-00-a.jsonl"));
+    }
+
+    fn rollout(events: &[Value]) -> String {
+        events.iter().map(|e| e.to_string() + "\n").collect()
+    }
+
+    fn item(ts: &str, payload: Value) -> Value {
+        json!({"timestamp": ts, "type": "response_item", "payload": payload})
+    }
+
+    fn token_count(total: [i64; 3], last: [i64; 3]) -> Value {
+        let u =
+            |[i, c, o]: [i64; 3]| json!({"input_tokens": i, "cached_input_tokens": c, "output_tokens": o, "reasoning_output_tokens": 2});
+        json!({"type": "event_msg", "payload": {"type": "token_count", "info": {"total_token_usage": u(total), "last_token_usage": u(last)}}})
+    }
+
+    /// Codex 0.16x: one `exec` custom tool, outputs as content parts, `token_usage_record` lines, and a last response
+    /// codex did not bill, whose `token_count` repeats the previous one.
+    #[test]
+    fn rollout_to_atif_code_mode() {
+        let text = rollout(&[
+            json!({"timestamp": "2026-01-01T00:00:00.000Z", "type": "session_meta", "payload": {"id": "s1", "cli_version": "0.164.0"}}),
+            json!({"type": "turn_context", "payload": {"model": "gpt-5.6-sol"}}),
+            item(
+                "2026-01-01T00:00:00.100Z",
+                json!({"type": "message", "role": "developer", "content": [{"type": "input_text", "text": "sys"}]}),
+            ),
+            item(
+                "2026-01-01T00:00:00.200Z",
+                json!({"type": "message", "role": "user", "content": [{"type": "input_text", "text": "do it"}]}),
+            ),
+            json!({"type": "event_msg", "payload": {"type": "token_count", "info": null}}),
+            item(
+                "2026-01-01T00:00:01.000Z",
+                json!({"type": "reasoning", "summary": [{"type": "summary_text", "text": "Plan."}], "encrypted_content": "x"}),
+            ),
+            item(
+                "2026-01-01T00:00:01.100Z",
+                json!({"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "Looking."}]}),
+            ),
+            item(
+                "2026-01-01T00:00:01.200Z",
+                json!({"type": "custom_tool_call", "call_id": "c1", "name": "exec", "input": "await tools.exec_command({cmd: \"ls\"})"}),
+            ),
+            json!({"type": "token_usage_record", "payload": {"usage": {"input_tokens": 100}}}),
+            item(
+                "2026-01-01T00:00:02.000Z",
+                json!({"type": "custom_tool_call_output", "call_id": "c1", "output": [{"type": "input_text", "text": "Script completed"}, {"type": "input_text", "text": "a.txt"}]}),
+            ),
+            token_count([100, 40, 10], [100, 40, 10]),
+            item("2026-01-01T00:00:03.000Z", json!({"type": "reasoning", "summary": []})),
+            item(
+                "2026-01-01T00:00:03.100Z",
+                json!({"type": "custom_tool_call", "call_id": "c2", "name": "exec", "input": "await tools.apply_patch(\"*** Begin Patch\")"}),
+            ),
+            item(
+                "2026-01-01T00:00:04.000Z",
+                json!({"type": "custom_tool_call_output", "call_id": "c2", "output": [{"type": "input_text", "text": "{}"}]}),
+            ),
+            token_count([250, 120, 30], [150, 80, 20]),
+            item(
+                "2026-01-01T00:00:05.000Z",
+                json!({"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "Done."}]}),
+            ),
+            token_count([410, 270, 35], [160, 150, 5]),
+            item("2026-01-01T00:00:06.000Z", json!({"type": "reasoning", "summary": []})),
+            token_count([410, 270, 35], [160, 150, 5]),
+        ]);
+        let t = rollout_trajectory(&text, Some("0.1.0"), Some("openai/gpt-5")).unwrap();
+        assert_eq!((t.schema_version.as_str(), t.session_id.as_deref()), ("ATIF-v1.7", Some("s1")));
+        assert_eq!(
+            (t.agent.name.as_str(), t.agent.version.as_str(), t.agent.model_name.as_deref()),
+            ("codex", "0.164.0", Some("gpt-5.6-sol"))
+        );
+        let shape: Vec<(usize, &str, &str)> = t.steps.iter().map(|s| (s.step_id, s.source.as_str(), s.message.as_str().unwrap())).collect();
+        assert_eq!(
+            shape,
+            [
+                (1, "system", "sys"),
+                (2, "user", "do it"),
+                (3, "agent", "Looking."),
+                (4, "agent", ""),
+                (5, "agent", "Done."),
+                (6, "agent", "")
+            ]
+        );
+
+        let s = &t.steps[2];
+        assert_eq!(
+            (s.timestamp.as_deref(), s.model_name.as_deref(), s.llm_call_count),
+            (Some("2026-01-01T00:00:01.000Z"), Some("gpt-5.6-sol"), Some(1))
+        );
+        assert_eq!(s.reasoning_content.as_deref(), Some("Plan."));
+        let call = &s.tool_calls.as_ref().unwrap()[0];
+        assert_eq!((call.tool_call_id.as_str(), call.function_name.as_str()), ("c1", "exec"));
+        assert_eq!(call.arguments, json!({"input": "await tools.exec_command({cmd: \"ls\"})"}));
+        assert_eq!(s.extra.as_ref().unwrap()["tool_call_details"]["c1"]["item_type"], "custom_tool_call");
+        let obs = &s.observation.as_ref().unwrap().results[0];
+        assert_eq!((obs.source_call_id.as_deref(), obs.content.clone()), (Some("c1"), Some(json!("Script completed\na.txt"))));
+        let m = s.metrics.as_ref().unwrap();
+        assert_eq!((m.prompt_tokens, m.completion_tokens, m.cached_tokens), (Some(100), Some(10), Some(40)));
+        assert_eq!(m.extra.as_ref().unwrap()["reasoning_output_tokens"], 2);
+
+        let per_step: Vec<Option<i64>> = t.steps.iter().map(|s| s.metrics.as_ref().and_then(|m| m.prompt_tokens)).collect();
+        assert_eq!(per_step, [None, None, Some(100), Some(150), Some(160), None]);
+        assert!(t.steps[3].reasoning_content.is_none());
+        let f = t.final_metrics.unwrap();
+        assert_eq!(
+            (f.total_prompt_tokens, f.total_completion_tokens, f.total_cached_tokens, f.total_steps),
+            (Some(410), Some(35), Some(270), Some(6))
+        );
+    }
+
+    /// Older rollouts: JSON-argument `function_call`s (two in one response), string outputs, a free-form `apply_patch`;
+    /// the trajectory renders back as the same native items.
+    #[test]
+    fn rollout_to_atif_function_calls() {
+        let shell = |id: &str, cmd: &str| {
+            item(
+                "t1",
+                json!({"type": "function_call", "call_id": id, "name": "shell", "arguments": json!({"command": ["bash", "-lc", cmd]}).to_string()}),
+            )
+        };
+        let text = rollout(&[
+            json!({"type": "session_meta", "payload": {"id": "s2"}}),
+            item("t0", json!({"type": "message", "role": "user", "content": [{"type": "input_text", "text": "fix it"}]})),
+            shell("c1", "ls"),
+            shell("c2", "cat a"),
+            item("t2", json!({"type": "function_call_output", "call_id": "c1", "output": "a\n"})),
+            item("t2", json!({"type": "function_call_output", "call_id": "c2", "output": {"content": "no such file", "success": false}})),
+            item("t3", json!({"type": "custom_tool_call", "call_id": "c3", "name": "apply_patch", "input": "*** Begin Patch"})),
+            item("t4", json!({"type": "custom_tool_call_output", "call_id": "c3", "output": "Done!"})),
+            item("t5", json!({"type": "function_call", "call_id": "c4", "name": "shell", "arguments": "not json"})),
+        ]);
+        let t = rollout_trajectory(&text, Some("0.118.0"), Some("openai/gpt-5")).unwrap();
+        assert_eq!((t.agent.version.as_str(), t.agent.model_name.as_deref()), ("0.118.0", Some("gpt-5")));
+        assert_eq!(t.steps.len(), 4);
+        let calls = t.steps[1].tool_calls.as_ref().unwrap();
+        assert_eq!(calls.iter().map(|c| c.tool_call_id.as_str()).collect::<Vec<_>>(), ["c1", "c2"]);
+        assert_eq!(calls[1].arguments, json!({"command": ["bash", "-lc", "cat a"]}));
+        let obs = &t.steps[1].observation.as_ref().unwrap().results;
+        assert_eq!(obs.iter().map(|r| r.content.clone().unwrap()).collect::<Vec<_>>(), [json!("a\n"), json!("no such file")]);
+        assert!(obs[0].extra.is_none() && obs[1].extra.as_ref().unwrap()["is_error"] == true);
+        assert_eq!(t.steps[2].tool_calls.as_ref().unwrap()[0].arguments, json!({"input": "*** Begin Patch"}));
+        assert_eq!(t.steps[3].tool_calls.as_ref().unwrap()[0].arguments, json!({"input": "not json"}));
+        assert!(t.steps.iter().all(|s| s.metrics.is_none()));
+        assert_eq!(t.final_metrics.as_ref().unwrap().total_prompt_tokens, None);
+
+        let (_, native) = atif_to_native_trajectory(&serde_json::to_value(&t).unwrap(), "sid");
+        let kinds: Vec<String> = parse_jsonl(&native)
+            .iter()
+            .filter(|e| e["type"] == "response_item")
+            .map(|e| e["payload"]["type"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(
+            kinds,
+            [
+                "message",
+                "function_call",
+                "function_call",
+                "function_call_output",
+                "function_call_output",
+                "custom_tool_call",
+                "custom_tool_call_output",
+                "function_call",
+                "function_call_output"
+            ]
+        );
+
+        assert!(rollout_trajectory(&rollout(&[json!({"type": "session_meta", "payload": {"id": "s"}})]), None, None).is_none());
+    }
+
+    #[test]
+    fn collect_usage_writes_trajectory() {
+        let dir = std::env::temp_dir().join(format!("hbench-codex-{}", uuid::Uuid::new_v4()));
+        let day = dir.join("sessions/2026/01/01");
+        std::fs::create_dir_all(&day).unwrap();
+        let text = rollout(&[
+            item("t0", json!({"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "hi"}]})),
+            token_count([10, 4, 1], [10, 4, 1]),
+        ]);
+        std::fs::write(day.join("rollout-2026-01-01T00-00-00-a.jsonl"), text).unwrap();
+        let mut ctx = AgentContext::default();
+        agent(json!({}), &[], Some("openai/gpt-5")).unwrap().collect_usage(&dir, &mut ctx);
+        assert_eq!((ctx.n_input_tokens, ctx.n_cache_tokens, ctx.n_output_tokens), (Some(10), Some(4), Some(1)));
+        let t: atif::Trajectory = serde_json::from_str(&std::fs::read_to_string(dir.join("trajectory.json")).unwrap()).unwrap();
+        assert_eq!((t.steps.len(), t.final_metrics.unwrap().total_cost_usd), (1, ctx.cost_usd));
     }
 
     #[test]

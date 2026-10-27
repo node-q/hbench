@@ -5,8 +5,8 @@ name: Release
 # Each build job builds one binary on a GitHub-hosted runner, with no secrets and a read-only
 # token, and attests its archive's build provenance. The ci job waits for ci.yml's run on the
 # tagged commit, so only a commit that passed CI on master is released. Only the publish job
-# can write: it creates this repo's release, with the tagged commit's scripts/install.sh beside
-# the archives, so `curl -fsSL https://github.com/node-q/hbench/releases/latest/download/install.sh | sh` installs the latest release.
+# can write: it attests install.sh and SHA256SUMS and creates this repo's release, with the tagged
+# commit's scripts/install.sh beside the archives, so `curl -fsSL https://github.com/node-q/hbench/releases/latest/download/install.sh | sh` installs the latest release.
 on:
   push:
     tags: ["v[0-9]+.[0-9]+.[0-9]+*"]
@@ -119,6 +119,8 @@ jobs:
     environment: release
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     steps:
       - name: Download archives
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -138,6 +140,12 @@ jobs:
       - name: Generate checksums
         working-directory: dist
         run: sha256sum -- *.tar.gz install.sh | tee SHA256SUMS
+      - name: Attest install.sh and SHA256SUMS
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            dist/install.sh
+            dist/SHA256SUMS
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
