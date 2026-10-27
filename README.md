@@ -31,6 +31,21 @@ curl -fsSL https://github.com/node-q/hbench/releases/latest/download/install.sh 
 
 Later, `hbench update` installs the newest release.
 
+The script checks the archive it downloads against the release's `SHA256SUMS`. To check the script itself
+before running it, download it, read it, and verify that this repository's release workflow built it (releases
+after v0.3.7; `gh attestation verify` needs the [GitHub CLI](https://cli.github.com)):
+
+```bash
+curl -fsSLO https://github.com/node-q/hbench/releases/latest/download/install.sh
+curl -fsSLO https://github.com/node-q/hbench/releases/latest/download/SHA256SUMS
+grep ' install.sh$' SHA256SUMS | sha256sum -c    # macOS: shasum -a 256 -c
+gh attestation verify install.sh --repo node-q/hbench
+less install.sh
+sh install.sh
+```
+
+The release archives verify the same way: `gh attestation verify hbench-<version>-<target>.tar.gz --repo node-q/hbench`.
+
 Or build from source:
 
 ```bash
