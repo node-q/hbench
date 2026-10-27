@@ -1058,42 +1058,13 @@ fn preflight_agents(cfg: &JobConfig) -> Result<()> {
     Ok(())
 }
 
-/// Credential env vars an agent accepts, any one of which is enough (API keys, OAuth tokens,
-/// Bedrock/Vertex switches, custom endpoints). None = not decidable up front, so not checked.
-fn auth_envs(agent: &str) -> Option<&'static [&'static str]> {
-    // Only agents with a fixed provider; passthrough agents depend on the model/endpoint.
-    Some(match agent {
-        "claude-code" => &[
-            "ANTHROPIC_API_KEY",
-            "ANTHROPIC_AUTH_TOKEN",
-            "CLAUDE_CODE_OAUTH_TOKEN",
-            "ANTHROPIC_BASE_URL",
-            "AWS_BEARER_TOKEN_BEDROCK",
-            "CLAUDE_CODE_USE_BEDROCK",
-            "CLAUDE_CODE_USE_VERTEX",
-        ],
-        "codex" => &["OPENAI_API_KEY", "CODEX_AUTH_JSON_PATH", "CODEX_FORCE_AUTH_JSON", "OPENAI_BASE_URL", "OPENAI_API_BASE"],
-        "gemini-cli" => &[
-            "GEMINI_API_KEY",
-            "GOOGLE_API_KEY",
-            "GOOGLE_GENERATIVE_AI_API_KEY",
-            "GEMINI_OAUTH_CREDS_PATH",
-            "GEMINI_FORCE_OAUTH",
-            "GOOGLE_GENAI_USE_VERTEXAI",
-            "GOOGLE_APPLICATION_CREDENTIALS",
-            "GOOGLE_GEMINI_BASE_URL",
-        ],
-        _ => return None,
-    })
-}
-
 /// Fail fast when an agent has none of its credential env vars (host env or agent `env`).
 fn preflight_auth(cfg: &JobConfig) -> Result<()> {
     if cfg.install_only {
         return Ok(());
     }
     for a in &cfg.agents {
-        let Some(names) = auth_envs(a.name()) else { continue };
+        let Some(names) = agents::installed::credential_envs(a.name()) else { continue };
         let env = crate::task::resolve_env_vars(&a.env).unwrap_or_default();
         let set = |n: &&str| env.get(*n).or(std::env::var(n).ok().as_ref()).is_some_and(|v| !v.is_empty());
         if !names.iter().any(set) {
@@ -1919,7 +1890,7 @@ mod tests {
         assert!(preflight_agents(&agent("claude-code", serde_json::json!({"bogus": 1}), &[])).is_err());
         assert!(preflight_auth(&agent("claude-code", serde_json::json!({}), &[("CLAUDE_CODE_OAUTH_TOKEN", "t")])).is_ok());
         assert!(preflight_auth(&agent("aider", serde_json::json!({}), &[])).is_ok()); // undecidable: skipped
-        if auth_envs("codex").unwrap().iter().all(|n| std::env::var(n).is_err()) {
+        if agents::installed::credential_envs("codex").unwrap().iter().all(|n| std::env::var(n).is_err()) {
             let e = preflight_auth(&agent("codex", serde_json::json!({}), &[])).unwrap_err().to_string();
             assert!(e.contains("OPENAI_API_KEY"), "{e}");
         }

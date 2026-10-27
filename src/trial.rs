@@ -1636,8 +1636,8 @@ mod tests {
             std::env::set_var("HBENCH_EP_TEST_URL", url);
         }
         let labels = serde_json::json!({"model_served_by": "lmstudio", "model_quantization": "q4_k_m"});
-        let overridden = serde_json::json!({"default": false, "model_served_by": "lmstudio", "model_quantization": "q4_k_m"});
-        let plain = serde_json::json!({"default": true, "model_served_by": null, "model_quantization": null});
+        let overridden = serde_json::json!({"backend": "custom", "model_served_by": "lmstudio", "model_quantization": "q4_k_m"});
+        let plain = serde_json::json!({"backend": "provider", "model_served_by": null, "model_quantization": null});
         let agent = |name: &str, model: &str, env: Value, extra: &Value| {
             let mut a = serde_json::json!({"name": name, "model_name": model, "env": env});
             a.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
@@ -1662,9 +1662,9 @@ mod tests {
         let gateway = serde_json::json!({"api_base": "https://gw.corp.example/v1?key=SECRET456"});
         let kwargs = serde_json::json!({"kwargs": gateway});
         assert_endpoint(agent("terminus-2", "openai/gpt-6.1-sol", serde_json::json!({"OPENAI_BASE_URL": ""}), &kwargs), {
-            serde_json::json!({"default": false, "model_served_by": null, "model_quantization": null})
+            serde_json::json!({"backend": "custom", "model_served_by": null, "model_quantization": null})
         });
-        let unknown = serde_json::json!({"default": null, "model_served_by": "vllm", "model_quantization": null});
+        let unknown = serde_json::json!({"backend": null, "model_served_by": "vllm", "model_quantization": null});
         assert_endpoint(
             agent(
                 "aider",
@@ -1673,6 +1673,11 @@ mod tests {
                 &serde_json::json!({"model_served_by": "vllm"}),
             ),
             unknown,
+        );
+        let bedrock = serde_json::json!({"AWS_BEARER_TOKEN_BEDROCK": "SECRET123-bedrock", "ANTHROPIC_BASE_URL": url});
+        assert_endpoint(
+            agent("claude-code", "anthropic/claude-x", bedrock, &serde_json::json!({})),
+            serde_json::json!({"backend": "bedrock", "model_served_by": null, "model_quantization": null}),
         );
         assert!(written_files(serde_json::json!({"name": "oracle"}))[1].get("model_endpoint").is_none());
     }

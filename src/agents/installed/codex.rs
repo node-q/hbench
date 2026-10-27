@@ -9,16 +9,26 @@ use super::{
     connection, ensure_acp_node_command, ensure_system_dependencies, exec_agent, exec_error, exec_root_checked, filter_jsonl_events,
     pinned_bin_wrapper_command, safe_bin_symlink_command, upload_text,
 };
-use crate::agents::model_connection::Spec;
+use crate::agents::model_connection::{On, Routing, Spec, Switch};
 use crate::agents::pricing;
-use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
+use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx, ModelAccess};
 use crate::env::quote;
 use anyhow::{Result, anyhow, bail};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-const SPEC: Spec = Spec { default_provider: Some("openai"), api_key_envs: &[], base_url_envs: &[], passthrough: false };
+pub const SPEC: Spec = Spec { default_provider: Some("openai"), api_key_envs: &[], base_url_envs: &[], passthrough: false };
+const AUTH_JSON_PATH: Switch = Switch::new("CODEX_AUTH_JSON_PATH", On::Set);
+const FORCE_AUTH_JSON: Switch = Switch::new("CODEX_FORCE_AUTH_JSON", On::Bool);
+const BASE_URL_KEY: &str = "openai_base_url";
+/// An auth.json (ChatGPT login) or a `model_provider` in `config` may route away from the OpenAI API.
+pub const ROUTING: Routing = Routing {
+    opaque_auth: &[AUTH_JSON_PATH, FORCE_AUTH_JSON],
+    config_base_urls: &[BASE_URL_KEY],
+    config_opaque: &["model_provider"],
+    ..Routing::NONE
+};
 const CODEX_HOME: &str = "/installed-agent/codex-home";
 const SECRETS_DIR: &str = "/tmp/codex-secrets";
 const AUTH_PATH: &str = "/tmp/codex-secrets/auth.json";
@@ -139,7 +149,7 @@ impl Codex {
     fn effective_config(&self, base_url: Option<&str>) -> Result<serde_json::Map<String, Value>> {
         let mut c = self.base_config.clone();
         if let Some(u) = base_url {
-            c.insert("openai_base_url".into(), json!(u));
+            c.insert(BASE_URL_KEY.into(), json!(u));
         }
         if self.args.mcp_servers.is_empty() {
             return Ok(c);
@@ -156,16 +166,16 @@ impl Codex {
 
     /// CODEX_AUTH_JSON_PATH=<path> or CODEX_FORCE_AUTH_JSON=<truthy> (~/.codex/auth.json); default OPENAI_API_KEY.
     fn auth_json_path(&self) -> Result<Option<PathBuf>> {
-        if let Some(p) = self.args.get_env("CODEX_AUTH_JSON_PATH") {
+        if let Some(p) = self.args.get_env(AUTH_JSON_PATH.env) {
             if !Path::new(&p).is_file() {
-                bail!("CODEX_AUTH_JSON_PATH points to non-existent file: {p}");
+                bail!("{} points to non-existent file: {p}", AUTH_JSON_PATH.env);
             }
             return Ok(Some(p.into()));
         }
-        if parse_bool_env(self.args.get_env("CODEX_FORCE_AUTH_JSON"), "CODEX_FORCE_AUTH_JSON")? {
+        if parse_bool_env(self.args.get_env(FORCE_AUTH_JSON.env), FORCE_AUTH_JSON.env)? {
             let d = PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".codex/auth.json");
             if !d.is_file() {
-                bail!("CODEX_FORCE_AUTH_JSON is set but {} does not exist", d.display());
+                bail!("{} is set but {} does not exist", FORCE_AUTH_JSON.env, d.display());
             }
             return Ok(Some(d));
         }
@@ -439,16 +449,8 @@ impl Agent for Codex {
     fn version(&self) -> Option<String> {
         self.version.clone()
     }
-    /// An auth.json (ChatGPT login) or a `model_provider` in `config` may route elsewhere, so neither is
-    /// taken for the OpenAI API.
-    fn uses_default_endpoint(&self) -> Option<bool> {
-        if connection(&self.args, SPEC).configured_base_url.is_some() || self.base_config.contains_key("openai_base_url") {
-            return Some(false);
-        }
-        if self.base_config.contains_key("model_provider") || !matches!(self.auth_json_path(), Ok(None)) {
-            return None;
-        }
-        Some(true)
+    fn model_access(&self) -> Option<ModelAccess<'_>> {
+        Some(ModelAccess { args: &self.args, spec: SPEC, routing: &ROUTING, config: Some(&self.base_config) })
     }
     fn supports_resume(&self) -> bool {
         true
@@ -677,28 +679,25 @@ impl Agent for Codex {
 mod tests {
     use super::*;
     use crate::agents::installed::common;
+    use crate::agents::model_connection::Backend;
 
     fn agent(kwargs: Value, env: &[(&str, &str)], model: Option<&str>) -> Result<Codex> {
         Codex::new(common::test_args(kwargs, env, model))
     }
 
     #[test]
-    fn default_endpoint() {
-        let used = |kwargs: Value, env: &[(&str, &str)]| {
-            let mut env = env.to_vec();
-            env.insert(0, ("OPENAI_BASE_URL", ""));
-            agent(kwargs, &env, Some("openai/gpt-6.1-sol")).unwrap().uses_default_endpoint()
+    fn backend() {
+        let backend = |kwargs: Value, env: &[(&str, &str)]| {
+            let mut all = vec![("OPENAI_BASE_URL", ""), (AUTH_JSON_PATH.env, ""), (FORCE_AUTH_JSON.env, "")];
+            all.extend_from_slice(env);
+            agent(kwargs, &all, Some("openai/gpt-6.1-sol")).unwrap().backend()
         };
-        let auth = std::env::temp_dir().join(format!("hbench-codex-auth-{}.json", uuid::Uuid::new_v4()));
-        std::fs::write(&auth, "{}").unwrap();
-        if std::env::var("CODEX_AUTH_JSON_PATH").is_err() && std::env::var("CODEX_FORCE_AUTH_JSON").is_err() {
-            assert_eq!(used(json!({}), &[("OPENAI_API_KEY", "sk")]), Some(true));
-            assert_eq!(used(json!({"config": {"model_provider": "oss"}}), &[]), None);
-        }
-        assert_eq!(used(json!({}), &[("CODEX_AUTH_JSON_PATH", auth.to_str().unwrap())]), None);
-        assert_eq!(used(json!({}), &[("OPENAI_BASE_URL", "http://100.67.202.9:1234/v1")]), Some(false));
-        assert_eq!(used(json!({"config": {"openai_base_url": "http://gw/v1"}}), &[]), Some(false));
-        std::fs::remove_file(&auth).unwrap();
+        assert_eq!(backend(json!({}), &[("OPENAI_API_KEY", "sk")]), Some(Backend::Provider));
+        assert_eq!(backend(json!({"config": {"model_provider": "oss"}}), &[]), None);
+        assert_eq!(backend(json!({}), &[(AUTH_JSON_PATH.env, "/home/u/.codex/auth.json")]), None);
+        assert_eq!(backend(json!({}), &[(FORCE_AUTH_JSON.env, "on")]), None);
+        assert_eq!(backend(json!({}), &[("OPENAI_BASE_URL", "http://100.67.202.9:1234/v1")]), Some(Backend::Custom));
+        assert_eq!(backend(json!({"config": {"openai_base_url": "http://gw/v1"}}), &[]), Some(Backend::Custom));
     }
 
     #[test]

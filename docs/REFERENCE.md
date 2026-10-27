@@ -326,19 +326,24 @@ the version. `manifest.json`, written last, holds the SHA-256 of the job's confi
 file its trials wrote; `hbench jobs verify -p jobs/<job>` reports any file changed, removed or added since. It shows
 the files are the ones this build wrote, not that the run was real: anyone can rebuild hbench.
 
-Each trial's `lock.json` and `result.json` (`agent_info`) record whether the model was served from its
-provider's built-in endpoint, never where it was served from:
+Each trial's `lock.json` and `result.json` (`agent_info`) record which kind of service answered the model's
+requests, never where it was:
 
 ```json
-"model_endpoint": {"default": false, "model_served_by": "lmstudio", "model_quantization": "q4_k_m"}
+"model_endpoint": {"backend": "custom", "model_served_by": "lmstudio", "model_quantization": "q4_k_m"}
 ```
 
-- `default` is `true` when no base URL override was given and the provider's built-in endpoint was used, `false`
-  when a base URL override was set (a provider env such as `OPENAI_BASE_URL` or `ANTHROPIC_BASE_URL`, or a kwarg
-  such as `api_base` or `base_url`), and `null` when hbench can't tell. That covers agents that forward the
-  environment to a CLI that reads its own config, Claude Code on Bedrock or Vertex, and Codex with an `auth.json`
-  login or a `model_provider` in its config. `terminus-2`, `computer-1` (litellm provider), `claude-code` and
-  `codex` report it. Other agents record `null` for now.
+- `backend` is one of these values:
+  - `provider`: the provider's own API at its built-in endpoint. This includes Claude Code's subscription
+    OAuth.
+  - `bedrock` or `vertex`: Claude Code with `AWS_BEARER_TOKEN_BEDROCK`, `CLAUDE_CODE_USE_BEDROCK` or
+    `CLAUDE_CODE_USE_VERTEX`.
+  - `custom`: a base URL override was set, through a provider env such as `OPENAI_BASE_URL`, a kwarg such as
+    `api_base`, or the agent's own config (Claude Code settings' `env`, Codex `openai_base_url`).
+  - `null`: hbench can't tell. That covers Codex with an `auth.json` login or a `model_provider` in its config,
+    agents that forward the environment to a CLI that reads its own config, and agents that don't declare their
+    model access yet. `terminus-2`, `computer-1` (litellm provider), `claude-code` and `codex` record a
+    backend. Other agents record `null`.
 - `model_served_by` and `model_quantization` are what the run declares, with `agent.model_served_by` /
   `agent.model_quantization` in a job config or `--model-served-by` / `--model-quantization`. Each is 1-64
   letters, digits and `. _ - : +`, recorded as given. They are `null` when not declared.

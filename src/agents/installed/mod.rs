@@ -45,7 +45,7 @@ pub mod swe_agent;
 pub mod trae_agent;
 pub mod vibe;
 
-use super::model_connection::{self, Resolved, Spec};
+use super::model_connection::{self, Resolved, Routing, Spec};
 use super::{AgentArgs, AgentBox, AgentCtx};
 use crate::env::{ErrorKind, ExecResult, kind_err, quote, tail};
 use anyhow::{Result, bail};
@@ -394,9 +394,9 @@ pub async fn exec_root_checked(cx: &AgentCtx<'_>, cmd: &str, env: &BTreeMap<Stri
     Ok(r)
 }
 
-/// Resolve a model connection with agent env (> host env) precedence.
-pub fn connection(args: &AgentArgs, spec: Spec) -> Resolved {
-    let get = |names: &[&str]| -> Option<(String, String)> {
+/// The first of `names` set in the agent env, else in the host env, as `(name, value)`.
+pub fn env_lookup(args: &AgentArgs) -> impl Fn(&[&str]) -> Option<(String, String)> + '_ {
+    |names: &[&str]| {
         for source in [Some(&args.extra_env), None] {
             for n in names {
                 let v = match source {
@@ -409,8 +409,25 @@ pub fn connection(args: &AgentArgs, spec: Spec) -> Resolved {
             }
         }
         None
-    };
-    model_connection::resolve(args.model_name.as_deref(), spec, &get)
+    }
+}
+
+/// Resolve a model connection with agent env (> host env) precedence.
+pub fn connection(args: &AgentArgs, spec: Spec) -> Resolved {
+    model_connection::resolve(args.model_name.as_deref(), spec, &env_lookup(args))
+}
+
+/// Agents with a fixed provider, whose credentials can be checked before a run.
+const FIXED_PROVIDER: &[(&str, Spec, &Routing)] = &[
+    ("claude-code", claude_code::SPEC, &claude_code::ROUTING),
+    ("codex", codex::SPEC, &codex::ROUTING),
+    ("gemini-cli", gemini_cli::SPEC, &gemini_cli::ROUTING),
+];
+
+/// Credential env vars an agent accepts, any one of which is enough (API keys, OAuth tokens, Bedrock/Vertex
+/// switches, custom endpoints). None = not decidable up front (passthrough agents depend on the model).
+pub fn credential_envs(agent: &str) -> Option<Vec<&'static str>> {
+    FIXED_PROVIDER.iter().find(|(n, _, _)| *n == agent).map(|(_, spec, routing)| model_connection::credential_envs(*spec, routing))
 }
 
 /// Write `content` to `path` in the container with mode 600, owned by the agent user.
@@ -459,6 +476,34 @@ pub fn parse_version(stdout: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn credential_envs_are_unchanged() {
+        let claude = [
+            "ANTHROPIC_API_KEY",
+            "ANTHROPIC_AUTH_TOKEN",
+            "CLAUDE_CODE_OAUTH_TOKEN",
+            "ANTHROPIC_BASE_URL",
+            "AWS_BEARER_TOKEN_BEDROCK",
+            "CLAUDE_CODE_USE_BEDROCK",
+            "CLAUDE_CODE_USE_VERTEX",
+        ];
+        assert_eq!(credential_envs("claude-code").unwrap(), claude);
+        let codex = ["OPENAI_API_KEY", "CODEX_AUTH_JSON_PATH", "CODEX_FORCE_AUTH_JSON", "OPENAI_BASE_URL", "OPENAI_API_BASE"];
+        assert_eq!(credential_envs("codex").unwrap(), codex);
+        let gemini = [
+            "GEMINI_API_KEY",
+            "GOOGLE_API_KEY",
+            "GOOGLE_GENERATIVE_AI_API_KEY",
+            "GEMINI_OAUTH_CREDS_PATH",
+            "GEMINI_FORCE_OAUTH",
+            "GOOGLE_GENAI_USE_VERTEXAI",
+            "GOOGLE_APPLICATION_CREDENTIALS",
+            "GOOGLE_GEMINI_BASE_URL",
+        ];
+        assert_eq!(credential_envs("gemini-cli").unwrap(), gemini);
+        assert!(credential_envs("opencode").is_none() && credential_envs("terminus-2").is_none());
+    }
 
     #[test]
     fn classification_last_match_wins() {

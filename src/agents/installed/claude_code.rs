@@ -3,11 +3,11 @@
 use super::common::{installed_dir, skills_dir};
 use super::pins;
 use super::{
-    connection, ensure_acp_node_command, ensure_system_dependencies, exec_agent, exec_error, exec_root_checked, filter_jsonl_events,
-    parse_version, pinned_bin_wrapper_command, safe_bin_symlink_command, upload_text,
+    connection, ensure_acp_node_command, ensure_system_dependencies, env_lookup, exec_agent, exec_error, exec_root_checked,
+    filter_jsonl_events, parse_version, pinned_bin_wrapper_command, safe_bin_symlink_command, upload_text,
 };
-use crate::agents::model_connection::Spec;
-use crate::agents::{Agent, AgentArgs, AgentContext, AgentCtx, ModelUsage};
+use crate::agents::model_connection::{Backend, On, Routing, Spec, Switch};
+use crate::agents::{Agent, AgentArgs, AgentContext, AgentCtx, ModelAccess, ModelUsage};
 use crate::env::quote;
 use anyhow::{Result, bail};
 use serde_json::{Value, json};
@@ -16,11 +16,23 @@ use std::collections::BTreeMap;
 /// Zed ACP adapter version (bridges ACP <-> the Claude Agent SDK).
 const SETTINGS_DIR: &str = "/tmp/claude-code-settings";
 const SETTINGS_PATH: &str = "/tmp/claude-code-settings/settings.json";
-const SPEC: Spec = Spec {
+pub const SPEC: Spec = Spec {
     default_provider: Some("anthropic"),
     api_key_envs: &["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"],
     base_url_envs: &["ANTHROPIC_BASE_URL"],
     passthrough: false,
+};
+const OAUTH_TOKEN: &str = "CLAUDE_CODE_OAUTH_TOKEN";
+const FORCE_OAUTH: Switch = Switch::new("CLAUDE_FORCE_OAUTH", On::Flag);
+const BEDROCK_TOKEN: Switch = Switch::new("AWS_BEARER_TOKEN_BEDROCK", On::Set);
+const USE_BEDROCK: Switch = Switch::new("CLAUDE_CODE_USE_BEDROCK", On::Flag);
+const USE_VERTEX: Switch = Switch::new("CLAUDE_CODE_USE_VERTEX", On::Flag);
+/// Subscription OAuth reaches Anthropic's API too; settings' `env` is applied like the agent env.
+pub const ROUTING: Routing = Routing {
+    credential_envs: &[OAUTH_TOKEN],
+    backends: &[(BEDROCK_TOKEN, Backend::Bedrock), (USE_BEDROCK, Backend::Bedrock), (USE_VERTEX, Backend::Vertex)],
+    config_env: Some("env"),
+    ..Routing::NONE
 };
 
 pub struct ClaudeCode {
@@ -31,10 +43,6 @@ pub struct ClaudeCode {
     loaded: bool,
     /// Native claude binary the ACP adapter must use (set by acp_install).
     acp_claude_executable: Option<String>,
-}
-
-fn env_flag_enabled(v: Option<String>) -> bool {
-    matches!(v.as_deref().map(str::trim).map(str::to_lowercase).as_deref(), Some("1" | "true" | "yes"))
 }
 
 impl ClaudeCode {
@@ -106,13 +114,7 @@ impl ClaudeCode {
     }
 
     fn use_bedrock(&self) -> bool {
-        self.args.get_env("AWS_BEARER_TOKEN_BEDROCK").is_some() || env_flag_enabled(self.args.get_env("CLAUDE_CODE_USE_BEDROCK"))
-    }
-
-    /// The `config` settings' `env` sets an endpoint (`ANTHROPIC_BASE_URL`, ...).
-    fn settings_set_endpoint(&self) -> bool {
-        let env = self.settings.as_ref().and_then(|s| s.get("env")).and_then(Value::as_object);
-        env.is_some_and(|e| e.keys().any(|k| crate::config::is_endpoint_key(k)))
+        ROUTING.backend_switch(&env_lookup(&self.args)) == Some(Backend::Bedrock)
     }
 
     fn resolved_model(&self) -> Option<String> {
@@ -129,12 +131,11 @@ impl ClaudeCode {
     /// Auth env: API key (default) or subscription OAuth token, or Bedrock.
     fn auth_env(&self) -> Result<BTreeMap<String, String>> {
         let bedrock = self.use_bedrock();
-        let force_oauth = env_flag_enabled(self.args.get_env("CLAUDE_FORCE_OAUTH"));
-        let oauth = self.args.get_env("CLAUDE_CODE_OAUTH_TOKEN").map(|s| s.trim().to_string()).unwrap_or_default();
+        let force_oauth = FORCE_OAUTH.is_on(&env_lookup(&self.args));
+        let oauth = self.args.get_env(OAUTH_TOKEN).map(|s| s.trim().to_string()).unwrap_or_default();
         if force_oauth && oauth.is_empty() {
-            bail!(
-                "CLAUDE_FORCE_OAUTH is set but CLAUDE_CODE_OAUTH_TOKEN is not. Run `claude setup-token` to get one, or unset CLAUDE_FORCE_OAUTH."
-            );
+            let force = FORCE_OAUTH.env;
+            bail!("{force} is set but {OAUTH_TOKEN} is not. Run `claude setup-token` to get one, or unset {force}.");
         }
         let conn = connection(&self.args, SPEC);
         let mut env = BTreeMap::new();
@@ -144,11 +145,11 @@ impl ClaudeCode {
         if !bedrock {
             env.insert("ANTHROPIC_BASE_URL".into(), conn.configured_base_url.clone().unwrap_or_default());
         }
-        env.insert("CLAUDE_CODE_OAUTH_TOKEN".into(), oauth);
+        env.insert(OAUTH_TOKEN.into(), oauth);
         if bedrock {
-            env.insert("CLAUDE_CODE_USE_BEDROCK".into(), "1".into());
+            env.insert(USE_BEDROCK.env.into(), "1".into());
             for k in [
-                "AWS_BEARER_TOKEN_BEDROCK",
+                BEDROCK_TOKEN.env,
                 "AWS_ACCESS_KEY_ID",
                 "AWS_SECRET_ACCESS_KEY",
                 "AWS_SESSION_TOKEN",
@@ -322,15 +323,8 @@ impl Agent for ClaudeCode {
     fn version(&self) -> Option<String> {
         self.version.clone()
     }
-    /// API key and subscription OAuth both reach Anthropic's API; Bedrock and Vertex are not its endpoint.
-    fn uses_default_endpoint(&self) -> Option<bool> {
-        if self.use_bedrock() || env_flag_enabled(self.args.get_env("CLAUDE_CODE_USE_VERTEX")) {
-            return None;
-        }
-        if self.settings_set_endpoint() {
-            return Some(false);
-        }
-        connection(&self.args, SPEC).uses_default_endpoint()
+    fn model_access(&self) -> Option<ModelAccess<'_>> {
+        Some(ModelAccess { args: &self.args, spec: SPEC, routing: &ROUTING, config: self.settings.as_ref().and_then(Value::as_object) })
     }
     fn supports_resume(&self) -> bool {
         true
@@ -575,19 +569,54 @@ mod tests {
         ClaudeCode::new(common::test_args(kwargs, env, model))
     }
 
+    /// Pins the agent env for every routing switch, so the host env can't leak into the cases.
+    fn pinned(env: &[(&'static str, &'static str)]) -> Vec<(&'static str, &'static str)> {
+        let names = ["ANTHROPIC_BASE_URL", OAUTH_TOKEN, FORCE_OAUTH.env, BEDROCK_TOKEN.env, USE_BEDROCK.env, USE_VERTEX.env];
+        let mut all: Vec<_> = names.map(|k| (k, "")).to_vec();
+        all.extend_from_slice(env);
+        all
+    }
+
     #[test]
-    fn default_endpoint() {
-        let used = |kwargs: Value, env: &[(&str, &str)]| {
-            let mut env = env.to_vec();
-            env.insert(0, ("ANTHROPIC_BASE_URL", ""));
-            agent(kwargs, &env, Some("anthropic/claude-x")).unwrap().uses_default_endpoint()
+    fn backend() {
+        let backend = |kwargs: Value, env: &[(&'static str, &'static str)]| {
+            agent(kwargs, &pinned(env), Some("anthropic/claude-x")).unwrap().backend()
         };
-        assert_eq!(used(json!({}), &[("ANTHROPIC_API_KEY", "sk")]), Some(true));
-        assert_eq!(used(json!({}), &[("CLAUDE_CODE_OAUTH_TOKEN", "oat"), ("CLAUDE_FORCE_OAUTH", "1")]), Some(true));
-        assert_eq!(used(json!({}), &[("ANTHROPIC_BASE_URL", "http://10.0.0.5:4000")]), Some(false));
-        assert_eq!(used(json!({"config": {"env": {"ANTHROPIC_BASE_URL": "http://gw"}}}), &[]), Some(false));
-        assert_eq!(used(json!({}), &[("CLAUDE_CODE_USE_BEDROCK", "1")]), None);
-        assert_eq!(used(json!({}), &[("CLAUDE_CODE_USE_VERTEX", "true")]), None);
+        assert_eq!(backend(json!({}), &[("ANTHROPIC_API_KEY", "sk")]), Some(Backend::Provider));
+        assert_eq!(backend(json!({}), &[("CLAUDE_CODE_OAUTH_TOKEN", "oat"), ("CLAUDE_FORCE_OAUTH", "1")]), Some(Backend::Provider));
+        assert_eq!(backend(json!({}), &[("ANTHROPIC_BASE_URL", "http://10.0.0.5:4000")]), Some(Backend::Custom));
+        assert_eq!(backend(json!({"config": {"env": {"ANTHROPIC_BASE_URL": "http://gw"}}}), &[]), Some(Backend::Custom));
+        assert_eq!(backend(json!({}), &[("CLAUDE_CODE_USE_BEDROCK", "1")]), Some(Backend::Bedrock));
+        assert_eq!(backend(json!({}), &[("AWS_BEARER_TOKEN_BEDROCK", "t"), ("CLAUDE_CODE_USE_VERTEX", "1")]), Some(Backend::Bedrock));
+        assert_eq!(backend(json!({}), &[("CLAUDE_CODE_USE_VERTEX", "true")]), Some(Backend::Vertex));
+    }
+
+    #[test]
+    fn bedrock_switch_and_model_resolution_are_unchanged() {
+        let a = |env: &[(&'static str, &'static str)], model: &str| agent(json!({}), &pinned(env), Some(model)).unwrap();
+        for (env, bedrock) in [
+            (&[("AWS_BEARER_TOKEN_BEDROCK", "t")][..], true),
+            (&[("CLAUDE_CODE_USE_BEDROCK", " Yes ")][..], true),
+            (&[("CLAUDE_CODE_USE_BEDROCK", "TRUE")][..], true),
+            (&[("CLAUDE_CODE_USE_BEDROCK", "on")][..], false),
+            (&[("CLAUDE_CODE_USE_BEDROCK", "0")][..], false),
+            (&[("CLAUDE_CODE_USE_VERTEX", "1")][..], false),
+            (&[][..], false),
+        ] {
+            assert_eq!(a(env, "anthropic/claude-x").use_bedrock(), bedrock, "{env:?}");
+        }
+        assert_eq!(a(&[("CLAUDE_CODE_USE_BEDROCK", "1")], "bedrock/us.anthropic.claude").resolved_model().unwrap(), "us.anthropic.claude");
+        assert_eq!(
+            a(&[("ANTHROPIC_BASE_URL", "http://p")], "openrouter/anthropic/claude-x").resolved_model().unwrap(),
+            "openrouter/anthropic/claude-x"
+        );
+        assert_eq!(a(&[], "openrouter/anthropic/claude-x").resolved_model().unwrap(), "claude-x");
+        let e = a(&[("CLAUDE_FORCE_OAUTH", "yes")], "anthropic/claude-x").auth_env().unwrap_err().to_string();
+        assert_eq!(
+            e,
+            "CLAUDE_FORCE_OAUTH is set but CLAUDE_CODE_OAUTH_TOKEN is not. Run `claude setup-token` to get one, or unset CLAUDE_FORCE_OAUTH."
+        );
+        assert!(a(&[("CLAUDE_FORCE_OAUTH", "on")], "anthropic/claude-x").auth_env().is_ok());
     }
 
     #[test]
