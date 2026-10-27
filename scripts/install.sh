@@ -19,8 +19,8 @@ esac
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-# /releases/latest redirects to /releases/tag/<tag>; reading the redirect avoids the API rate limit.
-tag=${HBENCH_VERSION:-${DEFAULT_VERSION:-$(curl -fsSLI -o /dev/null -w '%{url_effective}' "https://github.com/$REPO/releases/latest" | sed 's|.*/||')}}
+# /releases/latest redirects to /releases/tag/<tag>; reading the redirect, without fetching that page, avoids the API rate limit.
+tag=${HBENCH_VERSION:-${DEFAULT_VERSION:-$(curl -fsSI -o /dev/null -w '%{redirect_url}' "https://github.com/$REPO/releases/latest" | sed 's|.*/||')}}
 case "$tag" in v*) ;; *) echo "could not find the latest hbench release of $REPO" >&2; exit 1 ;; esac
 for f in "hbench-$tag-$target.tar.gz" SHA256SUMS; do
   curl -fsSL -o "$tmp/$f" "https://github.com/$REPO/releases/download/$tag/$f" || { echo "could not download $f of hbench $tag from $REPO" >&2; exit 1; }
