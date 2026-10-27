@@ -4,6 +4,7 @@
 //! trajectories) to the agent logs dir; the pane log and asciinema recording land in /logs/agent.
 
 use super::llm::{Chat, ChatClient, Llm, LlmConfig, LlmError, LlmResponse, content_text};
+use super::model_connection::Backend;
 use super::{Agent, AgentArgs, AgentContext, AgentCtx, ModelUsage};
 use crate::agents::installed::{APT_INSTALL_FN, pins};
 use crate::env::{ExecResult, quote};
@@ -1657,6 +1658,9 @@ impl Agent for Terminus2 {
     }
     fn version(&self) -> Option<String> {
         Some(VERSION.into())
+    }
+    fn backend(&self) -> Option<Backend> {
+        self.llm.backend()
     }
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
         let mut t = self.new_session();

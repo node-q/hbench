@@ -8,7 +8,7 @@
 //! HTTP goes through the host `curl` (no HTTP client crate in Cargo.toml), like
 //! `registry.rs`. Secrets travel on curl's stdin config, never argv.
 
-use super::model_connection::{self, Spec};
+use super::model_connection::{self, Backend, Spec};
 use super::pricing::{self, Rates};
 use crate::env::{ErrorKind, kind_err, tail};
 use anyhow::{Result, anyhow, bail};
@@ -232,6 +232,9 @@ pub struct Endpoint {
     /// Model name sent to the provider (provider prefix stripped).
     pub model: String,
     pub provider: String,
+    /// [`Backend::Custom`] when a base URL override (`api_base`, a provider env) was given, else
+    /// [`Backend::Provider`].
+    pub backend: Backend,
 }
 
 /// Default base URLs for providers `model_connection` doesn't list.
@@ -256,12 +259,9 @@ pub fn resolve_endpoint(model: &str, api_base: Option<&str>, responses: bool, ge
     let sent = model.split_once('/').map(|(_, m)| m).unwrap_or(model).to_string();
     let upper = provider.to_uppercase().replace('-', "_");
     let key = conn.api_key.clone().or_else(|| get(&format!("{upper}_API_KEY")));
-    let base = api_base
-        .map(String::from)
-        .or(conn.configured_base_url.clone())
-        .or_else(|| get(&format!("{upper}_API_BASE")))
-        .or_else(|| default_base(&provider).map(String::from))
-        .map(|b| b.trim_end_matches('/').to_string());
+    let configured = api_base.map(String::from).or(conn.configured_base_url.clone()).or_else(|| get(&format!("{upper}_API_BASE")));
+    let backend = if configured.is_some() { Backend::Custom } else { Backend::Provider };
+    let base = configured.or_else(|| default_base(&provider).map(String::from)).map(|b| b.trim_end_matches('/').to_string());
     let mut headers: Vec<(String, String)> = vec![];
     let h = |k: &str, v: String| (k.to_string(), v);
     match provider.as_str() {
@@ -281,7 +281,7 @@ pub fn resolve_endpoint(model: &str, api_base: Option<&str>, responses: bool, ge
             } else {
                 format!("{b}/v1/messages")
             };
-            return Ok(Endpoint { api: Api::Anthropic, url, headers, model: sent, provider });
+            return Ok(Endpoint { api: Api::Anthropic, url, headers, model: sent, provider, backend });
         }
         "amazon-bedrock" | "vertex_ai" | "sagemaker" => {
             bail!(
@@ -299,7 +299,7 @@ pub fn resolve_endpoint(model: &str, api_base: Option<&str>, responses: bool, ge
             headers.push(h("api-key", k));
         }
         let url = format!("{b}/openai/deployments/{sent}/chat/completions?api-version={ver}");
-        return Ok(Endpoint { api: Api::Chat, url, headers, model: sent, provider });
+        return Ok(Endpoint { api: Api::Chat, url, headers, model: sent, provider, backend });
     }
     if provider == "google" && !b.contains("/openai") {
         b += "/v1beta/openai";
@@ -311,7 +311,7 @@ pub fn resolve_endpoint(model: &str, api_base: Option<&str>, responses: bool, ge
         headers.push(h("authorization", format!("Bearer {k}")));
     }
     let (api, url) = if responses { (Api::Responses, format!("{b}/responses")) } else { (Api::Chat, format!("{b}/chat/completions")) };
-    Ok(Endpoint { api, url, headers, model: sent, provider })
+    Ok(Endpoint { api, url, headers, model: sent, provider, backend })
 }
 
 /// LLM client constructor arguments.
@@ -342,6 +342,10 @@ pub trait Llm: Send + Sync {
     ) -> Result<LlmResponse, LlmError>;
     fn context_limit(&self) -> i64;
     fn output_limit(&self) -> Option<i64>;
+    /// See [`super::Agent::backend`].
+    fn backend(&self) -> Option<Backend> {
+        None
+    }
     fn count_tokens(&self, messages: &[Value]) -> i64 {
         approx_tokens(messages)
     }
@@ -952,6 +956,9 @@ impl Llm for ChatClient {
     fn output_limit(&self) -> Option<i64> {
         self.info.and_then(|i| i.max_output_tokens)
     }
+    fn backend(&self) -> Option<Backend> {
+        Some(self.ep.backend)
+    }
     async fn complete(&self, messages: Vec<Value>, kw: &Map<String, Value>) -> Result<LlmResponse, LlmError> {
         let mut p = self.build_params(messages, kw, false);
         // Fable/Mythos think adaptively; an explicit budget is rejected.
@@ -1180,6 +1187,22 @@ mod tests {
         let e = resolve_endpoint("myprov/x", None, false, &env(&[("MYPROV_BASE_URL", "http://m"), ("MYPROV_API_KEY", "mk")])).unwrap();
         assert_eq!(e.url, "http://m/chat/completions");
         assert!(e.headers.contains(&("authorization".into(), "Bearer mk".into())));
+    }
+
+    #[test]
+    fn provider_backend_unless_overridden() {
+        let backend = |model: &str, api_base: Option<&str>, vars: &'static [(&'static str, &'static str)]| {
+            resolve_endpoint(model, api_base, false, &env(vars)).unwrap().backend
+        };
+        assert_eq!(backend("openai/gpt-6.1-sol", None, &[("OPENAI_API_KEY", "k")]), Backend::Provider);
+        assert_eq!(backend("anthropic/claude-x", None, &[("CLAUDE_CODE_OAUTH_TOKEN", "oat")]), Backend::Provider);
+        assert_eq!(backend("ollama/llama3", None, &[]), Backend::Provider);
+        assert_eq!(backend("openai/gpt-6.1-sol", None, &[("OPENAI_BASE_URL", "http://100.67.202.9:1234/v1")]), Backend::Custom);
+        assert_eq!(backend("anthropic/claude-x", None, &[("ANTHROPIC_BASE_URL", "http://proxy:8080")]), Backend::Custom);
+        assert_eq!(backend("openai/gpt-6.1-sol", Some("http://gw/v1"), &[]), Backend::Custom);
+        assert_eq!(backend("myprov/x", None, &[("MYPROV_API_BASE", "http://m")]), Backend::Custom);
+        let l = llm(LlmConfig { model_name: "openai/gpt-4o".into(), ..Default::default() }, &[("OPENAI_BASE_URL", "http://h/v1")]);
+        assert_eq!(l.backend(), Some(Backend::Custom));
     }
 
     #[test]

@@ -1,5 +1,6 @@
 //! One agent attempt on one task (single- or multi-step).
 
+use crate::agents::model_connection::ModelEndpoint;
 use crate::agents::{self, AgentBox, AgentContext, AgentCtx};
 use crate::artifacts::{self, Claims};
 use crate::config::TrialConfig;
@@ -69,6 +70,8 @@ pub struct AgentInfo {
     pub name: String,
     pub version: String,
     pub model_info: Option<ModelInfo>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_endpoint: Option<ModelEndpoint>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -130,6 +133,7 @@ impl TrialResult {
                 name: cfg.agent.name().into(),
                 version: "unknown".into(),
                 model_info: model_info(&cfg.agent.model_name),
+                model_endpoint: agents::model_endpoint(&cfg.agent, task),
             },
             config: cfg,
             agent_result: None,
@@ -1320,7 +1324,7 @@ fn sha256_prefixed(b: &[u8]) -> String {
     format!("sha256:{}", crate::task::hex(&<sha2::Sha256 as sha2::Digest>::digest(b)))
 }
 
-/// Trial lock (lock.json), with null fields omitted.
+/// Trial lock (lock.json), with null fields omitted except in `model_endpoint`, whose nulls mean unknown.
 pub fn trial_lock(c: &TrialConfig) -> Value {
     let local = crate::registry::local_path(&c.task);
     let task = Task::load(&local).ok();
@@ -1345,7 +1349,8 @@ pub fn trial_lock(c: &TrialConfig) -> Value {
         .map(|s| serde_json::json!({"name": Path::new(s).file_name().map(|n| n.to_string_lossy().into_owned()), "source": s, "digest": crate::task::package_digest(Path::new(s))}))
         .collect();
     let user_agent = c.user_agent.as_ref();
-    drop_nulls(serde_json::json!({
+    let model_endpoint = task.as_ref().and_then(|t| agents::model_endpoint(&c.agent, t));
+    let mut lock = drop_nulls(serde_json::json!({
         "schema_version": 2,
         // The build that ran this trial: a job resumed on another build has trials from both.
         "hbench": crate::build_info::json(),
@@ -1375,6 +1380,7 @@ pub fn trial_lock(c: &TrialConfig) -> Value {
         "environment_build_timeout_multiplier": c.environment_build_timeout_multiplier,
         "extra_instructions": if extra.is_empty() { Value::Null } else { Value::Array(extra) },
         "agent": c.agent,
+        "model_endpoint": model_endpoint,
         "prompt_template": c.agent.kwargs.get("prompt_template_path").and_then(Value::as_str)
             .map(|p| serde_json::json!({"path": p, "digest": file_digest(Path::new(p))})),
         "user_agent": user_agent,
@@ -1389,7 +1395,11 @@ pub fn trial_lock(c: &TrialConfig) -> Value {
         },
         "verifier": verifier,
         "source_trial": c.source_trial,
-    }))
+    }));
+    if let Some(e) = model_endpoint {
+        lock["model_endpoint"] = serde_json::to_value(e).unwrap_or_default();
+    }
+    lock
 }
 
 async fn cancellable<T>(mut cancel: watch::Receiver<bool>, fut: impl Future<Output = Result<T>>) -> Result<T> {
@@ -1589,6 +1599,87 @@ mod tests {
         assert_eq!(lock["prompt_template"]["digest"], sha256_prefixed(b"Fix it: {{ instruction }}"));
         assert!(trial_lock(&cfg(serde_json::json!({}))).get("prompt_template").is_none());
         assert_eq!(lock["hbench"]["version"], env!("CARGO_PKG_VERSION"));
+    }
+
+    const LEAKS: [&str; 6] = ["SECRET123", "SECRET456", "SECRET789", "user:pass", "100.67.202.9", "gw.corp.example"];
+
+    /// config.json, lock.json and result.json as a trial with this agent config writes them.
+    fn written_files(agent: Value) -> [Value; 3] {
+        let task_dir = Path::new("examples/tasks/hello-world");
+        let cfg: TrialConfig = serde_json::from_value(serde_json::json!({
+            "task": {"path": task_dir}, "trial_name": "t", "trials_dir": tmp("endpoint"), "agent": agent,
+        }))
+        .unwrap();
+        let task = Task::load(task_dir).unwrap();
+        let result = serde_json::to_value(TrialResult::new(cfg.clone(), &task, &cfg.trials_dir)).unwrap();
+        [cfg.config_json(), trial_lock(&cfg), result]
+    }
+
+    fn assert_endpoint(agent: Value, expected: Value) {
+        let files = written_files(agent.clone());
+        for (name, v) in ["config.json", "lock.json", "result.json"].iter().zip(&files) {
+            let text = v.to_string();
+            for leak in LEAKS {
+                assert!(!text.contains(leak), "{name} of {agent} holds {leak:?}: {text}");
+            }
+        }
+        assert_eq!(files[1]["model_endpoint"], expected, "{agent}");
+        assert_eq!(files[2]["agent_info"]["model_endpoint"], expected, "{agent}");
+    }
+
+    #[test]
+    fn model_endpoint_records_no_url_host_or_credential() {
+        let url = "http://user:pass@100.67.202.9:1234/token/SECRET789?api_key=SECRET456";
+        // SAFETY: unique var names.
+        unsafe {
+            std::env::set_var("HBENCH_EP_TEST_KEY", "sk-test-SECRET123");
+            std::env::set_var("HBENCH_EP_TEST_URL", url);
+        }
+        let labels = serde_json::json!({"model_served_by": "lmstudio", "model_quantization": "q4_k_m"});
+        let overridden = serde_json::json!({"backend": "custom", "model_served_by": "lmstudio", "model_quantization": "q4_k_m"});
+        let plain = serde_json::json!({"backend": "provider", "model_served_by": null, "model_quantization": null});
+        let agent = |name: &str, model: &str, env: Value, extra: &Value| {
+            let mut a = serde_json::json!({"name": name, "model_name": model, "env": env});
+            a.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            a
+        };
+        for (name, model, key, base) in [
+            ("terminus-2", "openai/gpt-6.1-sol", "OPENAI_API_KEY", "OPENAI_BASE_URL"),
+            ("codex", "openai/gpt-6.1-sol", "OPENAI_API_KEY", "OPENAI_BASE_URL"),
+            ("claude-code", "anthropic/claude-x", "ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL"),
+        ] {
+            let literal = serde_json::json!({key: "sk-test-SECRET123", base: url});
+            assert_endpoint(agent(name, model, literal, &labels), overridden.clone());
+            let templated = serde_json::json!({key: "${HBENCH_EP_TEST_KEY}", base: "${HBENCH_EP_TEST_URL}"});
+            assert_endpoint(agent(name, model, templated, &labels), overridden.clone());
+            if name != "codex" || std::env::var("CODEX_AUTH_JSON_PATH").is_err() {
+                assert_endpoint(
+                    agent(name, model, serde_json::json!({key: "sk-test-SECRET123", base: ""}), &serde_json::json!({})),
+                    plain.clone(),
+                );
+            }
+        }
+        let gateway = serde_json::json!({"api_base": "https://gw.corp.example/v1?key=SECRET456"});
+        let kwargs = serde_json::json!({"kwargs": gateway});
+        assert_endpoint(agent("terminus-2", "openai/gpt-6.1-sol", serde_json::json!({"OPENAI_BASE_URL": ""}), &kwargs), {
+            serde_json::json!({"backend": "custom", "model_served_by": null, "model_quantization": null})
+        });
+        let unknown = serde_json::json!({"backend": null, "model_served_by": "vllm", "model_quantization": null});
+        assert_endpoint(
+            agent(
+                "aider",
+                "openai/gpt-6.1-sol",
+                serde_json::json!({"OPENAI_BASE_URL": url}),
+                &serde_json::json!({"model_served_by": "vllm"}),
+            ),
+            unknown,
+        );
+        let bedrock = serde_json::json!({"AWS_BEARER_TOKEN_BEDROCK": "SECRET123-bedrock", "ANTHROPIC_BASE_URL": url});
+        assert_endpoint(
+            agent("claude-code", "anthropic/claude-x", bedrock, &serde_json::json!({})),
+            serde_json::json!({"backend": "bedrock", "model_served_by": null, "model_quantization": null}),
+        );
+        assert!(written_files(serde_json::json!({"name": "oracle"}))[1].get("model_endpoint").is_none());
     }
 
     #[test]

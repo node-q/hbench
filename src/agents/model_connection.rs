@@ -1,5 +1,7 @@
 //! Declarative model credentials and endpoint resolution.
 
+use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 use std::collections::BTreeMap;
 
 pub struct ProviderAccess {
@@ -207,6 +209,148 @@ pub fn resolve(model: Option<&str>, spec: Spec, get: &EnvLookup) -> Resolved {
     }
 }
 
+impl Resolved {
+    /// [`Backend::Custom`] when a base URL was configured, else [`Backend::Provider`] when the provider has a
+    /// built-in endpoint; `None` when hbench knows none.
+    pub fn backend(&self) -> Option<Backend> {
+        if self.configured_base_url.is_some() {
+            return Some(Backend::Custom);
+        }
+        self.provider.as_deref().and_then(provider).and_then(|p| p.base_url).map(|_| Backend::Provider)
+    }
+}
+
+/// Which service answers a run's model requests.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Backend {
+    /// The provider's own API at its built-in endpoint.
+    Provider,
+    Bedrock,
+    Vertex,
+    /// Wherever a base URL override points.
+    Custom,
+}
+
+/// When an env switch is on: `Set` to any non-empty value, a `Flag` of `1`/`true`/`yes`, or a `Bool` that
+/// parses as true (`1`/`on`/`t`/`true`/`y`/`yes`).
+#[derive(Clone, Copy)]
+pub enum On {
+    Set,
+    Flag,
+    Bool,
+}
+
+#[derive(Clone, Copy)]
+pub struct Switch {
+    pub env: &'static str,
+    pub on: On,
+}
+
+impl Switch {
+    pub const fn new(env: &'static str, on: On) -> Switch {
+        Switch { env, on }
+    }
+    pub fn is_on(&self, get: &EnvLookup) -> bool {
+        let Some((_, v)) = get(&[self.env]) else { return false };
+        match self.on {
+            On::Set => !v.is_empty(),
+            On::Flag => matches!(v.trim().to_lowercase().as_str(), "1" | "true" | "yes"),
+            On::Bool => super::installed::common::opts::lax_bool(&Value::String(v)) == Some(true),
+        }
+    }
+}
+
+/// What, besides its provider and base URL envs, decides where an agent's model requests go.
+#[derive(Clone, Copy)]
+pub struct Routing {
+    /// Credentials whose endpoint hbench can't know (a ChatGPT auth.json, Gemini OAuth).
+    pub opaque_auth: &'static [Switch],
+    /// Other credentials for the provider's own endpoint (an OAuth token).
+    pub credential_envs: &'static [&'static str],
+    /// Switches to another official backend; the first one on wins.
+    pub backends: &'static [(Switch, Backend)],
+    /// Key of the agent's own config whose map counts as env too (Claude Code settings' `env`).
+    pub config_env: Option<&'static str>,
+    /// Agent config keys that set a base URL.
+    pub config_base_urls: &'static [&'static str],
+    /// Agent config keys that pick a provider hbench can't know.
+    pub config_opaque: &'static [&'static str],
+}
+
+impl Routing {
+    pub const NONE: Routing =
+        Routing { opaque_auth: &[], credential_envs: &[], backends: &[], config_env: None, config_base_urls: &[], config_opaque: &[] };
+
+    pub fn backend_switch(&self, get: &EnvLookup) -> Option<Backend> {
+        self.backends.iter().find(|(s, _)| s.is_on(get)).map(|(_, b)| *b)
+    }
+    pub fn opaque_auth_on(&self, get: &EnvLookup) -> bool {
+        self.opaque_auth.iter().any(|s| s.is_on(get))
+    }
+}
+
+/// The backend a non-passthrough agent's model requests go to: a backend switch, else [`Backend::Custom`] for
+/// a base URL (env or `config`), else unknown for an opaque credential or `config` provider, else the
+/// provider's built-in endpoint. `None` when hbench can't tell, as for passthrough agents.
+pub fn backend(
+    model: Option<&str>,
+    spec: Spec,
+    routing: &Routing,
+    config: Option<&Map<String, Value>>,
+    get: &EnvLookup,
+) -> Option<Backend> {
+    if spec.passthrough {
+        return None;
+    }
+    let config_env = routing.config_env.and_then(|k| config?.get(k)?.as_object());
+    let from_config = |names: &[&str]| names.iter().find_map(|n| Some((n.to_string(), config_env?.get(*n)?.as_str()?.to_string())));
+    let get = |names: &[&str]| from_config(names).or_else(|| get(names));
+    if let Some(b) = routing.backend_switch(&get) {
+        return Some(b);
+    }
+    let in_config = |keys: &[&str]| config.is_some_and(|c| keys.iter().any(|k| c.contains_key(*k)));
+    let resolved = resolve(model, spec, &get);
+    if resolved.configured_base_url.is_some() || in_config(routing.config_base_urls) {
+        return Some(Backend::Custom);
+    }
+    if in_config(routing.config_opaque) || routing.opaque_auth_on(&get) {
+        return None;
+    }
+    resolved.backend()
+}
+
+/// Envs any one of which lets an agent reach its model, as the credential preflight names them: API keys,
+/// opaque credentials, other credentials, base URLs (the agent's own, else its provider's), backend switches.
+pub fn credential_envs(spec: Spec, routing: &Routing) -> Vec<&'static str> {
+    let access = spec.default_provider.and_then(provider);
+    let keys = spec.api_key_envs.iter().chain(access.as_ref().map_or(&[][..], |a| a.api_key_envs));
+    let base_urls = if spec.base_url_envs.is_empty() { access.as_ref().map_or(&[][..], |a| a.base_url_envs) } else { spec.base_url_envs };
+    let mut out: Vec<&'static str> = vec![];
+    let all = keys
+        .copied()
+        .chain(routing.opaque_auth.iter().map(|s| s.env))
+        .chain(routing.credential_envs.iter().copied())
+        .chain(base_urls.iter().copied())
+        .chain(routing.backends.iter().map(|(s, _)| s.env));
+    for n in all {
+        if !out.contains(&n) {
+            out.push(n);
+        }
+    }
+    out
+}
+
+/// What lock.json and result.json record about where a trial's model was served: its [`Backend`] and the
+/// labels the run declared. Never a URL, host or credential.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ModelEndpoint {
+    /// `None`: hbench can't tell.
+    pub backend: Option<Backend>,
+    pub model_served_by: Option<String>,
+    pub model_quantization: Option<String>,
+}
+
 /// Rewrite provider env aliases to each provider's canonical (first) name.
 pub fn with_canonical_provider_envs(mut r: Resolved) -> Resolved {
     let Some(s) = r.provider.as_deref().and_then(provider) else { return r };
@@ -259,5 +403,59 @@ mod tests {
         assert_eq!(r.provider.as_deref(), Some("openai"));
         let r = resolve(Some("myprov/m"), pass, &getter(&[("MYPROV_BASE_URL", "http://y")]));
         assert_eq!(r.env["MYPROV_BASE_URL"], "http://y");
+    }
+
+    #[test]
+    fn provider_backend_unless_a_base_url_is_configured() {
+        let backend =
+            |model: &str, vars: &'static [(&'static str, &'static str)]| resolve(Some(model), Spec::default(), &getter(vars)).backend();
+        assert_eq!(backend("openai/gpt-6.1-sol", &[("OPENAI_API_KEY", "k")]), Some(Backend::Provider));
+        assert_eq!(backend("openai/gpt-6.1-sol", &[]), Some(Backend::Provider));
+        assert_eq!(backend("openai/gpt-6.1-sol", &[("OPENAI_BASE_URL", "http://100.67.202.9:1234/v1")]), Some(Backend::Custom));
+        assert_eq!(backend("openai/gpt-6.1-sol", &[("OPENAI_API_BASE", "http://h/v1")]), Some(Backend::Custom));
+        assert_eq!(backend("openai/gpt-6.1-sol", &[("OPENAI_BASE_URL", "")]), Some(Backend::Provider));
+        assert_eq!(backend("ollama/llama3", &[]), None);
+        assert_eq!(backend("myprov/m", &[("MYPROV_BASE_URL", "http://y")]), Some(Backend::Custom));
+        assert_eq!(backend("myprov/m", &[]), None);
+    }
+
+    const ROUTED: Routing = Routing {
+        opaque_auth: &[Switch::new("AUTH_JSON", On::Set)],
+        backends: &[(Switch::new("USE_BEDROCK", On::Flag), Backend::Bedrock), (Switch::new("USE_VERTEX", On::Bool), Backend::Vertex)],
+        config_env: Some("env"),
+        config_base_urls: &["base_url"],
+        config_opaque: &["model_provider"],
+        ..Routing::NONE
+    };
+
+    #[test]
+    fn backend_follows_switches_config_and_opaque_auth() {
+        let spec = Spec { default_provider: Some("anthropic"), base_url_envs: &["ANTHROPIC_BASE_URL"], ..Spec::default() };
+        let backend = |vars: &'static [(&'static str, &'static str)], config: Value| {
+            backend(Some("anthropic/claude-x"), spec, &ROUTED, config.as_object(), &getter(vars))
+        };
+        assert_eq!(backend(&[], Value::Null), Some(Backend::Provider));
+        assert_eq!(backend(&[("USE_BEDROCK", "yes"), ("ANTHROPIC_BASE_URL", "http://p")], Value::Null), Some(Backend::Bedrock));
+        assert_eq!(backend(&[("USE_BEDROCK", "on")], Value::Null), Some(Backend::Provider));
+        assert_eq!(backend(&[("USE_VERTEX", "on")], Value::Null), Some(Backend::Vertex));
+        assert_eq!(backend(&[], serde_json::json!({"env": {"USE_VERTEX": "1"}})), Some(Backend::Vertex));
+        assert_eq!(backend(&[], serde_json::json!({"env": {"ANTHROPIC_BASE_URL": "http://gw"}})), Some(Backend::Custom));
+        assert_eq!(backend(&[], serde_json::json!({"base_url": "http://gw"})), Some(Backend::Custom));
+        assert_eq!(backend(&[("AUTH_JSON", "/a.json")], Value::Null), None);
+        assert_eq!(backend(&[("AUTH_JSON", "/a.json"), ("ANTHROPIC_BASE_URL", "http://p")], Value::Null), Some(Backend::Custom));
+        assert_eq!(backend(&[], serde_json::json!({"model_provider": "oss"})), None);
+        let pass = Spec { passthrough: true, ..spec };
+        assert_eq!(super::backend(Some("anthropic/claude-x"), pass, &ROUTED, None, &getter(&[])), None);
+        assert_eq!(serde_json::to_value(Backend::Bedrock).unwrap(), "bedrock");
+    }
+
+    #[test]
+    fn credential_envs_in_preflight_order() {
+        let spec = Spec { default_provider: Some("anthropic"), api_key_envs: &["ANTHROPIC_AUTH_TOKEN"], ..Spec::default() };
+        let routing = Routing { credential_envs: &["OAUTH"], ..ROUTED };
+        assert_eq!(
+            credential_envs(spec, &routing),
+            ["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "AUTH_JSON", "OAUTH", "ANTHROPIC_BASE_URL", "USE_BEDROCK", "USE_VERTEX"]
+        );
     }
 }

@@ -14,6 +14,7 @@ use crate::config::AgentConfig;
 use crate::env::{DockerEnv, ExecResult};
 use crate::task::Task;
 use anyhow::{Context, Result, bail};
+use model_connection::{Backend, ModelEndpoint, Routing, Spec};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -128,6 +129,30 @@ pub trait Agent: Send + Sync {
     }
     /// Fill usage from downloaded logs when run() left the context empty.
     fn collect_usage(&self, _logs_dir: &std::path::Path, _ctx: &mut AgentContext) {}
+    /// Where the agent's model requests go, for the run's record; `None` when hbench can't tell.
+    fn backend(&self) -> Option<Backend> {
+        self.model_access().and_then(|a| a.backend())
+    }
+    /// What the agent resolves its model access from, for [`Agent::backend`]; `None` when not declared.
+    fn model_access(&self) -> Option<ModelAccess<'_>> {
+        None
+    }
+}
+
+/// An agent's model access as data: its args, connection spec and routing, and its own config.
+pub struct ModelAccess<'a> {
+    pub args: &'a AgentArgs,
+    pub spec: Spec,
+    pub routing: &'static Routing,
+    /// The agent's own config (Claude Code settings, Codex config.toml).
+    pub config: Option<&'a serde_json::Map<String, Value>>,
+}
+
+impl ModelAccess<'_> {
+    pub fn backend(&self) -> Option<Backend> {
+        let get = installed::env_lookup(self.args);
+        model_connection::backend(self.args.model_name.as_deref(), self.spec, self.routing, self.config, &get)
+    }
 }
 
 /// Common per-agent inputs.
@@ -214,6 +239,10 @@ pub fn check_kwargs(name: &str, kwargs: &BTreeMap<String, Value>) -> Result<()> 
 
 pub fn create(cfg: &AgentConfig, logs_dir: PathBuf, task: Arc<Task>, load_trajectory: Option<PathBuf>) -> Result<AgentBox> {
     check_kwargs(cfg.name(), &cfg.kwargs)?;
+    cfg.check_model_labels()?;
+    for (k, v) in &cfg.kwargs {
+        crate::config::check_endpoint_given(k, v.as_str().unwrap_or_default())?;
+    }
     let extra_env = crate::task::resolve_env_vars(&cfg.env)?;
     crate::redact::register_env(&extra_env);
     crate::redact::register_json(&serde_json::to_value(&cfg.kwargs)?);
@@ -243,6 +272,17 @@ pub fn create(cfg: &AgentConfig, logs_dir: PathBuf, task: Arc<Task>, load_trajec
             None => bail!("Unknown agent {other:?}. Known agents: {}", agent_names().join(", ")),
         },
     })
+}
+
+/// What a trial records about where its model was served; `None` for oracle and nop, which use no model.
+pub fn model_endpoint(cfg: &AgentConfig, task: &Task) -> Option<ModelEndpoint> {
+    if matches!(cfg.name(), "oracle" | "nop") {
+        return None;
+    }
+    let backend = create(cfg, PathBuf::new(), Arc::new(task.clone()), None).ok().and_then(|a| a.backend());
+    let labels_ok = cfg.check_model_labels().is_ok();
+    let label = |v: &Option<String>| v.clone().filter(|_| labels_ok);
+    Some(ModelEndpoint { backend, model_served_by: label(&cfg.model_served_by), model_quantization: label(&cfg.model_quantization) })
 }
 
 #[cfg(test)]

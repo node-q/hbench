@@ -10,6 +10,7 @@
 //!
 
 use super::llm::{ChatClient, Llm, LlmConfig, LlmError, LlmResponse, add_anthropic_caching, api_err, lookup_model_info};
+use super::model_connection::Backend;
 use super::terminus2::{Kw, Shell, fill_template, limit_output_length, now, quote_repr};
 use super::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx, ModelUsage};
 use crate::env::{ErrorKind, error_kind, quote};
@@ -1993,6 +1994,9 @@ impl Agent for Computer1 {
     }
     fn version(&self) -> Option<String> {
         Some(VERSION.into())
+    }
+    fn backend(&self) -> Option<Backend> {
+        self.llm.backend()
     }
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
         let mut d = self.new_desktop();

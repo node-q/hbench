@@ -341,11 +341,40 @@ the version. `manifest.json`, written last, holds the SHA-256 of the job's confi
 file its trials wrote; `hbench jobs verify -p jobs/<job>` reports any file changed, removed or added since. It shows
 the files are the ones this build wrote, not that the run was real: anyone can rebuild hbench.
 
+Each trial's `lock.json` and `result.json` (`agent_info`) record which kind of service answered the model's
+requests, never where it was:
+
+```json
+"model_endpoint": {"backend": "custom", "model_served_by": "lmstudio", "model_quantization": "q4_k_m"}
+```
+
+- `backend` is one of these values:
+  - `provider`: the provider's own API at its built-in endpoint. This includes Claude Code's subscription
+    OAuth.
+  - `bedrock` or `vertex`: Claude Code with `AWS_BEARER_TOKEN_BEDROCK`, `CLAUDE_CODE_USE_BEDROCK` or
+    `CLAUDE_CODE_USE_VERTEX`.
+  - `custom`: a base URL override was set, through a provider env such as `OPENAI_BASE_URL`, a kwarg such as
+    `api_base`, or the agent's own config (Claude Code settings' `env`, Codex `openai_base_url`).
+  - `null`: hbench can't tell. That covers Codex with an `auth.json` login or a `model_provider` in its config,
+    agents that forward the environment to a CLI that reads its own config, and agents that don't declare their
+    model access yet. `terminus-2`, `computer-1` (litellm provider), `claude-code` and `codex` record a
+    backend. Other agents record `null`.
+- `model_served_by` and `model_quantization` are what the run declares, with `agent.model_served_by` /
+  `agent.model_quantization` in a job config or `--model-served-by` / `--model-quantization`. Each is 1-64
+  letters, digits and `. _ - : +`, recorded as given. They are `null` when not declared.
+- No URL, host, IP address, port, env value or credential is recorded, not even hashed. Oracle and `nop` record
+  no `model_endpoint`.
+
 Secrets stay out of the output and off command lines:
 
 - hbench treats as secret the value of every environment variable whose name looks like one (`*_KEY`, `*TOKEN`,
   `*SECRET*`, `*PASSWORD*`, `*CREDENTIAL*`, `*AUTH*`), from the host, the agent's `env`, agent kwargs and a task's
   `env` tables. Values shorter than 8 characters are not treated as secrets.
+- Model endpoints are treated the same way, since a base URL can reveal private infrastructure. That covers the
+  value of every variable or kwarg named like one (`*_BASE_URL`, `*_API_BASE`, `*_ENDPOINT`, `*_HOST`,
+  `base_url`, `api_base`). A written `config.json` or `lock.json` keeps the name but records the value as
+  `${NAME}` when it equals the host variable, or as `[set]` otherwise. Resuming a job whose config says `[set]`
+  fails with a message that names the endpoint. Pass endpoints as `${VAR}` templates to keep a job resumable.
 - When a trial ends, these values are replaced with `[REDACTED]` in every file of the trial directory: trajectories,
   agent and verifier logs, artifacts and `result.json`. The job directory gets the same treatment when the job ends,
   and `trial.log` is scrubbed as it is written. Each value is matched raw, JSON-escaped, URL-encoded and in base64,
