@@ -342,9 +342,13 @@ pub async fn download(tasks: &[&TaskRef]) -> Result<()> {
         if needed.is_empty() {
             continue;
         }
-        eprintln!("downloading {} task(s) from {}", needed.len(), store.reference(&repository, &digest));
+        let label = format!("{}@{}", dataset.config.name, dataset.config.version);
+        let progress = crate::progress::Download::start(&label, needed.len(), needed.iter().map(|(l, _)| l.size).sum());
+        if !progress.is_live() {
+            eprintln!("downloading {} task(s) from {}", needed.len(), store.reference(&repository, &digest));
+        }
         let blobs: Vec<Result<PathBuf>> =
-            futures_util::stream::iter(needed.iter().map(|(l, _)| store.blob_file(&repository, &l.digest, l.size)))
+            futures_util::stream::iter(needed.iter().map(|(l, _)| fetch_layer(&store, &repository, l, &progress)))
                 .buffered(PARALLEL_DOWNLOADS)
                 .collect()
                 .await;
@@ -354,8 +358,16 @@ pub async fn download(tasks: &[&TaskRef]) -> Result<()> {
                 bail!("task {}: {} does not match its package digest after unpacking", layer.name, dir.display());
             }
         }
+        progress.finish();
     }
     Ok(())
+}
+
+/// The blob of task `layer`, counted in `progress`.
+async fn fetch_layer(store: &Store, repository: &str, layer: &Layer, progress: &crate::progress::Download) -> Result<PathBuf> {
+    let blob = store.fetch_blob(repository, &layer.digest, layer.size, &|n| progress.add_bytes(n)).await;
+    progress.add_tasks(1);
+    blob
 }
 
 /// The versions of dataset `name` in `--registry` `spec`, oldest first: its tags that start with a digit (so not

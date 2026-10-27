@@ -257,16 +257,24 @@ impl Store {
     /// The path of a blob whose contents match `digest` and `size`, downloading it into the cache first when
     /// it comes from a registry.
     pub async fn blob_file(&self, repository: &str, digest: &str, size: u64) -> Result<PathBuf> {
+        self.fetch_blob(repository, digest, size, &|_| {}).await
+    }
+
+    /// [`Store::blob_file`], calling `fetched` with the length of each piece of the blob as it arrives, or with its
+    /// whole size when it is on disk already.
+    pub async fn fetch_blob(&self, repository: &str, digest: &str, size: u64, fetched: &(dyn Fn(u64) + Sync)) -> Result<PathBuf> {
         let reference = self.reference(repository, digest);
         match self {
             Store::Layout { root } => {
                 let path = root.join(repository).join("blobs/sha256").join(hex(digest)?);
                 verify_file(&path, digest, size).with_context(|| reference.clone())?;
+                fetched(size);
                 Ok(path)
             }
             Store::Registry { client, registry, blobs, auth } => {
                 let path = blobs.join(hex(digest)?);
                 if verify_file(&path, digest, size).is_ok() {
+                    fetched(size);
                     return Ok(path);
                 }
                 std::fs::create_dir_all(blobs)?;
@@ -282,6 +290,7 @@ impl Store {
                             bail!("the registry sent more than the {size} bytes the manifest lists");
                         }
                         out.write_all(&chunk)?;
+                        fetched(chunk.len() as u64);
                     }
                     let (got, len) = out.finish()?;
                     if got != digest || len != size {

@@ -94,6 +94,15 @@ With a ChatGPT login (`CODEX_AUTH_JSON_PATH`, `CODEX_FORCE_AUTH_JSON`), codex ta
 Other hbench variables: `DOCKER_CONTEXT`/`DOCKER_HOST` (which daemon), `HBENCH_EGRESS_METHOD=proxy` (see below).
 `HBENCH_NO_UPDATE_CHECK=1` stops the daily check for a newer release, which suggests `hbench update` (also off when `CI` is set or stderr is not a
 terminal); hbench reads the last result from `~/.cache/hbench/latest-release.json` and refreshes it in the background.
+While tasks download, a progress line on stderr counts tasks and bytes and ends as a summary:
+
+```
+Downloading terminal-bench@2.0.1  █████████░░░░░░░░░░░░░░░  37/89 tasks  412 MB/1.1 GB
+✔ Downloaded terminal-bench@2.0.1 · 89 task(s) · 1.1 GB
+```
+
+`HBENCH_NO_PROGRESS=1` turns it off, as `--quiet` and `--observe` do for `hbench run`. It is also off when `CI` is set
+or stderr is not a terminal; hbench then prints one `downloading 89 task(s) from <reference>` line instead.
 
 ## Task format
 

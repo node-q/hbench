@@ -138,6 +138,9 @@ pub fn trial_name(t: &TaskRef) -> String {
 
 /// Resolve tasks + datasets into task refs; download git and OCI tasks.
 pub async fn resolve_tasks(cfg: &JobConfig) -> Result<Vec<TaskRef>> {
+    if cfg.quiet {
+        crate::progress::quiet();
+    }
     let mut v: Vec<TaskRef> = cfg.tasks.clone();
     for d in &cfg.datasets {
         v.extend(registry::dataset_tasks(d, cfg.verifier.disable).await?);
@@ -577,7 +580,7 @@ fn status_line(p: &JobProgress, n_total: usize, frame: usize, elapsed: Duration,
 
 const BAR: usize = 24;
 
-fn bar(frac: f64) -> (String, String) {
+pub(crate) fn bar(frac: f64) -> (String, String) {
     let n = ((frac.clamp(0.0, 1.0) * BAR as f64).round() as usize).min(BAR);
     ("█".repeat(n), "░".repeat(BAR - n))
 }
