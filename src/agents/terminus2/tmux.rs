@@ -1,6 +1,7 @@
 //! The tmux session Terminus drives, and installing tmux and asciinema when the image lacks them.
 
 use super::*;
+use crate::env::{ErrorKind, error_kind};
 
 /// Command execution inside the environment (the agent's `AgentCtx`; mocked in tests).
 #[async_trait::async_trait]
@@ -22,8 +23,11 @@ const COMPLETION_COMMAND: &str = "; tmux wait -S done";
 /// tmux rejects client commands above ~16 KB ("command too long").
 pub(super) const MAX_COMMAND_LENGTH: usize = 16_000;
 const PASTE_CHUNK: usize = 65_536;
-const INSTALL_TIMEOUT: Duration = Duration::from_secs(120);
-const INSTALL_BUDGET: Duration = Duration::from_secs(240);
+/// Time for installing tmux (and asciinema, when recording) with the package manager and its fallbacks; apt runs
+/// of parallel trials can take minutes. Each step gets what is left and is stopped in the container when it runs out.
+pub(super) const INSTALL_BUDGET: Duration = Duration::from_secs(600);
+/// Stderr lines of a failed install quoted in the setup error.
+const INSTALL_ERROR_LINES: usize = 5;
 
 pub struct Tmux {
     pub(super) name: String,
@@ -88,13 +92,11 @@ impl Tmux {
     }
 
     pub async fn start(&mut self, sh: &dyn Shell) -> Result<()> {
-        // Recording tools are best-effort: a hung install must not eat the setup budget.
-        if let Ok(r) = tokio::time::timeout(INSTALL_BUDGET, self.install_tools(sh)).await {
-            r?;
-        }
+        let install_error = self.install_tools(sh).await?;
         let r = sh.sh(&self.start_command(), false, None).await?;
         if r.code != 0 {
-            bail!("Failed to start tmux session. Error: {}", r.stderr);
+            let cause = install_error.map(|e| format!(" (installing tmux failed: {e})")).unwrap_or_default();
+            bail!("Failed to start tmux session. Error: {}{cause}", r.stderr);
         }
         sh.sh("tmux set-option -g history-limit 10000000", false, None).await?;
         if let Some(p) = self.recording_path.clone() {
@@ -104,13 +106,15 @@ impl Tmux {
         Ok(())
     }
 
-    async fn install_tools(&self, sh: &dyn Shell) -> Result<()> {
+    /// Install what is missing; returns the package manager's error when its install failed.
+    async fn install_tools(&self, sh: &dyn Shell) -> Result<Option<String>> {
         let tmux_ok = sh.sh("tmux -V", true, None).await?.code == 0;
         let needs_asciinema = self.recording_path.is_some();
         let asciinema_ok = !needs_asciinema || sh.sh("asciinema --version", true, None).await?.code == 0;
         if tmux_ok && asciinema_ok {
-            return Ok(());
+            return Ok(None);
         }
+        let deadline = Instant::now() + INSTALL_BUDGET;
         let mut tools = vec![];
         if !tmux_ok {
             tools.push("tmux");
@@ -125,6 +129,7 @@ impl Tmux {
                 break;
             }
         }
+        let mut install_error = Some("no supported package manager".to_string());
         if let Some(pm) = pm {
             let pkgs = tools.join(" ");
             let cmd = match pm {
@@ -136,23 +141,26 @@ impl Tmux {
                 "pkg" => format!("ASSUME_ALWAYS_YES=yes pkg install -y {pkgs}"),
                 _ => format!("zypper install -y -n {pkgs}"),
             };
-            if matches!(sh.sh(&cmd, true, Some(INSTALL_TIMEOUT)).await, Ok(r) if r.code == 0) {
-                if !tmux_ok && sh.sh("tmux -V", true, None).await?.code != 0 {
-                    build_tmux_from_source(sh).await;
+            match install_step(sh, &cmd, deadline).await {
+                Ok(r) if r.code == 0 => {
+                    if !tmux_ok && sh.sh("tmux -V", true, None).await?.code != 0 {
+                        build_tmux_from_source(sh, deadline).await;
+                    }
+                    if !asciinema_ok && sh.sh("asciinema --version", true, None).await?.code != 0 {
+                        install_asciinema_with_pip(sh, deadline).await;
+                    }
+                    return Ok(None);
                 }
-                if !asciinema_ok && sh.sh("asciinema --version", true, None).await?.code != 0 {
-                    install_asciinema_with_pip(sh).await;
-                }
-                return Ok(());
+                r => install_error = Some(install_failure(&r)),
             }
         }
         if !tmux_ok {
-            build_tmux_from_source(sh).await;
+            build_tmux_from_source(sh, deadline).await;
         }
         if !asciinema_ok {
-            install_asciinema_with_pip(sh).await;
+            install_asciinema_with_pip(sh, deadline).await;
         }
-        Ok(())
+        Ok(install_error)
     }
 
     pub async fn is_alive(&self, sh: &dyn Shell) -> Result<bool> {
@@ -311,7 +319,28 @@ impl Tmux {
     }
 }
 
-async fn build_tmux_from_source(sh: &dyn Shell) {
+/// An install command as root, stopped when the install budget that ends at `deadline` runs out.
+async fn install_step(sh: &dyn Shell, cmd: &str, deadline: Instant) -> Result<ExecResult> {
+    let left = deadline.saturating_duration_since(Instant::now());
+    if left.is_zero() {
+        bail!("the {}s install budget ran out", INSTALL_BUDGET.as_secs());
+    }
+    sh.sh(cmd, true, Some(left)).await
+}
+
+/// The last stderr lines of a failed install (apt's lock error, say), or why it did not finish.
+fn install_failure(r: &Result<ExecResult>) -> String {
+    match r {
+        Ok(r) => {
+            let lines: Vec<&str> = r.stderr.lines().filter(|l| !l.trim().is_empty()).collect();
+            format!("exit {}: {}", r.code, lines[lines.len().saturating_sub(INSTALL_ERROR_LINES)..].join("\n"))
+        }
+        Err(e) if error_kind(e) == ErrorKind::Timeout => format!("stopped when the {}s install budget ran out", INSTALL_BUDGET.as_secs()),
+        Err(e) => format!("{e:#}"),
+    }
+}
+
+async fn build_tmux_from_source(sh: &dyn Shell, deadline: Instant) {
     let _ = async {
         for cmd in [
             "export DEBIAN_FRONTEND=noninteractive; hb_apt_install build-essential libevent-dev libncurses5-dev curl",
@@ -319,18 +348,18 @@ async fn build_tmux_from_source(sh: &dyn Shell) {
             "dnf groupinstall -y 'Development Tools' && dnf install -y libevent-devel ncurses-devel curl",
             "apk add --no-cache build-base libevent-dev ncurses-dev curl",
         ] {
-            if sh.sh(&format!("{APT_INSTALL_FN}{cmd}"), true, Some(INSTALL_TIMEOUT)).await?.code == 0 {
+            if install_step(sh, &format!("{APT_INSTALL_FN}{cmd}"), deadline).await?.code == 0 {
                 break;
             }
         }
         let v = pins::TMUX.version;
-        sh.sh(
+        install_step(
+            sh,
             &format!(
                 "cd /tmp && curl -L https://github.com/tmux/tmux/releases/download/{v}/tmux-{v}.tar.gz -o tmux.tar.gz && tar -xzf tmux.tar.gz && \
                  cd tmux-{v} && ./configure --prefix=/usr/local && make && make install"
             ),
-            true,
-            Some(INSTALL_TIMEOUT),
+            deadline,
         )
         .await?;
         sh.sh("tmux -V || /usr/local/bin/tmux -V", true, None).await
@@ -338,7 +367,7 @@ async fn build_tmux_from_source(sh: &dyn Shell) {
     .await;
 }
 
-async fn install_asciinema_with_pip(sh: &dyn Shell) {
+async fn install_asciinema_with_pip(sh: &dyn Shell, deadline: Instant) {
     let _ = async {
         for cmd in [
             "export DEBIAN_FRONTEND=noninteractive; hb_apt_install python3-pip",
@@ -346,13 +375,13 @@ async fn install_asciinema_with_pip(sh: &dyn Shell) {
             "dnf install -y python3-pip",
             "apk add --no-cache python3 py3-pip",
         ] {
-            if sh.sh(&format!("{APT_INSTALL_FN}{cmd}"), true, Some(INSTALL_TIMEOUT)).await?.code == 0 {
+            if install_step(sh, &format!("{APT_INSTALL_FN}{cmd}"), deadline).await?.code == 0 {
                 break;
             }
         }
         for pip in ["pip3", "pip"] {
             let cmd = format!("{pip} install {}", pins::ASCIINEMA.requirement());
-            if sh.sh(&cmd, true, Some(INSTALL_TIMEOUT)).await?.code == 0 && sh.sh("asciinema --version", true, None).await?.code == 0 {
+            if install_step(sh, &cmd, deadline).await?.code == 0 && sh.sh("asciinema --version", true, None).await?.code == 0 {
                 break;
             }
         }

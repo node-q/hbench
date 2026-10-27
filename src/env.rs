@@ -12,7 +12,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
@@ -175,7 +175,30 @@ pub fn error_kind(e: &anyhow::Error) -> ErrorKind {
 /// records, closes stdin and runs the command. Secrets and commands then never appear on a command
 /// line, where any local user could read them with `ps` or /proc, on the host or in the container.
 /// Works the same on rootless Docker and Docker Desktop, since only `docker compose exec`'s stdin is used.
-const EXEC_FROM_STDIN: &str = r#"while IFS= read -r -d '' __hb && [ -n "$__hb" ]; do export -- "$__hb"; done; IFS= read -r -d '' __hb_cmd; unset __hb; exec </dev/null; eval "$__hb_cmd""#;
+/// Given a deadline `$1` and a grace `$2` in whole seconds, the command runs as its own process group, which gets
+/// SIGTERM at the deadline and SIGKILL after the grace: a command that times out stops in the container too,
+/// instead of running on (holding apt's lock, say) after hbench gave up on it. Needs only bash, `sleep` and `kill`.
+const EXEC_FROM_STDIN: &str = r#"__hb_t=$1; __hb_k=$2; set --
+while IFS= read -r -d '' __hb && [ -n "$__hb" ]; do export -- "$__hb"; done; IFS= read -r -d '' __hb_cmd; unset __hb; exec </dev/null
+if [ -z "$__hb_t" ]; then unset __hb_t __hb_k; eval "$__hb_cmd"; exit; fi
+set -m
+{ set +m; unset __hb_t __hb_k; eval "$__hb_cmd"; } &
+__hb_pid=$!
+{ sleep "$__hb_t"; kill -TERM -"$__hb_pid"; sleep "$__hb_k"; kill -KILL -"$__hb_pid"; } </dev/null >/dev/null 2>&1 &
+__hb_watchdog=$!
+set +m
+wait "$__hb_pid"; __hb_rc=$?
+kill -KILL -"$__hb_watchdog" 2>/dev/null
+exit "$__hb_rc""#;
+
+/// How long a timed-out exec's processes get between SIGTERM and SIGKILL in the container.
+const EXEC_KILL_GRACE: Duration = Duration::from_secs(5);
+
+/// The `$1 $2` of [`EXEC_FROM_STDIN`]: `sleep` portably takes whole seconds, and the deadline must not be 0.
+fn exec_deadline_args(t: Duration) -> [String; 2] {
+    let deadline = (t.as_secs() + u64::from(t.subsec_nanos() > 0)).max(1);
+    [deadline.to_string(), EXEC_KILL_GRACE.as_secs().to_string()]
+}
 
 /// The stdin [`EXEC_FROM_STDIN`] reads: env records, an empty record, then the command.
 fn exec_stdin(env: &BTreeMap<String, String>, command: &str) -> Vec<u8> {
@@ -855,10 +878,7 @@ impl DockerEnv {
         let (status, stdout, stderr) = match timeout {
             Some(t) => match tokio::time::timeout(t, out).await {
                 Ok(r) => r?,
-                Err(_) => {
-                    self.log.line(&format!("timed out after {t:?}"));
-                    return Err(kind_err(ErrorKind::Timeout, format!("`{label}` timed out after {t:?}")));
-                }
+                Err(_) => return Err(self.timed_out(label, t)),
             },
             None => out.await?,
         };
@@ -868,6 +888,11 @@ impl DockerEnv {
             crate::observe::exit(self.log.who(), r.code);
         }
         Ok(r)
+    }
+
+    fn timed_out(&self, label: &str, t: Duration) -> anyhow::Error {
+        self.log.line(&format!("timed out after {t:?}"));
+        kind_err(ErrorKind::Timeout, format!("`{label}` timed out after {t:?}"))
     }
 
     async fn run_ok(&self, args: Vec<String>, timeout: Option<Duration>) -> Result<ExecResult> {
@@ -995,11 +1020,17 @@ impl DockerEnv {
         if let Some(u) = user {
             args.extend(to_owned_args(&["-u", u]));
         }
-        args.extend(to_owned_args(&["main", "bash", "-c", EXEC_FROM_STDIN]));
+        args.extend(to_owned_args(&["main", "bash", "-c", EXEC_FROM_STDIN, "bash"]));
+        args.extend(timeout.into_iter().flat_map(exec_deadline_args));
         let keys: Vec<&str> = merged.keys().map(String::as_str).collect();
         // Log env keys only: values may be secrets.
         let label = format!("exec user={} env={keys:?}: {}", user.unwrap_or("-"), tail(command, 2000));
-        self.run(args, timeout, &label, Some(exec_stdin(&merged, command))).await
+        let Some(t) = timeout else {
+            return self.run(args, None, &label, Some(exec_stdin(&merged, command))).await;
+        };
+        let started = Instant::now();
+        let r = self.run(args, Some(t + 2 * EXEC_KILL_GRACE), &label, Some(exec_stdin(&merged, command))).await?;
+        if started.elapsed() >= t { Err(self.timed_out(&label, t)) } else { Ok(r) }
     }
 
     pub async fn exec_root(&self, command: &str, timeout: Option<Duration>) -> Result<ExecResult> {
@@ -1417,16 +1448,18 @@ mod tests {
         std::fs::remove_dir_all(&d).unwrap();
     }
 
-    /// What `docker compose exec ... main bash -c EXEC_FROM_STDIN` runs, with the same stdin.
-    fn run_from_stdin(env: &[(&str, &str)], command: &str) -> (i32, String) {
+    /// What `docker compose exec ... main bash -c EXEC_FROM_STDIN bash [deadline grace]` runs, with the same stdin.
+    fn run_from_stdin(env: &[(&str, &str)], command: &str, timeout: Option<Duration>) -> (i32, String) {
         use std::io::Write as _;
         let env: BTreeMap<String, String> = env.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
         let mut c = std::process::Command::new("bash")
-            .args(["-c", EXEC_FROM_STDIN])
+            .args(["-c", EXEC_FROM_STDIN, "bash"])
+            .args(timeout.into_iter().flat_map(exec_deadline_args))
             .env_clear()
             .env("PATH", std::env::var("PATH").unwrap())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
+            .stderr(Stdio::null())
             .spawn()
             .unwrap();
         c.stdin.take().unwrap().write_all(&exec_stdin(&env, command)).unwrap();
@@ -1437,13 +1470,41 @@ mod tests {
     #[test]
     fn exec_passes_env_and_command_on_stdin() {
         let tricky = "sk-a=b 'c' \"d\" $(echo pwned) `e`\nline2\\";
-        let (code, out) = run_from_stdin(
-            &[("API_KEY", tricky), ("EMPTY", ""), ("PATH", &std::env::var("PATH").unwrap())],
-            "printf '%s|' \"$API_KEY\" \"${EMPTY-unset}\" \"$0\" \"$#\"; env | grep -c '^__hb' || true; cat; set -o pipefail; false | true; exit 7",
-        );
-        assert_eq!(code, 7);
-        assert_eq!(out, format!("{tricky}||bash|0|0\n"));
-        assert_eq!(run_from_stdin(&[], "echo ok").1, "ok\n");
+        for timeout in [None, Some(Duration::from_secs(60))] {
+            let (code, out) = run_from_stdin(
+                &[("API_KEY", tricky), ("EMPTY", ""), ("PATH", &std::env::var("PATH").unwrap())],
+                "printf '%s|' \"$API_KEY\" \"${EMPTY-unset}\" \"$0\" \"$#\"; env | grep -c '^__hb' || true; cat; set -o pipefail; false | true; exit 7",
+                timeout,
+            );
+            assert_eq!(code, 7);
+            assert_eq!(out, format!("{tricky}||bash|0|0\n"));
+            assert_eq!(run_from_stdin(&[], "echo ok", timeout).1, "ok\n");
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn timed_out_exec_stops_with_its_children_in_the_container() {
+        let started = std::time::Instant::now();
+        let path = std::env::var("PATH").unwrap();
+        let (code, out) =
+            run_from_stdin(&[("PATH", &path)], "trap '' TERM; sleep 60 & echo $!; sleep 60", Some(Duration::from_millis(200)));
+        assert!(started.elapsed() < Duration::from_secs(30), "the exec outlived its deadline");
+        assert_eq!(code, 128 + 9);
+        let child = format!("/proc/{}/stat", out.trim());
+        let until = std::time::Instant::now() + Duration::from_secs(5);
+        while std::fs::read_to_string(&child).is_ok_and(|s| !s.contains(") Z ")) {
+            assert!(std::time::Instant::now() < until, "the command's child survived the timeout");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    #[test]
+    fn exec_deadline_is_whole_seconds_rounded_up() {
+        let grace = EXEC_KILL_GRACE.as_secs().to_string();
+        assert_eq!(exec_deadline_args(Duration::from_secs(600)), ["600".to_string(), grace.clone()]);
+        assert_eq!(exec_deadline_args(Duration::from_millis(1500))[0], "2");
+        assert_eq!(exec_deadline_args(Duration::ZERO)[0], "1");
     }
 
     #[test]
