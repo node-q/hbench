@@ -308,6 +308,12 @@
           "title": "Stream",
           "type": "boolean"
         },
+        "cache_agent_setup": {
+          "default": false,
+          "description": "Start the main container from an image of it as agent setup left it, committed by the first trial with the same image, agent, options and hbench version.",
+          "title": "Cache Agent Setup",
+          "type": "boolean"
+        },
         "cpu_enforcement_policy": {
           "$ref": "#/$defs/ResourceMode",
           "default": "auto"

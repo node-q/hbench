@@ -299,14 +299,18 @@ impl Agent for DeepSeekHarness {
 
     async fn setup(&mut self, cx: &AgentCtx<'_>) -> Result<()> {
         installed_dir(cx).await?;
-        ensure_system_dependencies(cx, &["curl", "bash", "coreutils"]).await?;
-        let spec = pins::DEEPSEEK_HARNESS.npm_spec(self.version.as_deref());
-        exec_agent(
-            cx,
-            &format!("set -euo pipefail; {} && npm i -g {spec} && dsh --version", nvm_node_install_snippet(22)),
-            &BTreeMap::new(),
-        )
-        .await?;
+        let wanted = pins::DEEPSEEK_HARNESS.or(self.version.as_deref()).to_string();
+        let installed = detect_version(cx, &format!("{NVM} dsh --version"), |s| s.trim().to_string()).await;
+        if wanted == "latest" || installed.as_deref() != Some(wanted.as_str()) {
+            ensure_system_dependencies(cx, &["curl", "bash", "coreutils"]).await?;
+            let spec = pins::DEEPSEEK_HARNESS.npm_spec(self.version.as_deref());
+            exec_agent(
+                cx,
+                &format!("set -euo pipefail; {} && npm i -g {spec} && dsh --version", nvm_node_install_snippet(22)),
+                &BTreeMap::new(),
+            )
+            .await?;
+        }
         if self.version.is_none() {
             self.version = detect_version(cx, &format!("{NVM} dsh --version"), |s| s.trim().to_string()).await;
         }
