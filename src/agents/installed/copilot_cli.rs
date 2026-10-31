@@ -121,7 +121,7 @@ fn add_message(steps: &mut Vec<atif::Step>, event: &Value) {
     let d = &event["data"];
     let same_call =
         |s: &&mut atif::Step| d["apiCallId"].is_string() && s.extra.as_ref().is_some_and(|x| x.get("api_call_id") == Some(&d["apiCallId"]));
-    let step = match steps.iter_mut().rev().next().filter(|s| same_call(s)) {
+    let step = match steps.last_mut().filter(same_call) {
         Some(step) => step,
         None => {
             let extra =
