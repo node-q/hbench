@@ -167,9 +167,9 @@ fn has_content(step: &atif::Step) -> bool {
     step.reasoning_content.is_some() || step.tool_calls.is_some() || step.message != ""
 }
 
-/// opencode's `--format=json` stream -> ATIF. Each `step_start` .. `step_finish` turn is one model call; the stream
-/// carries neither the instruction nor the model's name.
-pub fn atif_trajectory(text: &str, version: Option<&str>, model: Option<&str>) -> Option<atif::Trajectory> {
+/// The `--format=json` stream of opencode, or of its fork mimo, -> ATIF. Each `step_start` .. `step_finish` turn is one
+/// model call; the stream carries neither the instruction nor the model's name.
+pub fn atif_trajectory(name: &str, text: &str, version: Option<&str>, model: Option<&str>) -> Option<atif::Trajectory> {
     let (mut steps, mut open, mut session_id) = (vec![], None::<atif::Step>, None);
     for e in parse_jsonl(text) {
         session_id = session_id.or(e["sessionID"].as_str().map(String::from));
@@ -210,7 +210,7 @@ pub fn atif_trajectory(text: &str, version: Option<&str>, model: Option<&str>) -
     }
     steps.extend(open.filter(has_content));
     let agent = atif::Agent {
-        name: "opencode".into(),
+        name: name.into(),
         version: version.unwrap_or("unknown").into(),
         model_name: model.map(String::from),
         ..Default::default()
@@ -356,7 +356,7 @@ impl Agent for OpenCode {
             ctx.n_output_tokens = c.n_output_tokens;
             ctx.cost_usd = c.cost_usd;
         }
-        if let Some(t) = atif_trajectory(&text, self.version.as_deref(), self.args.model_name.as_deref()) {
+        if let Some(t) = atif_trajectory("opencode", &text, self.version.as_deref(), self.args.model_name.as_deref()) {
             atif::write_trajectory(logs_dir, &t);
         }
     }
@@ -428,7 +428,7 @@ mod tests {
 
     #[test]
     fn stream_to_atif() {
-        let a = atif_trajectory(STREAM, Some("1.19.3"), Some("openai/m")).unwrap();
+        let a = atif_trajectory("opencode", STREAM, Some("1.19.3"), Some("openai/m")).unwrap();
         assert_eq!(
             (a.session_id.as_deref(), a.agent.version.as_str(), a.agent.model_name.as_deref()),
             (Some("ses_1"), "1.19.3", Some("openai/m"))
@@ -454,7 +454,7 @@ mod tests {
             (f.total_prompt_tokens, f.total_completion_tokens, f.total_cached_tokens, f.total_cost_usd),
             (c.n_input_tokens, c.n_output_tokens, c.n_cache_tokens, c.cost_usd)
         );
-        assert!(atif_trajectory("{\"type\":\"step_start\"}\n{\"type\":\"error\"}\n", None, None).is_none());
+        assert!(atif_trajectory("opencode", "{\"type\":\"step_start\"}\n{\"type\":\"error\"}\n", None, None).is_none());
     }
 
     #[test]
