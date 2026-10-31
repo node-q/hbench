@@ -325,8 +325,8 @@ jobs/<job>/<task>__<id>/{config.json, lock.json, result.json, trial.log, excepti
                          agent/, verifier/, artifacts/{manifest.json, logs/artifacts/...}, steps/<name>/...}
 ```
 
-`agent/trajectory.json` is the trial's trajectory in ATIF. `claude-code`, `codex`, `deepseek-harness` and
-`mini-swe-agent` convert their native session logs into it; `terminus-2`, `computer-1`, `openhands-sdk`, `antigravity-sdk` and `nemo-agent` write it
+`agent/trajectory.json` is the trial's trajectory in ATIF. `claude-code`, `codex`, `deepseek-harness`, `gemini-cli`,
+`mini-swe-agent` and `opencode` convert their native session logs into it; `terminus-2`, `computer-1`, `openhands-sdk`, `antigravity-sdk` and `nemo-agent` write it
 themselves. In a converted trajectory each agent step is one model call and its metrics are that call's alone:
 `prompt_tokens` is the whole prompt, cached and cache-written tokens included, and `cached_tokens` the cached part of
 it. A step whose call the native log reports no usage for has no metrics. A `deepseek-harness` run with no exported
