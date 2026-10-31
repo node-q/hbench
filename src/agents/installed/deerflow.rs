@@ -2,14 +2,16 @@
 //! `assets/agents/deerflow/deerflow_runner.py`.
 
 use super::common::opts::kw_int;
-use super::common::{installed_dir, upload_asset, uv_install};
+use super::common::{installed_dir, parse_jsonl, upload_asset, uv_install};
 use super::pins;
 use super::{ensure_system_dependencies, exec_agent, exec_error, exec_root_checked};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
+use crate::atif;
 use crate::env::quote;
 use anyhow::{Result, bail};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
+use std::path::Path;
 use std::time::Duration;
 
 const RUNNER: &str = include_str!("../../../assets/agents/deerflow/deerflow_runner.py");
@@ -329,6 +331,72 @@ pub fn parse_summary(text: &str) -> Option<(i64, i64)> {
     Some((tok("input_tokens")?, tok("output_tokens")?))
 }
 
+/// A LangChain message's text: a plain string, or the text of its parts.
+fn text_of(content: &Value) -> String {
+    match content.as_array() {
+        Some(parts) => parts.iter().filter_map(|p| p["text"].as_str()).collect::<Vec<_>>().join("\n"),
+        None => content.as_str().unwrap_or_default().into(),
+    }
+}
+
+/// An `ai` message, one model call, as an agent step.
+fn agent_step(m: &Value) -> atif::Step {
+    let calls: Vec<atif::ToolCall> = m["tool_calls"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|c| atif::ToolCall {
+            tool_call_id: c["id"].as_str().unwrap_or_default().into(),
+            function_name: c["name"].as_str().unwrap_or_default().into(),
+            arguments: c["args"].clone(),
+            extra: None,
+        })
+        .collect();
+    let usage = &m["usage_metadata"];
+    let n = |v: &Value| v.as_i64().unwrap_or(0);
+    atif::Step {
+        source: "agent".into(),
+        message: json!(text_of(&m["content"])),
+        reasoning_content: m["additional_kwargs"]["reasoning_content"].as_str().filter(|r| !r.is_empty()).map(String::from),
+        tool_calls: (!calls.is_empty()).then_some(calls),
+        metrics: usage.is_object().then(|| atif::Metrics {
+            prompt_tokens: Some(n(&usage["input_tokens"])),
+            completion_tokens: Some(n(&usage["output_tokens"])),
+            cached_tokens: Some(n(&usage["input_token_details"]["cache_read"])),
+            ..Default::default()
+        }),
+        ..Default::default()
+    }
+}
+
+/// `deerflow.jsonl` -> ATIF, from the last `values` event: the whole conversation, with each call's usage.
+pub fn atif_trajectory(text: &str, version: Option<&str>, model: Option<&str>) -> Option<atif::Trajectory> {
+    let events = parse_jsonl(text);
+    let last = events.iter().rev().find(|e| e["type"] == "values" && e["data"]["messages"].is_array())?;
+    let mut steps = vec![];
+    for m in last["data"]["messages"].as_array()?.iter().filter(|m| m["additional_kwargs"]["hide_from_ui"] != true) {
+        match m["type"].as_str() {
+            Some(kind @ ("system" | "human")) => steps.push(atif::Step {
+                source: if kind == "system" { "system" } else { "user" }.into(),
+                message: json!(text_of(&m["content"])),
+                ..Default::default()
+            }),
+            Some("ai") => steps.push(agent_step(m)),
+            Some("tool") => {
+                atif::attach_result(&mut steps, m["tool_call_id"].as_str().unwrap_or_default(), json!(text_of(&m["content"])));
+            }
+            _ => {}
+        }
+    }
+    let agent = atif::Agent {
+        name: "deerflow".into(),
+        version: version.unwrap_or("unknown").into(),
+        model_name: model.map(String::from),
+        ..Default::default()
+    };
+    atif::assemble(agent, None, steps)
+}
+
 #[async_trait::async_trait]
 impl Agent for DeerFlow {
     fn name(&self) -> &str {
@@ -418,6 +486,15 @@ impl Agent for DeerFlow {
         }
         Ok(())
     }
+
+    fn collect_usage(&self, logs_dir: &Path, ctx: &mut AgentContext) {
+        let Ok(text) = std::fs::read_to_string(logs_dir.join("deerflow.jsonl")) else { return };
+        let Some(mut t) = atif_trajectory(&text, self.version.as_deref(), self.args.model_name.as_deref()) else { return };
+        let totals = t.final_metrics.get_or_insert_default();
+        totals.total_prompt_tokens = ctx.n_input_tokens.or(totals.total_prompt_tokens);
+        totals.total_completion_tokens = ctx.n_output_tokens.or(totals.total_completion_tokens);
+        atif::write_trajectory(logs_dir, &t);
+    }
 }
 
 #[cfg(test)]
@@ -429,6 +506,35 @@ mod tests {
         let mut d = DeerFlow::new(args(kwargs, env, Some(model))).unwrap();
         d.runtime = Some(("/testbed".into(), 1000, 1000));
         d
+    }
+
+    #[test]
+    fn stream_to_atif() {
+        // A real run's stream, trimmed.
+        let values = json!({"type": "values", "data": {"title": "t", "messages": [
+            {"type": "system", "content": "<system-reminder/>", "id": "1", "additional_kwargs": {"hide_from_ui": true}},
+            {"type": "human", "content": "Write the line.", "id": "2", "additional_kwargs": {"run_id": "r"}},
+            {"type": "ai", "content": "", "id": "3", "tool_calls": [{"name": "bash", "args": {"command": "echo hi"}, "id": "call_1"}],
+             "additional_kwargs": {"reasoning_content": "Use bash."},
+             "usage_metadata": {"input_tokens": 5662, "output_tokens": 93, "total_tokens": 5755, "input_token_details": {"cache_read": 0}}},
+            {"type": "tool", "content": "(no output)", "name": "bash", "tool_call_id": "call_1", "id": "4"},
+            {"type": "ai", "content": [{"type": "text", "text": "Done."}], "id": "5",
+             "usage_metadata": {"input_tokens": 5805, "output_tokens": 27, "total_tokens": 5832, "input_token_details": {"cache_read": 5737}}}
+        ]}});
+        let stale = json!({"type": "values", "data": {"messages": [{"type": "human", "content": "Write the line."}]}});
+        let log =
+            format!("{stale}\n{values}\n{}\n", json!({"type": "end", "data": {"usage": {"input_tokens": 11467, "output_tokens": 120}}}));
+        let a = atif_trajectory(&log, Some("7a6c4a9"), Some("openai/m")).unwrap();
+        assert_eq!(a.steps.iter().map(|s| (s.step_id, s.source.as_str())).collect::<Vec<_>>(), [(1, "user"), (2, "agent"), (3, "agent")]);
+        let call = &a.steps[1];
+        assert_eq!(call.reasoning_content.as_deref(), Some("Use bash."));
+        assert_eq!(call.tool_calls.as_ref().unwrap()[0].arguments, json!({"command": "echo hi"}));
+        let result = &call.observation.as_ref().unwrap().results[0];
+        assert_eq!((result.source_call_id.as_deref(), result.content.clone()), (Some("call_1"), Some(json!("(no output)"))));
+        assert_eq!(a.steps[2].message, json!("Done."));
+        let f = a.final_metrics.unwrap();
+        assert_eq!((f.total_prompt_tokens, f.total_completion_tokens, f.total_cached_tokens), (Some(11467), Some(120), Some(5737)));
+        assert!(atif_trajectory("{\"type\":\"end\",\"data\":{}}\n", None, None).is_none());
     }
 
     #[test]
