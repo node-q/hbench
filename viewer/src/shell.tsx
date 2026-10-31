@@ -88,12 +88,7 @@ export function Shell() {
           </a>
           <header className="bar">
             <NavLink to={tasksMode ? "/task-definitions" : "/"} className="bar__brand" aria-label="hbench home">
-              <svg width="18" height="18" viewBox="0 0 32 32" aria-hidden="true">
-                <rect x="4" y="17" width="6" height="11" fill="currentColor" opacity=".45" />
-                <rect x="13" y="10" width="6" height="18" fill="currentColor" opacity=".7" />
-                <rect x="22" y="3" width="6" height="25" fill="var(--color-accent)" />
-              </svg>
-              hbench
+              Hbench
             </NavLink>
             <nav className="bar__links" aria-label="Sections">
               {links.map((l) => (

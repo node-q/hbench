@@ -25,9 +25,9 @@ h4 {
   margin: 0;
   color: var(--color-ink);
   font-family: var(--font-display);
-  font-weight: 600;
+  font-weight: 500;
   font-style: normal;
-  letter-spacing: -0.015em;
+  letter-spacing: -0.02em;
   line-height: 1.2;
   overflow-wrap: anywhere;
   min-width: 0;
@@ -109,8 +109,8 @@ pre,
 
 /* Mono label: the machine-readout voice (meta, column heads, kbd hints). */
 .label {
-  font: 500 var(--text-2xs) / 1.3 var(--font-mono);
-  letter-spacing: 0.06em;
+  font: 400 var(--text-2xs) / 1.3 var(--font-mono);
+  letter-spacing: 0.055em;
   text-transform: uppercase;
   color: var(--color-muted);
 }
@@ -180,9 +180,9 @@ pre,
   gap: var(--space-xs);
   height: 32px;
   padding: 0 var(--space-sm);
-  border: 1px solid var(--color-rule-2);
+  border: 1px solid var(--color-ink);
   border-radius: var(--radius);
-  background: var(--color-raised);
+  background: transparent;
   color: var(--color-ink);
   font: 500 var(--text-sm) / 1 var(--font-body);
   white-space: nowrap;
@@ -195,7 +195,6 @@ pre,
 @media (hover: hover) {
   .btn:hover:not(:disabled) {
     background: var(--color-paper-2);
-    border-color: var(--color-faint);
   }
   .btn--primary:hover:not(:disabled) {
     background: var(--color-accent-2);
@@ -253,9 +252,9 @@ pre,
   flex: none;
 }
 .btn.is-on {
-  background: var(--color-accent-wash);
-  border-color: var(--color-accent);
-  color: var(--color-ink);
+  background: var(--color-ink);
+  border-color: var(--color-ink);
+  color: var(--color-paper);
 }
 
 /* ---------------------------------------------------------------- inputs */
@@ -437,7 +436,8 @@ kbd,
 /* ---------------------------------------------------------------- tabs */
 .tabs {
   display: flex;
-  gap: var(--space-md);
+  gap: var(--space-2xs);
+  padding-bottom: var(--space-xs);
   border-bottom: 1px solid var(--color-rule);
   margin-bottom: var(--space-md);
   overflow-x: auto;
@@ -448,25 +448,15 @@ kbd,
   display: inline-flex;
   align-items: center;
   gap: var(--space-2xs);
-  height: 36px;
-  padding: 0 1px;
+  height: 30px;
+  padding: 0 var(--space-sm);
   border: 0;
+  border-radius: var(--radius);
   background: none;
   color: var(--color-muted);
   font: 500 var(--text-sm) / 1 var(--font-body);
   white-space: nowrap;
   cursor: pointer;
-}
-.tab::after {
-  content: "";
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: -1px;
-  height: 2px;
-  background: var(--color-accent);
-  transform: scaleX(0);
-  transition: transform var(--dur-short) var(--ease-out);
 }
 @media (hover: hover) {
   .tab:hover {
@@ -474,10 +464,11 @@ kbd,
   }
 }
 .tab[aria-selected="true"] {
-  color: var(--color-ink);
+  background: var(--color-ink);
+  color: var(--color-paper);
 }
-.tab[aria-selected="true"]::after {
-  transform: scaleX(1);
+.tab[aria-selected="true"] .tab__count {
+  color: inherit;
 }
 .tab:disabled {
   opacity: 0.45;
@@ -491,10 +482,10 @@ kbd,
 /* Segmented control (small option groups: color-by, group-by). */
 .seg {
   display: inline-flex;
+  gap: 2px;
   padding: 2px;
-  border: 1px solid var(--color-rule-2);
+  border: 1px solid var(--color-rule);
   border-radius: var(--radius);
-  background: var(--color-paper-2);
 }
 .seg > button {
   height: 24px;
@@ -508,9 +499,8 @@ kbd,
   cursor: pointer;
 }
 .seg > button[aria-pressed="true"] {
-  background: var(--color-raised);
-  color: var(--color-ink);
-  box-shadow: 0 0 0 1px var(--color-rule-2);
+  background: var(--color-ink);
+  color: var(--color-paper);
 }
 
 /* ---------------------------------------------------------------- data table */
@@ -1046,47 +1036,29 @@ dialog.dialog::backdrop {
   height: var(--bar-h);
   padding: 0 var(--space-lg);
   border-bottom: 1px solid var(--color-rule);
-  background: color-mix(in oklch, var(--color-paper) 88%, transparent);
-  backdrop-filter: blur(8px);
+  background: var(--color-paper);
 }
 .bar__brand {
   display: inline-flex;
   align-items: center;
   gap: var(--space-xs);
   color: var(--color-ink);
-  font: 600 var(--text-lg) / 1 var(--font-display);
-  letter-spacing: -0.02em;
+  font: 500 var(--text-lg) / 1 var(--font-display);
+  letter-spacing: -0.03em;
 }
 .bar__links {
   display: flex;
-  gap: var(--space-md);
+  gap: var(--space-lg);
 }
 .bar__link {
-  position: relative;
   padding: 4px 0;
   color: var(--color-muted);
   font-size: var(--text-sm);
-  font-weight: 500;
   white-space: nowrap;
-}
-.bar__link::after {
-  content: "";
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: -2px;
-  height: 1.5px;
-  background: var(--color-accent);
-  transform: scaleX(0);
-  transform-origin: left;
-  transition: transform var(--dur-short) var(--ease-out);
 }
 @media (hover: hover) {
   .bar__link:hover {
     color: var(--color-ink);
-  }
-  .bar__link:hover::after {
-    transform: scaleX(1);
   }
   .bar__search:hover {
     border-color: var(--color-faint);
@@ -1094,9 +1066,7 @@ dialog.dialog::backdrop {
 }
 .bar__link.active {
   color: var(--color-ink);
-}
-.bar__link.active::after {
-  transform: scaleX(1);
+  font-weight: 500;
 }
 .bar__search {
   display: flex;
