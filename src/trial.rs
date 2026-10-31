@@ -219,6 +219,7 @@ const SETUP_ATTEMPTS: u32 = 3;
 /// Timeout of a step's workdir/setup.sh unless the agent config's `override_setup_timeout_sec`, which also
 /// bounds the agent install, sets one.
 const STEP_SETUP_TIMEOUT_SEC: f64 = 600.0;
+const LIVE_SYNC_INTERVAL: Duration = Duration::from_secs(5);
 
 /// Context on an agent phase whose processes could not be stopped: grading then would be unsafe, so the
 /// trial ends there, still reporting the run's own error kind.
@@ -784,17 +785,20 @@ impl Trial {
             let r = match self.agent_ctx(self.agent_user(step), step) {
                 Err(e) => Err(e),
                 Ok(cx) => {
-                    let run = agent.run(instruction, &cx, &mut ctx, resume);
-                    match timeout {
-                        Some(d) => match tokio::time::timeout(d, run).await {
-                            Ok(r) => r,
-                            Err(_) => Err(kind_err(
-                                ErrorKind::AgentTimeout,
-                                format!("Agent execution timed out after {} seconds", d.as_secs_f64()),
-                            )),
-                        },
-                        None => run.await,
-                    }
+                    self.with_live_sync(async {
+                        let run = agent.run(instruction, &cx, &mut ctx, resume);
+                        match timeout {
+                            Some(d) => match tokio::time::timeout(d, run).await {
+                                Ok(r) => r,
+                                Err(_) => Err(kind_err(
+                                    ErrorKind::AgentTimeout,
+                                    format!("Agent execution timed out after {} seconds", d.as_secs_f64()),
+                                )),
+                            },
+                            None => run.await,
+                        }
+                    })
+                    .await
                 }
             };
             self.agent = Some(agent);
@@ -882,6 +886,40 @@ impl Trial {
             self.log.line(&format!("agent log download failed: {e:#}"));
         }
         r
+    }
+
+    /// Run `fut` while mirroring the agent's logs to the trial dir, so `hbench view` can follow a running trial.
+    /// A pass in progress finishes before this returns: it must not overwrite what sync_agent_output writes next.
+    async fn with_live_sync<T>(&self, fut: impl Future<Output = T>) -> T {
+        let (done, mut stop) = tokio::sync::oneshot::channel::<()>();
+        let sync = async {
+            let dir = self.dir.join("agent");
+            // A second instance: `fut` holds the real agent mutably, and collect_usage only reads logs.
+            let Ok(agent) = agents::create(&self.cfg.agent, dir.clone(), self.task.clone(), None) else { return };
+            let agent: Arc<dyn agents::Agent> = agent.into();
+            loop {
+                tokio::select! {
+                    _ = &mut stop => return,
+                    _ = tokio::time::sleep(LIVE_SYNC_INTERVAL) => {}
+                }
+                if self.download_agent_logs(&dir).await.is_err() {
+                    continue;
+                }
+                let (agent, dir) = (agent.clone(), dir.clone());
+                // Parsing and scrubbing long logs would stall the runtime; the viewer may serve these files now.
+                let _ = tokio::task::spawn_blocking(move || {
+                    agent.collect_usage(&dir, &mut AgentContext::default());
+                    crate::redact::scrub_dir(&dir);
+                })
+                .await;
+            }
+        };
+        let run = async move {
+            let r = fut.await;
+            let _ = done.send(());
+            r
+        };
+        tokio::join!(run, sync).0
     }
 
     /// Download agent logs, fill usage, and push host-side files (e.g. exit-code.txt) back.

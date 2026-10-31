@@ -596,6 +596,23 @@ check "Read-only" < "$CLI/view-readonly.log"
 expect_fail "does not exist" $BIN view "$CLI/nowhere"
 echo "viewer assertions OK"
 
+# hbench view follows a running trial: the agent's logs reach the trial dir before the agent exits.
+cp -R examples/tasks/hello-alpine "$JOBS/live-task"
+cat > "$JOBS/live-task/solution/solve.sh" <<'EOF'
+#!/bin/sh
+echo "Hello, world!" > /app/hello.txt
+echo live > /logs/agent/live.txt
+sleep 20
+EOF
+$BIN run -p "$JOBS/live-task" -a oracle --jobs-dir "$JOBS" --job-name live >/dev/null &
+live_pid=$!
+until compgen -G "$JOBS/live/*/agent/live.txt" >/dev/null; do
+  kill -0 $live_pid 2>/dev/null || { echo "agent logs did not reach the host during the run"; exit 1; }
+  sleep 1
+done
+wait $live_pid
+echo "live sync OK"
+
 left=$(docker ps -a --filter label=com.docker.compose.service=main --format '{{.Names}}' | grep -E '__[0-9a-f]{7}-main' || true)
 [ -z "$left" ] || { echo "leaked containers: $left"; exit 1; }
 echo "E2E OK ($JOBS)"

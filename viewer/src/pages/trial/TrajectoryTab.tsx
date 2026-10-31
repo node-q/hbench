@@ -1,5 +1,5 @@
 // ATIF trajectory: filterable, searchable step list. Step bodies render only when expanded (500+ step runs stay fast).
-import { memo, useCallback, useMemo, useState, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useApi } from "../../lib/api";
 import * as fmt from "../../lib/fmt";
 import { useKey, useUrlState } from "../../lib/state";
@@ -12,12 +12,20 @@ import { api, fileUrl, textOf, type TrialRef } from "./util";
 type SourceFilter = "all" | "agent" | "user" | "system";
 const SHELL_TOOLS = /^(bash|shell|sh|exec|exec_command|run|run_command|run_shell_command|execute_command|terminal|local_shell|command)$/i;
 
-export function TrajectoryTab({ t }: { t: TrialRef }) {
-  const res = useApi<Trajectory | null>(api(t, "trajectory"));
+export function TrajectoryTab({ t, running }: { t: TrialRef; running: boolean }) {
+  const res = useApi<Trajectory | null>(api(t, "trajectory"), { poll: running ? 4000 : undefined });
   const url = useUrlState();
   const sub = Number(url.get("sub") || 0);
-  if (res.error) return <ErrorBox error={res.error} title="Couldn't load the trajectory" onRetry={res.reload} />;
+  // Polling stops with the run, before the agent's last steps are fetched.
+  const wasRunning = useRef(running);
+  useEffect(() => {
+    if (wasRunning.current && !running) res.reload();
+    wasRunning.current = running;
+  }, [running]);
+  // A poll can catch the file mid-write; keep showing the last good copy.
+  if (res.error && !res.data) return <ErrorBox error={res.error} title="Couldn't load the trajectory" onRetry={res.reload} />;
   if (res.data === undefined) return <SkeletonRows rows={10} />;
+  if (!res.data?.steps?.length && running) return <Empty title="Waiting for the first step">The trajectory shows up here as the agent works.</Empty>;
   if (!res.data?.steps?.length) return <Empty title="No trajectory">This agent didn't write agent/trajectory.json for this trial.</Empty>;
   const subs: Trajectory[] = res.data.subagent_trajectories ?? [];
   const traj = sub > 0 && subs[sub - 1] ? subs[sub - 1] : res.data;
@@ -53,6 +61,13 @@ function Steps({ traj, t }: { traj: Trajectory; t: TrialRef }) {
   const [q, setQ] = useState("");
   const [source, setSource] = useState<SourceFilter>("all");
   const [open, setOpen] = useState<Set<number>>(() => new Set(steps.length <= 40 ? steps.map((_, i) => i) : []));
+  // Steps arriving live follow the same rule as the initial set.
+  const seen = useRef(steps.length);
+  useEffect(() => {
+    const from = seen.current;
+    seen.current = steps.length;
+    if (steps.length > from && steps.length <= 40) setOpen((o) => new Set([...o, ...[...steps.keys()].slice(from)]));
+  }, [steps.length]);
   const hay = useMemo(() => steps.map(haystack), [steps]);
   const counts = useMemo(() => {
     const c: Record<string, number> = { all: steps.length };

@@ -194,7 +194,7 @@ export default function Trial() {
       <div className="section">
         <Tabs tabs={tabs} value={tab} onChange={setTab} label="Trial views" />
         <div role="tabpanel">
-          {tab === "trajectory" && <TrajectoryTab t={ref} />}
+          {tab === "trajectory" && <TrajectoryTab t={ref} running={running} />}
           {tab === "interaction" && <InteractionTab t={ref} />}
           {tab === "verifier" && <VerifierTab t={ref} />}
           {tab === "logs" && <AgentLogsTab t={ref} />}
