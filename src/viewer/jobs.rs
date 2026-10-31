@@ -9,11 +9,12 @@ use std::path::{Path, PathBuf};
 const RESOURCE_MODES: &[&str] = &["auto", "limit", "request", "guarantee", "ignore"];
 
 impl App {
-    /// Every subdirectory of the jobs folder, newest (reverse-sorted by name) first.
+    /// Every subdirectory of the jobs folder, newest first, by when its config was written, then by reversed name.
     pub(super) fn list_jobs(&self) -> Vec<String> {
-        let mut v: Vec<String> = sorted_entries(&self.folder).into_iter().filter(|p| p.is_dir()).map(|p| name_of(&p)).collect();
+        let mut v: Vec<PathBuf> = sorted_entries(&self.folder).into_iter().filter(|p| p.is_dir()).collect();
+        v.sort_by_key(|p| p.join("config.json").metadata().and_then(|m| m.modified()).ok());
         v.reverse();
-        v
+        v.iter().map(|p| name_of(p)).collect()
     }
 
     pub(super) fn list_trials(&self, job: &str) -> Vec<String> {
