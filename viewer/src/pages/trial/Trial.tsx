@@ -9,6 +9,7 @@ import { useCommands, useTitle, type Command } from "../../shell";
 import { ErrorBox, PageHead, SkeletonRows, Status, Tabs, type TabDef } from "../../ui/kit";
 import * as Icon from "../../ui/icons";
 import { Summary } from "./Summary";
+import { MapTab } from "./MapTab";
 import { TrajectoryTab } from "./TrajectoryTab";
 import { FilesTab } from "./FilesTab";
 import { AgentLogsTab, AnalysisTab, ConfigTab, InteractionTab, RecordingTab, TextFileTab, VerifierTab } from "./tabs";
@@ -53,6 +54,7 @@ export default function Trial() {
 
   const tabs: TabDef[] = [
     { id: "trajectory", label: "Trajectory" },
+    { id: "map", label: "Map" },
     { id: "interaction", label: "Interaction", disabled: has.known && !has.interaction },
     { id: "verifier", label: "Verifier", disabled: has.known && !has.verifier },
     { id: "logs", label: "Agent logs", disabled: has.known && !has.logs },
@@ -66,7 +68,7 @@ export default function Trial() {
   ];
   const tabParam = url.get("tab");
   const tab = tabs.find((t) => t.id === tabParam && !t.disabled)?.id ?? "trajectory";
-  const setTab = useCallback((id: string) => url.set({ tab: id === "trajectory" ? null : id, path: null }), [url]);
+  const setTab = useCallback((id: string) => url.set({ tab: id === "trajectory" ? null : id, path: null, at: null }), [url]);
 
   const jobUrl = `/jobs/${encodeURIComponent(jobName)}`;
   const trialUrl = (name: string) => `${jobUrl}/trials/${encodeURIComponent(name)}`;
@@ -195,6 +197,7 @@ export default function Trial() {
         <Tabs tabs={tabs} value={tab} onChange={setTab} label="Trial views" />
         <div role="tabpanel">
           {tab === "trajectory" && <TrajectoryTab t={ref} running={running} />}
+          {tab === "map" && <MapTab t={ref} running={running} source={r.source} />}
           {tab === "interaction" && <InteractionTab t={ref} />}
           {tab === "verifier" && <VerifierTab t={ref} />}
           {tab === "logs" && <AgentLogsTab t={ref} />}
