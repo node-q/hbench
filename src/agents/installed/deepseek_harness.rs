@@ -38,6 +38,8 @@ const RUN_START: &str = "/logs/agent/dsh-run-start";
 const PATCH: &str = "/logs/agent/dsh-patch.yml";
 const INSTRUCTION: &str = "/tmp/hbench-dsh-instruction.md";
 const NVM: &str = "[ -f ~/.nvm/nvm.sh ] && . ~/.nvm/nvm.sh;";
+const STREAM_NOTE: &str = "Rebuilt from dsh's output stream: the run was stopped before its session log could be exported. \
+                           The instruction and timestamps are missing, and long text is cut at 8 KiB.";
 
 /// Copy every persisted session (zstd JSONL under $DSH_HOME/sessions) out as plain JSONL.
 /// The log is appended as one zstd frame per flush and Node's zstd (>= 22.15; dsh needs >= 22.19)
@@ -168,9 +170,9 @@ fn iso(ms: &Value) -> Option<String> {
     chrono::DateTime::from_timestamp_millis(ms.as_i64()?).map(|t| t.to_rfc3339_opts(chrono::SecondsFormat::Millis, true))
 }
 
-/// (prompt incl. cache, completion, cache read, cache write) of one `assistant/message`.
-fn usage(e: &Value) -> Option<(i64, i64, i64, i64)> {
-    let u = e["data"]["usage"].as_object()?;
+/// (prompt incl. cache, completion, cache read, cache write) of one model call.
+fn usage(u: &Value) -> Option<(i64, i64, i64, i64)> {
+    let u = u.as_object()?;
     let n = |k: &str| u.get(k).and_then(Value::as_i64).unwrap_or(0);
     let (read, write) = (n("cacheReadTokens"), n("cacheWriteTokens"));
     Some((n("inputTokens") + read + write, n("outputTokens"), read, write))
@@ -179,6 +181,54 @@ fn usage(e: &Value) -> Option<(i64, i64, i64, i64)> {
 fn cost(model: &str, (p, c, read, write): (i64, i64, i64, i64)) -> Option<f64> {
     let key = pricing::pricing_key(&format!("deepseek/{model}"))?;
     pricing::cost_per_token(&key, p, c, write, read).map(|(a, b)| a + b)
+}
+
+fn metrics(u: (i64, i64, i64, i64), model: Option<&str>) -> atif::Metrics {
+    atif::Metrics {
+        prompt_tokens: Some(u.0),
+        completion_tokens: Some(u.1),
+        cached_tokens: Some(u.2),
+        cost_usd: model.and_then(|m| cost(m, u)),
+        ..Default::default()
+    }
+}
+
+/// Number the steps and total their metrics.
+fn trajectory(
+    mut steps: Vec<atif::Step>,
+    session_id: Option<String>,
+    version: &str,
+    model_name: Option<String>,
+) -> Option<atif::Trajectory> {
+    if steps.is_empty() {
+        return None;
+    }
+    let (mut tp, mut tc, mut tcache, mut tcost) = (0i64, 0i64, 0i64, None::<f64>);
+    for (i, s) in steps.iter_mut().enumerate() {
+        s.step_id = i + 1;
+        let Some(m) = &s.metrics else { continue };
+        (tp, tc, tcache) =
+            (tp + m.prompt_tokens.unwrap_or(0), tc + m.completion_tokens.unwrap_or(0), tcache + m.cached_tokens.unwrap_or(0));
+        if let Some(c) = m.cost_usd {
+            tcost = Some(tcost.unwrap_or(0.0) + c);
+        }
+    }
+    let n = steps.len();
+    Some(atif::Trajectory {
+        schema_version: "ATIF-v1.6".into(),
+        session_id,
+        agent: atif::Agent { name: NAME.into(), version: version.into(), model_name, ..Default::default() },
+        steps,
+        final_metrics: Some(atif::FinalMetrics {
+            total_prompt_tokens: Some(tp),
+            total_completion_tokens: Some(tc),
+            total_cached_tokens: Some(tcache),
+            total_cost_usd: tcost,
+            total_steps: Some(n),
+            extra: None,
+        }),
+        ..Default::default()
+    })
 }
 
 /// One session log (`dsh-sessions/<id>.jsonl`) -> ATIF, counting only events at or after `since_ms`.
@@ -193,7 +243,6 @@ pub fn session_trajectory(text: &str, since_ms: i64, version: &str, model: Optio
         .map(String::from)
         .or(model.map(String::from));
     let mut steps: Vec<atif::Step> = vec![];
-    let (mut tp, mut tc, mut tcache, mut tcost) = (0i64, 0i64, 0i64, None::<f64>);
     for e in evs.iter().filter(|e| e["time"].as_i64().unwrap_or(i64::MAX) >= since_ms) {
         let d = &e["data"];
         match e["type"].as_str().unwrap_or_default() {
@@ -208,20 +257,7 @@ pub fn session_trajectory(text: &str, since_ms: i64, version: &str, model: Optio
             "assistant/message" => {
                 let msg = &d["message"];
                 let m = msg["source"]["model"].as_str().map(String::from).or(model_name.clone());
-                let metrics = usage(e).map(|u| {
-                    let c = m.as_deref().and_then(|m| cost(m, u));
-                    (tp, tc, tcache) = (tp + u.0, tc + u.1, tcache + u.2);
-                    if let Some(c) = c {
-                        tcost = Some(tcost.unwrap_or(0.0) + c);
-                    }
-                    atif::Metrics {
-                        prompt_tokens: Some(u.0),
-                        completion_tokens: Some(u.1),
-                        cached_tokens: Some(u.2),
-                        cost_usd: c,
-                        ..Default::default()
-                    }
-                });
+                let metrics = usage(&e["data"]["usage"]).map(|u| metrics(u, m.as_deref()));
                 let reasoning = text_of(&msg["content"], "reasoning");
                 steps.push(atif::Step {
                     source: "agent".into(),
@@ -261,28 +297,62 @@ pub fn session_trajectory(text: &str, since_ms: i64, version: &str, model: Optio
             _ => {}
         }
     }
-    if steps.is_empty() {
-        return None;
+    trajectory(steps, session_id, version, model_name)
+}
+
+/// dsh's `--json` stdout (`dsh.jsonl`) -> ATIF, for a run stopped before its session could be exported.
+/// The stream has every model call, but no timestamps or instruction, and cuts long text at 8 KiB.
+pub fn stream_trajectory(text: &str, version: &str, model: Option<&str>) -> Option<atif::Trajectory> {
+    let evs = events(text);
+    let session_id = evs.iter().find(|e| e["type"] == "session").and_then(|e| e["sessionId"].as_str()).map(String::from);
+    let mut steps: Vec<atif::Step> = vec![];
+    for e in &evs {
+        let kind = e["type"].as_str().unwrap_or_default();
+        if kind == "status" && e["phase"] == "step_start" {
+            steps.push(atif::Step {
+                source: "agent".into(),
+                model_name: model.map(String::from),
+                message: json!(""),
+                ..Default::default()
+            });
+            continue;
+        }
+        let Some(step) = steps.last_mut() else { continue };
+        match kind {
+            "status" if e["phase"] == "step_end" => step.metrics = usage(&e["usage"]).map(|u| metrics(u, model)),
+            "thinking" => step.reasoning_content = e["text"].as_str().map(String::from),
+            "text" => step.message = e["text"].clone(),
+            "tool_call" => step.tool_calls.get_or_insert_with(Vec::new).push(atif::ToolCall {
+                tool_call_id: e["callId"].as_str().unwrap_or_default().into(),
+                function_name: e["tool"].as_str().unwrap_or_default().into(),
+                arguments: e["input"].clone(),
+                extra: None,
+            }),
+            "tool_result" => {
+                let mut extra = Map::new();
+                if e["status"] == "error" {
+                    extra.insert("is_error".into(), json!(true));
+                }
+                step.observation.get_or_insert_with(Default::default).results.push(atif::ObservationResult {
+                    source_call_id: e["callId"].as_str().map(String::from),
+                    content: Some(e["result"].clone()),
+                    extra: (!extra.is_empty()).then_some(extra),
+                    ..Default::default()
+                });
+            }
+            _ => {}
+        }
     }
-    for (i, s) in steps.iter_mut().enumerate() {
-        s.step_id = i + 1;
-    }
-    let n = steps.len();
-    Some(atif::Trajectory {
-        schema_version: "ATIF-v1.6".into(),
-        session_id,
-        agent: atif::Agent { name: NAME.into(), version: version.into(), model_name, ..Default::default() },
-        steps,
-        final_metrics: Some(atif::FinalMetrics {
-            total_prompt_tokens: Some(tp),
-            total_completion_tokens: Some(tc),
-            total_cached_tokens: Some(tcache),
-            total_cost_usd: tcost,
-            total_steps: Some(n),
-            extra: None,
-        }),
-        ..Default::default()
-    })
+    // A step the run was stopped in may hold nothing yet.
+    steps.retain(|s| s.metrics.is_some() || s.reasoning_content.is_some() || s.tool_calls.is_some() || s.message != "");
+    let mut t = trajectory(steps, session_id, version, model.map(String::from))?;
+    t.notes = Some(STREAM_NOTE.into());
+    Some(t)
+}
+
+/// [`stream_trajectory`] of a trial's agent logs.
+pub fn stream_trajectory_of(logs_dir: &Path, version: &str, model: Option<&str>) -> Option<atif::Trajectory> {
+    stream_trajectory(&std::fs::read_to_string(logs_dir.join("dsh.jsonl")).ok()?, version, model)
 }
 
 #[async_trait::async_trait]
@@ -340,8 +410,9 @@ impl Agent for DeepSeekHarness {
             .and_then(|e| e["sessionId"].as_str().map(String::from));
         let model = self.route().ok().flatten().unwrap_or_else(|| DEFAULT_MODEL.into());
         let version = self.version.clone().unwrap_or_else(|| "unknown".into());
-        let Ok(dir) = std::fs::read_dir(logs_dir.join("dsh-sessions")) else { return };
-        let mut paths: Vec<_> = dir.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "jsonl")).collect();
+        let dir = std::fs::read_dir(logs_dir.join("dsh-sessions"));
+        let mut paths: Vec<_> =
+            dir.into_iter().flatten().flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "jsonl")).collect();
         paths.sort();
         // Totals cover every session this run touched (subagents included); the trajectory is the main session.
         let (mut found, mut i, mut o, mut c, mut cost) = (false, 0, 0, 0, None::<f64>);
@@ -359,6 +430,18 @@ impl Agent for DeepSeekHarness {
             if main_id.as_deref().is_some_and(|id| p.file_stem().is_some_and(|s| s == id)) {
                 let _ = std::fs::write(logs_dir.join("trajectory.json"), serde_json::to_string_pretty(&t).unwrap_or_default());
             }
+        }
+        // A timed-out run never reaches the export that follows dsh in `command`.
+        if !found && let Some(t) = stream_trajectory_of(logs_dir, &version, Some(&model)) {
+            let _ = std::fs::write(logs_dir.join("trajectory.json"), serde_json::to_string_pretty(&t).unwrap_or_default());
+            let fm = t.final_metrics.unwrap_or_default();
+            (found, i, o, c, cost) = (
+                true,
+                fm.total_prompt_tokens.unwrap_or(0),
+                fm.total_completion_tokens.unwrap_or(0),
+                fm.total_cached_tokens.unwrap_or(0),
+                fm.total_cost_usd,
+            );
         }
         if found {
             (ctx.n_input_tokens, ctx.n_output_tokens, ctx.n_cache_tokens, ctx.cost_usd) = (Some(i), Some(o), Some(c), cost);
@@ -461,5 +544,74 @@ mod tests {
         // LiteLLM deepseek/deepseek-v4-flash: in 3e-7, out 1.2e-6, cache read 6e-9, cache write 0.
         let want = (1000.0 + 10.0) * 3e-7 + 9000.0 * 6e-9 + 105.0 * 1.2e-6;
         assert!((fm.total_cost_usd.unwrap() - want).abs() < 1e-12, "{:?} vs {want}", fm.total_cost_usd);
+    }
+
+    fn stream() -> String {
+        [
+            json!({"type": "session", "sessionId": "session-a", "cwd": "/app"}).to_string(),
+            json!({"type": "status", "phase": "turn_start", "turn": 1}).to_string(),
+            json!({"type": "status", "phase": "step_start", "turn": 1, "step": 1}).to_string(),
+            json!({"type": "thinking", "text": "hmm", "truncated": false}).to_string(),
+            json!({"type": "tool_call", "callId": "c1", "tool": "bash", "input": {"command": "ls"}}).to_string(),
+            json!({"type": "tool_result", "callId": "c1", "status": "error", "result": "boom"}).to_string(),
+            json!({"type": "status", "phase": "step_end", "turn": 1, "step": 1, "usage": {"inputTokens": 1000, "outputTokens": 100, "cacheReadTokens": 4000, "cacheWriteTokens": 0}}).to_string(),
+            json!({"type": "status", "phase": "step_start", "turn": 1, "step": 2}).to_string(),
+            json!({"type": "tool_call", "callId": "c2", "tool": "read", "input": {"path": "a"}}).to_string(),
+            json!({"type": "status", "phase": "step_start", "turn": 1, "step": 3}).to_string(),
+            "{\"type\":\"thinking\",\"te".to_string(),
+        ]
+        .join("\n")
+    }
+
+    #[test]
+    fn stream_to_trajectory() {
+        let t = stream_trajectory(&stream(), "0.2.0", Some("deepseek-v4-flash")).unwrap();
+        assert_eq!(t.session_id.as_deref(), Some("session-a"));
+        assert!(t.notes.as_deref().unwrap().contains("Rebuilt from dsh's output stream"));
+        // The step the run was killed in has no usage yet; the empty one after it is dropped.
+        assert_eq!(t.steps.iter().map(|s| (s.step_id, s.metrics.is_some())).collect::<Vec<_>>(), [(1, true), (2, false)]);
+        let s = &t.steps[0];
+        assert_eq!((s.source.as_str(), s.reasoning_content.as_deref(), s.timestamp.as_ref()), ("agent", Some("hmm"), None));
+        let tc = &s.tool_calls.as_ref().unwrap()[0];
+        assert_eq!((tc.tool_call_id.as_str(), tc.function_name.as_str(), &tc.arguments), ("c1", "bash", &json!({"command": "ls"})));
+        let r = &s.observation.as_ref().unwrap().results[0];
+        assert_eq!(
+            (r.source_call_id.as_deref(), r.content.clone(), r.extra.as_ref().map(|e| e["is_error"].clone())),
+            (Some("c1"), Some(json!("boom")), Some(json!(true)))
+        );
+        let fm = t.final_metrics.unwrap();
+        assert_eq!(
+            (fm.total_prompt_tokens, fm.total_completion_tokens, fm.total_cached_tokens, fm.total_steps),
+            (Some(5000), Some(100), Some(4000), Some(2))
+        );
+        assert!(fm.total_cost_usd.is_some());
+        assert!(stream_trajectory("{\"type\":\"session\",\"sessionId\":\"s\"}\ndsh: boom", "0.2.0", None).is_none());
+    }
+
+    #[test]
+    fn collect_usage_falls_back_to_the_stream() {
+        let dir = std::env::temp_dir().join(format!("hbench-dsh-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(dir.join("dsh-sessions")).unwrap();
+        std::fs::write(dir.join("dsh.jsonl"), stream()).unwrap();
+        let mut ctx = AgentContext::default();
+        agent(json!({}), None).unwrap().collect_usage(&dir, &mut ctx);
+        assert_eq!((ctx.n_input_tokens, ctx.n_output_tokens, ctx.n_cache_tokens), (Some(5000), Some(100), Some(4000)));
+        assert!(ctx.cost_usd.is_some());
+        let v: Value = serde_json::from_slice(&std::fs::read(dir.join("trajectory.json")).unwrap()).unwrap();
+        assert_eq!(v["steps"].as_array().unwrap().len(), 2);
+
+        // An exported session wins: it has the full text.
+        std::fs::remove_file(dir.join("trajectory.json")).unwrap();
+        let session = [
+            json!({"type": "session", "id": "session-a"}),
+            json!({"type": "user/message", "time": 1000, "data": {"content": [{"type": "text", "text": "do it"}], "source": {"kind": "user"}}}),
+        ]
+        .map(|e| e.to_string())
+        .join("\n");
+        std::fs::write(dir.join("dsh-sessions/session-a.jsonl"), session).unwrap();
+        agent(json!({}), None).unwrap().collect_usage(&dir, &mut AgentContext::default());
+        let v: Value = serde_json::from_slice(&std::fs::read(dir.join("trajectory.json")).unwrap()).unwrap();
+        assert!(v["notes"].is_null() && v["steps"][0]["message"] == "do it", "{v}");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

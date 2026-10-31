@@ -329,7 +329,9 @@ jobs/<job>/<task>__<id>/{config.json, lock.json, result.json, trial.log, excepti
 native session logs into it; `terminus-2`, `computer-1`, `openhands-sdk`, `antigravity-sdk` and `nemo-agent` write it
 themselves. In a converted trajectory each agent step is one model call and its metrics are that call's alone:
 `prompt_tokens` is the whole prompt, cached and cache-written tokens included, and `cached_tokens` the cached part of
-it. A step whose call the native log reports no usage for has no metrics.
+it. A step whose call the native log reports no usage for has no metrics. A `deepseek-harness` run stopped by its
+timeout has no session log, so its trajectory comes from `dsh`'s output stream instead: the instruction and timestamps
+are missing, long text is cut at 8 KiB, and `notes` says so.
 
 `trials.json` is written only for jobs not planned from their config (`jobs regrade`, `run --diff`), so they can be
 resumed. The job's `result.json` has per-eval metrics (mean/sum/min/max/uv-script), pass@k, reward/exception stats, tokens,
