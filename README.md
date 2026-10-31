@@ -15,14 +15,6 @@ As AI agents learn to improve themselves, progress needs proof. hbench runs a ha
 Gemini CLI and 40+ more) on fixed tasks in Docker, with its version and model pinned, so you can tell whether a
 change really made it better.
 
-- **Compare versions.** `--ak version=X` pins the harness, on the same model and tasks.
-- **Check the result.** `hbench jobs verify` fails if a job's files have changed.
-- **Use your own tasks.** `hbench init` starts one, and [hbench-action](https://github.com/node-q/hbench-action)
-  runs them in CI. For a private site for your company, [talk to us](https://nodeq.tech/contact#enterprise).
-- **Publish it.** Upload a job to [Your bench](https://nodeq.tech/bench) to see it on a board.
-
-Contents:
-
 - [Installation](#installation)
 - [Quick start](#quick-start)
 - [Docs](#docs)
