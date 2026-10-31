@@ -4,6 +4,7 @@ use super::common::{installed_dir, skills_dir};
 use super::{connection, ensure_system_dependencies, exec_agent, exec_root_checked, upload_text};
 use crate::agents::model_connection::{Resolved, Spec};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
+use crate::atif;
 use crate::env::quote;
 use crate::fmt::json_spaced;
 use anyhow::{Result, anyhow, bail};
@@ -551,6 +552,101 @@ fn find_sessions(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
+/// The run's own `session.jsonl`, of all the session files under `root`.
+fn root_session<'a>(all: &'a [PathBuf], root: &Path, sid: &str) -> Option<&'a PathBuf> {
+    let roots: Vec<&PathBuf> = all
+        .iter()
+        .filter(|p| {
+            let c: Vec<_> = p.strip_prefix(root).map(|r| r.components().collect()).unwrap_or_default();
+            c.len() == 5 && c[3].as_os_str() == sid
+        })
+        .collect();
+    let [root_path] = roots[..] else { return None };
+    Some(root_path)
+}
+
+/// A session's run events after `after` -> ATIF, a step for each model response. Subagents stay out of the steps; their
+/// tokens are in the run's totals.
+fn atif_trajectory(records: &Records, after: usize, version: Option<&str>, model: Option<&str>) -> Option<atif::Trajectory> {
+    let (mut steps, mut instructions) = (Vec::<atif::Step>::new(), None::<&str>);
+    let agent_step = || atif::Step { source: "agent".into(), message: json!(""), ..Default::default() };
+    let text = |e: &Value| e["text"].as_str().unwrap_or_default().to_string();
+    for e in run_events(records, after) {
+        let kind = e["kind"].as_str().unwrap_or_default();
+        let responding = steps.last().is_some_and(|s| s.source == "agent");
+        if !responding && matches!(kind, "reasoning_committed" | "assistant_message_committed" | "assistant_tool_calls_committed") {
+            steps.push(agent_step());
+        }
+        match kind {
+            "started" => steps.push(atif::Step { source: "user".into(), message: e["prompt"].clone(), ..Default::default() }),
+            "model_request_configured" => {
+                let base = e["base_instructions"].as_str().filter(|b| !b.is_empty());
+                if base.is_some() && base != instructions {
+                    instructions = base;
+                    steps.push(atif::Step { source: "system".into(), message: e["base_instructions"].clone(), ..Default::default() });
+                }
+            }
+            "model_response_created" => steps.push(agent_step()),
+            "reasoning_committed" => {
+                steps.last_mut()?.reasoning_content.get_or_insert_default().push_str(&text(e));
+            }
+            "assistant_message_committed" => {
+                let step = steps.last_mut()?;
+                step.message = json!(format!("{}{}", step.message.as_str().unwrap_or_default(), text(e)));
+            }
+            "assistant_tool_calls_committed" => {
+                for c in e["tool_calls"].as_array().into_iter().flatten() {
+                    let raw = c["args"].as_str().unwrap_or_default();
+                    steps.last_mut()?.tool_calls.get_or_insert_default().push(atif::ToolCall {
+                        tool_call_id: c["call_id"].as_str().unwrap_or_default().into(),
+                        function_name: c["name"].as_str().unwrap_or_default().into(),
+                        arguments: serde_json::from_str(raw).unwrap_or_else(|_| json!(raw)),
+                        extra: None,
+                    });
+                }
+            }
+            "tool_result_batch_committed" => {
+                for r in e["results"].as_array().into_iter().flatten() {
+                    atif::attach_result(&mut steps, r["tool_call_id"].as_str().unwrap_or_default(), json!(text(r)));
+                }
+            }
+            "tool_result" => {
+                atif::attach_result(&mut steps, e["call_id"].as_str().unwrap_or_default(), json!(text(e)));
+            }
+            "model_completed" if e["usage"].is_object() => {
+                let u = &e["usage"];
+                steps.last_mut()?.metrics = Some(atif::Metrics {
+                    prompt_tokens: u["input_tokens"].as_i64(),
+                    completion_tokens: u["output_tokens"].as_i64(),
+                    cached_tokens: u["cached_tokens"].as_i64(),
+                    cost_usd: u["cost_usd"].as_f64(),
+                    ..Default::default()
+                });
+            }
+            _ => {}
+        }
+    }
+    let agent = atif::Agent {
+        name: "muse-code".into(),
+        version: version.unwrap_or("unknown").into(),
+        model_name: model.map(String::from),
+        ..Default::default()
+    };
+    atif::assemble(agent, native_session_id(records), steps)
+}
+
+/// The root session of the run -> ATIF.
+fn trajectory_from_logs(logs_dir: &Path, version: Option<&str>, model: Option<&str>) -> Option<atif::Trajectory> {
+    let manifest = read_manifest(logs_dir).ok()?;
+    let root = logs_dir.join("sessions");
+    let mut all = vec![];
+    find_sessions(&root, &mut all);
+    let path = root_session(&all, &root, manifest["session_id"].as_str()?)?;
+    let key = path.strip_prefix(&root).ok()?.to_string_lossy().replace('\\', "/");
+    let after = manifest["usage_start"][&key].as_u64().unwrap_or(0) as usize;
+    atif_trajectory(&read_session(&std::fs::read_to_string(path).ok()?), after, version, model)
+}
+
 /// Usage totals over the root session (`sessions/*/*/*/<sid>/session.jsonl`) and its nested
 /// subagent/observer sessions, counting only records after each file's `usage_start` boundary.
 fn usage_from_logs(logs_dir: &Path) -> Option<Usage> {
@@ -559,14 +655,7 @@ fn usage_from_logs(logs_dir: &Path) -> Option<Usage> {
     let root = logs_dir.join("sessions");
     let mut all = vec![];
     find_sessions(&root, &mut all);
-    let roots: Vec<&PathBuf> = all
-        .iter()
-        .filter(|p| {
-            let c: Vec<_> = p.strip_prefix(&root).map(|r| r.components().collect()).unwrap_or_default();
-            c.len() == 5 && c[3].as_os_str() == sid.as_str()
-        })
-        .collect();
-    let [root_path] = roots[..] else { return None };
+    let root_path = root_session(&all, &root, &sid)?;
     let parent = root_path.parent()?;
     let mut children: Vec<&PathBuf> = all.iter().filter(|p| p.starts_with(parent) && *p != root_path).collect();
     children.sort();
@@ -687,6 +776,10 @@ impl Agent for MuseCode {
             ctx.n_cache_tokens = u.cached;
             ctx.n_output_tokens = u.completion;
             ctx.cost_usd = u.cost;
+        }
+        if let Some(mut t) = trajectory_from_logs(logs_dir, self.version.as_deref(), self.args.model_name.as_deref()) {
+            atif::set_run_totals(&mut t, ctx.n_input_tokens, ctx.n_output_tokens, ctx.n_cache_tokens, ctx.cost_usd);
+            atif::write_trajectory(logs_dir, &t);
         }
     }
 }
@@ -829,10 +922,38 @@ mod tests {
         let mut ctx = AgentContext::default();
         MuseCode::collect_usage(&agent(json!({}), &[], None).unwrap(), &logs, &mut ctx);
         assert_eq!((ctx.n_input_tokens, ctx.n_cache_tokens, ctx.n_output_tokens, ctx.cost_usd), (Some(120), Some(56), Some(16), None));
+        let t: atif::Trajectory = serde_json::from_str(&std::fs::read_to_string(logs.join("trajectory.json")).unwrap()).unwrap();
+        let f = t.final_metrics.as_ref().unwrap();
+        assert_eq!((f.total_prompt_tokens, f.total_cached_tokens, f.total_completion_tokens), (Some(120), Some(56), Some(16)));
+        assert_eq!(t.steps.iter().map(|s| s.source.as_str()).collect::<Vec<_>>(), ["user", "agent", "agent"]);
+        assert_eq!(t.steps[1].observation.as_ref().unwrap().results[0].content, Some(json!("42")));
+        assert_eq!(t.steps[2].metrics.as_ref().unwrap().prompt_tokens, Some(40));
+        assert_eq!(t.steps[2].message, json!("The answer is 42."));
         // Resume boundary: root lines up to 7 (first model_completed is line 6) are excluded.
         std::fs::write(logs.join(MANIFEST), json!({"session_id": SID, "usage_start": {SESSION: 7}}).to_string()).unwrap();
         let u = usage_from_logs(&logs).unwrap();
         assert_eq!((u.prompt, u.cached, u.completion), (Some(100), Some(48), Some(11)));
+    }
+
+    #[test]
+    fn native_round_trip_to_atif() {
+        let traj = json!({"schema_version": "ATIF-v1.4", "session_id": SID, "agent": {"name": "x", "version": "1"},
+        "steps": [
+            {"step_id": 1, "source": "system", "message": "be brief"},
+            {"step_id": 2, "source": "user", "message": "Read the answer"},
+            {"step_id": 3, "source": "agent", "message": "Reading", "reasoning_content": "think",
+             "tool_calls": [{"tool_call_id": "c1", "function_name": "bash", "arguments": {"cmd": "cat x"}}],
+             "observation": {"results": [{"source_call_id": "c1", "content": "42"}]}},
+            {"step_id": 4, "source": "agent", "message": "It is 42"}
+        ]});
+        let a = atif_trajectory(&read_session(&atif_to_native(&traj, SID).unwrap()), 0, Some("1.0.0"), Some("meta/m")).unwrap();
+        assert_eq!(a.session_id.as_deref(), Some(SID));
+        let call = a.steps.iter().find(|s| s.tool_calls.is_some()).unwrap();
+        assert_eq!((call.message.as_str(), call.reasoning_content.as_deref()), (Some("Reading"), Some("think")));
+        assert_eq!(call.tool_calls.as_ref().unwrap()[0].arguments["cmd"], "cat x");
+        let result = &call.observation.as_ref().unwrap().results[0];
+        assert_eq!((result.source_call_id.as_deref(), result.content.clone()), (Some("c1"), Some(json!("42"))));
+        assert!(a.steps.iter().any(|s| s.message == json!("It is 42")));
     }
 
     #[test]
