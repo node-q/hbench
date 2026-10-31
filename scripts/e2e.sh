@@ -601,16 +601,23 @@ cp -R examples/tasks/hello-alpine "$JOBS/live-task"
 cat > "$JOBS/live-task/solution/solve.sh" <<'EOF'
 #!/bin/sh
 echo "Hello, world!" > /app/hello.txt
-echo live > /logs/agent/live.txt
+echo "live $LIVE_KEY" > /logs/agent/live.txt
 sleep 20
 EOF
-$BIN run -p "$JOBS/live-task" -a oracle --jobs-dir "$JOBS" --job-name live >/dev/null &
+live_key="hb-e2e-live-$(openssl rand -hex 12)"
+$BIN run -p "$JOBS/live-task" -a oracle --ae "LIVE_KEY=$live_key" --jobs-dir "$JOBS" --job-name live >/dev/null &
 live_pid=$!
-until compgen -G "$JOBS/live/*/agent/live.txt" >/dev/null; do
-  kill -0 $live_pid 2>/dev/null || { echo "agent logs did not reach the host during the run"; exit 1; }
-  sleep 1
+# Scrubbed before it's served: the raw key never lands in the trial dir, not even for a moment.
+live_seen=
+while kill -0 $live_pid 2>/dev/null; do
+  if compgen -G "$JOBS/live/*/agent/live.txt" >/dev/null; then
+    live_seen=1
+    grep -F "[REDACTED]" "$JOBS"/live/*/agent/live.txt >/dev/null || { echo "raw agent log reached the host"; exit 1; }
+  fi
+  sleep 0.1
 done
 wait $live_pid
+[ -n "$live_seen" ] || { echo "agent logs did not reach the host during the run"; exit 1; }
 echo "live sync OK"
 
 left=$(docker ps -a --filter label=com.docker.compose.service=main --format '{{.Names}}' | grep -E '__[0-9a-f]{7}-main' || true)

@@ -221,6 +221,24 @@ const SETUP_ATTEMPTS: u32 = 3;
 const STEP_SETUP_TIMEOUT_SEC: f64 = 600.0;
 const LIVE_SYNC_INTERVAL: Duration = Duration::from_secs(5);
 
+/// A private temp dir for raw logs, removed even if the trial is cancelled mid-copy.
+struct Stage(PathBuf);
+
+impl Stage {
+    fn new() -> std::io::Result<Stage> {
+        use std::os::unix::fs::DirBuilderExt;
+        let dir = std::env::temp_dir().join(format!("hbench-logs-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::DirBuilder::new().mode(0o700).create(&dir)?;
+        Ok(Stage(dir))
+    }
+}
+
+impl Drop for Stage {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 /// Context on an agent phase whose processes could not be stopped: grading then would be unsafe, so the
 /// trial ends there, still reporting the run's own error kind.
 #[derive(Debug)]
@@ -890,17 +908,30 @@ impl Trial {
         self.agent = Some(agent);
     }
 
-    async fn download_agent_logs(&self, target: &Path) -> Result<()> {
-        let env = self.env();
+    /// The agent's logs, raw, somewhere `hbench view` doesn't serve.
+    async fn stage_agent_logs(&self) -> Result<Stage> {
         let a = &self.cfg.agent;
-        let r = env.download_dir(MAIN, "/logs/agent", target).await;
-        if r.is_ok() && (!a.include_logs.is_empty() || !a.exclude_logs.is_empty()) {
-            filter_logs(target, &a.include_logs, &a.exclude_logs, &[]);
-        }
+        let stage = Stage::new()?;
+        let r = self.env().download_dir(MAIN, "/logs/agent", &stage.0).await;
         if let Err(e) = &r {
             self.log.line(&format!("agent log download failed: {e:#}"));
         }
-        r
+        r?;
+        if !a.include_logs.is_empty() || !a.exclude_logs.is_empty() {
+            filter_logs(&stage.0, &a.include_logs, &a.exclude_logs, &[]);
+        }
+        Ok(stage)
+    }
+
+    /// The trial dir is served while the trial runs, so logs only land there scrubbed.
+    async fn download_agent_logs(&self, target: &Path) -> Result<()> {
+        let a = &self.cfg.agent;
+        let stage = self.stage_agent_logs().await?;
+        crate::redact::publish_dir(&stage.0, target)?;
+        if !a.include_logs.is_empty() || !a.exclude_logs.is_empty() {
+            filter_logs(target, &a.include_logs, &a.exclude_logs, &[]);
+        }
+        Ok(())
     }
 
     /// Run `fut` while mirroring the agent's logs to the trial dir, so `hbench view` can follow a running trial.
@@ -917,14 +948,12 @@ impl Trial {
                     _ = &mut stop => return,
                     _ = tokio::time::sleep(LIVE_SYNC_INTERVAL) => {}
                 }
-                if self.download_agent_logs(&dir).await.is_err() {
-                    continue;
-                }
+                let Ok(stage) = self.stage_agent_logs().await else { continue };
                 let (agent, dir) = (agent.clone(), dir.clone());
-                // Parsing and scrubbing long logs would stall the runtime; the viewer may serve these files now.
+                // Parsing and scrubbing long logs would stall the runtime.
                 let _ = tokio::task::spawn_blocking(move || {
-                    agent.collect_usage(&dir, &mut AgentContext::default());
-                    crate::redact::scrub_dir(&dir);
+                    agent.collect_usage(&stage.0, &mut AgentContext::default());
+                    crate::redact::publish_dir(&stage.0, &dir)
                 })
                 .await;
             }
@@ -1624,6 +1653,17 @@ mod tests {
         let d = std::env::temp_dir().join(format!("hbench-test-{name}-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    #[test]
+    fn a_stage_is_private_and_goes_away() {
+        use std::os::unix::fs::PermissionsExt;
+        let stage = Stage::new().unwrap();
+        let dir = stage.0.clone();
+        assert_eq!(std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777, 0o700);
+        std::fs::write(dir.join("raw.txt"), "x").unwrap();
+        drop(stage);
+        assert!(!dir.exists());
     }
 
     #[test]
