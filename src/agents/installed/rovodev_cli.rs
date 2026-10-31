@@ -1,8 +1,9 @@
 //! RovoDev CLI installed agent.
 
-use super::common::installed_dir;
+use super::common::{installed_dir, pydantic_ai_steps};
 use super::{ensure_system_dependencies, exec_agent, exec_root_checked};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
+use crate::atif;
 use crate::env::quote;
 use anyhow::{Result, anyhow, bail};
 use serde_json::Value;
@@ -68,6 +69,21 @@ pub fn usage_from_session(text: &str) -> Option<AgentContext> {
         n_output_tokens: Some(n("output_tokens")),
         ..Default::default()
     })
+}
+
+/// `session_context.json`, a pydantic-ai `message_history`, -> ATIF. The session's usage is the only one known to add up,
+/// so steps have no metrics.
+pub fn atif_trajectory(text: &str, version: Option<&str>, model: Option<&str>) -> Option<atif::Trajectory> {
+    let session: Value = serde_json::from_str(text).ok()?;
+    let mut steps = pydantic_ai_steps(session["message_history"].as_array()?, &|c| !is_system_message(c));
+    steps.iter_mut().for_each(|s| s.metrics = None);
+    let agent = atif::Agent {
+        name: "rovodev-cli".into(),
+        version: version.unwrap_or("unknown").into(),
+        model_name: model.map(String::from),
+        ..Default::default()
+    };
+    atif::assemble(agent, session["id"].as_str().map(String::from), steps)
 }
 
 /// System message patterns (internal prompts filtered from user steps).
@@ -151,9 +167,13 @@ impl Agent for RovodevCli {
     }
 
     fn collect_usage(&self, logs_dir: &std::path::Path, ctx: &mut AgentContext) {
-        if let Some(c) = std::fs::read_to_string(logs_dir.join("rovodev_session_context.json")).ok().and_then(|t| usage_from_session(&t)) {
-            *ctx = c;
+        let Ok(text) = std::fs::read_to_string(logs_dir.join("rovodev_session_context.json")) else { return };
+        let Some(c) = usage_from_session(&text) else { return };
+        if let Some(mut t) = atif_trajectory(&text, self.version.as_deref(), self.args.model_name.as_deref()) {
+            atif::set_run_totals(&mut t, c.n_input_tokens, c.n_output_tokens, c.n_cache_tokens, None);
+            atif::write_trajectory(logs_dir, &t);
         }
+        *ctx = c;
     }
 }
 
@@ -165,6 +185,23 @@ mod tests {
 
     fn args(kwargs: Value, env: &[(&str, &str)]) -> AgentArgs {
         common::test_args(kwargs, env, None)
+    }
+
+    #[test]
+    fn session_context_to_atif() {
+        let session = serde_json::json!({"id": "s1", "usage": {"input_tokens": 10}, "message_history": [
+            {"kind": "request", "parts": [{"part_kind": "system-prompt", "content": "be brief"}, {"part_kind": "user-prompt", "content": "Fix the bug"},
+                                          {"part_kind": "user-prompt", "content": "You have used 3 iterations."}]},
+            {"kind": "response", "usage": {"input_tokens": 4}, "parts": [{"part_kind": "tool-call", "tool_name": "bash", "args": "{\"command\":\"ls\"}", "tool_call_id": "c1"}]},
+            {"kind": "request", "parts": [{"part_kind": "tool-return", "tool_name": "bash", "content": "a.py", "tool_call_id": "c1"}]},
+            {"kind": "response", "parts": [{"part_kind": "text", "content": "done"}]}
+        ]});
+        let a = atif_trajectory(&session.to_string(), Some("1"), None).unwrap();
+        assert_eq!(a.session_id.as_deref(), Some("s1"));
+        assert_eq!(a.steps.iter().map(|s| s.source.as_str()).collect::<Vec<_>>(), ["system", "user", "agent", "agent"]);
+        let result = &a.steps[2].observation.as_ref().unwrap().results[0];
+        assert_eq!((result.source_call_id.as_deref(), result.content.clone()), (Some("c1"), Some(serde_json::json!("a.py"))));
+        assert!(a.steps[2].metrics.is_none());
     }
 
     #[test]
