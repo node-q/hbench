@@ -331,16 +331,6 @@ fn agent_step(m: &Value) -> atif::Step {
     }
 }
 
-/// Attach a tool's result to the agent step that called it.
-fn observe(steps: &mut [atif::Step], call_id: &Value, output: String) {
-    let Some(step) = steps.iter_mut().rev().find(|s| s.source == "agent") else { return };
-    step.observation.get_or_insert_with(Default::default).results.push(atif::ObservationResult {
-        source_call_id: call_id.as_str().map(String::from),
-        content: Some(json!(output)),
-        ..Default::default()
-    });
-}
-
 /// mini-swe-agent's native trajectory -> ATIF.
 pub fn atif_trajectory(text: &str, session_id: Option<String>, version: Option<&str>, model: Option<&str>) -> Option<atif::Trajectory> {
     let totals = parse_trajectory(text)?;
@@ -350,7 +340,7 @@ pub fn atif_trajectory(text: &str, session_id: Option<String>, version: Option<&
         if m["object"] == "response" {
             steps.push(agent_step(m));
         } else if m["type"] == "function_call_output" {
-            observe(&mut steps, &m["call_id"], text_of(&m["output"]));
+            atif::attach_result(&mut steps, m["call_id"].as_str().unwrap_or_default(), json!(text_of(&m["output"])));
         } else {
             match m["role"].as_str() {
                 Some(role @ ("system" | "user")) => steps.push(atif::Step {
@@ -360,38 +350,22 @@ pub fn atif_trajectory(text: &str, session_id: Option<String>, version: Option<&
                     ..Default::default()
                 }),
                 Some("assistant") => steps.push(agent_step(m)),
-                Some("tool") => observe(&mut steps, &m["tool_call_id"], text_of(&m["content"])),
+                Some("tool") => {
+                    atif::attach_result(&mut steps, m["tool_call_id"].as_str().unwrap_or_default(), json!(text_of(&m["content"])));
+                }
                 _ => {}
             }
         }
     }
-    if steps.is_empty() {
-        return None;
-    }
-    for (i, s) in steps.iter_mut().enumerate() {
-        s.step_id = i + 1;
-    }
-    let n = steps.len();
-    Some(atif::Trajectory {
-        schema_version: "ATIF-v1.7".into(),
-        session_id,
-        agent: atif::Agent {
-            name: "mini-swe-agent".into(),
-            version: t["info"]["mini_version"].as_str().or(version).unwrap_or("unknown").into(),
-            model_name: model.map(String::from),
-            ..Default::default()
-        },
-        steps,
-        final_metrics: Some(atif::FinalMetrics {
-            total_prompt_tokens: totals.n_input_tokens,
-            total_completion_tokens: totals.n_output_tokens,
-            total_cached_tokens: totals.n_cache_tokens,
-            total_cost_usd: totals.cost_usd,
-            total_steps: Some(n),
-            extra: None,
-        }),
+    let agent = atif::Agent {
+        name: "mini-swe-agent".into(),
+        version: t["info"]["mini_version"].as_str().or(version).unwrap_or("unknown").into(),
+        model_name: model.map(String::from),
         ..Default::default()
-    })
+    };
+    let mut trajectory = atif::assemble(agent, session_id, steps)?;
+    trajectory.final_metrics.get_or_insert_default().total_cost_usd = totals.cost_usd;
+    Some(trajectory)
 }
 
 #[async_trait::async_trait]
@@ -428,7 +402,7 @@ impl Agent for MiniSweAgent {
             *ctx = c;
         }
         if let Some(t) = atif_trajectory(&text, session_id(&self.args), self.version.as_deref(), self.args.model_name.as_deref()) {
-            let _ = std::fs::write(logs_dir.join("trajectory.json"), serde_json::to_string_pretty(&t).unwrap_or_default());
+            atif::write_trajectory(logs_dir, &t);
         }
     }
 }

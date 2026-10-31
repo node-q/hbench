@@ -167,7 +167,7 @@ fn text_of(content: &Value, kind: &str) -> String {
 }
 
 fn iso(ms: &Value) -> Option<String> {
-    chrono::DateTime::from_timestamp_millis(ms.as_i64()?).map(|t| t.to_rfc3339_opts(chrono::SecondsFormat::Millis, true))
+    atif::timestamp_of_millis(ms.as_i64()?)
 }
 
 /// (prompt incl. cache, completion, cache read, cache write) of one model call.
@@ -191,44 +191,6 @@ fn metrics(u: (i64, i64, i64, i64), model: Option<&str>) -> atif::Metrics {
         cost_usd: model.and_then(|m| cost(m, u)),
         ..Default::default()
     }
-}
-
-/// Number the steps and total their metrics.
-fn trajectory(
-    mut steps: Vec<atif::Step>,
-    session_id: Option<String>,
-    version: &str,
-    model_name: Option<String>,
-) -> Option<atif::Trajectory> {
-    if steps.is_empty() {
-        return None;
-    }
-    let (mut tp, mut tc, mut tcache, mut tcost) = (0i64, 0i64, 0i64, None::<f64>);
-    for (i, s) in steps.iter_mut().enumerate() {
-        s.step_id = i + 1;
-        let Some(m) = &s.metrics else { continue };
-        (tp, tc, tcache) =
-            (tp + m.prompt_tokens.unwrap_or(0), tc + m.completion_tokens.unwrap_or(0), tcache + m.cached_tokens.unwrap_or(0));
-        if let Some(c) = m.cost_usd {
-            tcost = Some(tcost.unwrap_or(0.0) + c);
-        }
-    }
-    let n = steps.len();
-    Some(atif::Trajectory {
-        schema_version: "ATIF-v1.6".into(),
-        session_id,
-        agent: atif::Agent { name: NAME.into(), version: version.into(), model_name, ..Default::default() },
-        steps,
-        final_metrics: Some(atif::FinalMetrics {
-            total_prompt_tokens: Some(tp),
-            total_completion_tokens: Some(tc),
-            total_cached_tokens: Some(tcache),
-            total_cost_usd: tcost,
-            total_steps: Some(n),
-            extra: None,
-        }),
-        ..Default::default()
-    })
 }
 
 /// One session log (`dsh-sessions/<id>.jsonl`) -> ATIF, counting only events at or after `since_ms`.
@@ -297,7 +259,7 @@ pub fn session_trajectory(text: &str, since_ms: i64, version: &str, model: Optio
             _ => {}
         }
     }
-    trajectory(steps, session_id, version, model_name)
+    atif::assemble(atif::Agent { name: NAME.into(), version: version.into(), model_name, ..Default::default() }, session_id, steps)
 }
 
 /// dsh's `--json` stdout (`dsh.jsonl`) -> ATIF, for a run with no exported session.
@@ -345,7 +307,8 @@ pub fn stream_trajectory(text: &str, version: &str, model: Option<&str>) -> Opti
     }
     // A step the run was stopped in may hold nothing yet.
     steps.retain(|s| s.metrics.is_some() || s.reasoning_content.is_some() || s.tool_calls.is_some() || s.message != "");
-    let mut t = trajectory(steps, session_id, version, model.map(String::from))?;
+    let agent = atif::Agent { name: NAME.into(), version: version.into(), model_name: model.map(String::from), ..Default::default() };
+    let mut t = atif::assemble(agent, session_id, steps)?;
     t.notes = Some(STREAM_NOTE.into());
     Some(t)
 }
@@ -438,12 +401,12 @@ impl Agent for DeepSeekHarness {
                 cost = Some(cost.unwrap_or(0.0) + x);
             }
             if main_id.as_deref().is_some_and(|id| p.file_stem().is_some_and(|s| s == id)) {
-                let _ = std::fs::write(logs_dir.join("trajectory.json"), serde_json::to_string_pretty(&t).unwrap_or_default());
+                atif::write_trajectory(logs_dir, &t);
             }
         }
         // Older runs that timed out, and any run whose export failed.
         if !found && let Some(t) = stream_trajectory_of(logs_dir, &version, Some(&model)) {
-            let _ = std::fs::write(logs_dir.join("trajectory.json"), serde_json::to_string_pretty(&t).unwrap_or_default());
+            atif::write_trajectory(logs_dir, &t);
             let fm = t.final_metrics.unwrap_or_default();
             (found, i, o, c, cost) = (
                 true,
