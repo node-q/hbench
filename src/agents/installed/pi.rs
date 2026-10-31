@@ -6,6 +6,7 @@ use super::pins;
 use super::{connection, ensure_system_dependencies, exec_agent, upload_text};
 use crate::agents::model_connection::{Resolved, Spec};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
+use crate::atif;
 use crate::env::quote;
 use anyhow::{Result, bail};
 use serde_json::{Map, Value, json};
@@ -261,6 +262,88 @@ fn has_steps(events: &[&(usize, Value)]) -> bool {
     })
 }
 
+/// An assistant message, one model call, as an agent step.
+fn agent_step(e: &Value) -> atif::Step {
+    let m = &e["message"];
+    let blocks = m["content"].as_array().map(Vec::as_slice).unwrap_or_default();
+    let joined = |kind: &str, field: &str| {
+        let texts = blocks.iter().filter(|b| b["type"] == kind).filter_map(|b| b[field].as_str());
+        texts.collect::<Vec<_>>().join("\n")
+    };
+    let calls: Vec<atif::ToolCall> = blocks
+        .iter()
+        .filter(|b| b["type"] == "toolCall")
+        .map(|b| atif::ToolCall {
+            tool_call_id: b["id"].as_str().unwrap_or_default().into(),
+            function_name: b["name"].as_str().unwrap_or_default().into(),
+            arguments: b["arguments"].clone(),
+            extra: None,
+        })
+        .collect();
+    let reasoning = joined("thinking", "thinking");
+    atif::Step {
+        source: "agent".into(),
+        timestamp: e["timestamp"].as_str().map(String::from),
+        model_name: m["model"].as_str().map(String::from),
+        message: json!(joined("text", "text")),
+        reasoning_content: (!reasoning.is_empty()).then_some(reasoning),
+        tool_calls: (!calls.is_empty()).then_some(calls),
+        metrics: metrics(&m["usage"]).map(|(prompt, completion, cached, cost_usd)| atif::Metrics {
+            prompt_tokens: Some(prompt),
+            completion_tokens: Some(completion),
+            cached_tokens: Some(cached),
+            cost_usd,
+            ..Default::default()
+        }),
+        ..Default::default()
+    }
+}
+
+/// The text parts of a user or tool-result message.
+fn message_text(m: &Value) -> String {
+    match m["content"].as_array() {
+        Some(parts) => parts.iter().filter_map(|p| p["text"].as_str()).collect::<Vec<_>>().join("\n"),
+        None => m["content"].as_str().unwrap_or_default().into(),
+    }
+}
+
+/// A Pi session's active branch -> ATIF.
+pub fn atif_trajectory(text: &str, version: Option<&str>, model: Option<&str>) -> Option<atif::Trajectory> {
+    let events: Vec<(usize, Value)> =
+        text.lines().filter_map(|l| serde_json::from_str::<Value>(l).ok().filter(Value::is_object)).map(|v| (0, v)).collect();
+    let mut steps = vec![];
+    let mut session_id = None;
+    for (_, e) in active_events(&events) {
+        if e["type"] == "session" {
+            session_id = session_id.or(e["id"].as_str().map(String::from));
+        }
+        if e["type"] != "message" {
+            continue;
+        }
+        let m = &e["message"];
+        match m["role"].as_str() {
+            Some("user") => steps.push(atif::Step {
+                source: "user".into(),
+                timestamp: e["timestamp"].as_str().map(String::from),
+                message: json!(message_text(m)),
+                ..Default::default()
+            }),
+            Some("assistant") => steps.push(agent_step(e)),
+            Some("toolResult") => {
+                atif::attach_result(&mut steps, m["toolCallId"].as_str().unwrap_or_default(), json!(message_text(m)));
+            }
+            _ => {}
+        }
+    }
+    let agent = atif::Agent {
+        name: "pi".into(),
+        version: version.unwrap_or("unknown").into(),
+        model_name: model.map(String::from),
+        ..Default::default()
+    };
+    atif::assemble(agent, session_id, steps)
+}
+
 /// Usage from the newest Pi session file (events after `copied_until` only).
 pub fn session_usage(text: &str, copied_until: usize) -> Option<AgentContext> {
     let events: Vec<(usize, Value)> = text
@@ -408,10 +491,16 @@ impl Agent for Pi {
     }
 
     fn collect_usage(&self, logs_dir: &Path, ctx: &mut AgentContext) {
-        let session = newest_session(&logs_dir.join("pi/sessions")).and_then(|p| {
-            let copied = p.file_name().and_then(|n| self.session_usage_start.get(n.to_str()?)).copied().unwrap_or(0);
-            session_usage(&std::fs::read_to_string(&p).ok()?, copied)
-        });
+        let newest = newest_session(&logs_dir.join("pi/sessions"));
+        let log = newest.as_ref().and_then(|p| std::fs::read_to_string(p).ok());
+        let copied = newest.as_ref().and_then(|p| self.session_usage_start.get(p.file_name()?.to_str()?)).copied().unwrap_or(0);
+        let session = log.as_ref().and_then(|t| session_usage(t, copied));
+        if let Some(mut t) = log.and_then(|t| atif_trajectory(&t, self.version.as_deref(), self.args.model_name.as_deref())) {
+            if let Some(c) = &session {
+                atif::set_run_totals(&mut t, c.n_input_tokens, c.n_output_tokens, c.n_cache_tokens, c.cost_usd);
+            }
+            atif::write_trajectory(logs_dir, &t);
+        }
         let c = match session {
             Some(c) => c,
             None => match std::fs::read_to_string(logs_dir.join("pi.txt")) {
@@ -433,6 +522,33 @@ mod tests {
 
     fn pi(kwargs: Value, env: &[(&str, &str)], model: Option<&str>) -> Result<Pi> {
         Pi::new(args(kwargs, env, model))
+    }
+
+    /// A real run's session, trimmed, with an abandoned branch added.
+    const SESSION: &str = r#"{"type":"session","version":3,"id":"s1","timestamp":"2026-10-31T09:44:49.694Z","cwd":"/app"}
+{"type":"model_change","id":"a","parentId":null,"timestamp":"2026-10-31T09:44:49.786Z","provider":"p","modelId":"m"}
+{"type":"message","id":"b","parentId":"a","timestamp":"2026-10-31T09:44:49.799Z","message":{"role":"user","content":[{"type":"text","text":"Write the line."}]}}
+{"type":"message","id":"x","parentId":"b","timestamp":"2026-10-31T09:44:50.000Z","message":{"role":"assistant","content":[{"type":"text","text":"abandoned"}],"model":"m","usage":{"input":1,"output":1}}}
+{"type":"message","id":"c","parentId":"b","timestamp":"2026-10-31T09:45:08.396Z","message":{"role":"assistant","content":[{"type":"thinking","thinking":"Use write."},{"type":"toolCall","id":"call_1","name":"write","arguments":{"path":"/app/hello.txt"}}],"model":"qwen3.5:9b","usage":{"input":1611,"output":76,"cacheRead":0,"cacheWrite":0,"totalTokens":1687,"cost":{"total":0}},"stopReason":"toolUse"}}
+{"type":"message","id":"d","parentId":"c","timestamp":"2026-10-31T09:45:08.403Z","message":{"role":"toolResult","toolCallId":"call_1","toolName":"write","content":[{"type":"text","text":"Successfully wrote."}],"isError":false}}
+{"type":"message","id":"e","parentId":"d","timestamp":"2026-10-31T09:45:10.144Z","message":{"role":"assistant","content":[{"type":"text","text":"Done."}],"model":"qwen3.5:9b","usage":{"input":24,"output":35,"cacheRead":1686,"cacheWrite":0,"totalTokens":1745,"cost":{"total":0}},"stopReason":"stop"}}
+"#;
+
+    #[test]
+    fn session_to_atif() {
+        let a = atif_trajectory(SESSION, Some("1.3.0"), Some("openai/m")).unwrap();
+        assert_eq!(a.session_id.as_deref(), Some("s1"));
+        assert_eq!(a.steps.iter().map(|s| (s.step_id, s.source.as_str())).collect::<Vec<_>>(), [(1, "user"), (2, "agent"), (3, "agent")]);
+        let call = &a.steps[1];
+        assert_eq!(call.reasoning_content.as_deref(), Some("Use write."));
+        assert_eq!(call.tool_calls.as_ref().unwrap()[0].arguments["path"], "/app/hello.txt");
+        let result = &call.observation.as_ref().unwrap().results[0];
+        assert_eq!((result.source_call_id.as_deref(), result.content.clone()), (Some("call_1"), Some(json!("Successfully wrote."))));
+        let m = a.steps[2].metrics.as_ref().unwrap();
+        assert_eq!((m.prompt_tokens, m.completion_tokens, m.cached_tokens), (Some(1710), Some(35), Some(1686)));
+        let f = a.final_metrics.unwrap();
+        assert_eq!((f.total_prompt_tokens, f.total_completion_tokens, f.total_cached_tokens), (Some(3321), Some(111), Some(1686)));
+        assert!(atif_trajectory("{\"type\":\"session\",\"id\":\"s\"}\n", None, None).is_none());
     }
 
     #[test]
