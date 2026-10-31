@@ -139,7 +139,7 @@ pub fn assemble(agent: Agent, session_id: Option<String>, mut steps: Vec<Step>) 
         return None;
     }
     let mut totals = FinalMetrics { total_steps: Some(steps.len()), ..Default::default() };
-    let add = |total: &mut Option<i64>, n: Option<i64>| *total = Some(total.unwrap_or(0) + n.unwrap_or(0));
+    let add = |total: &mut Option<i64>, n: Option<i64>| *total = n.map(|n| total.unwrap_or(0) + n).or(*total);
     for (i, s) in steps.iter_mut().enumerate() {
         s.step_id = i + 1;
         let Some(m) = &s.metrics else { continue };
@@ -151,6 +151,19 @@ pub fn assemble(agent: Agent, session_id: Option<String>, mut steps: Vec<Step>) 
         }
     }
     Some(Trajectory { schema_version: "ATIF-v1.7".into(), session_id, agent, steps, final_metrics: Some(totals), ..Default::default() })
+}
+
+/// Totals of a run whose log reports usage for the run, not per model call.
+pub fn set_run_totals(
+    trajectory: &mut Trajectory,
+    prompt: Option<i64>,
+    completion: Option<i64>,
+    cached: Option<i64>,
+    cost_usd: Option<f64>,
+) {
+    let totals = trajectory.final_metrics.get_or_insert_default();
+    (totals.total_prompt_tokens, totals.total_completion_tokens, totals.total_cached_tokens, totals.total_cost_usd) =
+        (prompt, completion, cached, cost_usd);
 }
 
 /// Attach a tool's result to the agent step that made the call; false when no step did.
