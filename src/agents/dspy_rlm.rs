@@ -7,6 +7,7 @@
 
 use super::terminus2::{Kw, mcp_info, quote_repr};
 use super::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
+use crate::atif;
 use crate::env::{ErrorKind, ExecResult, kind_err};
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Map, Value, json};
@@ -175,6 +176,46 @@ impl DspyRlm {
     }
 }
 
+/// dspy's `rlm/trajectory.json`, a list of `REPLEntry` (reasoning, code, output), -> ATIF. Each entry is one model call
+/// and the code it ran; dspy reports usage per run, so steps have no metrics.
+fn atif_trajectory(text: &str, version: Option<&str>, model: Option<&str>) -> Option<atif::Trajectory> {
+    let entries: Vec<Value> = serde_json::from_str(text).ok()?;
+    let steps = entries
+        .iter()
+        .filter(|e| e["code"].is_string())
+        .enumerate()
+        .map(|(i, e)| {
+            let id = format!("repl-{}", i + 1);
+            atif::Step {
+                source: "agent".into(),
+                message: json!(""),
+                reasoning_content: e["reasoning"].as_str().filter(|r| !r.is_empty()).map(String::from),
+                tool_calls: Some(vec![atif::ToolCall {
+                    tool_call_id: id.clone(),
+                    function_name: "python".into(),
+                    arguments: json!({"code": e["code"]}),
+                    extra: None,
+                }]),
+                observation: Some(atif::Observation {
+                    results: vec![atif::ObservationResult {
+                        source_call_id: Some(id),
+                        content: Some(e["output"].clone()),
+                        ..Default::default()
+                    }],
+                }),
+                ..Default::default()
+            }
+        })
+        .collect();
+    let agent = atif::Agent {
+        name: NAME.into(),
+        version: version.unwrap_or("unknown").into(),
+        model_name: model.map(String::from),
+        ..Default::default()
+    };
+    atif::assemble(agent, None, steps)
+}
+
 /// The runner reports the class of the exception dspy raised, usually one of litellm's; the others
 /// are classified by their message, as an installed agent's output is.
 fn runner_error_kind(exception_class: &str, msg: &str) -> ErrorKind {
@@ -212,6 +253,14 @@ impl Agent for DspyRlm {
         let _ = std::fs::remove_file(log);
         Ok(())
     }
+    fn collect_usage(&self, logs_dir: &Path, ctx: &mut AgentContext) {
+        let Ok(text) = std::fs::read_to_string(logs_dir.join("rlm/trajectory.json")) else { return };
+        if let Some(mut t) = atif_trajectory(&text, self.version.as_deref(), self.args.model_name.as_deref()) {
+            atif::set_run_totals(&mut t, ctx.n_input_tokens, ctx.n_output_tokens, None, ctx.cost_usd);
+            atif::write_trajectory(logs_dir, &t);
+        }
+    }
+
     async fn run(&mut self, instruction: &str, cx: &AgentCtx<'_>, ctx: &mut AgentContext, _resume: bool) -> Result<()> {
         self.run_with(instruction, cx, ctx).await
     }
@@ -263,6 +312,23 @@ mod tests {
     }
 
     /// Drives the real runner against a fake `dspy` package: the tool bridge, logs and usage.
+    #[test]
+    fn repl_entries_to_atif() {
+        let text = json!([
+            {"reasoning": "List the files.", "code": "print(1)", "output": "1\n"},
+            {"reasoning": "", "code": "SUBMIT(answer='hi')", "output": "FINAL: {'answer': 'hi'}"}
+        ]);
+        let a = atif_trajectory(&text.to_string(), Some("3.4.1"), Some("openai/m")).unwrap();
+        assert_eq!(a.steps.iter().map(|s| (s.step_id, s.source.as_str())).collect::<Vec<_>>(), [(1, "agent"), (2, "agent")]);
+        let first = &a.steps[0];
+        assert_eq!(first.reasoning_content.as_deref(), Some("List the files."));
+        assert_eq!(first.tool_calls.as_ref().unwrap()[0].arguments, json!({"code": "print(1)"}));
+        let result = &first.observation.as_ref().unwrap().results[0];
+        assert_eq!((result.source_call_id.as_deref(), result.content.clone()), (Some("repl-1"), Some(json!("1\n"))));
+        assert!(a.steps[1].reasoning_content.is_none());
+        assert!(atif_trajectory(&json!([{"step": 1}]).to_string(), None, None).is_none());
+    }
+
     #[tokio::test]
     async fn runner_bridges_tools_with_fake_dspy() {
         if std::process::Command::new(PYTHON).arg("--version").output().is_err() {
