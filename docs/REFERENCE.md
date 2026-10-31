@@ -329,7 +329,9 @@ jobs/<job>/<task>__<id>/{config.json, lock.json, result.json, trial.log, excepti
 native session logs into it; `terminus-2`, `computer-1`, `openhands-sdk`, `antigravity-sdk` and `nemo-agent` write it
 themselves. In a converted trajectory each agent step is one model call and its metrics are that call's alone:
 `prompt_tokens` is the whole prompt, cached and cache-written tokens included, and `cached_tokens` the cached part of
-it. A step whose call the native log reports no usage for has no metrics.
+it. A step whose call the native log reports no usage for has no metrics. A `deepseek-harness` run with no exported
+session log, as in jobs from before the export ran after a timeout, gets its trajectory from `dsh`'s output stream
+instead: the instruction and timestamps are missing, long text is cut at 8 KiB, and `notes` says so.
 
 `trials.json` is written only for jobs not planned from their config (`jobs regrade`, `run --diff`), so they can be
 resumed. The job's `result.json` has per-eval metrics (mean/sum/min/max/uv-script), pass@k, reward/exception stats, tokens,
@@ -426,7 +428,7 @@ hbench jobs upload -p jobs/<job> --url https://example.com/api/uploads --token-e
 
 ### Viewer
 
-`hbench view` serves its own web UI (`viewer/`, React + Vite) for browsing jobs and tasks. It listens on 127.0.0.1 by
+`hbench view` serves its own web UI (`viewer/`, React + Vite) for browsing jobs and tasks. A trial's Map tab draws its trajectory as groups of similar work in lanes, and flags steps that fetched the benchmark's own sources: a keyword match on the command or URL, so check the steps it points to. It listens on 127.0.0.1 by
 default; with `--host` set to any non-loopback address it is read-only, because starting runs and deleting jobs would be
 open to anyone who can reach it. The built bundle (`viewer/dist`) is committed and embedded at compile time, so
 `cargo build` doesn't need Node. After changing the UI:

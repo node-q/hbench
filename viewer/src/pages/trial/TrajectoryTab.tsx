@@ -1,5 +1,5 @@
 // ATIF trajectory: filterable, searchable step list. Step bodies render only when expanded (500+ step runs stay fast).
-import { memo, useCallback, useMemo, useState, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useApi } from "../../lib/api";
 import * as fmt from "../../lib/fmt";
 import { useKey, useUrlState } from "../../lib/state";
@@ -7,17 +7,31 @@ import type { Trajectory, TrajectoryStep } from "../../lib/types";
 import { CodeView, Markdown } from "../../ui/content";
 import { Empty, ErrorBox, SearchField, Seg, SkeletonRows } from "../../ui/kit";
 import * as Icon from "../../ui/icons";
+import { SHELL_TOOLS } from "./map";
 import { api, fileUrl, textOf, type TrialRef } from "./util";
 
 type SourceFilter = "all" | "agent" | "user" | "system";
-const SHELL_TOOLS = /^(bash|shell|sh|exec|exec_command|run|run_command|run_shell_command|execute_command|terminal|local_shell|command)$/i;
 
-export function TrajectoryTab({ t }: { t: TrialRef }) {
-  const res = useApi<Trajectory | null>(api(t, "trajectory"));
+/** The trial's trajectory, followed while it runs. */
+export function useTrajectory(t: TrialRef, running: boolean) {
+  const res = useApi<Trajectory | null>(api(t, "trajectory"), { poll: running ? 4000 : undefined });
+  // Polling stops with the run, before the agent's last steps are fetched.
+  const wasRunning = useRef(running);
+  useEffect(() => {
+    if (wasRunning.current && !running) res.reload();
+    wasRunning.current = running;
+  }, [running]);
+  return res;
+}
+
+export function TrajectoryTab({ t, running }: { t: TrialRef; running: boolean }) {
+  const res = useTrajectory(t, running);
   const url = useUrlState();
   const sub = Number(url.get("sub") || 0);
-  if (res.error) return <ErrorBox error={res.error} title="Couldn't load the trajectory" onRetry={res.reload} />;
+  // A poll can catch the file mid-write; keep showing the last good copy.
+  if (res.error && !res.data) return <ErrorBox error={res.error} title="Couldn't load the trajectory" onRetry={res.reload} />;
   if (res.data === undefined) return <SkeletonRows rows={10} />;
+  if (!res.data?.steps?.length && running) return <Empty title="Waiting for the first step">The trajectory shows up here as the agent works.</Empty>;
   if (!res.data?.steps?.length) return <Empty title="No trajectory">This agent didn't write agent/trajectory.json for this trial.</Empty>;
   const subs: Trajectory[] = res.data.subagent_trajectories ?? [];
   const traj = sub > 0 && subs[sub - 1] ? subs[sub - 1] : res.data;
@@ -53,6 +67,22 @@ function Steps({ traj, t }: { traj: Trajectory; t: TrialRef }) {
   const [q, setQ] = useState("");
   const [source, setSource] = useState<SourceFilter>("all");
   const [open, setOpen] = useState<Set<number>>(() => new Set(steps.length <= 40 ? steps.map((_, i) => i) : []));
+  // `at` (1-based) comes from the Map tab: open that step and bring it into view.
+  const at = Number(useUrlState().get("at") || 0);
+  useEffect(() => {
+    if (at) setOpen((o) => new Set(o).add(at - 1));
+  }, [at]);
+  const atOpen = at > 0 && open.has(at - 1);
+  useEffect(() => {
+    if (atOpen) document.getElementById(`tstep-${at}`)?.scrollIntoView({ block: "start" });
+  }, [at, atOpen]);
+  // Steps arriving live follow the same rule as the initial set.
+  const seen = useRef(steps.length);
+  useEffect(() => {
+    const from = seen.current;
+    seen.current = steps.length;
+    if (steps.length > from && steps.length <= 40) setOpen((o) => new Set([...o, ...[...steps.keys()].slice(from)]));
+  }, [steps.length]);
   const hay = useMemo(() => steps.map(haystack), [steps]);
   const counts = useMemo(() => {
     const c: Record<string, number> = { all: steps.length };
@@ -143,7 +173,7 @@ const Step = memo(function Step({ i, s, prev, t0, open, onToggle, t, q }: { i: n
   const preview = textOf(s.message).trim().split("\n")[0] || (s.reasoning_content ?? "").split("\n")[0];
   const calls = s.tool_calls ?? [];
   return (
-    <li className={`tstep${open ? " is-open" : ""}`} data-source={s.source}>
+    <li id={`tstep-${i + 1}`} className={`tstep${open ? " is-open" : ""}`} data-source={s.source}>
       <button className="tstep__head" onClick={() => onToggle(i)} aria-expanded={open}>
         <span className="tstep__chev">
           <Icon.Chevron size={11} />

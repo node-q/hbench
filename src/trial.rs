@@ -219,6 +219,25 @@ const SETUP_ATTEMPTS: u32 = 3;
 /// Timeout of a step's workdir/setup.sh unless the agent config's `override_setup_timeout_sec`, which also
 /// bounds the agent install, sets one.
 const STEP_SETUP_TIMEOUT_SEC: f64 = 600.0;
+const LIVE_SYNC_INTERVAL: Duration = Duration::from_secs(5);
+
+/// A private temp dir for raw logs, removed even if the trial is cancelled mid-copy.
+struct Stage(PathBuf);
+
+impl Stage {
+    fn new() -> std::io::Result<Stage> {
+        use std::os::unix::fs::DirBuilderExt;
+        let dir = std::env::temp_dir().join(format!("hbench-logs-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::DirBuilder::new().mode(0o700).create(&dir)?;
+        Ok(Stage(dir))
+    }
+}
+
+impl Drop for Stage {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
 
 /// Context on an agent phase whose processes could not be stopped: grading then would be unsafe, so the
 /// trial ends there, still reporting the run's own error kind.
@@ -784,17 +803,20 @@ impl Trial {
             let r = match self.agent_ctx(self.agent_user(step), step) {
                 Err(e) => Err(e),
                 Ok(cx) => {
-                    let run = agent.run(instruction, &cx, &mut ctx, resume);
-                    match timeout {
-                        Some(d) => match tokio::time::timeout(d, run).await {
-                            Ok(r) => r,
-                            Err(_) => Err(kind_err(
-                                ErrorKind::AgentTimeout,
-                                format!("Agent execution timed out after {} seconds", d.as_secs_f64()),
-                            )),
-                        },
-                        None => run.await,
-                    }
+                    self.with_live_sync(async {
+                        let run = agent.run(instruction, &cx, &mut ctx, resume);
+                        match timeout {
+                            Some(d) => match tokio::time::timeout(d, run).await {
+                                Ok(r) => r,
+                                Err(_) => Err(kind_err(
+                                    ErrorKind::AgentTimeout,
+                                    format!("Agent execution timed out after {} seconds", d.as_secs_f64()),
+                                )),
+                            },
+                            None => run.await,
+                        }
+                    })
+                    .await
                 }
             };
             self.agent = Some(agent);
@@ -819,10 +841,25 @@ impl Trial {
                 Err(f)
             }
         };
+        if self.user_agent.is_none() {
+            self.export_agent_session(step).await;
+        }
         if switch && let Err(e) = self.env().set_network_policy(&plan.agent_env_baseline).await {
             return (ctx, t.finish(), Err(e));
         }
         (ctx, t.finish(), r)
+    }
+
+    /// After the agent is stopped and before its logs are downloaded. A failure costs detail, not the trial.
+    async fn export_agent_session(&self, step: Option<&StepConfig>) {
+        let Some(agent) = &self.agent else { return };
+        let r = match self.agent_ctx(self.agent_user(step), step) {
+            Ok(cx) => agent.export_session(&cx).await,
+            Err(e) => Err(e),
+        };
+        if let Err(e) = r {
+            self.log.line(&format!("agent session export failed: {e:#}"));
+        }
     }
 
     /// The user agent drives the target over the bridge; the bridge is closed (export + teardown) afterwards.
@@ -871,17 +908,62 @@ impl Trial {
         self.agent = Some(agent);
     }
 
-    async fn download_agent_logs(&self, target: &Path) -> Result<()> {
-        let env = self.env();
+    /// The agent's logs, raw, somewhere `hbench view` doesn't serve.
+    async fn stage_agent_logs(&self) -> Result<Stage> {
         let a = &self.cfg.agent;
-        let r = env.download_dir(MAIN, "/logs/agent", target).await;
-        if r.is_ok() && (!a.include_logs.is_empty() || !a.exclude_logs.is_empty()) {
-            filter_logs(target, &a.include_logs, &a.exclude_logs, &[]);
-        }
+        let stage = Stage::new()?;
+        let r = self.env().download_dir(MAIN, "/logs/agent", &stage.0).await;
         if let Err(e) = &r {
             self.log.line(&format!("agent log download failed: {e:#}"));
         }
-        r
+        r?;
+        if !a.include_logs.is_empty() || !a.exclude_logs.is_empty() {
+            filter_logs(&stage.0, &a.include_logs, &a.exclude_logs, &[]);
+        }
+        Ok(stage)
+    }
+
+    /// The trial dir is served while the trial runs, so logs only land there scrubbed.
+    async fn download_agent_logs(&self, target: &Path) -> Result<()> {
+        let a = &self.cfg.agent;
+        let stage = self.stage_agent_logs().await?;
+        crate::redact::publish_dir(&stage.0, target)?;
+        if !a.include_logs.is_empty() || !a.exclude_logs.is_empty() {
+            filter_logs(target, &a.include_logs, &a.exclude_logs, &[]);
+        }
+        Ok(())
+    }
+
+    /// Run `fut` while mirroring the agent's logs to the trial dir, so `hbench view` can follow a running trial.
+    /// A pass in progress finishes before this returns: it must not overwrite what sync_agent_output writes next.
+    async fn with_live_sync<T>(&self, fut: impl Future<Output = T>) -> T {
+        let (done, mut stop) = tokio::sync::oneshot::channel::<()>();
+        let sync = async {
+            let dir = self.dir.join("agent");
+            // A second instance: `fut` holds the real agent mutably, and collect_usage only reads logs.
+            let Ok(agent) = agents::create(&self.cfg.agent, dir.clone(), self.task.clone(), None) else { return };
+            let agent: Arc<dyn agents::Agent> = agent.into();
+            loop {
+                tokio::select! {
+                    _ = &mut stop => return,
+                    _ = tokio::time::sleep(LIVE_SYNC_INTERVAL) => {}
+                }
+                let Ok(stage) = self.stage_agent_logs().await else { continue };
+                let (agent, dir) = (agent.clone(), dir.clone());
+                // Parsing and scrubbing long logs would stall the runtime.
+                let _ = tokio::task::spawn_blocking(move || {
+                    agent.collect_usage(&stage.0, &mut AgentContext::default());
+                    crate::redact::publish_dir(&stage.0, &dir)
+                })
+                .await;
+            }
+        };
+        let run = async move {
+            let r = fut.await;
+            let _ = done.send(());
+            r
+        };
+        tokio::join!(run, sync).0
     }
 
     /// Download agent logs, fill usage, and push host-side files (e.g. exit-code.txt) back.
@@ -1571,6 +1653,17 @@ mod tests {
         let d = std::env::temp_dir().join(format!("hbench-test-{name}-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    #[test]
+    fn a_stage_is_private_and_goes_away() {
+        use std::os::unix::fs::PermissionsExt;
+        let stage = Stage::new().unwrap();
+        let dir = stage.0.clone();
+        assert_eq!(std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777, 0o700);
+        std::fs::write(dir.join("raw.txt"), "x").unwrap();
+        drop(stage);
+        assert!(!dir.exists());
     }
 
     #[test]
