@@ -307,19 +307,10 @@ fn message_text(m: &Value) -> String {
     }
 }
 
-/// A Pi session's active branch -> ATIF.
-pub fn atif_trajectory(text: &str, version: Option<&str>, model: Option<&str>) -> Option<atif::Trajectory> {
-    let events: Vec<(usize, Value)> =
-        text.lines().filter_map(|l| serde_json::from_str::<Value>(l).ok().filter(Value::is_object)).map(|v| (0, v)).collect();
+/// Steps of session entries, which Pi and OpenClaw share.
+pub(super) fn session_steps<'a>(entries: impl Iterator<Item = &'a Value>) -> Vec<atif::Step> {
     let mut steps = vec![];
-    let mut session_id = None;
-    for (_, e) in active_events(&events) {
-        if e["type"] == "session" {
-            session_id = session_id.or(e["id"].as_str().map(String::from));
-        }
-        if e["type"] != "message" {
-            continue;
-        }
+    for e in entries.filter(|e| e["type"] == "message") {
         let m = &e["message"];
         match m["role"].as_str() {
             Some("user") => steps.push(atif::Step {
@@ -335,6 +326,16 @@ pub fn atif_trajectory(text: &str, version: Option<&str>, model: Option<&str>) -
             _ => {}
         }
     }
+    steps
+}
+
+/// A Pi session's active branch -> ATIF.
+pub fn atif_trajectory(text: &str, version: Option<&str>, model: Option<&str>) -> Option<atif::Trajectory> {
+    let events: Vec<(usize, Value)> =
+        text.lines().filter_map(|l| serde_json::from_str::<Value>(l).ok().filter(Value::is_object)).map(|v| (0, v)).collect();
+    let branch = active_events(&events);
+    let session_id = branch.iter().find(|(_, e)| e["type"] == "session").and_then(|(_, e)| e["id"].as_str()).map(String::from);
+    let steps = session_steps(branch.iter().map(|(_, e)| e));
     let agent = atif::Agent {
         name: "pi".into(),
         version: version.unwrap_or("unknown").into(),
