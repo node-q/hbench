@@ -5,6 +5,7 @@ use super::pins;
 use super::{connection, ensure_system_dependencies, exec_agent, exec_root_checked, upload_text};
 use crate::agents::model_connection::{Resolved, Spec, with_canonical_provider_envs};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
+use crate::atif;
 use crate::env::quote;
 use anyhow::{Result, bail};
 use regex::Regex;
@@ -213,6 +214,78 @@ fn usage_counts(u: &Value, provider: Option<&str>) -> Option<(i64, Option<i64>, 
     Some((input + if separate { cr + cw } else { 0 }, u["outputTokens"].as_i64(), cr, cw))
 }
 
+/// An assistant message, one model call, as an agent step.
+fn agent_step(e: &Value, provider: Option<&str>) -> atif::Step {
+    let m = &e["message"];
+    let blocks = m["content"].as_array().map(Vec::as_slice).unwrap_or_default();
+    let joined = |text_of: &dyn Fn(&Value) -> Option<String>| blocks.iter().filter_map(text_of).collect::<Vec<_>>().join("\n");
+    let reasoning = joined(&|b| b["reasoningContent"]["reasoningText"]["text"].as_str().map(String::from));
+    let calls: Vec<atif::ToolCall> = blocks
+        .iter()
+        .filter(|b| b["toolUse"].is_object())
+        .map(|b| atif::ToolCall {
+            tool_call_id: b["toolUse"]["toolUseId"].as_str().unwrap_or_default().into(),
+            function_name: b["toolUse"]["name"].as_str().unwrap_or_default().into(),
+            arguments: b["toolUse"]["input"].clone(),
+            extra: None,
+        })
+        .collect();
+    atif::Step {
+        source: "agent".into(),
+        timestamp: e["timestamp"].as_str().map(String::from),
+        message: json!(joined(&|b| b["text"].as_str().map(String::from))),
+        reasoning_content: (!reasoning.is_empty()).then_some(reasoning),
+        tool_calls: (!calls.is_empty()).then_some(calls),
+        metrics: usage_counts(&m["metadata"]["usage"], provider).map(|(prompt, completion, cached, _)| atif::Metrics {
+            prompt_tokens: Some(prompt),
+            completion_tokens: completion,
+            cached_tokens: Some(cached),
+            ..Default::default()
+        }),
+        ..Default::default()
+    }
+}
+
+/// `strands-events.jsonl` -> ATIF, up to its first torn line and without the context a run started from.
+pub fn atif_trajectory(events: &str, result: Option<&str>, version: Option<&str>, model: Option<&str>) -> Option<atif::Trajectory> {
+    let result = result.and_then(|r| serde_json::from_str::<Value>(r).ok()).unwrap_or_default();
+    let provider = result["observed_model"]["provider"].as_str();
+    let mut steps = vec![];
+    for line in events.lines().filter(|l| !l.trim().is_empty()) {
+        let Ok(e) = serde_json::from_str::<Value>(line) else { break };
+        if e["kind"] != "message" || e["is_preexisting_context"] == true {
+            continue;
+        }
+        let m = &e["message"];
+        if m["role"] == "assistant" {
+            steps.push(agent_step(&e, provider));
+            continue;
+        }
+        let blocks = m["content"].as_array().map(Vec::as_slice).unwrap_or_default();
+        let said = blocks.iter().filter_map(|b| b["text"].as_str()).collect::<Vec<_>>().join("\n");
+        if !said.is_empty() {
+            let timestamp = e["timestamp"].as_str().map(String::from);
+            steps.push(atif::Step { source: "user".into(), timestamp, message: json!(said), ..Default::default() });
+        }
+        for tool_result in blocks.iter().map(|b| &b["toolResult"]).filter(|r| r.is_object()) {
+            let parts = tool_result["content"].as_array().map(Vec::as_slice).unwrap_or_default();
+            let output = parts.iter().map(|p| p["text"].as_str().map(String::from).unwrap_or_else(|| p["json"].to_string()));
+            atif::attach_result(
+                &mut steps,
+                tool_result["toolUseId"].as_str().unwrap_or_default(),
+                json!(output.collect::<Vec<_>>().join("\n")),
+            );
+        }
+    }
+    let agent = atif::Agent {
+        name: "strands".into(),
+        version: version.unwrap_or("unknown").into(),
+        model_name: model.map(String::from),
+        ..Default::default()
+    };
+    atif::assemble(agent, None, steps)
+}
+
 /// Strands result + events -> AgentContext (final_metrics totals + metadata).
 pub fn parse_context(result: Option<&str>, events: Option<&str>) -> AgentContext {
     let result = result.and_then(|r| serde_json::from_str::<Value>(r).ok()).filter(Value::is_object).unwrap_or_else(
@@ -344,6 +417,12 @@ impl Agent for Strands {
         ctx.n_cache_tokens = c.n_cache_tokens;
         ctx.n_output_tokens = c.n_output_tokens;
         ctx.metadata = c.metadata;
+        let trajectory =
+            events.as_deref().and_then(|e| atif_trajectory(e, result.as_deref(), self.version.as_deref(), self.args.model_name.as_deref()));
+        if let Some(mut t) = trajectory {
+            atif::set_run_totals(&mut t, c.n_input_tokens, c.n_output_tokens, c.n_cache_tokens, None);
+            atif::write_trajectory(logs_dir, &t);
+        }
     }
 }
 
@@ -351,6 +430,31 @@ impl Agent for Strands {
 mod tests {
     use super::*;
     use crate::agents::installed::common::test_args as args;
+
+    /// A real run's events, trimmed, with a context event and a torn line added.
+    const EVENTS: &str = r#"{"sequence":1,"kind":"message","is_preexisting_context":true,"message":{"role":"user","content":[{"text":"earlier"}]}}
+{"sequence":2,"kind":"message","timestamp":"2026-10-31T09:48:49.757468+00:00","message":{"content":[{"text":"Write the line."}],"role":"user"}}
+{"sequence":3,"kind":"message","timestamp":"2026-10-31T09:48:54.793533+00:00","message":{"content":[{"reasoningContent":{"reasoningText":{"text":"Use echo."}}},{"toolUse":{"input":{"command":"echo hi"},"name":"shell","toolUseId":"call_1"}}],"metadata":{"usage":{"inputTokens":305,"outputTokens":79,"totalTokens":384}},"role":"assistant"}}
+{"sequence":4,"kind":"message","timestamp":"2026-10-31T09:48:54.796022+00:00","message":{"content":[{"toolResult":{"content":[{"text":"ok"}],"status":"success","toolUseId":"call_1"}}],"role":"user"}}
+{"sequence":5,"kind":"message","timestamp":"2026-10-31T09:48:57.572233+00:00","message":{"content":[{"text":"Done."}],"metadata":{"usage":{"cacheReadInputTokens":301,"inputTokens":358,"outputTokens":50,"totalTokens":408}},"role":"assistant"}}
+{"sequence":6,"kind":"mess
+"#;
+
+    #[test]
+    fn events_to_atif() {
+        let a = atif_trajectory(EVENTS, None, Some("1.54.0"), Some("openai/m")).unwrap();
+        assert_eq!(a.steps.iter().map(|s| (s.step_id, s.source.as_str())).collect::<Vec<_>>(), [(1, "user"), (2, "agent"), (3, "agent")]);
+        let call = &a.steps[1];
+        assert_eq!(call.reasoning_content.as_deref(), Some("Use echo."));
+        assert_eq!(call.tool_calls.as_ref().unwrap()[0].arguments, json!({"command": "echo hi"}));
+        let result = &call.observation.as_ref().unwrap().results[0];
+        assert_eq!((result.source_call_id.as_deref(), result.content.clone()), (Some("call_1"), Some(json!("ok"))));
+        let m = a.steps[2].metrics.as_ref().unwrap();
+        assert_eq!((m.prompt_tokens, m.completion_tokens, m.cached_tokens), (Some(358), Some(50), Some(301)));
+        let f = a.final_metrics.unwrap();
+        assert_eq!((f.total_prompt_tokens, f.total_completion_tokens, f.total_cached_tokens), (Some(663), Some(129), Some(301)));
+        assert!(atif_trajectory("", None, None, None).is_none());
+    }
 
     #[test]
     fn options_and_install() {

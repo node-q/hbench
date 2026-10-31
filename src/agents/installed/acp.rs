@@ -2,17 +2,18 @@
 //! Installs a registry (or git-source) ACP server plus the bundled `acp_runner.py`, which
 //! drives one prompt over the Agent Client Protocol and writes acp-summary.json.
 
-use super::common::{installed_dir, system_or_nvm_node, uv_install};
+use super::common::{installed_dir, parse_jsonl, system_or_nvm_node, uv_install};
 use super::pins;
 use super::{exec_agent, exec_root_checked};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
+use crate::atif;
 use crate::env::quote;
 use anyhow::{Context, Result, anyhow, bail};
 use regex::Regex;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
 const RUNNER: &str = include_str!("../../../assets/agents/acp/acp_runner.py");
@@ -1133,7 +1134,81 @@ impl Agent for Acp {
             "selected_distribution": self.selected_kind,
         });
         apply_summary(&summary, ctx, extra);
+        let Ok(events) = std::fs::read_to_string(logs_dir.join(EVENTS_FILENAME)) else { return };
+        if let Some(mut t) = atif_trajectory(&events, self.name(), self.version().as_deref(), self.args.model_name.as_deref()) {
+            atif::set_run_totals(&mut t, ctx.n_input_tokens, ctx.n_output_tokens, ctx.n_cache_tokens, ctx.cost_usd);
+            atif::write_trajectory(logs_dir, &t);
+        }
     }
+}
+
+/// The text of a tool result: its `content` items, else `rawOutput`.
+fn tool_output(update: &Value) -> Value {
+    let items = update["content"].as_array().map(Vec::as_slice).unwrap_or_default();
+    let texts: Vec<&str> = items.iter().filter_map(|i| i["content"]["text"].as_str()).collect();
+    if texts.is_empty() { update["rawOutput"].clone() } else { json!(texts.join("\n")) }
+}
+
+fn finished(update: &Value) -> bool {
+    matches!(update["status"].as_str(), Some("completed" | "failed"))
+}
+
+/// `acp-events.jsonl` -> ATIF. In a prompt turn tool results go back to the model as another request, so output after a
+/// finished tool starts a step, as does a new `messageId` on message chunks; thoughts carry their own ids. Usage comes per
+/// turn, so steps have no metrics.
+fn atif_trajectory(text: &str, name: &str, version: Option<&str>, model: Option<&str>) -> Option<atif::Trajectory> {
+    let (mut steps, mut message_id, mut answered) = (Vec::<atif::Step>::new(), None::<String>, HashSet::<String>::new());
+    let (mut session_id, mut pending) = (None, BTreeMap::<String, Value>::new());
+    for event in parse_jsonl(text).iter().filter(|e| e["event_type"] == "session_update") {
+        session_id = session_id.or(event["payload"]["session_id"].as_str().map(String::from));
+        let update = &event["payload"]["update"];
+        let kind = update["sessionUpdate"].as_str().unwrap_or_default();
+        if !matches!(kind, "agent_message_chunk" | "agent_thought_chunk" | "tool_call" | "tool_call_update") {
+            continue;
+        }
+        let id = update["toolCallId"].as_str().unwrap_or_default();
+        if kind != "tool_call_update" {
+            let chunk_id = update["messageId"].as_str().filter(|_| kind == "agent_message_chunk");
+            let new_message = chunk_id.is_some_and(|m| message_id.as_deref().is_some_and(|known| known != m));
+            if new_message || steps.last().is_none_or(|s: &atif::Step| s.observation.is_some()) {
+                steps.push(atif::Step { source: "agent".into(), message: json!(""), ..Default::default() });
+                message_id = None;
+            }
+            message_id = chunk_id.map(String::from).or(message_id);
+        }
+        let Some(step) = steps.last_mut() else { continue };
+        let chunk = update["content"]["text"].as_str().unwrap_or_default();
+        match kind {
+            "agent_message_chunk" => step.message = json!(format!("{}{chunk}", step.message.as_str().unwrap_or_default())),
+            "agent_thought_chunk" => step.reasoning_content.get_or_insert_default().push_str(chunk),
+            "tool_call" => step.tool_calls.get_or_insert_default().push(atif::ToolCall {
+                tool_call_id: id.into(),
+                function_name: update["title"].as_str().unwrap_or_default().into(),
+                arguments: update["rawInput"].clone(),
+                extra: None,
+            }),
+            _ => {
+                if update["rawInput"].as_object().is_some_and(|o| !o.is_empty()) {
+                    pending.insert(id.into(), update["rawInput"].clone());
+                }
+            }
+        }
+        if finished(update) && answered.insert(id.to_string()) {
+            atif::attach_result(&mut steps, id, tool_output(update));
+        }
+    }
+    for call in steps.iter_mut().flat_map(|s| s.tool_calls.iter_mut().flatten()) {
+        if let Some(input) = pending.remove(&call.tool_call_id) {
+            call.arguments = input;
+        }
+    }
+    let agent = atif::Agent {
+        name: name.into(),
+        version: version.unwrap_or("unknown").into(),
+        model_name: model.map(String::from),
+        ..Default::default()
+    };
+    atif::assemble(agent, session_id, steps)
 }
 
 #[cfg(test)]
@@ -1149,6 +1224,40 @@ mod tests {
                 "npx": {"package": "@zed-industries/codex-acp@0.10.0"},
             },
         })
+    }
+
+    #[test]
+    fn events_to_atif() {
+        let update = |u: Value| json!({"event_type": "session_update", "payload": {"session_id": "s1", "update": u}}).to_string();
+        let log = [
+            json!({"event_type": "on_connect", "payload": {"connection": "c"}}).to_string(),
+            update(json!({"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "Use "}, "messageId": "m1:reasoning:0"})),
+            update(json!({"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "write."}, "messageId": "m1:reasoning:0"})),
+            update(json!({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Writing."}, "messageId": "m1"})),
+            update(json!({"sessionUpdate": "tool_call", "toolCallId": "c1", "title": "write", "kind": "edit", "status": "pending", "rawInput": {}})),
+            update(json!({"sessionUpdate": "tool_call", "toolCallId": "c2", "title": "read", "kind": "read", "status": "pending", "rawInput": {"path": "/x"}})),
+            update(json!({"sessionUpdate": "tool_call_update", "toolCallId": "c1", "status": "in_progress", "rawInput": {"path": "/a"}})),
+            update(json!({"sessionUpdate": "tool_call_update", "toolCallId": "c1", "status": "completed", "content": [{"type": "content", "content": {"type": "text", "text": "ok"}}]})),
+            update(json!({"sessionUpdate": "tool_call_update", "toolCallId": "c2", "status": "failed", "rawOutput": {"error": "missing"}})),
+            update(json!({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Do"}, "messageId": "m2"})),
+            update(json!({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "ne."}, "messageId": "m2"})),
+            update(json!({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "More."}, "messageId": "m3"})),
+        ]
+        .join("\n");
+        let a = atif_trajectory(&log, "acp", Some("1"), Some("openai/m")).unwrap();
+        assert_eq!(a.session_id.as_deref(), Some("s1"));
+        assert_eq!(a.steps.len(), 3);
+        let call = &a.steps[0];
+        assert_eq!((call.message.as_str(), call.reasoning_content.as_deref()), (Some("Writing."), Some("Use write.")));
+        let calls = call.tool_calls.as_ref().unwrap();
+        assert_eq!((calls[0].arguments.clone(), calls[1].arguments.clone()), (json!({"path": "/a"}), json!({"path": "/x"})));
+        let results = &call.observation.as_ref().unwrap().results;
+        assert_eq!(
+            results.iter().map(|r| (r.source_call_id.clone().unwrap(), r.content.clone().unwrap())).collect::<Vec<_>>(),
+            [("c1".to_string(), json!("ok")), ("c2".to_string(), json!({"error": "missing"}))]
+        );
+        assert_eq!((a.steps[1].message.as_str(), a.steps[2].message.as_str()), (Some("Done."), Some("More.")));
+        assert!(atif_trajectory("{\"event_type\":\"on_connect\"}\n", "acp", None, None).is_none());
     }
 
     fn agent(kwargs: Value, model: Option<&str>) -> Result<Acp> {

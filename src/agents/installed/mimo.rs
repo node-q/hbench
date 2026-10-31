@@ -214,11 +214,15 @@ impl Agent for MiMo {
     }
 
     fn collect_usage(&self, logs_dir: &std::path::Path, ctx: &mut AgentContext) {
-        if let Some(c) = std::fs::read_to_string(logs_dir.join("mimo.txt")).ok().and_then(|t| parse_usage(&t)) {
+        let Ok(text) = std::fs::read_to_string(logs_dir.join("mimo.txt")) else { return };
+        if let Some(c) = parse_usage(&text) {
             ctx.n_input_tokens = c.n_input_tokens;
             ctx.n_cache_tokens = c.n_cache_tokens;
             ctx.n_output_tokens = c.n_output_tokens;
             ctx.cost_usd = c.cost_usd;
+        }
+        if let Some(t) = super::opencode::atif_trajectory("mimo", &text, self.version.as_deref(), self.args.model_name.as_deref()) {
+            crate::atif::write_trajectory(logs_dir, &t);
         }
     }
 }
@@ -231,6 +235,32 @@ mod tests {
     fn mimo(kwargs: Value, env: &[(&str, &str)], model: Option<&str>) -> MiMo {
         let a = args(kwargs, env, model);
         MiMo { version: None, mimo_config: a.kwargs.get("mimo_config").cloned().unwrap_or(json!({})), args: a }
+    }
+
+    #[test]
+    fn collect_usage_writes_atif() {
+        // A real run's stream, trimmed; opencode's converter reads it.
+        let log = r#"Performing one time database migration, may take a few minutes...
+{"type":"step_start","timestamp":1793444215332,"sessionID":"ses_1","part":{"type":"step-start"}}
+{"type":"reasoning","timestamp":1793444218613,"sessionID":"ses_1","part":{"type":"reasoning","text":"Write it."}}
+{"type":"tool_use","timestamp":1793444218700,"sessionID":"ses_1","part":{"type":"tool","tool":"task","callID":"call_1","state":{"status":"error","input":{"action":"start"},"error":"no such agent"}}}
+{"type":"step_finish","timestamp":1793444219000,"sessionID":"ses_1","part":{"reason":"tool-calls","tokens":{"input":12,"output":3,"reasoning":0,"cache":{"write":0,"read":4}},"cost":0}}
+"#;
+        let dir = std::env::temp_dir().join(format!("hbench-mimo-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("mimo.txt"), log).unwrap();
+        let a = create(crate::agents::installed::common::test_args(json!({}), &[], Some("openai/m"))).unwrap();
+        let mut ctx = AgentContext::default();
+        a.collect_usage(&dir, &mut ctx);
+        let t: crate::atif::Trajectory = serde_json::from_str(&std::fs::read_to_string(dir.join("trajectory.json")).unwrap()).unwrap();
+        assert_eq!(t.agent.name, "mimo");
+        assert_eq!(t.steps[0].observation.as_ref().unwrap().results[0].content, Some(json!("no such agent")));
+        let f = t.final_metrics.unwrap();
+        assert_eq!(
+            (f.total_prompt_tokens, f.total_completion_tokens, f.total_cached_tokens),
+            (ctx.n_input_tokens, ctx.n_output_tokens, ctx.n_cache_tokens)
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

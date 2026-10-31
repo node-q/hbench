@@ -4,6 +4,7 @@ use super::common::{installed_dir, nvm_install_script, quoted_or_not_set, skills
 use super::pins;
 use super::{exec_agent, exec_root_checked};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
+use crate::atif;
 use crate::env::{ExecResult, quote};
 use crate::fmt::value_text;
 use anyhow::{Result, anyhow, bail};
@@ -372,6 +373,74 @@ pub fn usage_from_messages(text: &str) -> Option<AgentContext> {
     saw.then_some(c)
 }
 
+/// An assistant message as an agent step; of the messages of one turn, the last carries the turn's metrics.
+fn agent_step(m: &Value) -> atif::Step {
+    let blocks = m["content"].as_array().map(Vec::as_slice).unwrap_or_default();
+    let joined = |kind: &str, field: &str| {
+        let texts = blocks.iter().filter(|b| b["type"] == kind).filter_map(|b| b[field].as_str());
+        texts.collect::<Vec<_>>().join("\n")
+    };
+    let calls: Vec<atif::ToolCall> = blocks
+        .iter()
+        .filter(|b| b["type"] == "tool_use")
+        .map(|b| atif::ToolCall {
+            tool_call_id: b["id"].as_str().unwrap_or_default().into(),
+            function_name: b["name"].as_str().unwrap_or_default().into(),
+            arguments: b["input"].clone(),
+            extra: None,
+        })
+        .collect();
+    let reasoning = joined("thinking", "thinking");
+    let int = |v: &Value| v.as_i64().unwrap_or(0);
+    let x = &m["metrics"];
+    atif::Step {
+        source: "agent".into(),
+        timestamp: m["ts"].as_i64().and_then(atif::timestamp_of_millis),
+        model_name: m["modelInfo"]["id"].as_str().map(String::from),
+        message: json!(joined("text", "text")),
+        reasoning_content: (!reasoning.is_empty()).then_some(reasoning),
+        tool_calls: (!calls.is_empty()).then_some(calls),
+        metrics: x.is_object().then(|| atif::Metrics {
+            prompt_tokens: Some(int(&x["inputTokens"])),
+            completion_tokens: Some(int(&x["outputTokens"])),
+            cached_tokens: Some(int(&x["cacheReadTokens"])),
+            cost_usd: x["cost"].as_f64().filter(|c| *c != 0.0),
+            ..Default::default()
+        }),
+        ..Default::default()
+    }
+}
+
+/// A `*.messages.json` session (`messages-contract-v1.md` in Cline's SDK) -> ATIF.
+pub fn atif_trajectory(text: &str, version: Option<&str>, model: Option<&str>) -> Option<atif::Trajectory> {
+    let doc: Value = serde_json::from_str(text).ok()?;
+    let mut steps = vec![];
+    let system = doc["system_prompt"].as_str().filter(|p| !p.is_empty());
+    steps.extend(system.map(|p| atif::Step { source: "system".into(), message: json!(p), ..Default::default() }));
+    for m in doc["messages"].as_array()? {
+        if m["role"] == "assistant" {
+            steps.push(agent_step(m));
+            continue;
+        }
+        let blocks = m["content"].as_array().map(Vec::as_slice).unwrap_or_default();
+        let said = blocks.iter().filter(|b| b["type"] == "text").filter_map(|b| b["text"].as_str()).collect::<Vec<_>>().join("\n");
+        if !said.is_empty() {
+            let timestamp = m["ts"].as_i64().and_then(atif::timestamp_of_millis);
+            steps.push(atif::Step { source: "user".into(), timestamp, message: json!(said), ..Default::default() });
+        }
+        for result in blocks.iter().filter(|b| b["type"] == "tool_result") {
+            atif::attach_result(&mut steps, result["tool_use_id"].as_str().unwrap_or_default(), result["content"].clone());
+        }
+    }
+    let agent = atif::Agent {
+        name: "cline-cli".into(),
+        version: version.unwrap_or("unknown").into(),
+        model_name: model.map(String::from),
+        ..Default::default()
+    };
+    atif::assemble(agent, doc["sessionId"].as_str().map(String::from), steps)
+}
+
 /// Newest `sessions/*/*.messages.json` by mtime.
 fn find_session(logs_dir: &Path) -> Option<PathBuf> {
     std::fs::read_dir(logs_dir.join("sessions"))
@@ -481,8 +550,12 @@ impl Agent for ClineCli {
     }
 
     fn collect_usage(&self, logs_dir: &Path, ctx: &mut AgentContext) {
-        if let Some(c) = find_session(logs_dir).and_then(|f| std::fs::read_to_string(f).ok()).and_then(|t| usage_from_messages(&t)) {
+        let Some(text) = find_session(logs_dir).and_then(|f| std::fs::read_to_string(f).ok()) else { return };
+        if let Some(c) = usage_from_messages(&text) {
             *ctx = c;
+        }
+        if let Some(t) = atif_trajectory(&text, self.version.as_deref(), self.args.model_name.as_deref()) {
+            atif::write_trajectory(logs_dir, &t);
         }
     }
 }
@@ -545,6 +618,37 @@ mod tests {
         }
         assert!(agent(json!({}), &[], Some("openrouter/m")).unwrap().run_commands("x").is_err());
         assert!(a.run_commands("   ").is_err());
+    }
+
+    #[test]
+    fn messages_to_atif() {
+        // Cline's golden fixture, sdk/packages/core/fixtures/messages/success.messages.json at cli-v3.0.74.
+        let doc = json!({"version": 1, "agent": "lead", "sessionId": "fixture-success-01", "messages": [
+            {"id": "u1", "role": "user", "content": [{"type": "text", "text": "Inspect the README and summarize it."}]},
+            {"id": "a1", "role": "assistant", "ts": 1745343730123i64, "modelInfo": {"id": "claude-sonnet-4-6", "provider": "anthropic"},
+             "content": [{"type": "thinking", "thinking": "I should read the README first before summarizing."},
+                         {"type": "tool_use", "id": "tool-call-1", "name": "read_files", "input": {"path": "/tmp/project/README.md"}}]},
+            {"id": "u2", "role": "user", "content": [{"type": "tool_result", "tool_use_id": "tool-call-1", "content": "# Project", "is_error": false}]},
+            {"id": "a2", "role": "assistant", "ts": 1745343731456i64, "modelInfo": {"id": "claude-sonnet-4-6", "provider": "anthropic"},
+             "metrics": {"inputTokens": 21, "outputTokens": 8, "cacheReadTokens": 3, "cacheWriteTokens": 1, "cost": 0.13},
+             "content": [{"type": "text", "text": "The README describes a small test fixture project."}]}
+        ]});
+        let text = doc.to_string();
+        let a = atif_trajectory(&text, Some("3.0.73"), None).unwrap();
+        assert_eq!(a.session_id.as_deref(), Some("fixture-success-01"));
+        assert_eq!(a.steps.iter().map(|s| (s.step_id, s.source.as_str())).collect::<Vec<_>>(), [(1, "user"), (2, "agent"), (3, "agent")]);
+        let call = &a.steps[1];
+        assert_eq!(call.model_name.as_deref(), Some("claude-sonnet-4-6"));
+        assert!(call.reasoning_content.as_deref().unwrap().starts_with("I should read") && call.metrics.is_none());
+        assert_eq!(call.tool_calls.as_ref().unwrap()[0].arguments["path"], "/tmp/project/README.md");
+        let result = &call.observation.as_ref().unwrap().results[0];
+        assert_eq!((result.source_call_id.as_deref(), result.content.clone()), (Some("tool-call-1"), Some(json!("# Project"))));
+        let (f, c) = (a.final_metrics.unwrap(), usage_from_messages(&text).unwrap());
+        assert_eq!(
+            (f.total_prompt_tokens, f.total_completion_tokens, f.total_cached_tokens, f.total_cost_usd),
+            (c.n_input_tokens, c.n_output_tokens, c.n_cache_tokens, c.cost_usd)
+        );
+        assert!(atif_trajectory("[]", None, None).is_none());
     }
 
     #[test]

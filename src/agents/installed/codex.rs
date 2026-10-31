@@ -871,7 +871,7 @@ impl Agent for Codex {
             ctx.cost_usd = c.cost_usd;
         }
         if let Some(t) = rollout_trajectory(&text, self.version.as_deref(), model) {
-            let _ = std::fs::write(logs_dir.join("trajectory.json"), serde_json::to_string_pretty(&t).unwrap_or_default());
+            atif::write_trajectory(logs_dir, &t);
         }
     }
 }

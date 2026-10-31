@@ -5,6 +5,7 @@ use super::pins;
 use super::{connection, ensure_system_dependencies, exec_agent};
 use crate::agents::model_connection::{Resolved, Spec, with_canonical_provider_envs};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
+use crate::atif;
 use crate::env::quote;
 use anyhow::{Result, anyhow, bail};
 use serde_json::{Value, json};
@@ -138,15 +139,16 @@ pub(crate) fn iso_timestamp_ok(v: &Value) -> bool {
         || NaiveDate::parse_from_str(&s, "%Y-%m-%d").is_ok()
 }
 
+fn truthy(v: &Value) -> bool {
+    !matches!(v, Value::Null | Value::Bool(false)) && *v != json!("") && *v != json!(0) && *v != json!([]) && *v != json!({})
+}
+
 /// Totals from trae-agent's trajectory JSON, as ATIF final_metrics:
 /// (input, output, cache) or None when the converter would produce no steps.
 pub fn trajectory_usage(raw: &Value) -> Option<(i64, i64, i64)> {
     let empty = vec![];
     let inter = raw["llm_interactions"].as_array().unwrap_or(&empty);
     let steps = raw["agent_steps"].as_array().unwrap_or(&empty);
-    let truthy = |v: &Value| {
-        !matches!(v, Value::Null | Value::Bool(false)) && *v != json!("") && *v != json!(0) && *v != json!([]) && *v != json!({})
-    };
     if inter.is_empty() && !steps.iter().any(|s| truthy(&s["error"])) {
         return None;
     }
@@ -164,6 +166,72 @@ pub fn trajectory_usage(raw: &Value) -> Option<(i64, i64, i64)> {
         c += u["cache_read_input_tokens"].as_i64().unwrap_or(0);
     }
     Some((i, o, c))
+}
+
+/// One `llm_interactions` entry, a model call, as an agent step. Its results come from `agent_steps`.
+fn agent_step(interaction: &Value) -> atif::Step {
+    let response = &interaction["response"];
+    let usage = &response["usage"];
+    let n = |k: &str| usage[k].as_i64().unwrap_or(0);
+    let calls: Option<Vec<atif::ToolCall>> = response["tool_calls"].as_array().filter(|c| !c.is_empty()).map(|calls| {
+        calls
+            .iter()
+            .map(|c| atif::ToolCall {
+                tool_call_id: c["call_id"].as_str().unwrap_or_default().into(),
+                function_name: c["name"].as_str().unwrap_or_default().into(),
+                arguments: c["arguments"].clone(),
+                extra: None,
+            })
+            .collect()
+    });
+    atif::Step {
+        source: "agent".into(),
+        timestamp: interaction["timestamp"].as_str().map(String::from),
+        model_name: response["model"].as_str().map(String::from),
+        message: response["content"].clone(),
+        tool_calls: calls,
+        metrics: usage.is_object().then(|| atif::Metrics {
+            prompt_tokens: Some(n("input_tokens")),
+            completion_tokens: Some(n("output_tokens")),
+            cached_tokens: Some(n("cache_read_input_tokens")),
+            ..Default::default()
+        }),
+        ..Default::default()
+    }
+}
+
+/// trae-agent's `--trajectory-file` -> ATIF. A run with no model call keeps its failed steps, whose `error` says why.
+pub fn atif_trajectory(raw: &Value, version: Option<&str>, model: Option<&str>) -> Option<atif::Trajectory> {
+    let list = |k: &str| raw[k].as_array().map(Vec::as_slice).unwrap_or_default();
+    let mut steps: Vec<atif::Step> = vec![atif::Step {
+        source: "user".into(),
+        timestamp: raw["start_time"].as_str().map(String::from),
+        message: raw["task"].clone(),
+        ..Default::default()
+    }];
+    steps.extend(list("llm_interactions").iter().map(agent_step));
+    if steps.len() == 1 {
+        steps.extend(list("agent_steps").iter().filter(|s| truthy(&s["error"])).map(|s| atif::Step {
+            source: "agent".into(),
+            timestamp: s["timestamp"].as_str().map(String::from),
+            message: s["error"].clone(),
+            ..Default::default()
+        }));
+    }
+    if steps.len() == 1 {
+        return None;
+    }
+    for result in list("agent_steps").iter().flat_map(|s| s["tool_results"].as_array().into_iter().flatten()) {
+        let output = if result["result"].is_null() { &result["error"] } else { &result["result"] };
+        atif::attach_result(&mut steps, result["call_id"].as_str().unwrap_or_default(), output.clone());
+    }
+    let agent = atif::Agent {
+        name: "trae-agent".into(),
+        version: version.unwrap_or("unknown").into(),
+        model_name: model.or(raw["model"].as_str()).map(String::from),
+        ..Default::default()
+    };
+    atif::assemble(agent, None, steps)
 }
 
 /// trae-cli version parsing: first non-empty line, strip "trae-cli" / ",", take up to ",".
@@ -248,6 +316,9 @@ impl Agent for TraeAgent {
             ctx.n_output_tokens = Some(o);
             ctx.n_cache_tokens = Some(c);
         }
+        if let Some(t) = atif_trajectory(&raw, self.version.as_deref(), self.args.model_name.as_deref()) {
+            atif::write_trajectory(logs_dir, &t);
+        }
     }
 }
 
@@ -255,6 +326,49 @@ impl Agent for TraeAgent {
 mod tests {
     use super::*;
     use crate::agents::installed::common::test_args as args;
+
+    #[test]
+    fn recording_to_atif() {
+        // The fields of the pinned trajectory_recorder.py, one model call with a tool, one with the answer.
+        let raw = json!({
+            "task": "fix it", "start_time": "2026-10-31T09:00:00.000000", "provider": "openai", "model": "gpt-5",
+            "llm_interactions": [
+                {"timestamp": "2026-10-31T09:00:01.000000", "provider": "openai", "model": "gpt-5", "input_messages": [],
+                 "response": {"content": "look", "model": "gpt-5-2026", "finish_reason": "tool_calls",
+                              "usage": {"input_tokens": 100, "output_tokens": 10, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 40, "reasoning_tokens": null},
+                              "tool_calls": [{"call_id": "c1", "name": "bash", "arguments": {"command": "ls"}, "id": "x"},
+                                             {"call_id": "c2", "name": "edit", "arguments": {}, "id": "y"}]}},
+                {"timestamp": "2026-10-31T09:00:02.000000", "provider": "openai", "model": "gpt-5", "input_messages": [],
+                 "response": {"content": "done", "model": "gpt-5-2026", "finish_reason": "stop", "usage": null, "tool_calls": null}}
+            ],
+            "agent_steps": [
+                {"step_number": 1, "tool_results": [
+                    {"call_id": "c1", "success": true, "result": "a.py", "error": null},
+                    {"call_id": "c2", "success": false, "result": null, "error": "bad path"}], "error": null},
+                {"step_number": 2, "tool_results": null, "error": null}
+            ]
+        });
+        let a = atif_trajectory(&raw, Some("0.1"), None).unwrap();
+        assert_eq!((a.agent.name.as_str(), a.agent.model_name.as_deref()), ("trae-agent", Some("gpt-5")));
+        assert_eq!(a.steps.iter().map(|s| (s.step_id, s.source.as_str())).collect::<Vec<_>>(), [(1, "user"), (2, "agent"), (3, "agent")]);
+        let call = &a.steps[1];
+        assert_eq!((call.message.as_str(), call.model_name.as_deref()), (Some("look"), Some("gpt-5-2026")));
+        let results = &call.observation.as_ref().unwrap().results;
+        assert_eq!(
+            results.iter().map(|r| (r.source_call_id.clone().unwrap(), r.content.clone().unwrap())).collect::<Vec<_>>(),
+            [("c1".to_string(), json!("a.py")), ("c2".to_string(), json!("bad path"))]
+        );
+        assert!(a.steps[2].metrics.is_none());
+        let f = a.final_metrics.unwrap();
+        assert_eq!(
+            (f.total_prompt_tokens, f.total_completion_tokens, f.total_cached_tokens),
+            trajectory_usage(&raw).map(|(i, o, c)| (Some(i), Some(o), Some(c))).unwrap()
+        );
+        let failed =
+            json!({"task": "t", "llm_interactions": [], "agent_steps": [{"timestamp": "2026-10-31T09:00:01", "error": "auth failed"}]});
+        assert_eq!(atif_trajectory(&failed, None, None).unwrap().steps[1].message, json!("auth failed"));
+        assert!(atif_trajectory(&json!({"task": "t"}), None, None).is_none());
+    }
 
     #[test]
     fn options_and_config() {

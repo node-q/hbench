@@ -1,10 +1,11 @@
 //! Code Puppy.
 
-use super::common::{installed_dir, uv_install};
+use super::common::{installed_dir, pydantic_ai_steps, uv_install};
 use super::pins;
 use super::{connection, ensure_system_dependencies, exec_agent};
 use crate::agents::model_connection::Spec;
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
+use crate::atif;
 use crate::env::quote;
 use anyhow::{Result, bail};
 use base64::Engine;
@@ -101,7 +102,9 @@ impl CodePuppy {
         };
         format!(
             "{PATH_EXPORT}; set -o pipefail; code-puppy --yolo true --disable-ask-user-question --usage-file {USAGE} --model {} --prompt {} \
-             2>&1 </dev/null | stdbuf -oL tee /logs/agent/code-puppy.txt; cp_status=$?; if [ ! -s {USAGE} ]; then \
+             2>&1 </dev/null | stdbuf -oL tee /logs/agent/code-puppy.txt; cp_status=$?; \
+             mkdir -p /logs/agent/code-puppy-sessions; find \"$HOME\" -path '*/autosaves/*.json' -not -name '*_meta.json' \
+             -exec cp {{}} /logs/agent/code-puppy-sessions/ \\; 2>/dev/null; if [ ! -s {USAGE} ]; then \
              echo 'code-puppy produced no result: {USAGE} was not written' >&2; exit 1; fi; exit $cp_status",
             quote(self.args.model_name.as_deref().unwrap_or("")),
             quote(&instruction)
@@ -132,6 +135,19 @@ pub fn apply_usage(text: &str, ctx: &mut AgentContext) {
     if let Some(v) = u.get("cost_usd").and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))) {
         ctx.cost_usd = Some(v);
     }
+}
+
+/// An autosaved session, a JSON envelope around pydantic-ai messages, -> ATIF.
+pub fn atif_trajectory(text: &str, version: Option<&str>, model: Option<&str>) -> Option<atif::Trajectory> {
+    let session: Value = serde_json::from_str(text).ok()?;
+    let steps = pydantic_ai_steps(session["messages"].as_array()?, &|_| true);
+    let agent = atif::Agent {
+        name: "code-puppy".into(),
+        version: session["code_puppy"].as_str().or(version).unwrap_or("unknown").into(),
+        model_name: model.map(String::from),
+        ..Default::default()
+    };
+    atif::assemble(agent, None, steps)
 }
 
 #[async_trait::async_trait]
@@ -182,6 +198,14 @@ impl Agent for CodePuppy {
         if let Ok(t) = std::fs::read_to_string(logs_dir.join("code-puppy-usage.json")) {
             apply_usage(&t, ctx);
         }
+        let mut sessions: Vec<_> =
+            std::fs::read_dir(logs_dir.join("code-puppy-sessions")).into_iter().flatten().flatten().map(|e| e.path()).collect();
+        sessions.sort();
+        let text = sessions.last().and_then(|p| std::fs::read_to_string(p).ok());
+        if let Some(mut t) = text.and_then(|t| atif_trajectory(&t, self.version.as_deref(), self.args.model_name.as_deref())) {
+            atif::set_run_totals(&mut t, ctx.n_input_tokens, ctx.n_output_tokens, ctx.n_cache_tokens, ctx.cost_usd);
+            atif::write_trajectory(logs_dir, &t);
+        }
     }
 }
 
@@ -189,6 +213,35 @@ impl Agent for CodePuppy {
 mod tests {
     use super::*;
     use crate::agents::installed::common;
+
+    #[test]
+    fn session_to_atif() {
+        // A real run's autosave, trimmed.
+        let session = json!({"format": 2, "code_puppy": "0.0.933", "pydantic_ai": "2.51.0", "encoding": "pydantic-ai-messages", "messages": [
+            {"kind": "request", "timestamp": "2026-10-31T10:53:33.016426Z", "instructions": "You are HbenchPup",
+             "parts": [{"content": "Write the line.", "timestamp": "2026-10-31T10:53:33.016061Z", "part_kind": "user-prompt"}]},
+            {"kind": "response", "model_name": "qwen3.5:9b", "timestamp": "2026-10-31T10:53:46.422962Z",
+             "usage": {"input_tokens": 3732, "cache_write_tokens": 0, "cache_read_tokens": 0, "output_tokens": 127},
+             "parts": [{"content": "Use create_file.", "id": "reasoning", "part_kind": "thinking"},
+                       {"tool_name": "create_file", "args": "{\"file_path\": \"/app/hello.txt\"}", "tool_call_id": "call_1", "part_kind": "tool-call"}]},
+            {"kind": "request", "timestamp": "2026-10-31T10:53:54.812295Z", "instructions": "You are HbenchPup",
+             "parts": [{"tool_name": "create_file", "content": {"success": true}, "tool_call_id": "call_1", "outcome": "success", "part_kind": "tool-return"}]},
+            {"kind": "response", "model_name": "qwen3.5:9b", "timestamp": "2026-10-31T10:53:56.539863Z",
+             "usage": {"input_tokens": 3914, "cache_read_tokens": 3728, "output_tokens": 56},
+             "parts": [{"content": "Done.", "part_kind": "text"}]}
+        ]});
+        let a = atif_trajectory(&session.to_string(), None, Some("openai/m")).unwrap();
+        assert_eq!(a.agent.version, "0.0.933");
+        assert_eq!(a.steps.iter().map(|s| s.source.as_str()).collect::<Vec<_>>(), ["system", "user", "agent", "agent"]);
+        let call = &a.steps[2];
+        assert_eq!((call.reasoning_content.as_deref(), call.model_name.as_deref()), (Some("Use create_file."), Some("qwen3.5:9b")));
+        assert_eq!(call.tool_calls.as_ref().unwrap()[0].arguments["file_path"], "/app/hello.txt");
+        let result = &call.observation.as_ref().unwrap().results[0];
+        assert_eq!((result.source_call_id.as_deref(), result.content.clone()), (Some("call_1"), Some(json!({"success": true}))));
+        let f = a.final_metrics.unwrap();
+        assert_eq!((f.total_prompt_tokens, f.total_completion_tokens, f.total_cached_tokens), (Some(7646), Some(183), Some(3728)));
+        assert!(atif_trajectory("{}", None, None).is_none());
+    }
 
     fn agent(kwargs: Value, env: &[(&str, &str)], model: Option<&str>) -> Result<CodePuppy> {
         let args = common::test_args(kwargs, env, model);

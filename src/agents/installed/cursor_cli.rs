@@ -4,6 +4,7 @@ use super::common::parse_jsonl;
 use super::common::{detect_version, installed_dir, opts, skills_dir};
 use super::{ensure_system_dependencies, exec_agent};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
+use crate::atif;
 use crate::env::quote;
 use anyhow::{Result, bail};
 use serde_json::{Value, json};
@@ -213,6 +214,66 @@ impl CursorCli {
     }
 }
 
+/// A `tool_call` event's payload: `(name, arguments, result)`. Tools nest under a `<name>ToolCall` key, or under `function`.
+fn tool_payload(event: &Value) -> Option<(String, Value, Value)> {
+    let call = &event["tool_call"];
+    if call["function"].is_object() {
+        let raw = call["function"]["arguments"].as_str().unwrap_or_default();
+        let arguments = serde_json::from_str(raw).unwrap_or_else(|_| json!(raw));
+        return Some((call["function"]["name"].as_str().unwrap_or_default().into(), arguments, call["result"].clone()));
+    }
+    let (key, tool) = call.as_object()?.iter().find(|(k, _)| k.ends_with("ToolCall"))?;
+    Some((key.trim_end_matches("ToolCall").into(), tool["args"].clone(), tool["result"].clone()))
+}
+
+/// Cursor's `--output-format stream-json` -> ATIF. An `assistant` event is a complete message between tool calls, so it
+/// starts a model call, as does a tool call after a finished one. Usage comes per session, so steps have no metrics.
+pub fn atif_trajectory(text: &str, version: Option<&str>, model: Option<&str>) -> Option<atif::Trajectory> {
+    let (mut steps, mut session_id, mut stream_model) = (Vec::<atif::Step>::new(), None, None);
+    let new_agent_step = || atif::Step { source: "agent".into(), message: json!(""), ..Default::default() };
+    for e in parse_jsonl(text) {
+        session_id = session_id.or(e["session_id"].as_str().map(String::from));
+        stream_model = stream_model.or(e["model"].as_str().map(String::from));
+        let blocks = e["message"]["content"].as_array().map(Vec::as_slice).unwrap_or_default();
+        let said = blocks.iter().filter_map(|b| b["text"].as_str()).collect::<Vec<_>>().join("\n");
+        match (e["type"].as_str(), e["subtype"].as_str()) {
+            (Some("user"), _) if !said.is_empty() => {
+                steps.push(atif::Step { source: "user".into(), message: json!(said), ..Default::default() });
+            }
+            (Some("assistant"), _) => steps.push(atif::Step { message: json!(said), ..new_agent_step() }),
+            (Some("tool_call"), Some("started")) => {
+                let Some((name, arguments, _)) = tool_payload(&e) else { continue };
+                if steps.last().is_none_or(|s| s.source != "agent" || s.observation.is_some()) {
+                    steps.push(new_agent_step());
+                }
+                let call = atif::ToolCall {
+                    tool_call_id: e["call_id"].as_str().unwrap_or_default().into(),
+                    function_name: name,
+                    arguments,
+                    extra: None,
+                };
+                steps.last_mut()?.tool_calls.get_or_insert_default().push(call);
+            }
+            (Some("tool_call"), Some("completed")) => {
+                let Some((_, _, result)) = tool_payload(&e) else { continue };
+                let output = if result["success"].is_null() { result } else { result["success"].clone() };
+                atif::attach_result(&mut steps, e["call_id"].as_str().unwrap_or_default(), output);
+            }
+            _ => {}
+        }
+    }
+    if !steps.iter().any(|s| s.source == "agent") {
+        return None;
+    }
+    let agent = atif::Agent {
+        name: "cursor-cli".into(),
+        version: version.unwrap_or("unknown").into(),
+        model_name: model.map(String::from).or(stream_model),
+        ..Default::default()
+    };
+    atif::assemble(agent, session_id, steps)
+}
+
 #[async_trait::async_trait]
 impl Agent for CursorCli {
     fn name(&self) -> &str {
@@ -266,11 +327,16 @@ impl Agent for CursorCli {
     }
 
     fn collect_usage(&self, logs_dir: &std::path::Path, ctx: &mut AgentContext) {
-        if let Some(c) = std::fs::read_to_string(logs_dir.join("cursor-cli.txt")).ok().and_then(|t| self.parse_usage(&t)) {
+        let Ok(text) = std::fs::read_to_string(logs_dir.join("cursor-cli.txt")) else { return };
+        if let Some(c) = self.parse_usage(&text) {
             ctx.n_input_tokens = c.n_input_tokens;
             ctx.n_cache_tokens = c.n_cache_tokens;
             ctx.n_output_tokens = c.n_output_tokens;
             ctx.cost_usd = c.cost_usd;
+        }
+        if let Some(mut t) = atif_trajectory(&text, self.version.as_deref(), self.args.model_name.as_deref()) {
+            atif::set_run_totals(&mut t, ctx.n_input_tokens, ctx.n_output_tokens, ctx.n_cache_tokens, ctx.cost_usd);
+            atif::write_trajectory(logs_dir, &t);
         }
     }
 }
@@ -282,6 +348,36 @@ mod tests {
 
     fn agent(kwargs: Value, model: &str) -> Result<CursorCli> {
         CursorCli::new(common::test_args(kwargs, &[], Some(model)))
+    }
+
+    #[test]
+    fn stream_to_atif() {
+        // The event shapes of cursor.com/docs/cli/reference/output-format.
+        let log = r#"{"type":"system","subtype":"init","session_id":"s1","model":"gpt-5","cwd":"/app"}
+{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Read README"}]},"session_id":"s1"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Reading."}]},"session_id":"s1"}
+{"type":"tool_call","subtype":"started","call_id":"c1","tool_call":{"readToolCall":{"args":{"path":"README.md"}}},"session_id":"s1"}
+{"type":"tool_call","subtype":"started","call_id":"c2","tool_call":{"function":{"name":"grep","arguments":"{\"q\":\"x\"}"}},"session_id":"s1"}
+{"type":"tool_call","subtype":"completed","call_id":"c1","tool_call":{"readToolCall":{"args":{"path":"README.md"},"result":{"success":{"content":"hi","totalLines":1}}}},"session_id":"s1"}
+{"type":"tool_call","subtype":"completed","call_id":"c2","tool_call":{"function":{"name":"grep","arguments":"{}"},"result":{"error":{"errorMessage":"bad"}}},"session_id":"s1"}
+{"type":"tool_call","subtype":"started","call_id":"c3","tool_call":{"writeToolCall":{"args":{"path":"a"}}},"session_id":"s1"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Done."}]},"session_id":"s1"}
+{"type":"result","subtype":"success","is_error":false,"result":"Reading.Done.","session_id":"s1"}
+"#;
+        let a = atif_trajectory(log, Some("1"), None).unwrap();
+        assert_eq!((a.session_id.as_deref(), a.agent.model_name.as_deref()), (Some("s1"), Some("gpt-5")));
+        assert_eq!(a.steps.iter().map(|s| s.source.as_str()).collect::<Vec<_>>(), ["user", "agent", "agent", "agent"]);
+        let call = &a.steps[1];
+        assert_eq!(call.message, json!("Reading."));
+        let calls = call.tool_calls.as_ref().unwrap();
+        assert_eq!((calls[0].function_name.as_str(), calls[1].function_name.as_str()), ("read", "grep"));
+        assert_eq!(calls[1].arguments, json!({"q": "x"}));
+        let results = &call.observation.as_ref().unwrap().results;
+        assert_eq!(results[0].content.as_ref().unwrap()["content"], "hi");
+        assert_eq!(results[1].content.as_ref().unwrap()["error"]["errorMessage"], "bad");
+        assert_eq!(a.steps[2].tool_calls.as_ref().unwrap()[0].function_name, "write");
+        assert_eq!(a.steps[3].message, json!("Done."));
+        assert!(atif_trajectory("plain text\n", None, None).is_none());
     }
 
     #[test]

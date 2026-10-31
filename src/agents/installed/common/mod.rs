@@ -5,8 +5,9 @@ pub mod opts;
 
 use super::pins;
 use crate::agents::{AgentArgs, AgentCtx};
+use crate::atif;
 use anyhow::{Result, anyhow};
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
 
 /// Task `skills_dir`, else `/hbench/skills` when `--skill`s were given.
@@ -119,6 +120,86 @@ pub fn deep_merge_maps(base: &mut Map<String, Value>, over: &Map<String, Value>)
 /// `'value'`, or `(not set)` when there is none, for error messages.
 pub fn quoted_or_not_set(v: Option<&str>) -> String {
     v.map_or_else(|| "(not set)".into(), |v| format!("'{v}'"))
+}
+
+/// Agent steps of a pydantic-ai message list, with its prompts where `keep_prompt` allows: a `response` is one model
+/// call and `tool-return` parts answer its calls.
+pub fn pydantic_ai_steps(messages: &[Value], keep_prompt: &dyn Fn(&str) -> bool) -> Vec<atif::Step> {
+    let mut steps: Vec<atif::Step> = vec![];
+    let text_of = |v: &Value| match v.as_array() {
+        Some(parts) => parts.iter().filter_map(Value::as_str).collect::<Vec<_>>().join("\n"),
+        None => v.as_str().unwrap_or_default().to_string(),
+    };
+    for m in messages {
+        let parts = m["parts"].as_array().map(Vec::as_slice).unwrap_or_default();
+        let timestamp = m["timestamp"].as_str().map(String::from);
+        if m["kind"] == "response" {
+            let joined = |kind: &str| {
+                let texts = parts.iter().filter(|p| p["part_kind"] == kind).filter_map(|p| p["content"].as_str());
+                texts.collect::<Vec<_>>().join("\n")
+            };
+            let calls: Vec<atif::ToolCall> = parts
+                .iter()
+                .filter(|p| p["part_kind"] == "tool-call")
+                .map(|p| {
+                    let raw = p["args"].as_str();
+                    atif::ToolCall {
+                        tool_call_id: p["tool_call_id"].as_str().unwrap_or_default().into(),
+                        function_name: p["tool_name"].as_str().unwrap_or_default().into(),
+                        arguments: raw.map_or_else(|| p["args"].clone(), |r| serde_json::from_str(r).unwrap_or_else(|_| json!(r))),
+                        extra: None,
+                    }
+                })
+                .collect();
+            let reasoning = joined("thinking");
+            let usage = &m["usage"];
+            let n = |k: &str| usage[k].as_i64().unwrap_or(0);
+            steps.push(atif::Step {
+                source: "agent".into(),
+                timestamp,
+                model_name: m["model_name"].as_str().map(String::from),
+                message: json!(joined("text")),
+                reasoning_content: (!reasoning.is_empty()).then_some(reasoning),
+                tool_calls: (!calls.is_empty()).then_some(calls),
+                metrics: usage.is_object().then(|| atif::Metrics {
+                    prompt_tokens: Some(n("input_tokens")),
+                    completion_tokens: Some(n("output_tokens")),
+                    cached_tokens: Some(n("cache_read_tokens")),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            });
+            continue;
+        }
+        let instructions = m["instructions"].as_str().filter(|_| !steps.iter().any(|s| s.source == "system"));
+        steps.extend(instructions.map(|i| atif::Step { source: "system".into(), message: json!(i), ..Default::default() }));
+        for p in parts {
+            let content = text_of(&p["content"]);
+            match p["part_kind"].as_str() {
+                Some("system-prompt") if !content.trim().is_empty() => {
+                    steps.push(atif::Step {
+                        source: "system".into(),
+                        timestamp: timestamp.clone(),
+                        message: json!(content),
+                        ..Default::default()
+                    });
+                }
+                Some("user-prompt") if !content.trim().is_empty() && keep_prompt(&content) => {
+                    steps.push(atif::Step {
+                        source: "user".into(),
+                        timestamp: timestamp.clone(),
+                        message: json!(content),
+                        ..Default::default()
+                    });
+                }
+                Some("tool-return" | "retry-prompt") => {
+                    atif::attach_result(&mut steps, p["tool_call_id"].as_str().unwrap_or_default(), p["content"].clone());
+                }
+                _ => {}
+            }
+        }
+    }
+    steps
 }
 
 pub fn parse_jsonl(text: &str) -> Vec<Value> {

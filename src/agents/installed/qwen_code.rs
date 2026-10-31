@@ -6,6 +6,7 @@ use super::trae_agent::{iso_timestamp_ok, opt_str};
 use super::{connection, ensure_system_dependencies, exec_agent};
 use crate::agents::model_connection::Spec;
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
+use crate::atif;
 use crate::env::quote;
 use anyhow::{Result, bail};
 use serde_json::{Value, json};
@@ -202,6 +203,76 @@ fn subagent_usage(session: &Path) -> (i64, i64, i64) {
     total
 }
 
+/// One `assistant` event, a model response, as an agent step.
+fn agent_step(e: &Value) -> atif::Step {
+    let parts = e["message"]["parts"].as_array().map(Vec::as_slice).unwrap_or_default();
+    let text_of = |thought: bool| {
+        let texts = parts.iter().filter(|p| p["thought"].as_bool().unwrap_or(false) == thought).filter_map(|p| p["text"].as_str());
+        texts.collect::<Vec<_>>().join("\n")
+    };
+    let calls: Vec<atif::ToolCall> = parts
+        .iter()
+        .filter(|p| p["functionCall"].is_object())
+        .map(|p| atif::ToolCall {
+            tool_call_id: p["functionCall"]["id"].as_str().unwrap_or_default().into(),
+            function_name: p["functionCall"]["name"].as_str().unwrap_or_default().into(),
+            arguments: p["functionCall"]["args"].clone(),
+            extra: None,
+        })
+        .collect();
+    let reasoning = text_of(true);
+    let usage = &e["usageMetadata"];
+    let n = |k: &str| usage[k].as_i64().unwrap_or(0);
+    atif::Step {
+        source: "agent".into(),
+        timestamp: e["timestamp"].as_str().map(String::from),
+        model_name: e["model"].as_str().map(String::from),
+        message: json!(text_of(false)),
+        reasoning_content: (!reasoning.is_empty()).then_some(reasoning),
+        tool_calls: (!calls.is_empty()).then_some(calls),
+        metrics: usage.is_object().then(|| atif::Metrics {
+            prompt_tokens: Some(n("promptTokenCount")),
+            completion_tokens: Some(n("candidatesTokenCount")),
+            cached_tokens: Some(n("cachedContentTokenCount")),
+            ..Default::default()
+        }),
+        ..Default::default()
+    }
+}
+
+/// A main session's events -> ATIF. Subagent transcripts stay out of the steps; their tokens are in the run's totals.
+pub fn atif_trajectory(events: &[Value], version: Option<&str>, model: Option<&str>) -> Option<atif::Trajectory> {
+    let mut steps = vec![];
+    for e in events {
+        let parts = e["message"]["parts"].as_array().map(Vec::as_slice).unwrap_or_default();
+        match e["type"].as_str() {
+            Some("user") => {
+                let text = parts.iter().filter_map(|p| p["text"].as_str()).collect::<Vec<_>>().join("\n");
+                if !text.is_empty() {
+                    let timestamp = e["timestamp"].as_str().map(String::from);
+                    steps.push(atif::Step { source: "user".into(), timestamp, message: json!(text), ..Default::default() });
+                }
+            }
+            Some("assistant") => steps.push(agent_step(e)),
+            Some("tool_result") => {
+                for response in parts.iter().map(|p| &p["functionResponse"]) {
+                    let r = &response["response"];
+                    let output = if r["output"].is_null() { &r["error"] } else { &r["output"] };
+                    atif::attach_result(&mut steps, response["id"].as_str().unwrap_or_default(), output.clone());
+                }
+            }
+            _ => {}
+        }
+    }
+    let agent = atif::Agent {
+        name: "qwen-coder".into(),
+        version: version.unwrap_or("unknown").into(),
+        model_name: model.map(String::from),
+        ..Default::default()
+    };
+    atif::assemble(agent, events.iter().find_map(|e| e["sessionId"].as_str()).map(String::from), steps)
+}
+
 #[async_trait::async_trait]
 impl Agent for QwenCode {
     fn name(&self) -> &str {
@@ -254,6 +325,10 @@ impl Agent for QwenCode {
         ctx.n_input_tokens = Some(i + s.0);
         ctx.n_output_tokens = Some(o + s.1);
         ctx.n_cache_tokens = Some(c + s.2);
+        if let Some(mut t) = atif_trajectory(&events, self.version.as_deref(), self.args.model_name.as_deref()) {
+            atif::set_run_totals(&mut t, ctx.n_input_tokens, ctx.n_output_tokens, ctx.n_cache_tokens, None);
+            atif::write_trajectory(logs_dir, &t);
+        }
     }
 }
 
@@ -272,6 +347,32 @@ mod tests {
         v.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
         v
     }
+    #[test]
+    fn session_to_atif() {
+        // A real run's session, trimmed.
+        let log = r##"{"uuid":"1","parentUuid":null,"sessionId":"s1","timestamp":"2026-10-31T09:28:19.122Z","type":"user","message":{"role":"user","parts":[{"text":"Write the line."}]}}
+{"uuid":"2","sessionId":"s1","timestamp":"2026-10-31T09:28:19.127Z","type":"system","subtype":"attribution_snapshot","systemPayload":{}}
+{"uuid":"3","sessionId":"s1","timestamp":"2026-10-31T09:28:29.715Z","type":"assistant","model":"qwen3.5:9b","message":{"role":"model","parts":[{"text":"Use write_file.","thought":true},{"text":"I'll create the file."},{"functionCall":{"id":"call_1","name":"write_file","args":{"file_path":"/app/hello.txt"}}}]},"usageMetadata":{"promptTokenCount":15072,"candidatesTokenCount":95,"thoughtsTokenCount":30,"totalTokenCount":15167,"cachedContentTokenCount":0}}
+{"uuid":"4","sessionId":"s1","timestamp":"2026-10-31T09:28:29.782Z","type":"tool_result","message":{"role":"user","parts":[{"functionResponse":{"id":"call_1","name":"write_file","response":{"output":"Successfully created."}}}]},"toolCallResult":{"callId":"call_1","status":"success"}}
+{"uuid":"5","sessionId":"s1","timestamp":"2026-10-31T09:28:31.214Z","type":"assistant","model":"qwen3.5:9b","message":{"role":"model","parts":[{"text":"Done."}]},"usageMetadata":{"promptTokenCount":15165,"candidatesTokenCount":41,"cachedContentTokenCount":14560}}
+"##;
+        let events: Vec<Value> = log.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+        let a = atif_trajectory(&events, Some("0.25.2"), Some("openai/qwen3.5:9b")).unwrap();
+        assert_eq!(a.session_id.as_deref(), Some("s1"));
+        assert_eq!(a.steps.iter().map(|s| (s.step_id, s.source.as_str())).collect::<Vec<_>>(), [(1, "user"), (2, "agent"), (3, "agent")]);
+        let call = &a.steps[1];
+        assert_eq!(
+            (call.message.as_str(), call.reasoning_content.as_deref(), call.model_name.as_deref()),
+            (Some("I'll create the file."), Some("Use write_file."), Some("qwen3.5:9b"))
+        );
+        assert_eq!(call.tool_calls.as_ref().unwrap()[0].arguments["file_path"], "/app/hello.txt");
+        let result = &call.observation.as_ref().unwrap().results[0];
+        assert_eq!((result.source_call_id.as_deref(), result.content.clone()), (Some("call_1"), Some(json!("Successfully created."))));
+        let f = a.final_metrics.unwrap();
+        assert_eq!((f.total_prompt_tokens, f.total_completion_tokens, f.total_cached_tokens), (Some(30237), Some(136), Some(14560)));
+        assert_eq!(events_usage(&events).unwrap(), Some((30237, 136, 14560)));
+    }
+
     fn write_jsonl(p: &Path, events: &[Value]) {
         std::fs::create_dir_all(p.parent().unwrap()).unwrap();
         std::fs::write(p, events.iter().map(Value::to_string).collect::<Vec<_>>().join("\n") + "\n").unwrap();

@@ -6,6 +6,7 @@ use super::pins;
 use super::{connection, ensure_system_dependencies, exec_agent, exec_root_checked, safe_bin_symlink_command};
 use crate::agents::model_connection::Spec;
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
+use crate::atif;
 use crate::env::{ErrorKind, kind_err, quote};
 use anyhow::{Result, bail};
 use serde_json::{Value, json};
@@ -128,6 +129,93 @@ pub fn parse_opencode_usage(text: &str) -> Option<AgentContext> {
         cost_usd: (cost != 0.0).then_some(cost),
         ..Default::default()
     })
+}
+
+/// A `tool_use` part: the call, and its result as `(call id, output or error)`.
+fn tool_call(part: &Value) -> (atif::ToolCall, atif::ObservationResult) {
+    let state = &part["state"];
+    let id = part["callID"].as_str().unwrap_or_default().to_string();
+    let call = atif::ToolCall {
+        tool_call_id: id.clone(),
+        function_name: part["tool"].as_str().unwrap_or_default().into(),
+        arguments: state["input"].clone(),
+        extra: None,
+    };
+    let output = if state["status"] == "error" { &state["error"] } else { &state["output"] };
+    (call, atif::ObservationResult { source_call_id: Some(id), content: Some(output.clone()), ..Default::default() })
+}
+
+/// A `step_finish` part's metrics, counted as [`parse_opencode_usage`] counts them. `tokens.input` and `tokens.output`
+/// leave out cache writes and reasoning; those two stay in `extra`.
+fn step_metrics(part: &Value) -> atif::Metrics {
+    let n = |v: &Value| v.as_i64().unwrap_or(0);
+    let tokens = &part["tokens"];
+    let read = n(&tokens["cache"]["read"]);
+    let uncounted = [("cache_write_tokens", n(&tokens["cache"]["write"])), ("reasoning_tokens", n(&tokens["reasoning"]))];
+    let extra: serde_json::Map<String, Value> = uncounted.into_iter().filter(|(_, v)| *v != 0).map(|(k, v)| (k.into(), v.into())).collect();
+    atif::Metrics {
+        prompt_tokens: Some(n(&tokens["input"]) + read),
+        completion_tokens: Some(n(&tokens["output"])),
+        cached_tokens: Some(read),
+        cost_usd: part["cost"].as_f64().filter(|c| *c != 0.0),
+        extra: (!extra.is_empty()).then_some(extra),
+        ..Default::default()
+    }
+}
+
+fn has_content(step: &atif::Step) -> bool {
+    step.reasoning_content.is_some() || step.tool_calls.is_some() || step.message != ""
+}
+
+/// The `--format=json` stream of opencode, or of its fork mimo, -> ATIF. Each `step_start` .. `step_finish` turn is one
+/// model call; the stream carries neither the instruction nor the model's name.
+pub fn atif_trajectory(name: &str, text: &str, version: Option<&str>, model: Option<&str>) -> Option<atif::Trajectory> {
+    let (mut steps, mut open, mut session_id) = (vec![], None::<atif::Step>, None);
+    for e in parse_jsonl(text) {
+        session_id = session_id.or(e["sessionID"].as_str().map(String::from));
+        let part = &e["part"];
+        let timestamp = e["timestamp"].as_i64().and_then(atif::timestamp_of_millis);
+        let event = e["type"].as_str().unwrap_or_default();
+        if event == "step_start" {
+            steps.extend(open.take().filter(has_content));
+        }
+        if !matches!(event, "step_start" | "step_finish" | "text" | "reasoning" | "tool_use") || (event == "step_finish" && open.is_none())
+        {
+            continue;
+        }
+        let step = open.get_or_insert_with(|| atif::Step { source: "agent".into(), timestamp, message: json!(""), ..Default::default() });
+        match event {
+            "text" => {
+                let joined = [step.message.as_str().unwrap_or_default(), part["text"].as_str().unwrap_or_default()];
+                step.message = json!(joined.into_iter().filter(|t| !t.is_empty()).collect::<Vec<_>>().join("\n"));
+            }
+            "reasoning" => {
+                let reasoning = part["text"].as_str().unwrap_or_default();
+                step.reasoning_content = Some(match step.reasoning_content.take() {
+                    Some(earlier) => format!("{earlier}\n{reasoning}"),
+                    None => reasoning.into(),
+                });
+            }
+            "tool_use" => {
+                let (call, result) = tool_call(part);
+                step.tool_calls.get_or_insert_default().push(call);
+                step.observation.get_or_insert_default().results.push(result);
+            }
+            "step_finish" => {
+                step.metrics = Some(step_metrics(part));
+                steps.extend(open.take());
+            }
+            _ => {}
+        }
+    }
+    steps.extend(open.filter(has_content));
+    let agent = atif::Agent {
+        name: name.into(),
+        version: version.unwrap_or("unknown").into(),
+        model_name: model.map(String::from),
+        ..Default::default()
+    };
+    atif::assemble(agent, session_id, steps)
 }
 
 const VERSION_CMD: &str = concat!(nvm_load!(), "; opencode --version");
@@ -261,11 +349,15 @@ impl Agent for OpenCode {
     }
 
     fn collect_usage(&self, logs_dir: &std::path::Path, ctx: &mut AgentContext) {
-        if let Some(c) = std::fs::read_to_string(logs_dir.join("opencode.txt")).ok().and_then(|t| parse_opencode_usage(&t)) {
+        let Ok(text) = std::fs::read_to_string(logs_dir.join("opencode.txt")) else { return };
+        if let Some(c) = parse_opencode_usage(&text) {
             ctx.n_input_tokens = c.n_input_tokens;
             ctx.n_cache_tokens = c.n_cache_tokens;
             ctx.n_output_tokens = c.n_output_tokens;
             ctx.cost_usd = c.cost_usd;
+        }
+        if let Some(t) = atif_trajectory("opencode", &text, self.version.as_deref(), self.args.model_name.as_deref()) {
+            atif::write_trajectory(logs_dir, &t);
         }
     }
 }
@@ -318,6 +410,51 @@ mod tests {
             ]
         );
         assert_eq!(a.acp_env().get("OPENAI_API_KEY").map(String::as_str), Some("k"));
+    }
+
+    /// A real run's stream, trimmed: one call with reasoning and a tool, one with the answer, then a call cut off.
+    const STREAM: &str = r#"{"type":"step_start","timestamp":1793437566906,"sessionID":"ses_1","part":{"id":"prt_1","messageID":"msg_1","type":"step-start"}}
+{"type":"reasoning","timestamp":1793437568219,"sessionID":"ses_1","part":{"id":"prt_2","type":"reasoning","text":"I'll use the write tool."}}
+{"type":"tool_use","timestamp":1793437568219,"sessionID":"ses_1","part":{"type":"tool","tool":"write","callID":"call_1","state":{"status":"completed","input":{"filePath":"/app/hello.txt","content":"Hello, world!"},"output":"Wrote file successfully."}}}
+{"type":"tool_use","timestamp":1793437568220,"sessionID":"ses_1","part":{"type":"tool","tool":"read","callID":"call_2","state":{"status":"error","input":{"filePath":"/x"},"error":"File not found"}}}
+{"type":"step_finish","timestamp":1793437568285,"sessionID":"ses_1","part":{"reason":"tool-calls","tokens":{"total":7368,"input":7291,"output":77,"reasoning":4,"cache":{"write":9,"read":0}},"cost":0.5}}
+{"type":"step_start","timestamp":1793437568772,"sessionID":"ses_1","part":{"type":"step-start"}}
+{"type":"text","timestamp":1793437569124,"sessionID":"ses_1","part":{"type":"text","text":"Done"}}
+{"type":"step_finish","timestamp":1793437569156,"sessionID":"ses_1","part":{"reason":"stop","tokens":{"total":7409,"input":21,"output":21,"reasoning":0,"cache":{"write":0,"read":7367}},"cost":0}}
+{"type":"step_start","timestamp":1793437570000,"sessionID":"ses_1","part":{"type":"step-start"}}
+{"type":"step_start","timestamp":1793437571000,"sessionID":"ses_1","part":{"type":"step-start"}}
+{"type":"text","timestamp":1793437571500,"sessionID":"ses_1","part":{"type":"text","text":"partial"}}
+"#;
+
+    #[test]
+    fn stream_to_atif() {
+        let a = atif_trajectory("opencode", STREAM, Some("1.19.3"), Some("openai/m")).unwrap();
+        assert_eq!(
+            (a.session_id.as_deref(), a.agent.version.as_str(), a.agent.model_name.as_deref()),
+            (Some("ses_1"), "1.19.3", Some("openai/m"))
+        );
+        assert_eq!(a.steps.iter().map(|s| (s.step_id, s.source.as_str())).collect::<Vec<_>>(), [(1, "agent"), (2, "agent"), (3, "agent")]);
+        let call = &a.steps[0];
+        assert_eq!(call.timestamp.as_deref(), Some("2026-10-31T09:06:06.906Z"));
+        assert_eq!(call.reasoning_content.as_deref(), Some("I'll use the write tool."));
+        assert_eq!(call.tool_calls.as_ref().unwrap()[0].arguments["filePath"], "/app/hello.txt");
+        let results = &call.observation.as_ref().unwrap().results;
+        assert_eq!(
+            results.iter().map(|r| (r.source_call_id.clone().unwrap(), r.content.clone().unwrap())).collect::<Vec<_>>(),
+            [("call_1".to_string(), json!("Wrote file successfully.")), ("call_2".to_string(), json!("File not found"))]
+        );
+        let m = call.metrics.as_ref().unwrap();
+        assert_eq!((m.prompt_tokens, m.completion_tokens, m.cached_tokens, m.cost_usd), (Some(7291), Some(77), Some(0), Some(0.5)));
+        assert_eq!(m.extra.as_ref().unwrap()["cache_write_tokens"], 9);
+        assert_eq!(m.extra.as_ref().unwrap()["reasoning_tokens"], 4);
+        assert_eq!((a.steps[1].message.as_str(), a.steps[1].metrics.as_ref().unwrap().cached_tokens), (Some("Done"), Some(7367)));
+        assert_eq!((a.steps[2].message.as_str(), a.steps[2].metrics.is_none()), (Some("partial"), true));
+        let (f, c) = (a.final_metrics.unwrap(), parse_opencode_usage(STREAM).unwrap());
+        assert_eq!(
+            (f.total_prompt_tokens, f.total_completion_tokens, f.total_cached_tokens, f.total_cost_usd),
+            (c.n_input_tokens, c.n_output_tokens, c.n_cache_tokens, c.cost_usd)
+        );
+        assert!(atif_trajectory("opencode", "{\"type\":\"step_start\"}\n{\"type\":\"error\"}\n", None, None).is_none());
     }
 
     #[test]
