@@ -3,6 +3,7 @@
 use super::common::installed_dir;
 use super::{ensure_system_dependencies, exec_agent, parse_version};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
+use crate::atif;
 use crate::env::quote;
 use crate::fmt::type_name;
 use anyhow::{Result, bail};
@@ -192,6 +193,76 @@ pub fn usage_from_output(text: &str) -> (i64, i64, i64) {
     (input, output, cache)
 }
 
+/// The blocks of a history message the model or the user saw.
+fn visible_blocks(m: &Value) -> impl Iterator<Item = &Value> {
+    m["content"].as_array().into_iter().flatten().filter(|b| b["internalOnly"] != true)
+}
+
+fn texts_of(m: &Value) -> String {
+    visible_blocks(m).filter(|b| b["type"] == "text").filter_map(|b| b["text"].as_str()).collect::<Vec<_>>().join("\n")
+}
+
+/// An assistant history message, one model response, as an agent step.
+fn agent_step(m: &Value) -> atif::Step {
+    let calls: Vec<atif::ToolCall> = visible_blocks(m)
+        .filter(|b| b["type"] == "tool_use")
+        .map(|b| atif::ToolCall {
+            tool_call_id: b["tool_use"]["tool_use_id"].as_str().unwrap_or_default().into(),
+            function_name: b["tool_use"]["name"].as_str().unwrap_or_default().into(),
+            arguments: b["tool_use"]["input"].clone(),
+            extra: None,
+        })
+        .collect();
+    let thoughts: Vec<&str> = visible_blocks(m).filter_map(|b| b["thinking"]["text"].as_str()).collect();
+    atif::Step {
+        source: "agent".into(),
+        timestamp: m["assistantSentTime"].as_str().map(String::from),
+        model_name: m["model"].as_str().map(String::from),
+        message: json!(texts_of(m)),
+        reasoning_content: (!thoughts.is_empty()).then(|| thoughts.join("\n")),
+        tool_calls: (!calls.is_empty()).then_some(calls),
+        ..Default::default()
+    }
+}
+
+/// A `<session>.history.jsonl` -> ATIF. Tool results arrive in user messages; usage comes from the output stream, per run.
+pub fn atif_trajectory(text: &str, session_id: Option<String>, version: Option<&str>, model: Option<&str>) -> Option<atif::Trajectory> {
+    let mut steps = vec![];
+    for m in text.lines().filter_map(|l| serde_json::from_str::<Value>(l).ok()) {
+        if m["role"] == "assistant" {
+            steps.push(agent_step(&m));
+            continue;
+        }
+        let said = texts_of(&m);
+        if !said.is_empty() {
+            let timestamp = m["userSentTime"].as_str().map(String::from);
+            steps.push(atif::Step { source: "user".into(), timestamp, message: json!(said), ..Default::default() });
+        }
+        for result in visible_blocks(&m).filter(|b| b["type"] == "tool_result").map(|b| &b["tool_result"]) {
+            let parts = result["content"].as_array().map(Vec::as_slice).unwrap_or_default();
+            let output =
+                parts.iter().filter(|p| p["internalOnly"] != true).filter_map(|p| p["text"].as_str()).collect::<Vec<_>>().join("\n");
+            atif::attach_result(&mut steps, result["tool_use_id"].as_str().unwrap_or_default(), json!(output));
+        }
+    }
+    let agent = atif::Agent {
+        name: "cortex-code".into(),
+        version: version.unwrap_or("unknown").into(),
+        model_name: model.map(String::from),
+        ..Default::default()
+    };
+    atif::assemble(agent, session_id, steps)
+}
+
+/// The newest `*.history.jsonl` of the snapshot, with its session id.
+fn newest_history(logs_dir: &std::path::Path) -> Option<(String, String)> {
+    let dir = std::fs::read_dir(logs_dir.join("cortex-code-snapshot/conversations")).ok()?;
+    let histories = dir.flatten().map(|e| e.path()).filter(|p| p.to_string_lossy().ends_with(".history.jsonl"));
+    let path = histories.max_by_key(|p| p.metadata().and_then(|m| m.modified()).ok())?;
+    let id = path.file_name()?.to_str()?.trim_end_matches(".history.jsonl").to_string();
+    Some((id, std::fs::read_to_string(path).ok()?))
+}
+
 #[async_trait::async_trait]
 impl Agent for CortexCode {
     fn name(&self) -> &str {
@@ -263,6 +334,11 @@ impl Agent for CortexCode {
             ctx.n_output_tokens = Some(o);
             ctx.n_cache_tokens = Some(c);
         }
+        let Some((id, history)) = newest_history(logs_dir) else { return };
+        if let Some(mut t) = atif_trajectory(&history, Some(id), self.version.as_deref(), self.args.model_name.as_deref()) {
+            atif::set_run_totals(&mut t, ctx.n_input_tokens, ctx.n_output_tokens, ctx.n_cache_tokens, None);
+            atif::write_trajectory(logs_dir, &t);
+        }
     }
 }
 
@@ -320,6 +396,30 @@ mod tests {
         assert!(p.connection_setup().unwrap().contains("authenticator = \"snowflake\"\npassword = \"$_cc_password\""));
         assert!(agent(json!({}), &[("SNOWFLAKE_ACCOUNT", "a"), ("SNOWFLAKE_USER", "u")], None).unwrap().connection_setup().is_err());
         assert!(agent(json!({}), &[], None).unwrap().connection_setup().is_err());
+    }
+
+    #[test]
+    fn history_to_atif() {
+        // The shapes of the stable bundle's addMessage and tool_result builders.
+        let history = [
+            json!({"role": "user", "id": "u1", "userSentTime": "2026-10-31T10:00:00.000Z", "content": [{"type": "text", "text": "Fix it"}, {"type": "text", "text": "hidden", "internalOnly": true}]}),
+            json!({"role": "assistant", "id": "a1", "assistantSentTime": "2026-10-31T10:00:01.000Z", "model": "m", "content": [
+                {"type": "thinking", "thinking": {"text": "Look first."}}, {"type": "text", "text": "Looking."},
+                {"type": "tool_use", "tool_use": {"tool_use_id": "t1", "type": "client_tool", "name": "bash", "input": {"command": "ls"}}}]}),
+            json!({"role": "user", "id": "u2", "content": [{"type": "tool_result", "tool_result": {"tool_use_id": "t1", "name": "bash", "status": "success", "content": [{"type": "text", "text": "a.py"}]}}]}),
+            json!({"role": "assistant", "id": "a2", "content": [{"type": "text", "text": "Done."}]}),
+        ]
+        .map(|m| m.to_string())
+        .join("\n");
+        let a = atif_trajectory(&history, Some("s1".into()), None, Some("snowflake/m")).unwrap();
+        assert_eq!(a.steps.iter().map(|s| s.source.as_str()).collect::<Vec<_>>(), ["user", "agent", "agent"]);
+        assert_eq!(a.steps[0].message, json!("Fix it"));
+        let call = &a.steps[1];
+        assert_eq!((call.message.as_str(), call.reasoning_content.as_deref()), (Some("Looking."), Some("Look first.")));
+        assert_eq!(call.tool_calls.as_ref().unwrap()[0].arguments, json!({"command": "ls"}));
+        let result = &call.observation.as_ref().unwrap().results[0];
+        assert_eq!((result.source_call_id.as_deref(), result.content.clone()), (Some("t1"), Some(json!("a.py"))));
+        assert!(atif_trajectory("", None, None, None).is_none());
     }
 
     #[test]

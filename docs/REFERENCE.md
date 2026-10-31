@@ -45,7 +45,7 @@ hbench run -d <name>@<version> --registry-url <registry-url> -a claude-code -m a
 ## Agents
 
 46 agents (`hbench agents list`): `oracle`, `nop`, `terminus-2` (also `terminus`, `terminus-1`), `claude-code`, `codex`,
-`gemini-cli`, `opencode`, `aider`, `goose`, `copilot-cli`, `cursor-cli`, `openhands`, `openhands-sdk`, `mini-swe-agent`,
+`gemini-cli`, `opencode`, `aider`, `goose`, `copilot-cli`, `cortex-code`, `cursor-cli`, `openhands`, `openhands-sdk`, `mini-swe-agent`,
 `swe-agent`, `trae-agent`, `qwen-coder`, `kimi-cli`, `kimi-code`, `grok-build`, `hermes`, `junie`, `rovodev-cli`,
 `cline-cli`, `cortex-code`, `code-puppy`, `devin`, `langgraph`, `deerflow`, `strands`, `nemo-agent`, `mimo`, `mcode`,
 `pi`, `openclaw`, `antigravity-cli`, `antigravity-sdk`, `eve`, `fx`, `fx-dev`, `vibe`, `muse-code`, `acp` (+ `acp:<id>`),
@@ -329,7 +329,7 @@ jobs/<job>/<task>__<id>/{config.json, lock.json, result.json, trial.log, excepti
 `deerflow`, `dspy-rlm`, `eve`, `gemini-cli`, `goose`, `hermes`, `kimi-code`, `langgraph`, `mcode`, `mimo`, `mini-swe-agent`, `muse-code`, `openclaw`, `opencode`, `pi`, `qwen-coder`, `rovodev-cli`, `strands`, `swe-agent` and `trae-agent` convert their native session logs into it; `terminus-2`, `computer-1`, `openhands-sdk`, `antigravity-sdk` and `nemo-agent` write it
 themselves. In a converted trajectory each agent step is one model call and its metrics are that call's alone:
 `prompt_tokens` is the whole prompt, cached and cache-written tokens included, and `cached_tokens` the cached part of
-it. A step whose call the native log reports no usage for has no metrics; `acp`, `cursor-cli`, `dspy-rlm`, `goose`, `hermes`, `mcode` and `swe-agent` report usage per run or per turn, so their steps have none, and `copilot-cli` reports output tokens only. `opencode` steps count tokens as its usage does, without cache writes and reasoning, which stay in `metrics.extra`. A `deepseek-harness` run with no exported
+it. A step whose call the native log reports no usage for has no metrics; `acp`, `cortex-code`, `cursor-cli`, `dspy-rlm`, `goose`, `hermes`, `mcode` and `swe-agent` report usage per run or per turn, so their steps have none, and `copilot-cli` reports output tokens only. `opencode` steps count tokens as its usage does, without cache writes and reasoning, which stay in `metrics.extra`. A `deepseek-harness` run with no exported
 session log, as in jobs from before the export ran after a timeout, gets its trajectory from `dsh`'s output stream
 instead: the instruction and timestamps are missing, long text is cut at 8 KiB, and `notes` says so.
 
