@@ -5,6 +5,7 @@ use super::kimi_cli::loads_lenient;
 use super::pins;
 use super::{exec_agent, exec_root_checked};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx, pricing};
+use crate::atif;
 use crate::env::quote;
 use anyhow::Result;
 use serde_json::{Value, json};
@@ -149,15 +150,24 @@ impl Agent for KimiCode {
         if let Some(c) = usage(logs_dir, self.args.model_name.as_deref()) {
             *ctx = c;
         }
+        if let Some(mut t) =
+            current_run(logs_dir).and_then(|p| atif_trajectory(&p, self.version.as_deref(), self.args.model_name.as_deref()))
+        {
+            atif::set_run_totals(&mut t, ctx.n_input_tokens, ctx.n_output_tokens, ctx.n_cache_tokens, ctx.cost_usd);
+            atif::write_trajectory(logs_dir, &t);
+        }
     }
 }
 
 #[derive(Default)]
 struct Step {
     agent: bool,
+    injected: bool,
     turn: u32,
     text: String,
+    reasoning: String,
     calls: Vec<String>,
+    tool_calls: Vec<atif::ToolCall>,
     usage: Option<Value>,
     model: Option<String>,
 }
@@ -165,8 +175,10 @@ struct Step {
 #[derive(Default)]
 struct Parsed {
     steps: Vec<Step>,
+    tool_results: Vec<(String, Value)>,
     session_id: Option<String>,
     model: Option<String>,
+    from_wire: bool,
 }
 
 fn read_jsonl(path: &Path) -> Vec<Value> {
@@ -232,7 +244,7 @@ fn parse_stream_json(path: &Path) -> Parsed {
 }
 
 fn parse_wire(path: &Path, session_id: String) -> Parsed {
-    let mut p = Parsed { session_id: Some(session_id), ..Default::default() };
+    let mut p = Parsed { session_id: Some(session_id), from_wire: true, ..Default::default() };
     let mut current: Option<Step> = None;
     let mut turn = 0;
     let close = |cur: &mut Option<Step>, steps: &mut Vec<Step>, turn: u32| {
@@ -264,12 +276,15 @@ fn parse_wire(path: &Path, session_id: String) -> Parsed {
             }
             "context.append_message" if o["message"]["origin"]["kind"] == "injection" => {
                 close(&mut current, &mut p.steps, turn);
-                p.steps.push(Step { turn, text: texts(&o["message"]["content"]), ..Default::default() });
+                p.steps.push(Step { turn, injected: true, text: texts(&o["message"]["content"]), ..Default::default() });
             }
             "turn.ended" => close(&mut current, &mut p.steps, turn),
             "context.append_loop_event" => {
                 let ev = &o["event"];
                 let et = ev["type"].as_str().unwrap_or("");
+                if et == "tool.result" {
+                    p.tool_results.push((id_str(&ev["toolCallId"]), ev["result"]["output"].clone()));
+                }
                 if et == "step.begin" {
                     close(&mut current, &mut p.steps, turn);
                     current = Some(Step { agent: true, ..Default::default() });
@@ -283,8 +298,19 @@ fn parse_wire(path: &Path, session_id: String) -> Parsed {
                         if !think && let Some(t) = part["text"].as_str() {
                             step.text.push_str(t);
                         }
+                        if think {
+                            step.reasoning.push_str(part["think"].as_str().unwrap_or_default());
+                        }
                     }
-                    "tool.call" => step.calls.push(id_str(&ev["toolCallId"])),
+                    "tool.call" => {
+                        step.calls.push(id_str(&ev["toolCallId"]));
+                        step.tool_calls.push(atif::ToolCall {
+                            tool_call_id: id_str(&ev["toolCallId"]),
+                            function_name: ev["name"].as_str().unwrap_or_default().into(),
+                            arguments: ev["args"].clone(),
+                            extra: None,
+                        });
+                    }
                     "step.end" => {
                         if ev["usage"].as_object().is_some_and(|u| !u.is_empty()) {
                             step.usage = Some(ev["usage"].clone());
@@ -324,10 +350,8 @@ fn pricing_key(model: &str) -> Option<String> {
     keys.into_iter().find(|k| pricing::model_cost(k).is_some())
 }
 
-/// Token totals of the current turn (earlier `--continue` turns are copied context);
-/// `None` when nothing was parsed or no usage was observed (tokens stay null).
-/// Cost is an all-or-nothing price-table estimate (None if any part is unpriced).
-pub fn usage(logs_dir: &Path, model_name: Option<&str>) -> Option<AgentContext> {
+/// This run's journal, or its stdout when no journal matches.
+fn current_run(logs_dir: &Path) -> Option<Parsed> {
     let stream_path = logs_dir.join("kimi-code.txt");
     let has_stream = stream_path.is_file();
     let stream = if has_stream { parse_stream_json(&stream_path) } else { Parsed::default() };
@@ -342,6 +366,66 @@ pub fn usage(logs_dir: &Path, model_name: Option<&str>) -> Option<AgentContext> 
         .map(|(sid, p)| parse_wire(&p, sid))
         .find(|w| !w.steps.is_empty() && (w.session_id == stream.session_id || same_invocation(w, &stream)))
         .unwrap_or(stream);
+    Some(parsed)
+}
+
+/// The journal's current turn -> ATIF; the turns before it are copied context. Stdout alone has no steps worth keeping.
+fn atif_trajectory(parsed: &Parsed, version: Option<&str>, model: Option<&str>) -> Option<atif::Trajectory> {
+    if !parsed.from_wire {
+        return None;
+    }
+    let last_turn = parsed.steps.iter().map(|s| s.turn).max()?;
+    let source = |s: &Step| {
+        if s.agent {
+            "agent"
+        } else if s.injected {
+            "system"
+        } else {
+            "user"
+        }
+    };
+    let spoke = |s: &&Step| !s.agent || !s.text.is_empty() || !s.reasoning.is_empty() || !s.tool_calls.is_empty() || s.usage.is_some();
+    let mut steps: Vec<atif::Step> = parsed
+        .steps
+        .iter()
+        .filter(|s| s.turn == last_turn)
+        .filter(spoke)
+        .map(|s| atif::Step {
+            source: source(s).into(),
+            model_name: s.model.clone().filter(|_| s.agent),
+            message: json!(s.text),
+            reasoning_content: (!s.reasoning.is_empty()).then(|| s.reasoning.clone()),
+            tool_calls: (!s.tool_calls.is_empty()).then(|| s.tool_calls.clone()),
+            metrics: s.usage.as_ref().filter(|u| u.as_object().is_some_and(|o| !o.is_empty())).map(|u| {
+                let n = |k: &str| u[k].as_i64().unwrap_or(0);
+                atif::Metrics {
+                    prompt_tokens: Some(n("inputOther") + n("inputCacheRead") + n("inputCacheCreation")),
+                    completion_tokens: Some(n("output")),
+                    cached_tokens: Some(n("inputCacheRead")),
+                    ..Default::default()
+                }
+            }),
+            ..Default::default()
+        })
+        .collect();
+    for (id, output) in &parsed.tool_results {
+        let text = output.as_array().map(|parts| json!(parts.iter().filter_map(|p| p["text"].as_str()).collect::<Vec<_>>().join("\n")));
+        atif::attach_result(&mut steps, id, text.unwrap_or_else(|| output.clone()));
+    }
+    let agent = atif::Agent {
+        name: "kimi-code".into(),
+        version: version.unwrap_or("unknown").into(),
+        model_name: model.map(String::from).or(parsed.model.clone()),
+        ..Default::default()
+    };
+    atif::assemble(agent, parsed.session_id.clone(), steps)
+}
+
+/// Token totals of the current turn (earlier `--continue` turns are copied context);
+/// `None` when nothing was parsed or no usage was observed (tokens stay null).
+/// Cost is an all-or-nothing price-table estimate (None if any part is unpriced).
+pub fn usage(logs_dir: &Path, model_name: Option<&str>) -> Option<AgentContext> {
+    let parsed = current_run(logs_dir)?;
     let last_turn = parsed.steps.iter().map(|s| s.turn).max()?;
     let used: Vec<(&Value, Option<&str>)> = parsed
         .steps
@@ -443,6 +527,32 @@ mod tests {
         assert_eq!(tokens(usage(&logs(Some(&cut), Some(STREAM)), None)).unwrap().1, 86 + 29);
         // missing stream falls back to the journal
         assert_eq!(tokens(usage(&logs(Some(WIRE), None), None)), Some((39615, 115, 19744)));
+    }
+
+    #[test]
+    fn wire_to_atif() {
+        let dir = logs(Some(WIRE), Some(STREAM));
+        let run = current_run(&dir).unwrap();
+        let a = atif_trajectory(&run, Some("2.2.0"), Some("kimi/k2")).unwrap();
+        assert_eq!(a.session_id.as_deref(), Some(SID));
+        assert_eq!(a.steps.first().map(|s| s.source.as_str()), Some("user"));
+        let call = a.steps.iter().find(|s| s.tool_calls.is_some()).unwrap();
+        let tool = &call.tool_calls.as_ref().unwrap()[0];
+        assert_eq!((tool.tool_call_id.as_str(), tool.function_name.as_str()), (CALL, "Write"));
+        assert_eq!(tool.arguments["path"], "/app/hello.txt");
+        let result = &call.observation.as_ref().unwrap().results[0];
+        assert_eq!(
+            (result.source_call_id.as_deref(), result.content.clone()),
+            (Some(CALL), Some(json!("Wrote 14 bytes to /app/hello.txt")))
+        );
+        assert!(call.metrics.as_ref().unwrap().prompt_tokens.unwrap() > 0);
+        let (f, c) = (a.final_metrics.unwrap(), usage(&dir, None).unwrap());
+        assert_eq!(
+            (f.total_prompt_tokens, f.total_completion_tokens, f.total_cached_tokens),
+            (c.n_input_tokens, c.n_output_tokens, c.n_cache_tokens)
+        );
+        let stdout_only = logs(None, Some(STREAM));
+        assert!(atif_trajectory(&current_run(&stdout_only).unwrap(), None, None).is_none());
     }
 
     #[test]
