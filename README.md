@@ -9,9 +9,19 @@
 
 # hbench
 
-hbench is the benchmark engine behind [Harness Playground](https://nodeq.tech), by node-q.
+hbench is the open source benchmark engine behind [Harness Playground](https://nodeq.tech), by node-q.
 
-Run coding agents (Claude Code, Codex, Gemini CLI and more) on benchmark tasks, and see how many they solve.
+As AI agents learn to improve themselves, progress needs proof. hbench runs a harness (Claude Code, Codex,
+Gemini CLI and 40+ more) on fixed tasks in Docker, with its version and model pinned, so you can tell whether a
+change really made it better.
+
+- **Compare versions.** `--ak version=X` pins the harness, on the same model and tasks.
+- **Check the result.** `hbench jobs verify` fails if a job's files have changed.
+- **Use your own tasks.** `hbench init` starts one, and [hbench-action](https://github.com/node-q/hbench-action)
+  runs them in CI. For a private site for your company, [talk to us](https://nodeq.tech/contact#enterprise).
+- **Publish it.** Upload a job to [Your bench](https://nodeq.tech/bench) to see it on a board.
+
+Contents:
 
 - [Installation](#installation)
 - [Quick start](#quick-start)
@@ -29,44 +39,36 @@ You need Docker, on Linux or macOS.
 curl -fsSL https://github.com/node-q/hbench/releases/latest/download/install.sh | sh
 ```
 
-Later, `hbench update` installs the newest release.
-
-The script checks the archive it downloads against the release's `SHA256SUMS`. To check the script itself
-before running it, download it, read it, and verify that this repository's release workflow built it (releases
-after v0.3.7; `gh attestation verify` needs the [GitHub CLI](https://cli.github.com)):
-
-```bash
-curl -fsSLO https://github.com/node-q/hbench/releases/latest/download/install.sh
-curl -fsSLO https://github.com/node-q/hbench/releases/latest/download/SHA256SUMS
-grep ' install.sh$' SHA256SUMS | sha256sum -c    # macOS: shasum -a 256 -c
-gh attestation verify install.sh --repo node-q/hbench
-less install.sh
-sh install.sh
-```
-
-The release archives verify the same way: `gh attestation verify hbench-<version>-<target>.tar.gz --repo node-q/hbench`.
+Later, `hbench update` installs the newest release. To check the installer before you run it, see
+[SECURITY.md](SECURITY.md#checking-the-installer).
 
 Or build from source:
 
 ```bash
+git clone https://github.com/node-q/hbench
+cd hbench
 cargo install --path .
 ```
 
 ## Quick start
 
+Try it on a small task. This needs no key: with no agent named, hbench runs the task's reference solution.
+
 ```bash
-hbench run     # pick a dataset, tasks, agent and model
-hbench view    # see the results in your browser
+hbench init demo/hello --task    # a new task, in hello/
+hbench run -p hello              # run it
+hbench view                      # see the results in your browser
 ```
 
-To run Claude Code, set your Anthropic key first, then pick `claude-code`:
+To run a real agent, set its key (see [Agents](#agents)), then pick a dataset, tasks, agent and model:
 
 ```bash
 export ANTHROPIC_API_KEY=sk-ant-...
 hbench run
 ```
 
-Other agents need their own key (see [Agents](#agents)). Every run is saved in `jobs/`.
+Every run is saved in `jobs/`. To see a job on a board, upload its folder to
+[Your bench](https://nodeq.tech/bench). It stays private until you publish it.
 
 ## Docs
 
@@ -83,18 +85,22 @@ The full docs are at [nodeq.tech/docs](https://nodeq.tech/docs). Good places to 
 ```bash
 # Run
 hbench run                                                # interactive
-hbench run -p examples/tasks/hello-world                  # a local task
+hbench run -p <task>                                      # a local task, or a dir of tasks
 hbench run -d terminal-bench@2.0.1 \
   -a claude-code -m anthropic/claude-opus-5-5             # a dataset, with Claude Code
+hbench run -d terminal-bench@2.0.1 \
+  -a claude-code -m anthropic/claude-opus-5-5 \
+  --ak version=<version>                                  # the same, at one version of the harness
 hbench run -c job.yaml                                    # from a job config (YAML/JSON)
 
 # Results
 hbench view                                               # web viewer
 hbench jobs summary -p jobs/<job>
 hbench jobs resume -p jobs/<job>
+hbench jobs verify -p jobs/<job>                          # fail if the job's files have changed
 
 # Tasks and datasets
-hbench init <org/name>                                    # a new task
+hbench init <org/name> --task                             # a new task
 hbench tasks check -p <tasks>                             # validate tasks: config, files, tests
 hbench check <tasks>                                      # review tasks against a rubric, with claude-code
 hbench datasets list|download
@@ -106,6 +112,9 @@ hbench --help
 ```
 
 Useful options: `-l 5` runs only 5 tasks, `-k 3` runs each task 3 times, `-n 4` runs 4 at a time.
+
+Datasets include Terminal-Bench, SWE-bench Verified, Lite and Multilingual, and HumanEval+. `hbench datasets list`
+shows them all.
 
 ## Agents
 
@@ -121,7 +130,7 @@ Useful options: `-l 5` runs only 5 tasks, `-k 3` runs each task 3 times, `-n 4` 
 | `aider` | Aider | `<provider>/<model>` | the provider's key |
 | `openhands` | OpenHands | `<provider>/<model>` | the provider's key |
 | `oracle` | Each task's reference solution, to check the tasks | | |
-| … and a lot more | `hbench agents list` | | |
+| … 40+ in all | `hbench agents list` | | |
 
 ## License
 

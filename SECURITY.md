@@ -10,6 +10,23 @@ reproduce it, and the hbench version (`hbench --version`) and platform.
 Fixes go into the next release; there are no backports to older ones. The newest release
 is on this repository's Releases page, and `scripts/install.sh` installs it.
 
+## Checking the installer
+
+The script checks the archive it downloads against the release's `SHA256SUMS`. To check the script itself
+before running it, download it, read it, and verify that this repository's release workflow built it (releases
+after v0.3.7; `gh attestation verify` needs the [GitHub CLI](https://cli.github.com)):
+
+```bash
+curl -fsSLO https://github.com/node-q/hbench/releases/latest/download/install.sh
+curl -fsSLO https://github.com/node-q/hbench/releases/latest/download/SHA256SUMS
+grep ' install.sh$' SHA256SUMS | sha256sum -c    # macOS: shasum -a 256 -c
+gh attestation verify install.sh --repo node-q/hbench
+less install.sh
+sh install.sh
+```
+
+The release archives verify the same way: `gh attestation verify hbench-<version>-<target>.tar.gz --repo node-q/hbench`.
+
 ## What hbench does and does not protect
 
 hbench runs tasks and agents in Docker containers on your machine. A container shares
@@ -17,7 +34,7 @@ the host's kernel and is not a boundary against hostile code: run tasks and agen
 trust, or put hbench in a VM you can throw away.
 
 - **Egress.** With `enforce_allowlist`, the agent phase reaches only the allowed hosts
-  (README, "Task format"), but DNS to the configured resolvers and ICMP stay open, and setup
+  (docs/REFERENCE.md, "Task format"), but DNS to the configured resolvers and ICMP stay open, and setup
   and the verifier keep the task's own network.
 - **Secrets.** Values of environment variables named like keys are redacted from a trial's
   files, raw and in the common encodings. A secret an agent hashes, encrypts or splits is
