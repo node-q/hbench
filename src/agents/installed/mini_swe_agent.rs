@@ -5,11 +5,12 @@ use super::pins;
 use super::{connection, ensure_system_dependencies, exec_agent};
 use crate::agents::model_connection::{Resolved, Spec};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
+use crate::atif;
 use crate::env::quote;
 use crate::fmt::type_name;
 use anyhow::{Result, anyhow, bail};
 use regex::Regex;
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
 const SPEC: Spec = Spec {
@@ -233,12 +234,15 @@ pub(crate) fn validate_session_id_headers(v: Option<&Value>) -> Result<Option<Ve
     }
 }
 
-/// Per-message usage: chat-completions or Responses-API usage, normalized.
+/// A message's chat-completions or Responses-API usage object.
+fn usage_of(m: &Value) -> &Value {
+    let usage = &m["extra"]["response"]["usage"];
+    if !is_nonempty_object(usage) && m["object"] == "response" { &m["usage"] } else { usage }
+}
+
+/// Per-message usage, normalized.
 fn message_usage(m: &Value) -> (i64, i64, i64) {
-    let mut usage = &m["extra"]["response"]["usage"];
-    if !is_nonempty_object(usage) && m["object"] == "response" {
-        usage = &m["usage"];
-    }
+    let usage = usage_of(m);
     let first = |a: &str, b: &str| usage[a].as_i64().filter(|n| *n != 0).or(usage[b].as_i64()).unwrap_or(0);
     let details =
         if is_nonempty_object(&usage["prompt_tokens_details"]) { &usage["prompt_tokens_details"] } else { &usage["input_tokens_details"] };
@@ -263,6 +267,131 @@ pub fn parse_trajectory(text: &str) -> Option<AgentContext> {
     ctx.n_cache_tokens = Some(c);
     ctx.cost_usd = Some(t["info"]["model_stats"]["instance_cost"].as_f64().unwrap_or(0.0));
     Some(ctx)
+}
+
+/// A message's text: a plain string, or the text of its parts.
+fn text_of(content: &Value) -> String {
+    match content.as_array() {
+        Some(parts) => parts.iter().filter_map(|p| p["text"].as_str()).collect::<Vec<_>>().join("\n"),
+        None => content.as_str().unwrap_or_default().into(),
+    }
+}
+
+fn timestamp(m: &Value) -> Option<String> {
+    let ms = m["extra"]["timestamp"].as_f64()? * 1000.0;
+    chrono::DateTime::from_timestamp_millis(ms as i64).map(|t| t.to_rfc3339_opts(chrono::SecondsFormat::Millis, true))
+}
+
+fn tool_call(id: &Value, name: &Value, arguments: &Value) -> atif::ToolCall {
+    let raw = arguments.as_str().unwrap_or_default();
+    atif::ToolCall {
+        tool_call_id: id.as_str().unwrap_or_default().into(),
+        function_name: name.as_str().unwrap_or_default().into(),
+        arguments: serde_json::from_str(raw).unwrap_or_else(|_| json!(raw)),
+        extra: None,
+    }
+}
+
+/// One model call, chat-completions or Responses-API, as an agent step.
+fn agent_step(m: &Value) -> atif::Step {
+    let (mut text, mut reasoning, mut calls) = (vec![], vec![], vec![]);
+    if m["object"] == "response" {
+        for item in m["output"].as_array().into_iter().flatten() {
+            match item["type"].as_str() {
+                Some("message") => text.push(text_of(&item["content"])),
+                Some("reasoning") => reasoning.push(text_of(&item["summary"])),
+                Some("function_call") => calls.push(tool_call(&item["call_id"], &item["name"], &item["arguments"])),
+                _ => {}
+            }
+        }
+    } else {
+        text.push(text_of(&m["content"]));
+        reasoning.push(text_of(&m["reasoning_content"]));
+        for c in m["tool_calls"].as_array().into_iter().flatten() {
+            calls.push(tool_call(&c["id"], &c["function"]["name"], &c["function"]["arguments"]));
+        }
+    }
+    let reasoning = reasoning.join("\n");
+    let (prompt, completion, cached) = message_usage(m);
+    atif::Step {
+        source: "agent".into(),
+        timestamp: timestamp(m),
+        model_name: m["extra"]["response"]["model"].as_str().or(m["model"].as_str()).map(String::from),
+        message: json!(text.join("\n")),
+        reasoning_content: (!reasoning.is_empty()).then_some(reasoning),
+        tool_calls: (!calls.is_empty()).then_some(calls),
+        metrics: is_nonempty_object(usage_of(m)).then(|| atif::Metrics {
+            prompt_tokens: Some(prompt),
+            completion_tokens: Some(completion),
+            cached_tokens: Some(cached),
+            cost_usd: m["extra"]["cost"].as_f64(),
+            ..Default::default()
+        }),
+        ..Default::default()
+    }
+}
+
+/// Attach a tool's result to the agent step that called it.
+fn observe(steps: &mut [atif::Step], call_id: &Value, output: String) {
+    let Some(step) = steps.iter_mut().rev().find(|s| s.source == "agent") else { return };
+    step.observation.get_or_insert_with(Default::default).results.push(atif::ObservationResult {
+        source_call_id: call_id.as_str().map(String::from),
+        content: Some(json!(output)),
+        ..Default::default()
+    });
+}
+
+/// mini-swe-agent's native trajectory -> ATIF.
+pub fn atif_trajectory(text: &str, session_id: Option<String>, version: Option<&str>, model: Option<&str>) -> Option<atif::Trajectory> {
+    let totals = parse_trajectory(text)?;
+    let t: Value = serde_json::from_str(text).ok()?;
+    let mut steps: Vec<atif::Step> = vec![];
+    for m in t["messages"].as_array()? {
+        if m["object"] == "response" {
+            steps.push(agent_step(m));
+        } else if m["type"] == "function_call_output" {
+            observe(&mut steps, &m["call_id"], text_of(&m["output"]));
+        } else {
+            match m["role"].as_str() {
+                Some(role @ ("system" | "user")) => steps.push(atif::Step {
+                    source: role.into(),
+                    timestamp: timestamp(m),
+                    message: json!(text_of(&m["content"])),
+                    ..Default::default()
+                }),
+                Some("assistant") => steps.push(agent_step(m)),
+                Some("tool") => observe(&mut steps, &m["tool_call_id"], text_of(&m["content"])),
+                _ => {}
+            }
+        }
+    }
+    if steps.is_empty() {
+        return None;
+    }
+    for (i, s) in steps.iter_mut().enumerate() {
+        s.step_id = i + 1;
+    }
+    let n = steps.len();
+    Some(atif::Trajectory {
+        schema_version: "ATIF-v1.7".into(),
+        session_id,
+        agent: atif::Agent {
+            name: "mini-swe-agent".into(),
+            version: t["info"]["mini_version"].as_str().or(version).unwrap_or("unknown").into(),
+            model_name: model.map(String::from),
+            ..Default::default()
+        },
+        steps,
+        final_metrics: Some(atif::FinalMetrics {
+            total_prompt_tokens: totals.n_input_tokens,
+            total_completion_tokens: totals.n_output_tokens,
+            total_cached_tokens: totals.n_cache_tokens,
+            total_cost_usd: totals.cost_usd,
+            total_steps: Some(n),
+            extra: None,
+        }),
+        ..Default::default()
+    })
 }
 
 #[async_trait::async_trait]
@@ -294,8 +423,12 @@ impl Agent for MiniSweAgent {
     }
 
     fn collect_usage(&self, logs_dir: &std::path::Path, ctx: &mut AgentContext) {
-        if let Some(c) = std::fs::read_to_string(logs_dir.join("mini-swe-agent.trajectory.json")).ok().and_then(|t| parse_trajectory(&t)) {
+        let Ok(text) = std::fs::read_to_string(logs_dir.join("mini-swe-agent.trajectory.json")) else { return };
+        if let Some(c) = parse_trajectory(&text) {
             *ctx = c;
+        }
+        if let Some(t) = atif_trajectory(&text, session_id(&self.args), self.version.as_deref(), self.args.model_name.as_deref()) {
+            let _ = std::fs::write(logs_dir.join("trajectory.json"), serde_json::to_string_pretty(&t).unwrap_or_default());
         }
     }
 }
@@ -433,5 +566,101 @@ pub(crate) mod tests {
         let c = parse_trajectory(&t.to_string()).unwrap();
         assert_eq!((c.n_input_tokens, c.n_output_tokens, c.n_cache_tokens, c.cost_usd), (Some(3800), Some(400), Some(1000), Some(0.25)));
         assert!(parse_trajectory("not json").is_none());
+    }
+
+    #[test]
+    fn chat_trajectory_to_atif() {
+        let t = json!({
+            "info": {"mini_version": "2.4.6", "model_stats": {"instance_cost": 0.5}},
+            "messages": [
+                {"role": "system", "content": "s"},
+                {"role": "user", "content": "u"},
+                {"role": "assistant", "content": "plan", "reasoning_content": "think",
+                 "tool_calls": [
+                     {"id": "c1", "function": {"name": "bash", "arguments": "{\"command\":\"ls\"}"}},
+                     {"id": "c2", "function": {"name": "bash", "arguments": "not json"}}],
+                 "extra": {"timestamp": 1793434965.5, "cost": 0.5, "response": {"model": "m1", "usage": {"prompt_tokens": 10, "completion_tokens": 2, "prompt_tokens_details": {"cached_tokens": 4}}}}},
+                {"role": "tool", "tool_call_id": "c1", "content": "out1", "extra": {"returncode": 0}},
+                {"role": "tool", "tool_call_id": "c2", "content": "out2", "extra": {"returncode": 1}},
+                {"role": "assistant", "content": "done", "extra": {}},
+                {"role": "exit", "content": "", "extra": {"exit_status": "Submitted"}}
+            ]
+        });
+        let a = atif_trajectory(&t.to_string(), Some("trial__agent".into()), Some("9.9"), Some("openai/m1")).unwrap();
+        assert_eq!(
+            (a.session_id.as_deref(), a.agent.version.as_str(), a.agent.model_name.as_deref()),
+            (Some("trial__agent"), "2.4.6", Some("openai/m1"))
+        );
+        assert_eq!(
+            a.steps.iter().map(|s| (s.step_id, s.source.as_str())).collect::<Vec<_>>(),
+            [(1, "system"), (2, "user"), (3, "agent"), (4, "agent")]
+        );
+        let call = &a.steps[2];
+        assert_eq!(
+            (call.message.as_str(), call.reasoning_content.as_deref(), call.model_name.as_deref()),
+            (Some("plan"), Some("think"), Some("m1"))
+        );
+        assert_eq!(call.timestamp.as_deref(), Some("2026-10-31T08:22:45.500Z"));
+        let calls = call.tool_calls.as_ref().unwrap();
+        assert_eq!((calls[0].arguments.clone(), calls[1].arguments.clone()), (json!({"command": "ls"}), json!("not json")));
+        let results = &call.observation.as_ref().unwrap().results;
+        assert_eq!(
+            results.iter().map(|r| (r.source_call_id.clone().unwrap(), r.content.clone().unwrap())).collect::<Vec<_>>(),
+            [("c1".to_string(), json!("out1")), ("c2".to_string(), json!("out2"))]
+        );
+        let m = call.metrics.as_ref().unwrap();
+        assert_eq!((m.prompt_tokens, m.completion_tokens, m.cached_tokens, m.cost_usd), (Some(10), Some(2), Some(4), Some(0.5)));
+        assert!(a.steps[3].metrics.is_none());
+        let f = a.final_metrics.unwrap();
+        assert_eq!(
+            (f.total_prompt_tokens, f.total_completion_tokens, f.total_cached_tokens, f.total_cost_usd, f.total_steps),
+            (Some(10), Some(2), Some(4), Some(0.5), Some(4))
+        );
+    }
+
+    #[test]
+    fn responses_trajectory_to_atif() {
+        let t = json!({
+            "info": {"model_stats": {"instance_cost": 0.0}},
+            "messages": [
+                {"role": "user", "content": [{"type": "input_text", "text": "u"}]},
+                {"object": "response", "model": "m2", "usage": {"input_tokens": 7, "output_tokens": 3, "input_tokens_details": {"cached_tokens": 1}},
+                 "output": [
+                     {"type": "reasoning", "summary": [{"type": "summary_text", "text": "think"}]},
+                     {"type": "message", "content": [{"type": "output_text", "text": "plan"}]},
+                     {"type": "function_call", "call_id": "c1", "name": "bash", "arguments": "{}"}]},
+                {"type": "function_call_output", "call_id": "c1", "output": "out"}
+            ]
+        });
+        let a = atif_trajectory(&t.to_string(), None, Some("2.4.6"), None).unwrap();
+        assert_eq!((a.agent.version.as_str(), a.steps[0].message.as_str()), ("2.4.6", Some("u")));
+        let call = &a.steps[1];
+        assert_eq!(
+            (call.message.as_str(), call.reasoning_content.as_deref(), call.model_name.as_deref()),
+            (Some("plan"), Some("think"), Some("m2"))
+        );
+        assert_eq!(call.tool_calls.as_ref().unwrap()[0].tool_call_id, "c1");
+        assert_eq!(call.observation.as_ref().unwrap().results[0].content, Some(json!("out")));
+        assert_eq!(call.metrics.as_ref().unwrap().prompt_tokens, Some(7));
+    }
+
+    #[test]
+    fn no_atif_without_messages() {
+        assert!(atif_trajectory("not json", None, None, None).is_none());
+        assert!(atif_trajectory(r#"{"messages": []}"#, None, None, None).is_none());
+    }
+
+    #[test]
+    fn collect_usage_writes_atif() {
+        let dir = std::env::temp_dir().join(format!("hbench-mini-swe-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let native = json!({"info": {"mini_version": "2.4.6"}, "messages": [{"role": "user", "content": "u"}]});
+        std::fs::write(dir.join("mini-swe-agent.trajectory.json"), native.to_string()).unwrap();
+        let mut ctx = AgentContext::default();
+        agent(json!({}), &[], SONNET).unwrap().collect_usage(&dir, &mut ctx);
+        assert_eq!(ctx.n_input_tokens, Some(0));
+        let t: atif::Trajectory = serde_json::from_str(&std::fs::read_to_string(dir.join("trajectory.json")).unwrap()).unwrap();
+        assert_eq!((t.steps.len(), t.agent.model_name.as_deref()), (1, SONNET));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
