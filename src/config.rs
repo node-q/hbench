@@ -626,6 +626,9 @@ fn read_config(path: &Path) -> Result<Value> {
     Ok(v)
 }
 
+const TIMESTAMP_NAME: &str = "%Y-%m-%d__%H-%M-%S";
+const NAME_PREFIX_MAX_LEN: usize = 80;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct JobConfig {
@@ -668,7 +671,7 @@ pub struct SourceJob {
 impl Default for JobConfig {
     fn default() -> Self {
         JobConfig {
-            job_name: chrono::Local::now().format("%Y-%m-%d__%H-%M-%S").to_string(),
+            job_name: chrono::Local::now().format(TIMESTAMP_NAME).to_string(),
             jobs_dir: "jobs".into(),
             n_attempts: 1,
             install_only: false,
@@ -703,6 +706,35 @@ pub const REFUSED_UNREAD_SETTINGS: [&str; 4] =
 impl JobConfig {
     pub fn job_dir(&self) -> PathBuf {
         self.jobs_dir.join(&self.job_name)
+    }
+
+    /// What a default-named job runs, then when: `<dataset>-<agent>-<model>-<YYYYMMDD-HHMMSS>`.
+    pub fn name_after_what_it_runs(&mut self) {
+        let Ok(started) = chrono::NaiveDateTime::parse_from_str(&self.job_name, TIMESTAMP_NAME) else { return };
+        let dataset = self.datasets.first().and_then(|d| {
+            let file_name = || d.path.as_ref()?.file_name().map(|n| n.to_string_lossy().into_owned());
+            d.name.clone().or_else(file_name)
+        });
+        let single_task = self.tasks.first().map(TaskRef::display_name);
+        let mut parts: Vec<String> = dataset.or(single_task).into_iter().collect();
+        match self.agents.as_slice() {
+            [] => {}
+            [agent] => {
+                parts.extend(agent.name.clone());
+                parts.extend(agent.model_name.as_ref().and_then(|m| m.rsplit('/').next()).map(String::from));
+            }
+            agents => parts.push(format!("{}-agents", agents.len())),
+        }
+        let safe: String = parts
+            .join("-")
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() || "._-".contains(c) { c } else { '-' })
+            .take(NAME_PREFIX_MAX_LEN)
+            .collect();
+        let prefix = safe.trim_matches(['-', '.']);
+        if !prefix.is_empty() {
+            self.job_name = format!("{prefix}-{}", started.format("%Y%m%d-%H%M%S"));
+        }
     }
 
     /// Load a YAML or JSON job config (incl. legacy `orchestrator:`).
@@ -910,6 +942,33 @@ pub fn migrate_legacy(v: &mut Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn job_named_after_what_it_runs() {
+        let name = |v: serde_json::Value| {
+            let mut j: JobConfig = serde_json::from_value(v).unwrap();
+            j.name_after_what_it_runs();
+            j.job_name
+        };
+        let at = "2026-10-31__15-21-19";
+        let mini = serde_json::json!({"name": "mini-swe-agent", "model_name": "openai/qwen3.5:9b"});
+        assert_eq!(
+            name(serde_json::json!({"job_name": at, "datasets": [{"name": "humanevalfix", "version": "1.0"}], "agents": [mini]})),
+            "humanevalfix-mini-swe-agent-qwen3.5-9b-20261031-152119"
+        );
+        assert_eq!(
+            name(serde_json::json!({"job_name": at, "datasets": [{"path": "/d/my tasks"}], "agents": [{"name": "oracle"}]})),
+            "my-tasks-oracle-20261031-152119"
+        );
+        assert_eq!(
+            name(serde_json::json!({"job_name": at, "tasks": [{"path": "/t/hello"}], "agents": [mini, {"name": "nop"}]})),
+            "hello-2-agents-20261031-152119"
+        );
+        assert_eq!(name(serde_json::json!({"job_name": at, "agents": []})), at);
+        assert_eq!(name(serde_json::json!({"job_name": "chosen", "datasets": [{"name": "d"}], "agents": [mini]})), "chosen");
+        let long = name(serde_json::json!({"job_name": at, "datasets": [{"name": "x".repeat(300)}]}));
+        assert_eq!(long.len(), NAME_PREFIX_MAX_LEN + "-20261031-152119".len());
+    }
 
     #[test]
     fn loads_yaml_job() {

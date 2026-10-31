@@ -512,6 +512,23 @@ pub fn load_config(job_dir: &Path) -> Result<JobConfig> {
     Ok(cfg)
 }
 
+/// Rename a finished job's folder. config.json keeps the name the job ran under: the manifest covers it, and a
+/// server that issued the run checks it.
+pub fn rename(job_dir: &Path, name: &str) -> Result<PathBuf> {
+    let valid =
+        name.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c)) && name.starts_with(|c: char| c.is_ascii_alphanumeric());
+    anyhow::ensure!(valid, "job name '{name}': use letters, digits, '.', '_' and '-', starting with a letter or digit");
+    let job_dir = job_dir.canonicalize().with_context(|| format!("job dir {}", job_dir.display()))?;
+    anyhow::ensure!(job_dir.join("config.json").exists(), "{} is not a job dir", job_dir.display());
+    let result: serde_json::Value =
+        std::fs::read_to_string(job_dir.join("result.json")).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+    anyhow::ensure!(!result["finished_at"].is_null(), "{} has not finished; a running job writes to its folder", job_dir.display());
+    let target = job_dir.with_file_name(name);
+    anyhow::ensure!(!target.exists(), "{} already exists", target.display());
+    std::fs::rename(&job_dir, &target).with_context(|| format!("renaming {}", job_dir.display()))?;
+    Ok(target)
+}
+
 /// Job results tables + "Job Info", laid out as a dashboard with bars.
 pub fn print_summary(jr: &JobResult, job_dir: &Path) {
     print!("\n{}", render_summary(jr, job_dir, use_color()));
@@ -864,6 +881,32 @@ Job  runtime 1h 2m 5s
             "terminal-bench@2.0 • claude-code • deepseek/deepseek-v4-flash"
         );
         assert_eq!(title_case("Metric 1: pass_rate"), "Metric 1: Pass_Rate");
+    }
+
+    #[test]
+    fn rename_moves_a_finished_job() {
+        let root = std::env::temp_dir().join(format!("hbench-rename-{}", uuid::Uuid::new_v4()));
+        let dir = root.join("old");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("config.json"), r#"{"job_name": "old", "n_attempts": 1}"#).unwrap();
+
+        let refused = |name: &str| rename(&dir, name).unwrap_err().to_string();
+        assert!(refused("new").contains("has not finished"));
+        std::fs::write(dir.join("result.json"), r#"{"finished_at": null}"#).unwrap();
+        assert!(refused("new").contains("has not finished"));
+        std::fs::write(dir.join("result.json"), r#"{"finished_at": "2026-10-31T08:33:02Z"}"#).unwrap();
+        for bad in ["", ".hidden", "-flag", "a/b", "../up", "a b"] {
+            assert!(refused(bad).contains("job name"), "{bad}");
+        }
+        std::fs::create_dir(root.join("taken")).unwrap();
+        assert!(refused("taken").contains("already exists"));
+
+        let target = rename(&dir, "new").unwrap();
+        assert_eq!(target.file_name().unwrap(), "new");
+        assert!(!dir.exists());
+        assert!(std::fs::read_to_string(target.join("config.json")).unwrap().contains(r#""job_name": "old""#));
+        assert_eq!(load_config(&target).unwrap().job_name, "new");
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

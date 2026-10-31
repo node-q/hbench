@@ -325,6 +325,11 @@ jobs/<job>/<task>__<id>/{config.json, lock.json, result.json, trial.log, excepti
                          agent/, verifier/, artifacts/{manifest.json, logs/artifacts/...}, steps/<name>/...}
 ```
 
+A job without `--job-name` or a `job_name` in its config is named for what it runs, as in
+`humanevalfix-mini-swe-agent-qwen3.5-9b-20261031-152119`. `hbench jobs rename -p jobs/<job> <name>` renames a finished
+job's folder. Its `config.json` keeps the name it ran under, so `jobs verify` still passes, and `jobs upload` sends the
+new folder name.
+
 `agent/trajectory.json` is the trial's trajectory in ATIF. `claude-code`, `codex` and `deepseek-harness` convert their
 native session logs into it; `terminus-2`, `computer-1`, `openhands-sdk`, `antigravity-sdk` and `nemo-agent` write it
 themselves. In a converted trajectory each agent step is one model call and its metrics are that call's alone:

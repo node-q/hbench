@@ -351,6 +351,14 @@ enum JobsCmd {
         #[arg(long)]
         json: bool,
     },
+    /// Rename a finished job's folder. Its files stay as they are, so its manifest still holds.
+    Rename {
+        /// Job dir.
+        #[arg(short = 'p', long = "job-path")]
+        job_path: PathBuf,
+        /// New folder name.
+        name: String,
+    },
     /// Check a job's files against its manifest.json: exit 1 if any was changed, removed or added.
     Verify {
         /// Job dir.
@@ -811,7 +819,7 @@ struct RunArgs {
     /// Where job dirs are created (default: jobs).
     #[arg(long, help_heading = "Output")]
     jobs_dir: Option<PathBuf>,
-    /// Job dir name (default: timestamp).
+    /// Job dir name (default: `<dataset>-<agent>-<model>-<YYYYMMDD-HHMMSS>`).
     #[arg(long, help_heading = "Output")]
     job_name: Option<String>,
     /// Artifact path to collect (repeatable).
@@ -1009,6 +1017,9 @@ fn build_job_config(a: &RunArgs) -> Result<JobConfig> {
     cfg.extra_instruction_paths.extend(a.extra_instruction_path.iter().cloned());
     if cfg.tasks.is_empty() && cfg.datasets.is_empty() {
         bail!("nothing to run: pass -p <task or dataset dir>, -d <dataset>, or -c <job config>");
+    }
+    if a.job_name.is_none() {
+        cfg.name_after_what_it_runs();
     }
     cfg.validate()?;
     Ok(cfg)
@@ -1336,6 +1347,10 @@ async fn run() -> Result<ExitCode> {
             let done = job_upload::run(&upload).await?;
             eprintln!("uploaded {} ({:.1} MB) to {url}", job.display(), done.bytes as f64 / 1e6);
             println!("{}", done.response);
+            Ok(ExitCode::SUCCESS)
+        }
+        Cmd::Jobs { cmd: JobsCmd::Rename { job_path, name } } => {
+            println!("{}", job::rename(&job_path, &name)?.display());
             Ok(ExitCode::SUCCESS)
         }
         Cmd::Jobs { cmd: JobsCmd::Verify { path, job_path } } => {

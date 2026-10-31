@@ -185,3 +185,18 @@ fn task_config_dump_fills_defaults_and_migrates() {
     assert!(c["environment"].get("allow_internet").is_none() && c["agent"]["timeout_sec"].is_f64());
     assert_eq!(c["artifacts"], json!([]));
 }
+
+#[test]
+fn jobs_list_newest_config_first_whatever_the_name() {
+    let root = std::env::temp_dir().join(format!("hbench-view-{}", uuid::Uuid::new_v4()));
+    let now = std::time::SystemTime::now();
+    for (job, age_secs) in [("zebra-oldest", 300), ("apple-newest", 0), ("middle", 100)] {
+        let config = root.join(job).join("config.json");
+        write(&config, "{}");
+        let written = now - std::time::Duration::from_secs(age_secs);
+        std::fs::File::options().write(true).open(&config).unwrap().set_modified(written).unwrap();
+    }
+    let app = App::new(root.canonicalize().unwrap(), Mode::Jobs, true);
+    assert_eq!(app.list_jobs(), ["apple-newest", "middle", "zebra-oldest"]);
+    std::fs::remove_dir_all(&root).unwrap();
+}
