@@ -369,12 +369,10 @@ fn agent_step(m: &Value) -> atif::Step {
     }
 }
 
-/// `deerflow.jsonl` -> ATIF, from the last `values` event: the whole conversation, with each call's usage.
-pub fn atif_trajectory(text: &str, version: Option<&str>, model: Option<&str>) -> Option<atif::Trajectory> {
-    let events = parse_jsonl(text);
-    let last = events.iter().rev().find(|e| e["type"] == "values" && e["data"]["messages"].is_array())?;
+/// A LangChain conversation's steps, with tool results on the calls they answer.
+pub(super) fn langchain_steps(messages: &[Value]) -> Vec<atif::Step> {
     let mut steps = vec![];
-    for m in last["data"]["messages"].as_array()?.iter().filter(|m| m["additional_kwargs"]["hide_from_ui"] != true) {
+    for m in messages.iter().filter(|m| m["additional_kwargs"]["hide_from_ui"] != true) {
         match m["type"].as_str() {
             Some(kind @ ("system" | "human")) => steps.push(atif::Step {
                 source: if kind == "system" { "system" } else { "user" }.into(),
@@ -388,6 +386,14 @@ pub fn atif_trajectory(text: &str, version: Option<&str>, model: Option<&str>) -
             _ => {}
         }
     }
+    steps
+}
+
+/// `deerflow.jsonl` -> ATIF, from the last `values` event: the whole conversation, with each call's usage.
+pub fn atif_trajectory(text: &str, version: Option<&str>, model: Option<&str>) -> Option<atif::Trajectory> {
+    let events = parse_jsonl(text);
+    let last = events.iter().rev().find(|e| e["type"] == "values" && e["data"]["messages"].is_array())?;
+    let steps = langchain_steps(last["data"]["messages"].as_array()?);
     let agent = atif::Agent {
         name: "deerflow".into(),
         version: version.unwrap_or("unknown").into(),
