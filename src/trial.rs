@@ -823,10 +823,25 @@ impl Trial {
                 Err(f)
             }
         };
+        if self.user_agent.is_none() {
+            self.export_agent_session(step).await;
+        }
         if switch && let Err(e) = self.env().set_network_policy(&plan.agent_env_baseline).await {
             return (ctx, t.finish(), Err(e));
         }
         (ctx, t.finish(), r)
+    }
+
+    /// After the agent is stopped and before its logs are downloaded. A failure costs detail, not the trial.
+    async fn export_agent_session(&self, step: Option<&StepConfig>) {
+        let Some(agent) = &self.agent else { return };
+        let r = match self.agent_ctx(self.agent_user(step), step) {
+            Ok(cx) => agent.export_session(&cx).await,
+            Err(e) => Err(e),
+        };
+        if let Err(e) = r {
+            self.log.line(&format!("agent session export failed: {e:#}"));
+        }
     }
 
     /// The user agent drives the target over the bridge; the bridge is closed (export + teardown) afterwards.

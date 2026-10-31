@@ -127,6 +127,11 @@ pub trait Agent: Send + Sync {
     async fn acp_teardown(&mut self, _cx: &AgentCtx<'_>) -> Result<()> {
         Ok(())
     }
+    /// Copy what only exists inside the container into the logs dir. Runs once the agent's processes
+    /// are stopped, so it also covers a run its timeout cut short; the logs are downloaded right after.
+    async fn export_session(&self, _cx: &AgentCtx<'_>) -> Result<()> {
+        Ok(())
+    }
     /// Fill usage from downloaded logs when run() left the context empty.
     fn collect_usage(&self, _logs_dir: &std::path::Path, _ctx: &mut AgentContext) {}
     /// Where the agent's model requests go, for the run's record; `None` when hbench can't tell.

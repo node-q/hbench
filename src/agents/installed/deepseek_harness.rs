@@ -14,6 +14,7 @@ use anyhow::{Result, bail};
 use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::time::Duration;
 
 const NAME: &str = "deepseek-harness";
 const SPEC: Spec = Spec {
@@ -38,7 +39,8 @@ const RUN_START: &str = "/logs/agent/dsh-run-start";
 const PATCH: &str = "/logs/agent/dsh-patch.yml";
 const INSTRUCTION: &str = "/tmp/hbench-dsh-instruction.md";
 const NVM: &str = "[ -f ~/.nvm/nvm.sh ] && . ~/.nvm/nvm.sh;";
-const STREAM_NOTE: &str = "Rebuilt from dsh's output stream: the run was stopped before its session log could be exported. \
+const EXPORT_TIMEOUT: Duration = Duration::from_secs(120);
+const STREAM_NOTE: &str = "Rebuilt from dsh's output stream: this run has no exported session log. \
                            The instruction and timestamps are missing, and long text is cut at 8 KiB.";
 
 /// Copy every persisted session (zstd JSONL under $DSH_HOME/sessions) out as plain JSONL.
@@ -126,9 +128,7 @@ impl DeepSeekHarness {
             flags += &format!(" --session-id {}", quote(id));
         }
         format!(
-            "{NVM} date +%s%3N > {RUN_START}; dsh --profile headless{flags} - < {INSTRUCTION} 2>&1 | stdbuf -oL tee {STREAM}; rc=$?; \
-             node -e {} {SESSIONS} >/dev/null 2>&1 || true; exit $rc",
-            quote(EXPORT_SESSIONS_JS)
+            "{NVM} date +%s%3N > {RUN_START}; dsh --profile headless{flags} - < {INSTRUCTION} 2>&1 | stdbuf -oL tee {STREAM}; rc=$?; exit $rc"
         )
     }
 }
@@ -300,7 +300,7 @@ pub fn session_trajectory(text: &str, since_ms: i64, version: &str, model: Optio
     trajectory(steps, session_id, version, model_name)
 }
 
-/// dsh's `--json` stdout (`dsh.jsonl`) -> ATIF, for a run stopped before its session could be exported.
+/// dsh's `--json` stdout (`dsh.jsonl`) -> ATIF, for a run with no exported session.
 /// The stream has every model call, but no timestamps or instruction, and cuts long text at 8 KiB.
 pub fn stream_trajectory(text: &str, version: &str, model: Option<&str>) -> Option<atif::Trajectory> {
     let evs = events(text);
@@ -402,6 +402,16 @@ impl Agent for DeepSeekHarness {
         Ok(())
     }
 
+    async fn export_session(&self, cx: &AgentCtx<'_>) -> Result<()> {
+        cx.exec(
+            &format!("{NVM} node -e {} {SESSIONS} >/dev/null 2>&1 || true", quote(EXPORT_SESSIONS_JS)),
+            &self.env(),
+            Some(EXPORT_TIMEOUT),
+        )
+        .await
+        .map(|_| ())
+    }
+
     fn collect_usage(&self, logs_dir: &Path, ctx: &mut AgentContext) {
         let since = std::fs::read_to_string(logs_dir.join("dsh-run-start")).ok().and_then(|s| s.trim().parse().ok()).unwrap_or(0);
         let main_id = std::fs::read_to_string(logs_dir.join("dsh.jsonl"))
@@ -431,7 +441,7 @@ impl Agent for DeepSeekHarness {
                 let _ = std::fs::write(logs_dir.join("trajectory.json"), serde_json::to_string_pretty(&t).unwrap_or_default());
             }
         }
-        // A timed-out run never reaches the export that follows dsh in `command`.
+        // Older runs that timed out, and any run whose export failed.
         if !found && let Some(t) = stream_trajectory_of(logs_dir, &version, Some(&model)) {
             let _ = std::fs::write(logs_dir.join("trajectory.json"), serde_json::to_string_pretty(&t).unwrap_or_default());
             let fm = t.final_metrics.unwrap_or_default();
@@ -485,6 +495,8 @@ mod tests {
         let mut a = a;
         let cmd = a.command(true, true);
         assert!(cmd.contains("dsh --profile headless --patch /logs/agent/dsh-patch.yml --json - < /tmp/hbench-dsh-instruction.md 2>&1 | stdbuf -oL tee /logs/agent/dsh.jsonl; rc=$?"));
+        // A timeout never reaches the end of this command: the export is export_session's.
+        assert!(!cmd.contains("zstd"));
         assert!(!cmd.contains("--session-id"));
         a.session_id = Some("session-1".into());
         assert!(a.command(true, false).contains("dsh --profile headless --json --session-id session-1 -"));
