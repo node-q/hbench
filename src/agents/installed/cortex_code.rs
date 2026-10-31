@@ -7,7 +7,7 @@ use crate::atif;
 use crate::env::quote;
 use crate::fmt::type_name;
 use anyhow::{Result, bail};
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
 const OUTPUT: &str = "cortex-code.txt";
