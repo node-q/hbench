@@ -4,11 +4,12 @@ use super::common::{installed_dir, skills_dir, uv_install};
 use super::pins;
 use super::{ensure_system_dependencies, exec_agent, exec_error};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
+use crate::atif;
 use crate::env::{ErrorKind, kind_err, quote};
 use crate::fmt::{float_with_point, truthy};
 use anyhow::{Result, anyhow, bail};
 use regex::Regex;
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -388,6 +389,102 @@ fn session_usage(chain: &[PathBuf], has_pricing: bool) -> Option<(Option<i64>, O
     Some((stats.get("session_prompt_tokens").and_then(Value::as_i64), stats.get("session_completion_tokens").and_then(Value::as_i64), cost))
 }
 
+/// The `text` of a journal content list.
+fn journal_text(content: &Value) -> String {
+    content.as_array().into_iter().flatten().filter_map(|c| c["text"].as_str()).collect::<Vec<_>>().join("\n")
+}
+
+/// A `completion_succeeded` command, one model call, as an agent step.
+fn agent_step(result: &Value, timestamp: Option<String>) -> atif::Step {
+    let parts = result["parts"].as_array().map(Vec::as_slice).unwrap_or_default();
+    let of_type = |kind: &'static str| parts.iter().filter(move |p| p["type"] == kind);
+    let text = of_type("text").filter_map(|p| p["text"].as_str()).collect::<Vec<_>>().join("\n");
+    let reasoning = of_type("reasoning").map(|p| journal_text(&p["content"])).collect::<Vec<_>>().join("\n");
+    let calls: Vec<atif::ToolCall> = of_type("tool_call")
+        .map(|p| {
+            let raw = p["arguments_json"].as_str().unwrap_or_default();
+            atif::ToolCall {
+                tool_call_id: p["id"].as_str().unwrap_or_default().into(),
+                function_name: p["name"].as_str().unwrap_or_default().into(),
+                arguments: serde_json::from_str(raw).unwrap_or_else(|_| json!(raw)),
+                extra: None,
+            }
+        })
+        .collect();
+    let usage = &result["usage"];
+    let n = |k: &str| usage[k].as_i64().unwrap_or(0);
+    atif::Step {
+        source: "agent".into(),
+        timestamp,
+        message: json!(text),
+        reasoning_content: (!reasoning.is_empty()).then_some(reasoning),
+        tool_calls: (!calls.is_empty()).then_some(calls),
+        metrics: usage.is_object().then(|| atif::Metrics {
+            prompt_tokens: Some(n("input_tokens")),
+            completion_tokens: Some(n("output_tokens")),
+            cached_tokens: Some(n("cached_input_tokens")),
+            ..Default::default()
+        }),
+        ..Default::default()
+    }
+}
+
+/// A tool's result: its text, else its error, else its structured output.
+fn tool_output(result: &Value) -> Value {
+    let text = journal_text(&result["content"]);
+    if !text.is_empty() {
+        json!(text)
+    } else if !result["error"]["message"].is_null() {
+        result["error"]["message"].clone()
+    } else {
+        result["structured_content"].clone()
+    }
+}
+
+/// The `core_input` records of a unified session's journal -> ATIF: the harness's inputs in order, each with its time.
+pub fn atif_trajectory(journal: &str, session_id: Option<String>, version: Option<&str>, model: Option<&str>) -> Option<atif::Trajectory> {
+    let mut steps = vec![];
+    for record in journal.lines().filter_map(|l| serde_json::from_str::<Value>(l).ok()).filter(|r| r["type"] == "core_input") {
+        let input = &record["payload"]["input"];
+        let command = &input["command"];
+        let timestamp = input["determinism"]["time_unix_ms"].as_i64().and_then(atif::timestamp_of_millis);
+        match command["type"].as_str() {
+            Some("user_message") => {
+                steps.push(atif::Step {
+                    source: "user".into(),
+                    timestamp,
+                    message: json!(journal_text(&command["content"])),
+                    ..Default::default()
+                });
+            }
+            Some("completion_succeeded") => steps.push(agent_step(&command["result"], timestamp)),
+            Some("tool_succeeded" | "tool_failed") => {
+                atif::attach_result(&mut steps, command["call_id"].as_str().unwrap_or_default(), tool_output(&command["result"]));
+            }
+            _ => {}
+        }
+    }
+    let agent = atif::Agent {
+        name: "vibe".into(),
+        version: version.unwrap_or("unknown").into(),
+        model_name: model.map(String::from),
+        ..Default::default()
+    };
+    atif::assemble(agent, session_id, steps)
+}
+
+/// The run's root session in the unified store, as its id and journal, or None for a version that does not use it.
+fn unified_session(logs_dir: &Path) -> Option<(String, String)> {
+    let root = logs_dir.join("vibe-home/logs/session/unified");
+    let sessions = std::fs::read_dir(root).ok()?.flatten().map(|e| e.path()).filter(|d| d.join("journal").is_dir());
+    let roots = sessions.map(|d| (read_meta(&d), d)).filter(|(m, _)| str_field(m, "parent_session_id").is_none());
+    let (meta, dir) = roots.max_by_key(|(m, _)| str_field(m, "start_time").map(String::from))?;
+    let mut files: Vec<PathBuf> = std::fs::read_dir(dir.join("journal")).ok()?.flatten().map(|e| e.path()).collect();
+    files.sort();
+    let journal: Vec<String> = files.iter().filter_map(|f| std::fs::read_to_string(f).ok()).collect();
+    Some((str_field(&meta, "session_id")?.to_string(), journal.join("\n")))
+}
+
 #[async_trait::async_trait]
 impl Agent for Vibe {
     fn name(&self) -> &str {
@@ -446,7 +543,9 @@ impl Agent for Vibe {
             "export PATH=\"$HOME/.local/bin:$PATH\"; vibe --auto-approve --trust --output text {flags}--prompt={} 2>&1 </dev/null | tee /logs/agent/vibe.txt",
             quote(&instruction)
         );
-        self.exec(cx, &cmd, &env).await
+        let r = self.exec(cx, &cmd, &env).await;
+        let _ = exec_agent(cx, &format!("rm -rf {VIBE_HOME}/logs/session/plugins"), &BTreeMap::new()).await;
+        r
     }
 
     fn collect_usage(&self, logs_dir: &Path, ctx: &mut AgentContext) {
@@ -455,6 +554,10 @@ impl Agent for Vibe {
             ctx.cost_usd = cost;
             ctx.n_input_tokens = input;
             ctx.n_output_tokens = output;
+        }
+        let Some((id, journal)) = unified_session(logs_dir) else { return };
+        if let Some(t) = atif_trajectory(&journal, Some(id), self.version.as_deref(), self.args.model_name.as_deref()) {
+            atif::write_trajectory(logs_dir, &t);
         }
     }
 }
@@ -602,6 +705,42 @@ mod tests {
         }
         assert_ne!(vibe_classify("discussing how a token limit exceeded error should be handled"), "ApiUsageLimitError");
         assert_eq!(vibe_classify("curl: (6) Could not resolve host: astral.sh\nconnection error"), "ApiConnectionError");
+    }
+
+    #[test]
+    fn unified_journal_to_atif() {
+        // A real run's journal, trimmed; the failed tool takes the shape of the pinned protocol.py.
+        let input = |command: Value| json!({"type": "core_input", "payload": {"input": {"command": command, "determinism": {"time_unix_ms": 1793446463175i64}}}});
+        let tool_part = |id: &str, name: &str, args: &str| json!({"arguments_json": args, "id": id, "name": name, "type": "tool_call"});
+        let journal = [
+            json!({"type": "command_reserved", "payload": {"method": "turn/start"}}),
+            input(json!({"type": "user_message", "content": [{"text": "Write the line.", "type": "text"}], "mode": "queue"})),
+            json!({"type": "action_result", "payload": {"state": "succeeded"}}),
+            input(json!({"type": "completion_succeeded", "result": {"finish_reason": "tool_call",
+                "parts": [{"type": "reasoning", "content": [{"text": "Use the tool."}]}, tool_part("c1", "write_file", "{\"path\":\"/app/hello.txt\"}"), tool_part("c2", "read_file", "{}")],
+                "usage": {"cached_input_tokens": 7639, "input_tokens": 7643, "output_tokens": 84, "total_tokens": 7727}}})),
+            input(json!({"type": "tool_succeeded", "call_id": "c1", "result": {"content": [], "structured_content": {"bytes_written": 13}, "type": "success"}})),
+            input(json!({"type": "tool_failed", "call_id": "c2", "result": {"content": [], "error": {"code": "tool_failed", "message": "no such file"}}})),
+            input(json!({"type": "hook_completed", "result": {}})),
+            input(json!({"type": "completion_succeeded", "result": {"finish_reason": "stop", "parts": [{"text": "Done.", "type": "text"}],
+                "usage": {"cached_input_tokens": 7639, "input_tokens": 7724, "output_tokens": 17, "total_tokens": 7741}}})),
+        ]
+        .map(|r| r.to_string())
+        .join("\n");
+        let a = atif_trajectory(&journal, Some("s1".into()), Some("2.26.1"), Some("openai/m")).unwrap();
+        assert_eq!(a.steps.iter().map(|s| s.source.as_str()).collect::<Vec<_>>(), ["user", "agent", "agent"]);
+        assert_eq!(a.steps[0].timestamp.as_deref(), Some("2026-10-31T11:34:23.175Z"));
+        let call = &a.steps[1];
+        assert_eq!(call.reasoning_content.as_deref(), Some("Use the tool."));
+        assert_eq!(call.tool_calls.as_ref().unwrap()[0].arguments, json!({"path": "/app/hello.txt"}));
+        let results = &call.observation.as_ref().unwrap().results;
+        assert_eq!(
+            results.iter().map(|r| (r.source_call_id.clone().unwrap(), r.content.clone().unwrap())).collect::<Vec<_>>(),
+            [("c1".to_string(), json!({"bytes_written": 13})), ("c2".to_string(), json!("no such file"))]
+        );
+        let f = a.final_metrics.unwrap();
+        assert_eq!((f.total_prompt_tokens, f.total_completion_tokens, f.total_cached_tokens), (Some(15367), Some(101), Some(15278)));
+        assert!(atif_trajectory("", None, None, None).is_none());
     }
 
     fn write_session(root: &Path, name: &str, msgs: &[Value], meta: Option<Value>) {
