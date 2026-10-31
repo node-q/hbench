@@ -326,10 +326,10 @@ jobs/<job>/<task>__<id>/{config.json, lock.json, result.json, trial.log, excepti
 ```
 
 `agent/trajectory.json` is the trial's trajectory in ATIF. `claude-code`, `codex`, `copilot-cli`, `deepseek-harness`,
-`gemini-cli`, `goose`, `mcode`, `mini-swe-agent`, `opencode`, `qwen-coder`, `swe-agent` and `trae-agent` convert their native session logs into it; `terminus-2`, `computer-1`, `openhands-sdk`, `antigravity-sdk` and `nemo-agent` write it
+`gemini-cli`, `goose`, `hermes`, `mcode`, `mini-swe-agent`, `opencode`, `qwen-coder`, `swe-agent` and `trae-agent` convert their native session logs into it; `terminus-2`, `computer-1`, `openhands-sdk`, `antigravity-sdk` and `nemo-agent` write it
 themselves. In a converted trajectory each agent step is one model call and its metrics are that call's alone:
 `prompt_tokens` is the whole prompt, cached and cache-written tokens included, and `cached_tokens` the cached part of
-it. A step whose call the native log reports no usage for has no metrics; `goose`, `mcode` and `swe-agent` report usage per run or per turn, so their steps have none, and `copilot-cli` reports output tokens only. A `deepseek-harness` run with no exported
+it. A step whose call the native log reports no usage for has no metrics; `goose`, `hermes`, `mcode` and `swe-agent` report usage per run or per turn, so their steps have none, and `copilot-cli` reports output tokens only. A `deepseek-harness` run with no exported
 session log, as in jobs from before the export ran after a timeout, gets its trajectory from `dsh`'s output stream
 instead: the instruction and timestamps are missing, long text is cut at 8 KiB, and `notes` says so.
 

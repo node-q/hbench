@@ -5,6 +5,7 @@ use super::common::{installed_dir, skills_dir};
 use super::pins;
 use super::{ensure_system_dependencies, exec_agent, exec_error};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
+use crate::atif;
 use crate::env::quote;
 use anyhow::{Result, anyhow, bail};
 use serde_json::{Map, Value, json};
@@ -197,6 +198,72 @@ pub fn session_totals(text: &str) -> Option<(i64, i64)> {
     (steps > 0).then_some((prompt, completion))
 }
 
+fn step_time(m: &Value) -> Option<String> {
+    atif::timestamp_of_millis((m["timestamp"].as_f64()? * 1000.0) as i64)
+}
+
+/// An assistant message as an agent step; `tool_calls` are OpenAI-shaped, as a JSON list or its text.
+fn agent_step(m: &Value) -> atif::Step {
+    let parsed = m["tool_calls"].as_str().and_then(|t| serde_json::from_str::<Value>(t).ok());
+    let calls = parsed.as_ref().unwrap_or(&m["tool_calls"]).as_array().cloned().unwrap_or_default();
+    let tool_calls: Vec<atif::ToolCall> = calls
+        .iter()
+        .map(|c| {
+            let raw = c["function"]["arguments"].as_str().unwrap_or_default();
+            atif::ToolCall {
+                tool_call_id: c["id"].as_str().unwrap_or_default().into(),
+                function_name: c["function"]["name"].as_str().unwrap_or_default().into(),
+                arguments: serde_json::from_str(raw).unwrap_or_else(|_| json!(raw)),
+                extra: None,
+            }
+        })
+        .collect();
+    atif::Step {
+        source: "agent".into(),
+        timestamp: step_time(m),
+        message: json!(text_of(&m["content"])),
+        reasoning_content: m["reasoning_content"].as_str().or(m["reasoning"].as_str()).filter(|r| !r.is_empty()).map(String::from),
+        tool_calls: (!tool_calls.is_empty()).then_some(tool_calls),
+        ..Default::default()
+    }
+}
+
+/// `hermes sessions export` -> ATIF. Tokens are kept on the session, not on messages, and `input_tokens` leaves out
+/// cache reads and writes.
+pub fn atif_trajectory(text: &str, version: Option<&str>, model: Option<&str>) -> Option<atif::Trajectory> {
+    let session = text.lines().find_map(|l| serde_json::from_str::<Value>(l).ok().filter(|v| v["messages"].is_array()))?;
+    let mut steps = vec![];
+    let system = session["system_prompt"].as_str().filter(|p| !p.is_empty());
+    steps.extend(system.map(|p| atif::Step { source: "system".into(), message: json!(p), ..Default::default() }));
+    for m in session["messages"].as_array()? {
+        match m["role"].as_str() {
+            Some("user") if !text_of(&m["content"]).is_empty() => steps.push(atif::Step {
+                source: "user".into(),
+                timestamp: step_time(m),
+                message: json!(text_of(&m["content"])),
+                ..Default::default()
+            }),
+            Some("assistant") => steps.push(agent_step(m)),
+            Some("tool") => {
+                atif::attach_result(&mut steps, m["tool_call_id"].as_str().unwrap_or_default(), json!(text_of(&m["content"])));
+            }
+            _ => {}
+        }
+    }
+    let agent = atif::Agent {
+        name: "hermes".into(),
+        version: version.unwrap_or("unknown").into(),
+        model_name: model.or(session["model"].as_str()).map(String::from),
+        ..Default::default()
+    };
+    let mut trajectory = atif::assemble(agent, session["id"].as_str().map(String::from), steps)?;
+    let n = |k: &str| session[k].as_i64();
+    let cached = n("cache_read_tokens");
+    let prompt = n("input_tokens").map(|i| i + cached.unwrap_or(0) + n("cache_write_tokens").unwrap_or(0));
+    atif::set_run_totals(&mut trajectory, prompt, n("output_tokens"), cached, session["estimated_cost_usd"].as_f64());
+    Some(trajectory)
+}
+
 #[async_trait::async_trait]
 impl Agent for Hermes {
     fn name(&self) -> &str {
@@ -275,6 +342,9 @@ impl Agent for Hermes {
 
     fn collect_usage(&self, logs_dir: &std::path::Path, ctx: &mut AgentContext) {
         let Ok(text) = std::fs::read_to_string(logs_dir.join("hermes-session.jsonl")) else { return };
+        if let Some(t) = atif_trajectory(&text, self.version.as_deref(), self.args.model_name.as_deref()) {
+            atif::write_trajectory(logs_dir, &t);
+        }
         let native = native_session_id(&text);
         let Some((p, c)) = session_totals(&text) else { return };
         let mut reported = self.reported.lock().unwrap();
@@ -328,6 +398,38 @@ mod tests {
         assert!(agent(json!({"max_turns": "lots"}), &[], None).is_err());
         let p = agent(json!({"version": "v1"}), &[], Some("a/b")).unwrap();
         assert!(p.run_command(None, "b", true).is_err());
+    }
+
+    #[test]
+    fn session_to_atif() {
+        // The columns of the pinned hermes_state_common.py, as `sessions export` writes them.
+        let session = json!({"id": "s1", "model": "m", "system_prompt": "be brief", "input_tokens": 100, "output_tokens": 20,
+            "cache_read_tokens": 50, "cache_write_tokens": 5, "estimated_cost_usd": 0.5, "messages": [
+            {"role": "user", "content": "task", "timestamp": 1793438597.125},
+            {"role": "assistant", "content": "look", "reasoning_content": "think", "timestamp": 1793438598.0,
+             "tool_calls": [{"id": "t1", "type": "function", "function": {"name": "terminal", "arguments": "{\"command\":\"ls\"}"}}]},
+            {"role": "tool", "content": "a.py", "tool_call_id": "t1", "tool_name": "terminal", "timestamp": 1793438599.0},
+            {"role": "assistant", "content": "done", "timestamp": 1793438600.0}
+        ]});
+        let a = atif_trajectory(&session.to_string(), Some("0.22.2"), None).unwrap();
+        assert_eq!((a.session_id.as_deref(), a.agent.model_name.as_deref()), (Some("s1"), Some("m")));
+        assert_eq!(
+            a.steps.iter().map(|s| (s.step_id, s.source.as_str())).collect::<Vec<_>>(),
+            [(1, "system"), (2, "user"), (3, "agent"), (4, "agent")]
+        );
+        assert_eq!(a.steps[1].timestamp.as_deref(), Some("2026-10-31T09:23:17.125Z"));
+        let call = &a.steps[2];
+        assert_eq!((call.message.as_str(), call.reasoning_content.as_deref()), (Some("look"), Some("think")));
+        assert_eq!(call.tool_calls.as_ref().unwrap()[0].arguments, json!({"command": "ls"}));
+        let result = &call.observation.as_ref().unwrap().results[0];
+        assert_eq!((result.source_call_id.as_deref(), result.content.clone()), (Some("t1"), Some(json!("a.py"))));
+        assert!(a.steps.iter().all(|s| s.metrics.is_none()));
+        let f = a.final_metrics.unwrap();
+        assert_eq!(
+            (f.total_prompt_tokens, f.total_completion_tokens, f.total_cached_tokens, f.total_cost_usd),
+            (Some(155), Some(20), Some(50), Some(0.5))
+        );
+        assert!(atif_trajectory("not json", None, None).is_none());
     }
 
     #[test]
