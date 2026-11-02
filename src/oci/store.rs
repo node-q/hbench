@@ -1,5 +1,5 @@
 //! Where a dataset's manifests and blobs come from and go to: an OCI registry, pulled into the content-addressed
-//! blob cache (anonymously, unless the store was opened with credentials), or OCI image layouts on disk,
+//! blob cache with the docker config's credentials for it (anonymously without any), or OCI image layouts on disk,
 //! `<root>/<repository>`. Every manifest and blob is checked against its digest before it is used.
 
 use super::format::{ARTIFACT_TYPE, INDEX_MEDIA_TYPE, MANIFEST_MEDIA_TYPE, MAX_MANIFEST_BYTES, REF_NAME};
@@ -35,9 +35,20 @@ fn is_loopback(registry: &str) -> bool {
 
 impl Store {
     /// The store for a task's or dataset's `registry` (a registry host, or `oci-layout:<dir>`), caching
-    /// registry blobs under `cache_root/blobs/sha256`.
+    /// registry blobs under `cache_root/blobs/sha256` and reading with the credentials the docker config has for it.
     pub fn open(registry: &str, cache_root: &Path) -> Result<Store> {
-        Store::open_with_auth(registry, cache_root, RegistryAuth::Anonymous)
+        Store::open_with_config(registry, cache_root, super::credentials::docker_config_path().as_deref())
+    }
+
+    /// [`Store::open`], with the docker config at `docker_config` (anonymous when there is none). An OCI layout
+    /// reads no credentials.
+    pub fn open_with_config(registry: &str, cache_root: &Path, docker_config: Option<&Path>) -> Result<Store> {
+        let auth = if registry.starts_with(LAYOUT_SCHEME) {
+            RegistryAuth::Anonymous
+        } else {
+            super::credentials::registry_auth(docker_config, registry)?
+        };
+        Store::open_with_auth(registry, cache_root, auth)
     }
 
     /// [`Store::open`], authenticating to a registry with `auth`.
@@ -314,7 +325,9 @@ impl Store {
 fn fetch_error(reference: &str, auth: &RegistryAuth, e: OciDistributionError) -> anyhow::Error {
     match (e, auth) {
         (OciDistributionError::UnauthorizedError { .. }, RegistryAuth::Anonymous) => {
-            anyhow::anyhow!("{reference}: not found, or not public (hbench pulls anonymously)")
+            anyhow::anyhow!(
+                "{reference}: not found, or not public (the docker config has no credentials for this registry, so hbench pulled anonymously; log in with `docker login` or `oras login`)"
+            )
         }
         (OciDistributionError::UnauthorizedError { .. }, _) => anyhow::anyhow!("{reference}: not found, or the credentials can't read it"),
         (e, _) => anyhow::Error::new(e).context(format!("fetching {reference}")),

@@ -364,6 +364,26 @@ fn registry_specs() {
 }
 
 #[test]
+fn a_registry_store_reads_the_docker_config_and_a_layout_store_does_not() {
+    use oci_client::secrets::RegistryAuth;
+    let root = scratch("pull-auth");
+    let config = root.join("config.json");
+    std::fs::write(&config, r#"{"auths": {"registry.example": {"username": "reader", "password": "pw"}}}"#).unwrap();
+    let auth = |registry: &str| match super::store::Store::open_with_config(registry, &root, Some(&config)).unwrap() {
+        super::store::Store::Registry { auth, .. } => auth,
+        super::store::Store::Layout { .. } => panic!("{registry} is a registry"),
+    };
+    assert_eq!(auth("registry.example"), RegistryAuth::Basic("reader".into(), "pw".into()));
+    assert_eq!(auth("other.example"), RegistryAuth::Anonymous);
+
+    std::fs::write(&config, "not json").unwrap();
+    let err = super::store::Store::open_with_config("registry.example", &root, Some(&config)).err().unwrap();
+    assert!(format!("{err:#}").contains("parsing"), "{err:#}");
+    let layout = format!("oci-layout:{}", root.display());
+    assert!(matches!(super::store::Store::open_with_config(&layout, &root, Some(&config)), Ok(super::store::Store::Layout { .. })));
+}
+
+#[test]
 fn lock_json_records_oci_tasks() {
     let oci = OciTask {
         registry: "ghcr.io".into(),
