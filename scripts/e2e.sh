@@ -54,6 +54,13 @@ wait_for() {
   return 1
 }
 
+# part <name>: whether this run includes that part. E2E_PART picks one, so CI runs the three in parallel: runs (the
+# fixture suite and the commands that read its job), isolation (integrity, egress, secrets) and cli (the rest of the
+# CLI). Unset, it runs all three.
+case ${E2E_PART:-} in "" | runs | isolation | cli) ;; *) echo "E2E_PART must be runs, isolation or cli, not $E2E_PART" >&2; exit 2 ;; esac
+part() { [ -z "${E2E_PART:-}" ] || [ "$E2E_PART" = "$1" ]; }
+
+if part runs; then
 $BIN run -p tests/fixtures -a oracle -n 4 -k 2 --jobs-dir "$JOBS" --job-name fixtures
 
 python3 - "$JOBS/fixtures" <<'EOF'
@@ -99,7 +106,9 @@ ev = s["evals"]["oracle__fixtures"]
 assert ev["exception_stats"].keys() == {"AgentTimeoutError", "RewardFileNotFoundError"}, ev
 print("fixture assertions OK")
 EOF
+fi
 
+if part isolation; then
 # Verifier-only files datasets build into the agent's image are gone before a (non-oracle) agent starts.
 $BIN run -p tests/integrity -a nop --jobs-dir "$JOBS" --job-name integrity >/dev/null
 python3 - "$JOBS/integrity" <<'EOF'
@@ -197,12 +206,14 @@ names = {p.name for p in files if b"[REDACTED]" in p.read_bytes()}
 assert {"oracle.txt", "trajectory-notes.txt", "leak.txt", "test-stdout.txt"} <= names, names
 print("secret assertions OK")
 EOF
+fi
 
 # ------------------------------------------------------------------------------------------------------
 # The rest of the CLI. Everything below this line writes under $CLI or into a named job dir under $JOBS.
 CLI=$JOBS/cli
 mkdir -p "$CLI"
 
+if part cli; then
 # --- Version, completions, schemas, the agent list ---------------------------------------------------
 $BIN --version | check "hbench "
 $BIN completions bash | check "_hbench"
@@ -299,7 +310,9 @@ $BIN tasks check -p "$CLI/migrated" | check "ok    "
 $BIN run -p "$CLI/migrated/hello-legacy" -a oracle --jobs-dir "$JOBS" --job-name migrated >/dev/null
 rewards "$JOBS/migrated" | check "{'reward': 1.0} None"
 echo "authoring assertions OK"
+fi
 
+if part runs; then
 # --- Jobs: start, summary, verify, resume, regrade, upload ------------------------------------------
 $BIN jobs start -p examples/tasks/hello-alpine -a nop --jobs-dir "$JOBS" --job-name start >/dev/null
 rewards "$JOBS/start" | check "hbench/hello-alpine {'reward': 0.0} None"
@@ -369,7 +382,9 @@ expect_fail "(401" $BIN jobs upload "$JOBS/start" --url "$upload_url/ok"
 expect_fail "E2E_MISSING_TOKEN is not set" $BIN jobs upload "$JOBS/start" --url "$upload_url/ok" --token-env E2E_MISSING_TOKEN
 expect_fail "differ from its manifest.json" env E2E_UPLOAD_TOKEN=$upload_token $BIN jobs upload "$CLI/tampered" --url "$upload_url/ok" --token-env E2E_UPLOAD_TOKEN -H "X-E2E: yes"
 echo "jobs assertions OK"
+fi
 
+if part cli; then
 # --- Trials: start, handoff -------------------------------------------------------------------------
 $BIN trials start -p examples/tasks/hello-world --trials-dir "$CLI/trials" --ae E2E_VAR=1 > "$CLI/trial.json"
 python3 -c '
@@ -381,7 +396,9 @@ expect_fail "does not support handoff" $BIN trials handoff "$trial"
 expect_fail "not a trial directory" $BIN trials handoff "$CLI"
 expect_fail "pass -p <task dir> or -c <trial.yaml>" $BIN trials start
 echo "trials assertions OK"
+fi
 
+if part runs; then
 # --- Traces: an ATIF trajectory planted in a copy of a finished trial ---------------------------------
 cp -r "$JOBS/start" "$CLI/traces"
 python3 - "$CLI/traces" <<'EOF'
@@ -408,7 +425,9 @@ assert rows[1]["conversations"][-1] == {"role": "assistant", "content": "Done."}
 expect_fail "no exportable trials" $BIN traces export -p "$CLI/traces" --filter success
 expect_fail "no exportable trials" $BIN traces export -p "$CLI/traces" --no-recursive
 echo "traces assertions OK"
+fi
 
+if part cli; then
 # --- Datasets: an OCI layout, a registry container, a registry.json over a git checkout -------------
 D=$CLI/datasets
 mkdir -p "$D"
@@ -570,7 +589,9 @@ $BIN tasks start-env -p examples/tasks/hello-world --non-interactive --no-all --
 $BIN cache clean --dry | check "Docker images:"
 $BIN cache clean --dry --no-docker --no-cache-dir | check "Docker images: 0"
 echo "start-env and cache assertions OK"
+fi
 
+if part runs; then
 # --- The viewer: jobs mode on the job dirs, tasks mode on the examples, read-only off loopback ------
 view() { # view <log> <args...>: start the viewer, print its base URL.
   local log=$1
@@ -595,7 +616,9 @@ check "Read-only" < "$CLI/view-readonly.log"
 [ -d "$JOBS/start" ]
 expect_fail "does not exist" $BIN view "$CLI/nowhere"
 echo "viewer assertions OK"
+fi
 
+if part cli; then
 # hbench view follows a running trial: the agent's logs reach the trial dir before the agent exits.
 cp -R examples/tasks/hello-alpine "$JOBS/live-task"
 cat > "$JOBS/live-task/solution/solve.sh" <<'EOF'
@@ -619,7 +642,8 @@ done
 wait $live_pid
 [ -n "$live_seen" ] || { echo "agent logs did not reach the host during the run"; exit 1; }
 echo "live sync OK"
+fi
 
 left=$(docker ps -a --filter label=com.docker.compose.service=main --format '{{.Names}}' | grep -E '__[0-9a-f]{7}-main' || true)
 [ -z "$left" ] || { echo "leaked containers: $left"; exit 1; }
-echo "E2E OK ($JOBS)"
+echo "E2E OK (${E2E_PART:-all parts}, $JOBS)"
