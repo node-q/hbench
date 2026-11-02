@@ -178,8 +178,10 @@ hbench datasets list --registry oci://ghcr.io/<namespace>              # what it
 ```
 
 - `oci://<registry>/<namespace>`: `-d <name>@<version>` is the manifest tagged `<version>` in
-  `<registry>/<namespace>/<name>`. Pulls are anonymous (with a registry token where the registry asks for one, as
-  GHCR does) and over HTTPS, except to `localhost`, `127.0.0.1` and `::1`, which use plain HTTP.
+  `<registry>/<namespace>/<name>`. Pulls use the docker config's credentials for the registry, as `push` does (see
+  [Publishing datasets](#publishing-datasets)), so a private dataset runs after `docker login`; without any they are
+  anonymous (with a registry token where the registry asks for one, as GHCR does). They are over HTTPS, except to
+  `localhost`, `127.0.0.1` and `::1`, which use plain HTTP.
 - `oci-layout:<dir>`: `<dir>/<name>` is an OCI image layout, and the dataset is the manifest in its `index.json`
   whose `org.opencontainers.image.ref.name` is `<version>`. `oras cp <registry>/<namespace>/<name>:<version>
   --to-oci-layout <dir>/<name>:<version>` makes one, for offline use.
@@ -245,7 +247,7 @@ hbench datasets export -d hello@1.0 --registry oci://ghcr.io/<namespace> --oci-l
   targets, `task_checksum` and package digest. Any difference fails the command.
 - `export` copies `name@version` from `--registry` (as `run` takes it) into `<dir>/<name>`, tagged with the version and
   checked blob by blob, so that `--registry oci-layout:<dir>` runs it offline. It reads with the docker config's
-  credentials; `run` and `datasets download` pull anonymously.
+  credentials, as `run` and `datasets download` do.
 
 ### Dataset format
 

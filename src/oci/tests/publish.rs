@@ -411,8 +411,15 @@ async fn push_and_export_use_the_docker_config_credentials() {
     let registry_spec = format!("oci://{registry}/{namespace}");
     let offline = root.join("offline");
     let err = format!("{:#}", publish::export("examples@1.0", &registry_spec, &offline, RegistryAuth::Anonymous).await.unwrap_err());
-    assert!(err.contains("not public (hbench pulls anonymously)"), "{err}");
+    assert!(err.contains("not public (the docker config has no credentials for this registry"), "{err}");
     let exported = publish::export("examples@1.0", &registry_spec, &offline, auth).await.unwrap();
     assert_eq!(exported.digest, packed.digest);
     assert_reads_back_identical(format!("oci-layout:{}", offline.display()), &root.join("cache")).await;
+
+    let repository = format!("{namespace}/examples");
+    let pulled = Store::open_with_config(&registry, &root.join("pull"), Some(&docker_config)).unwrap();
+    assert_eq!(pulled.resolve_tag(&repository, "1.0").await.unwrap(), packed.digest, "a pull reads with the credentials");
+    let anonymous = Store::open_with_config(&registry, &root.join("pull"), None).unwrap();
+    let err = format!("{:#}", anonymous.resolve_tag(&repository, "1.0").await.unwrap_err());
+    assert!(err.contains("log in with `docker login`"), "{err}");
 }
