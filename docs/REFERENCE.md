@@ -452,11 +452,13 @@ npm run dev                                    # hot reload; proxies /api to `hb
   `exec`, `analyze` and `check` with the nop agent, `tasks start-env`, `cache clean --dry`, and the viewer's API.
   Last, it checks for leaked containers. Not covered: `hbench update` (it would install a release over the binary
   under test) and the interactive paths (the `run` wizard, a real `trials handoff`, the `start-env` shell).
+  `E2E_PART=runs|isolation|cli` runs one part: the fixture suite and the commands that read its job; integrity,
+  egress and secrets; or the rest of the CLI. Unset, it runs all three.
 - `scripts/install-matrix.sh`: installs every installed agent into a real container (`install_only`).
 
 CI (`.github/workflows/ci.yml`) runs on GitHub-hosted runners: build + `cargo test` on Linux and macOS, `cargo fmt
 --check` and clippy, `cargo audit`, a check that the committed `viewer/dist` matches `viewer/src`, `scripts/e2e.sh`
-against a real Docker daemon, and the example tasks through
+against a real Docker daemon (its three parts in parallel jobs), and the example tasks through
 [node-q/hbench-action](https://github.com/node-q/hbench-action) with the latest release: every one must score 1 with
 the oracle and 0 with `nop`. On Linux it also runs the OCI tests against two local `registry:3` containers
 (`HBENCH_TEST_OCI_REGISTRY=localhost:5000 cargo test oci::tests`), the second taking basic auth with a password

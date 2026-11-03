@@ -163,7 +163,12 @@ jobs:
   e2e:
     # The integrity guarantees (stopping the agent at timeout, the hidden-test scrub, the egress allowlist)
     # only show against a real daemon.
-    name: E2E
+    name: E2E (${{ matrix.part }})
+    strategy:
+      fail-fast: false
+      matrix:
+        # scripts/e2e.sh's parts, run in parallel; each is about a third of the suite.
+        part: [runs, isolation, cli]
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -178,6 +183,7 @@ jobs:
         timeout-minutes: 30
         run: scripts/e2e.sh
         env:
+          E2E_PART: ${{ matrix.part }}
           E2E_REQUIRE_NFT: "1"
           E2E_JOBS_DIR: ${{ runner.temp }}/e2e-jobs
           # The registry the dataset commands push to and pull from; the same pin as the OCI tests above.
@@ -186,7 +192,7 @@ jobs:
         if: failure() || cancelled()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: e2e-jobs
+          name: e2e-jobs-${{ matrix.part }}
           path: ${{ runner.temp }}/e2e-jobs
           retention-days: 7
 
