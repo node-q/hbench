@@ -452,6 +452,7 @@ impl Trial {
             (!a.skills.is_empty() || task_env.skills_dir.is_some(), "skills"),
             (!task_env.mcp_servers.is_empty(), "the task's MCP servers"),
             (self.cfg.user_agent.is_some(), "a user agent"),
+            (self.cfg.environment.force_build, "--force-build"),
             (a.kwargs.get("version").and_then(Value::as_str) == Some("latest"), "version=latest"),
         ];
         if let Some((_, why)) = unshareable.iter().find(|(applies, _)| *applies) {
