@@ -645,6 +645,9 @@ impl Agent for Codex {
     fn name(&self) -> &str {
         "codex"
     }
+    fn setup_is_cacheable(&self) -> bool {
+        true
+    }
     fn version(&self) -> Option<String> {
         self.version.clone()
     }

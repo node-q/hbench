@@ -323,6 +323,9 @@ impl Agent for DeepSeekHarness {
     fn name(&self) -> &str {
         NAME
     }
+    fn setup_is_cacheable(&self) -> bool {
+        true
+    }
     fn version(&self) -> Option<String> {
         self.version.clone()
     }

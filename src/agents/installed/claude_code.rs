@@ -320,6 +320,9 @@ impl Agent for ClaudeCode {
     fn name(&self) -> &str {
         "claude-code"
     }
+    fn setup_is_cacheable(&self) -> bool {
+        true
+    }
     fn version(&self) -> Option<String> {
         self.version.clone()
     }

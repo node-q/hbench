@@ -439,15 +439,15 @@ impl Trial {
     }
 
     /// What, besides the main image, this trial's agent setup image depends on: None when the cache is off,
-    /// the agent installs nothing, or setup depends on more than the agent and its options.
+    /// the agent's setup is not cacheable, or setup depends on more than the agent and its options.
     fn setup_cache_key(&self, step: Option<&StepConfig>) -> Option<String> {
         let a = &self.cfg.agent;
-        if !self.cfg.environment.cache_agent_setup || matches!(a.name(), "oracle" | "nop") {
+        if !self.cfg.environment.cache_agent_setup {
             return None;
         }
         let task_env = &self.task.config.environment;
         let unshareable = [
-            (a.import_path.is_some(), "an agent from import_path"),
+            (!self.agent.as_ref().is_some_and(|agent| agent.setup_is_cacheable()), "this agent's setup is not cacheable"),
             (!a.skills.is_empty() || task_env.skills_dir.is_some(), "skills"),
             (!task_env.mcp_servers.is_empty(), "the task's MCP servers"),
             (self.cfg.user_agent.is_some(), "a user agent"),
