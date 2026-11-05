@@ -225,6 +225,9 @@ impl Agent for OpenCode {
     fn name(&self) -> &str {
         "opencode"
     }
+    fn setup_is_cacheable(&self) -> bool {
+        true
+    }
     fn version(&self) -> Option<String> {
         self.version.clone()
     }

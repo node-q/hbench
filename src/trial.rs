@@ -434,7 +434,42 @@ impl Trial {
             keep_containers: e.keep_containers(),
             delete: e.delete,
             log_dirs: if agent_env { LOG_DIRS.to_vec() } else { vec!["/logs/verifier"] },
+            setup_cache_key: None,
         })
+    }
+
+    /// What, besides the main image and the task's environment dir, this trial's agent setup image depends on:
+    /// None when the cache is off, the agent's setup is not cacheable, or setup depends on more than the agent and
+    /// its options.
+    fn setup_cache_key(&self, step: Option<&StepConfig>) -> Option<String> {
+        let a = &self.cfg.agent;
+        if !self.cfg.environment.cache_agent_setup {
+            return None;
+        }
+        let task_env = &self.task.config.environment;
+        let unshareable = [
+            (!self.agent.as_ref().is_some_and(|agent| agent.setup_is_cacheable()), "this agent's setup is not cacheable"),
+            (!a.skills.is_empty() || task_env.skills_dir.is_some(), "skills"),
+            (!task_env.mcp_servers.is_empty(), "the task's MCP servers"),
+            (self.cfg.user_agent.is_some(), "a user agent"),
+            (self.cfg.environment.force_build, "--force-build"),
+            (a.kwargs.get("version").and_then(Value::as_str) == Some("latest"), "version=latest"),
+        ];
+        if let Some((_, why)) = unshareable.iter().find(|(applies, _)| *applies) {
+            self.log.line(&format!("agent setup cache: not used ({why})"));
+            return None;
+        }
+        let key = serde_json::json!({
+            "hbench": crate::build_info::VERSION,
+            "agent": a.name(),
+            "model": a.model_name,
+            "kwargs": a.kwargs,
+            "mcp_servers": a.mcp_servers,
+            "env": a.env.keys().collect::<Vec<_>>(),
+            "user": self.agent_user(step),
+            "scrub": crate::integrity::scrub_command(&crate::integrity::leaks(&self.task.dir)),
+        });
+        Some(key.to_string())
     }
 
     fn record(&mut self, e: &anyhow::Error) {
@@ -619,6 +654,7 @@ impl Trial {
         if self.user_agent.is_some() {
             spec.log_dirs.push("/logs/user-agent");
         }
+        spec.setup_cache_key = self.setup_cache_key(steps[0]);
         let env = DockerEnv::new(spec, self.log.clone()).await?;
         self.env = Some(env);
 
@@ -726,6 +762,7 @@ impl Trial {
         self.result.agent_info.version = a.version().unwrap_or_else(|| "unknown".into());
         self.log.line(&format!("agent {} setup done (version {})", a.name(), self.result.agent_info.version));
         r?;
+        self.env().commit_setup_cache().await;
         if self.cfg.install_only {
             return Ok(());
         }

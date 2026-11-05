@@ -39,6 +39,7 @@ pub async fn start_env(path: &Path, all: bool, interactive: bool, agent: Option<
         keep_containers: false,
         delete: true,
         log_dirs: LOG_DIRS.to_vec(),
+        setup_cache_key: None,
     };
     let env = DockerEnv::new(spec, log).await?;
     let r = async {
@@ -81,7 +82,8 @@ pub async fn start_env(path: &Path, all: bool, interactive: bool, agent: Option<
     r
 }
 
-/// Remove the hbench cache dir and hbench-built images (`hb__*`, `hbench-egress-sidecar`).
+/// Remove the hbench cache dir and hbench-built images (`hb__*`, `hbench-egress-sidecar`, `hbench-setup-cache`, and
+/// setup cache images a later commit of the same tag untagged).
 pub async fn cache_clean(force: bool, dry: bool, no_docker: bool, no_cache_dir: bool) -> Result<()> {
     let dir = cache_root();
     let size: u64 = if dir.exists() && !no_cache_dir { walk_size(&dir) } else { 0 };
@@ -91,9 +93,14 @@ pub async fn cache_clean(force: bool, dry: bool, no_docker: bool, no_cache_dir: 
             Ok(o) if o.status.success() => {
                 images = String::from_utf8_lossy(&o.stdout)
                     .lines()
-                    .filter(|i| i.starts_with("hb__") || i.starts_with("hbench-egress-sidecar"))
+                    .filter(|i| i.starts_with("hb__") || i.starts_with("hbench-egress-sidecar") || i.starts_with("hbench-setup-cache"))
                     .map(String::from)
                     .collect();
+                let untagged_setup_caches = tokio::process::Command::new("docker")
+                    .args(["images", "--quiet", "--filter", "dangling=true", "--filter", "label=dev.hbench.setup-cache"])
+                    .output()
+                    .await?;
+                images.extend(String::from_utf8_lossy(&untagged_setup_caches.stdout).lines().map(String::from));
             }
             _ => eprintln!("could not list Docker images; skipping image cleanup"),
         }

@@ -278,6 +278,10 @@ pub struct EnvConfig {
     /// Docker kwargs; `keep_containers: true` stops instead of removing containers.
     pub kwargs: BTreeMap<String, Value>,
     pub extra_allowed_hosts: Vec<String>,
+    /// Start the main container from an image of it as agent setup left it, committed by the first trial with
+    /// the same image, agent, options and hbench version (`--cache-agent-setup`).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub cache_agent_setup: bool,
 }
 
 fn ser_env_type<S: serde::Serializer>(k: &Option<String>, s: S) -> Result<S::Ok, S::Error> {
@@ -310,6 +314,7 @@ impl Default for EnvConfig {
             env: BTreeMap::new(),
             kwargs: BTreeMap::new(),
             extra_allowed_hosts: vec![],
+            cache_agent_setup: false,
         }
     }
 }
@@ -1124,6 +1129,11 @@ mod tests {
             j2.config_json(),
             serde_json::json!({"job_name": "j", "n_attempts": 3, "agents": [{"name": "claude-code", "model_name": "m"}]})
         );
+        let cached: JobConfig =
+            serde_json::from_value(serde_json::json!({"job_name": "j", "environment": {"cache_agent_setup": true}})).unwrap();
+        assert!(cached.environment.cache_agent_setup);
+        assert_eq!(cached.config_json()["environment"]["cache_agent_setup"], true);
+        assert!(serde_json::to_value(JobConfig::default()).unwrap()["environment"].get("cache_agent_setup").is_none());
     }
 
     #[test]

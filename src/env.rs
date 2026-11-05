@@ -273,6 +273,8 @@ const CLEAR_DIRS_TIMEOUT: Duration = Duration::from_secs(120);
 const EGRESS_SETUP_TIMEOUT: Duration = Duration::from_secs(120);
 /// Building the egress sidecar image, which pulls its base image the first time.
 const SIDECAR_BUILD_TIMEOUT: Duration = Duration::from_secs(900);
+/// Committing a main container to an agent setup image: its writable layer can hold a large install.
+const SETUP_COMMIT_TIMEOUT: Duration = Duration::from_secs(600);
 /// `docker version` before a run: an ssh context may take a few seconds to connect.
 const DAEMON_CHECK_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -434,6 +436,9 @@ pub struct EnvSpec {
     pub delete: bool,
     /// Log dirs to create (agent env: all three; separate verifier: /logs/verifier).
     pub log_dirs: Vec<&'static str>,
+    /// What, besides the main image, an agent setup image depends on: set when this trial may start from
+    /// one, or commit one after agent setup.
+    pub setup_cache_key: Option<String>,
 }
 
 pub struct DockerEnv {
@@ -445,6 +450,27 @@ pub struct DockerEnv {
     /// The services behind the sidecar.
     egress_services: Vec<String>,
     log: Arc<TrialLog>,
+    setup_cache: Option<SetupCache>,
+}
+
+/// What the agent setup image depends on besides the main image; the image, unless the main image is pulled by
+/// this trial and its id is known only once the container runs; and whether this trial started from it.
+struct SetupCache {
+    key: String,
+    image: Option<String>,
+    hit: bool,
+}
+
+/// `hbench-setup-cache:<hash>` of the main image and `key`: the name of an image hbench builds, which hashes its
+/// build context and goes away with the trial, else the id of the pulled image, whose tag may move.
+pub fn setup_cache_image(key: &str, main_image: &str) -> String {
+    let hash = sha2::Digest::finalize(sha2::Digest::chain_update(sha2::Sha256::default(), format!("{main_image}\n{key}")));
+    format!("hbench-setup-cache:{}", &crate::task::hex(&hash)[..16])
+}
+
+async fn image_id(image: &str) -> Result<Option<String>> {
+    let out = docker_output(&["image", "inspect", "--format", "{{.Id}}", image], QUICK_COMMAND_TIMEOUT).await?;
+    Ok(Some(String::from_utf8_lossy(&out.stdout).trim().to_string()).filter(|id| out.status.success() && !id.is_empty()))
 }
 
 /// Docker image/project names: lowercase, alnum first, restricted charset.
@@ -746,6 +772,40 @@ impl DockerEnv {
             std::fs::write(&p, serde_json::to_string_pretty(&v)?)?;
             Ok(p)
         };
+        let plain = egress.is_none()
+            && ec.env.is_empty()
+            && spec.persistent_env.is_empty()
+            && spec.mounts.is_empty()
+            && spec.extra_compose.is_empty()
+            && !task_compose.exists();
+        let mut build_image = build_image;
+        let setup_cache = match (&spec.setup_cache_key, main.get("image").and_then(Value::as_str)) {
+            (Some(key), Some(base)) if plain => {
+                let dir = env_dir.clone();
+                let env_dir_hash = tokio::task::spawn_blocking(move || crate::task::hash_dir(&dir)).await??;
+                let key = format!("{key}\n{env_dir_hash}");
+                let image = match &build_image {
+                    Some(built) => Some(setup_cache_image(&key, built)),
+                    None => image_id(base).await?.map(|id| setup_cache_image(&key, &id)),
+                };
+                let hit = match &image {
+                    Some(image) => image_id(image).await?.is_some(),
+                    None => false,
+                };
+                if let Some(image) = image.as_ref().filter(|_| hit) {
+                    log.line(&format!("agent setup cache: starting from {image}"));
+                    main.insert("image".into(), json!(image));
+                    main.remove("build");
+                    build_image = None;
+                }
+                Some(SetupCache { key, image, hit })
+            }
+            (Some(_), _) => {
+                log.line("agent setup cache: not used (the main container sets env, egress control, mounts or its own compose)");
+                None
+            }
+            (None, _) => None,
+        };
         let mut files = vec![write("docker-compose-base.json", json!({"services": {"main": main}}))?];
         let mut user_files = vec![];
         if task_compose.exists() {
@@ -816,11 +876,49 @@ impl DockerEnv {
             std::env::var("DOCKER_CONFIG").unwrap_or_else(|_| cache_home().join(".docker").display().to_string()),
         );
         crate::redact::register_env(&compose_env);
-        Ok(DockerEnv { spec, files, compose_env, build_image, egress, egress_services, log })
+        Ok(DockerEnv { spec, files, compose_env, build_image, egress, egress_services, log, setup_cache })
     }
 
     pub fn workdir(&self) -> Option<&str> {
         self.spec.config.workdir.as_deref()
+    }
+
+    /// Commit the main container, as agent setup left it, to the setup cache image; a failure is logged,
+    /// not raised, since the trial does not need the image.
+    pub async fn commit_setup_cache(&self) {
+        let Some(cache) = self.setup_cache.as_ref().filter(|c| !c.hit) else { return };
+        let committed = async {
+            let ps = self.run_ok(to_owned_args(&["ps", "--quiet", MAIN]), Some(QUICK_COMMAND_TIMEOUT)).await?;
+            let id = ps.stdout.trim();
+            if id.is_empty() {
+                bail!("no main container");
+            }
+            let inspected =
+                docker_output(&["inspect", "--format", "{{.Image}} {{json .Config.Labels}}", id], QUICK_COMMAND_TIMEOUT).await?;
+            let inspected = String::from_utf8_lossy(&inspected.stdout);
+            let (main_image_id, labels) = inspected.trim().split_once(' ').ok_or_else(|| anyhow!("cannot inspect the main container"))?;
+            let image = cache.image.clone().unwrap_or_else(|| setup_cache_image(&cache.key, main_image_id));
+            if image_id(&image).await?.is_some() {
+                return anyhow::Ok(format!("{image} is already there (another trial committed it)"));
+            }
+            let labels: BTreeMap<String, String> = serde_json::from_str(labels).unwrap_or_default();
+            let mut changes = vec!["LABEL dev.hbench.setup-cache=1".to_string()];
+            changes.extend(labels.keys().filter(|k| k.starts_with("com.docker.compose.")).map(|k| format!("LABEL {k}=")));
+            let mut args: Vec<&str> = vec!["commit"];
+            for c in &changes {
+                args.extend(["--change", c]);
+            }
+            args.extend([id, &image]);
+            let out = docker_output(&args, SETUP_COMMIT_TIMEOUT).await?;
+            if !out.status.success() {
+                bail!("{}", String::from_utf8_lossy(&out.stderr).trim());
+            }
+            anyhow::Ok(format!("committed {image}"))
+        };
+        match committed.await {
+            Ok(done) => self.log.line(&format!("agent setup cache: {done}")),
+            Err(e) => self.log.line(&format!("agent setup cache: commit failed: {e:#}")),
+        }
     }
 
     fn compose(&self, args: &[String]) -> Command {
@@ -1417,6 +1515,15 @@ pub async fn preflight() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_setup_cache_image_is_named_by_its_main_image_and_key() {
+        let image = setup_cache_image("{\"agent\":\"codex\"}", "sha256:aa");
+        assert!(image.starts_with("hbench-setup-cache:") && image.len() == "hbench-setup-cache:".len() + 16, "{image}");
+        assert_eq!(image, setup_cache_image("{\"agent\":\"codex\"}", "sha256:aa"));
+        assert_ne!(image, setup_cache_image("{\"agent\":\"codex\"}", "sha256:bb"));
+        assert_ne!(image, setup_cache_image("{\"agent\":\"claude-code\"}", "sha256:aa"));
+    }
+
     #[test]
     fn ssh_not_connected_only_before_a_session() {
         let r = |code, stderr: &str| ExecResult { code, stdout: String::new(), stderr: stderr.into() };

@@ -101,6 +101,11 @@ pub trait Agent: Send + Sync {
     fn supports_resume(&self) -> bool {
         false
     }
+    /// Setup writes only what hbench's version and the agent's options decide (no credentials, no host
+    /// files), so `--cache-agent-setup` may commit the container it leaves for later trials.
+    fn setup_is_cacheable(&self) -> bool {
+        false
+    }
     /// Can seed a session from a native (`atif=false`) or ATIF (`atif=true`) trajectory.
     fn supports_load(&self, _atif: bool) -> bool {
         false
@@ -293,6 +298,20 @@ pub fn model_endpoint(cfg: &AgentConfig, task: &Task) -> Option<ModelEndpoint> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_agents_whose_setup_writes_no_credentials_or_host_files_are_cacheable() {
+        let task = Arc::new(Task::load(std::path::Path::new("examples/tasks/hello-world")).unwrap());
+        let cacheable = |name: &str| {
+            let cfg: AgentConfig =
+                serde_json::from_value(serde_json::json!({"name": name, "model_name": "anthropic/claude-sonnet-4-5"})).unwrap();
+            create(&cfg, std::env::temp_dir(), task.clone(), None).is_ok_and(|agent| agent.setup_is_cacheable())
+        };
+        let expected = ["claude-code", "codex", "deepseek-harness", "opencode"];
+        for name in agent_names() {
+            assert_eq!(cacheable(name), expected.contains(&name), "{name}");
+        }
+    }
 
     #[test]
     fn options_come_from_the_schema() {
