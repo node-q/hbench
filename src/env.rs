@@ -453,16 +453,24 @@ pub struct DockerEnv {
     setup_cache: Option<SetupCache>,
 }
 
-/// The agent setup image this trial started from (`hit`), or commits after agent setup.
+/// What the agent setup image depends on besides the main image; the image, unless the main image is pulled by
+/// this trial and its id is known only once the container runs; and whether this trial started from it.
 struct SetupCache {
-    image: String,
+    key: String,
+    image: Option<String>,
     hit: bool,
 }
 
-/// `hbench-setup-cache:<hash>` of the main image and `key`.
+/// `hbench-setup-cache:<hash>` of the main image and `key`: the name of an image hbench builds, which hashes its
+/// build context and goes away with the trial, else the id of the pulled image, whose tag may move.
 pub fn setup_cache_image(key: &str, main_image: &str) -> String {
     let hash = sha2::Digest::finalize(sha2::Digest::chain_update(sha2::Sha256::default(), format!("{main_image}\n{key}")));
     format!("hbench-setup-cache:{}", &crate::task::hex(&hash)[..16])
+}
+
+async fn image_id(image: &str) -> Result<Option<String>> {
+    let out = docker_output(&["image", "inspect", "--format", "{{.Id}}", image], QUICK_COMMAND_TIMEOUT).await?;
+    Ok(Some(String::from_utf8_lossy(&out.stdout).trim().to_string()).filter(|id| out.status.success() && !id.is_empty()))
 }
 
 /// Docker image/project names: lowercase, alnum first, restricted charset.
@@ -773,15 +781,24 @@ impl DockerEnv {
         let mut build_image = build_image;
         let setup_cache = match (&spec.setup_cache_key, main.get("image").and_then(Value::as_str)) {
             (Some(key), Some(base)) if plain => {
-                let image = setup_cache_image(key, base);
-                let hit = docker_output(&["image", "inspect", &image], QUICK_COMMAND_TIMEOUT).await?.status.success();
-                if hit {
+                let dir = env_dir.clone();
+                let env_dir_hash = tokio::task::spawn_blocking(move || crate::task::hash_dir(&dir)).await??;
+                let key = format!("{key}\n{env_dir_hash}");
+                let image = match &build_image {
+                    Some(built) => Some(setup_cache_image(&key, built)),
+                    None => image_id(base).await?.map(|id| setup_cache_image(&key, &id)),
+                };
+                let hit = match &image {
+                    Some(image) => image_id(image).await?.is_some(),
+                    None => false,
+                };
+                if let Some(image) = image.as_ref().filter(|_| hit) {
                     log.line(&format!("agent setup cache: starting from {image}"));
                     main.insert("image".into(), json!(image));
                     main.remove("build");
                     build_image = None;
                 }
-                Some(SetupCache { image, hit })
+                Some(SetupCache { key, image, hit })
             }
             (Some(_), _) => {
                 log.line("agent setup cache: not used (the main container sets env, egress control, mounts or its own compose)");
@@ -876,23 +893,27 @@ impl DockerEnv {
             if id.is_empty() {
                 bail!("no main container");
             }
-            let labels = docker_output(&["inspect", "--format", "{{json .Config.Labels}}", id], QUICK_COMMAND_TIMEOUT).await?;
-            let labels: BTreeMap<String, String> = serde_json::from_slice(&labels.stdout).unwrap_or_default();
+            let inspected =
+                docker_output(&["inspect", "--format", "{{.Image}} {{json .Config.Labels}}", id], QUICK_COMMAND_TIMEOUT).await?;
+            let inspected = String::from_utf8_lossy(&inspected.stdout);
+            let (main_image_id, labels) = inspected.trim().split_once(' ').ok_or_else(|| anyhow!("cannot inspect the main container"))?;
+            let image = cache.image.clone().unwrap_or_else(|| setup_cache_image(&cache.key, main_image_id));
+            let labels: BTreeMap<String, String> = serde_json::from_str(labels).unwrap_or_default();
             let mut changes = vec!["LABEL dev.hbench.setup-cache=1".to_string()];
             changes.extend(labels.keys().filter(|k| k.starts_with("com.docker.compose.")).map(|k| format!("LABEL {k}=")));
             let mut args: Vec<&str> = vec!["commit"];
             for c in &changes {
                 args.extend(["--change", c]);
             }
-            args.extend([id, &cache.image]);
+            args.extend([id, &image]);
             let out = docker_output(&args, SETUP_COMMIT_TIMEOUT).await?;
             if !out.status.success() {
                 bail!("{}", String::from_utf8_lossy(&out.stderr).trim());
             }
-            anyhow::Ok(())
+            anyhow::Ok(format!("committed {image}"))
         };
         match committed.await {
-            Ok(()) => self.log.line(&format!("agent setup cache: committed {}", cache.image)),
+            Ok(done) => self.log.line(&format!("agent setup cache: {done}")),
             Err(e) => self.log.line(&format!("agent setup cache: commit failed: {e:#}")),
         }
     }
@@ -1493,11 +1514,11 @@ pub async fn preflight() -> Result<()> {
 mod tests {
     #[test]
     fn a_setup_cache_image_is_named_by_its_main_image_and_key() {
-        let image = setup_cache_image("{\"agent\":\"codex\"}", "ubuntu:24.04");
+        let image = setup_cache_image("{\"agent\":\"codex\"}", "sha256:aa");
         assert!(image.starts_with("hbench-setup-cache:") && image.len() == "hbench-setup-cache:".len() + 16, "{image}");
-        assert_eq!(image, setup_cache_image("{\"agent\":\"codex\"}", "ubuntu:24.04"));
-        assert_ne!(image, setup_cache_image("{\"agent\":\"codex\"}", "ubuntu:22.04"));
-        assert_ne!(image, setup_cache_image("{\"agent\":\"claude-code\"}", "ubuntu:24.04"));
+        assert_eq!(image, setup_cache_image("{\"agent\":\"codex\"}", "sha256:aa"));
+        assert_ne!(image, setup_cache_image("{\"agent\":\"codex\"}", "sha256:bb"));
+        assert_ne!(image, setup_cache_image("{\"agent\":\"claude-code\"}", "sha256:aa"));
     }
 
     #[test]

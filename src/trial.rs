@@ -438,8 +438,9 @@ impl Trial {
         })
     }
 
-    /// What, besides the main image, this trial's agent setup image depends on: None when the cache is off,
-    /// the agent's setup is not cacheable, or setup depends on more than the agent and its options.
+    /// What, besides the main image and the task's environment dir, this trial's agent setup image depends on:
+    /// None when the cache is off, the agent's setup is not cacheable, or setup depends on more than the agent and
+    /// its options.
     fn setup_cache_key(&self, step: Option<&StepConfig>) -> Option<String> {
         let a = &self.cfg.agent;
         if !self.cfg.environment.cache_agent_setup {
@@ -465,6 +466,7 @@ impl Trial {
             "mcp_servers": a.mcp_servers,
             "env": a.env.keys().collect::<Vec<_>>(),
             "user": self.agent_user(step),
+            "scrub": crate::integrity::scrub_command(&crate::integrity::leaks(&self.task.dir)),
         });
         Some(key.to_string())
     }
