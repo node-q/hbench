@@ -13,11 +13,13 @@ mod fmt;
 mod fsutil;
 mod integrity;
 mod job;
+mod job_upload;
 mod manifest;
 mod metrics;
 mod migrate;
 mod observe;
 mod oci;
+mod progress;
 mod redact;
 mod registry;
 mod regrade;
@@ -34,7 +36,7 @@ mod wizard;
 use crate::config::{AgentConfig, DatasetConfig, JobConfig, SourceTrial, TaskRef, TrialConfig};
 use crate::task::{Artifact, Task};
 use anyhow::{Context, Result, bail};
-use clap::{Args, CommandFactory, Parser, Subcommand};
+use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -52,7 +54,7 @@ struct Cli {
 enum Cmd {
     /// Run a job (alias of `jobs start`).
     Run(Box<RunArgs>),
-    /// Jobs: start, resume, summary, regrade.
+    /// Jobs: start, resume, summary, verify, regrade, upload.
     Jobs {
         #[command(subcommand)]
         cmd: JobsCmd,
@@ -148,7 +150,7 @@ enum Cmd {
         /// Target shell.
         shell: clap_complete::Shell,
     },
-    /// Install the latest release (runs `curl -fsSL https://nodeq.tech/install.sh | sh`).
+    /// Install the latest release (runs `curl -fsSL https://github.com/node-q/hbench/releases/latest/download/install.sh | sh`).
     Update,
 }
 
@@ -358,6 +360,25 @@ enum JobsCmd {
         #[arg(short = 'p', long = "job-path")]
         job_path: Option<PathBuf>,
     },
+    /// Send a finished job to a server that takes one: its folder as a gzipped tar in a POST, after checking it
+    /// against its manifest.json. Prints the server's answer; exit 1 if it refused the job.
+    Upload {
+        /// Job dir.
+        #[arg(required_unless_present = "job_path", conflicts_with = "job_path")]
+        path: Option<PathBuf>,
+        /// Job dir (same as the positional argument).
+        #[arg(short = 'p', long = "job-path")]
+        job_path: Option<PathBuf>,
+        /// Where to POST the job.
+        #[arg(long)]
+        url: String,
+        /// Environment variable holding a token, sent as `Authorization: Bearer <token>`.
+        #[arg(long, value_name = "VAR")]
+        token_env: Option<String>,
+        /// Another request header, `Name: value` (repeatable).
+        #[arg(short = 'H', long = "header", value_name = "HEADER")]
+        headers: Vec<String>,
+    },
     /// Re-run (separate) verification against a finished job's recorded outputs.
     Regrade {
         /// Source job dir whose trials are regraded.
@@ -418,9 +439,11 @@ enum TrialsCmd {
 
 #[derive(Subcommand)]
 enum DatasetsCmd {
-    /// List datasets in a registry (--registry-url, --registry-path, --registry oci-layout:<dir>, or --registry oci://... with a dataset index).
+    /// List the datasets in a registry: the default OCI registry, or the one --registry, --registry-url or
+    /// --registry-path names. An oci:// registry is listed from its dataset index.
     List(RegistryArgs),
-    /// Download a registry dataset's tasks into the cache (or --output-dir); needs --registry-url, --registry-path or --registry.
+    /// Download a registry dataset's tasks into the cache (or --output-dir), from the default OCI registry unless
+    /// --registry, --registry-url or --registry-path names another.
     Download {
         /// Dataset, name[@version].
         dataset: String,
@@ -662,7 +685,8 @@ struct RunArgs {
     /// Local task dir, or a dir of task dirs.
     #[arg(short = 'p', long = "path", help_heading = "Selection")]
     path: Option<PathBuf>,
-    /// Registry dataset, name[@version]. Needs --registry-url, --registry-path or --registry.
+    /// Registry dataset, name[@version], from --registry, --registry-url or --registry-path, else from
+    /// $HBENCH_REGISTRY, else from oci://ghcr.io/node-q/hbench-datasets.
     #[arg(short = 'd', long = "dataset", help_heading = "Selection")]
     dataset: Option<String>,
     #[command(flatten, next_help_heading = "Selection")]
@@ -703,6 +727,12 @@ struct RunArgs {
     /// Per-agent cap on concurrent agent runs.
     #[arg(long, help_heading = "Agent")]
     n_concurrent_agent: Option<usize>,
+    /// What served the model, recorded with each trial (e.g. lmstudio, vllm, openrouter:together).
+    #[arg(long, help_heading = "Agent")]
+    model_served_by: Option<String>,
+    /// The served model's quantization, recorded with each trial (e.g. q4_k_m, fp8).
+    #[arg(long, help_heading = "Agent")]
+    model_quantization: Option<String>,
     /// Skill dir uploaded to /hbench/skills (repeatable).
     #[arg(long, help_heading = "Agent")]
     skill: Vec<String>,
@@ -791,7 +821,7 @@ struct RunArgs {
     /// Artifact path to collect (repeatable).
     #[arg(long, help_heading = "Output")]
     artifact: Vec<String>,
-    /// No per-trial progress lines.
+    /// No progress: no download bar, no per-trial lines.
     #[arg(long, help_heading = "Output")]
     quiet: bool,
     /// Print every trial's log and command output as it runs, each line under the trial's name.
@@ -990,9 +1020,14 @@ fn build_job_config(a: &RunArgs) -> Result<JobConfig> {
 }
 
 /// `-a`/`-m` replace the config's agents with one per model, based on its first agent; `--ak`, `--ae`,
-/// `--skill` and `--n-concurrent-agent` apply to every agent.
+/// `--skill`, `--n-concurrent-agent`, `--model-served-by` and `--model-quantization` apply to every agent.
 fn apply_agent_flags(cfg: &mut JobConfig, a: &RunArgs) {
-    let has_overrides = !a.agent_kwargs.is_empty() || !a.agent_env.is_empty() || a.n_concurrent_agent.is_some() || !a.skill.is_empty();
+    let has_overrides = !a.agent_kwargs.is_empty()
+        || !a.agent_env.is_empty()
+        || a.n_concurrent_agent.is_some()
+        || !a.skill.is_empty()
+        || a.model_served_by.is_some()
+        || a.model_quantization.is_some();
     if a.agent.is_some() || !a.models.is_empty() || (has_overrides && cfg.agents.is_empty()) {
         let base = cfg.agents.first().cloned().unwrap_or_default();
         let base = AgentConfig { name: a.agent.clone().or(base.name), ..base };
@@ -1009,6 +1044,8 @@ fn apply_agent_flags(cfg: &mut JobConfig, a: &RunArgs) {
             c.n_concurrent = a.n_concurrent_agent;
         }
         c.skills.extend(a.skill.iter().cloned());
+        c.model_served_by = a.model_served_by.clone().or(c.model_served_by.take());
+        c.model_quantization = a.model_quantization.clone().or(c.model_quantization.take());
     }
 }
 
@@ -1027,42 +1064,13 @@ fn preflight_agents(cfg: &JobConfig) -> Result<()> {
     Ok(())
 }
 
-/// Credential env vars an agent accepts, any one of which is enough (API keys, OAuth tokens,
-/// Bedrock/Vertex switches, custom endpoints). None = not decidable up front, so not checked.
-fn auth_envs(agent: &str) -> Option<&'static [&'static str]> {
-    // Only agents with a fixed provider; passthrough agents depend on the model/endpoint.
-    Some(match agent {
-        "claude-code" => &[
-            "ANTHROPIC_API_KEY",
-            "ANTHROPIC_AUTH_TOKEN",
-            "CLAUDE_CODE_OAUTH_TOKEN",
-            "ANTHROPIC_BASE_URL",
-            "AWS_BEARER_TOKEN_BEDROCK",
-            "CLAUDE_CODE_USE_BEDROCK",
-            "CLAUDE_CODE_USE_VERTEX",
-        ],
-        "codex" => &["OPENAI_API_KEY", "CODEX_AUTH_JSON_PATH", "CODEX_FORCE_AUTH_JSON", "OPENAI_BASE_URL", "OPENAI_API_BASE"],
-        "gemini-cli" => &[
-            "GEMINI_API_KEY",
-            "GOOGLE_API_KEY",
-            "GOOGLE_GENERATIVE_AI_API_KEY",
-            "GEMINI_OAUTH_CREDS_PATH",
-            "GEMINI_FORCE_OAUTH",
-            "GOOGLE_GENAI_USE_VERTEXAI",
-            "GOOGLE_APPLICATION_CREDENTIALS",
-            "GOOGLE_GEMINI_BASE_URL",
-        ],
-        _ => return None,
-    })
-}
-
 /// Fail fast when an agent has none of its credential env vars (host env or agent `env`).
 fn preflight_auth(cfg: &JobConfig) -> Result<()> {
     if cfg.install_only {
         return Ok(());
     }
     for a in &cfg.agents {
-        let Some(names) = auth_envs(a.name()) else { continue };
+        let Some(names) = agents::installed::credential_envs(a.name()) else { continue };
         let env = crate::task::resolve_env_vars(&a.env).unwrap_or_default();
         let set = |n: &&str| env.get(*n).or(std::env::var(n).ok().as_ref()).is_some_and(|v| !v.is_empty());
         if !names.iter().any(set) {
@@ -1110,18 +1118,26 @@ pub fn cancel_on_signal(trials: impl Fn() -> Vec<String> + Send + 'static) -> to
         if sigs.recv().await.is_none() {
             return;
         }
-        eprintln!("\ncancelling: tearing down containers (signal again to force quit)...");
+        eprintln!("{}cancelling: tearing down containers (signal again to force quit)...", over_status_line());
         let _ = tx.send(true);
         if sigs.recv().await.is_some() {
-            eprintln!("force quit: removing this run's compose projects (signal again to skip)...");
+            eprintln!("{}force quit: removing this run's compose projects (signal again to skip)...", over_status_line());
             tokio::select! {
                 _ = force_cleanup(trials()) => {}
                 _ = sigs.recv() => {}
             }
+            let mut stderr = std::io::stderr().lock();
+            let _ = std::io::Write::write_all(&mut stderr, over_status_line().as_bytes());
             std::process::exit(130);
         }
     });
     rx
+}
+
+/// Start of a line printed while the live status line may be on screen: it wipes that line (and an
+/// echoed `^C`) on a terminal.
+fn over_status_line() -> &'static str {
+    job::clear_line(std::io::IsTerminal::is_terminal(&std::io::stderr()))
 }
 
 /// Best effort, bounded: `docker compose down` every project named after one of `trials`.
@@ -1239,7 +1255,9 @@ async fn main() -> ExitCode {
 async fn run() -> Result<ExitCode> {
     redact::register_host_env();
     let ok = |r: Result<()>| r.map(|_| ExitCode::SUCCESS);
-    let cli = Cli::parse();
+    let logo = clap::builder::styling::AnsiColor::Cyan.on_default().bold();
+    let matches = Cli::command().before_help(format!("{logo}{}{logo:#}", wizard::LOGO)).get_matches();
+    let cli = Cli::from_arg_matches(&matches).unwrap_or_else(|e| e.exit());
     if !matches!(cli.cmd, Cmd::Completions { .. } | Cmd::Update) {
         update::notify();
     }
@@ -1315,6 +1333,14 @@ async fn run() -> Result<ExitCode> {
             } else {
                 job::print_summary(&serde_json::from_str(&s).with_context(|| format!("parsing {}", p.display()))?, &path);
             }
+            Ok(ExitCode::SUCCESS)
+        }
+        Cmd::Jobs { cmd: JobsCmd::Upload { path, job_path, url, token_env, headers } } => {
+            let job = path.or(job_path).context("pass a job dir")?;
+            let upload = job_upload::Upload { job: job.clone(), url: url.clone(), token_env, headers };
+            let done = job_upload::run(&upload).await?;
+            eprintln!("uploaded {} ({:.1} MB) to {url}", job.display(), done.bytes as f64 / 1e6);
+            println!("{}", done.response);
             Ok(ExitCode::SUCCESS)
         }
         Cmd::Jobs { cmd: JobsCmd::Verify { path, job_path } } => {
@@ -1871,7 +1897,7 @@ mod tests {
         assert!(preflight_agents(&agent("claude-code", serde_json::json!({"bogus": 1}), &[])).is_err());
         assert!(preflight_auth(&agent("claude-code", serde_json::json!({}), &[("CLAUDE_CODE_OAUTH_TOKEN", "t")])).is_ok());
         assert!(preflight_auth(&agent("aider", serde_json::json!({}), &[])).is_ok()); // undecidable: skipped
-        if auth_envs("codex").unwrap().iter().all(|n| std::env::var(n).is_err()) {
+        if agents::installed::credential_envs("codex").unwrap().iter().all(|n| std::env::var(n).is_err()) {
             let e = preflight_auth(&agent("codex", serde_json::json!({}), &[])).unwrap_err().to_string();
             assert!(e.contains("OPENAI_API_KEY"), "{e}");
         }

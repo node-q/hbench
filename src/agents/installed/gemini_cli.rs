@@ -3,21 +3,32 @@
 use super::common::parse_jsonl;
 use super::common::{NVM_LOAD, detect_version, installed_dir, nvm_load, nvm_node_install_snippet, opts, parse_bool_env, skills_dir};
 use super::pins;
-use super::{connection, ensure_system_dependencies, exec_agent, exec_root_checked, pinned_bin_wrapper_command, safe_bin_symlink_command};
-use crate::agents::model_connection::{Resolved, Spec};
+use super::{
+    connection, ensure_system_dependencies, env_lookup, exec_agent, exec_root_checked, pinned_bin_wrapper_command, safe_bin_symlink_command,
+};
+use crate::agents::model_connection::{On, Resolved, Routing, Spec, Switch};
 use crate::agents::pricing;
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
+use crate::atif;
 use crate::env::quote;
 use anyhow::{Result, bail};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-const SPEC: Spec = Spec {
+pub const SPEC: Spec = Spec {
     default_provider: Some("google"),
     api_key_envs: &["GEMINI_API_KEY"],
     base_url_envs: &["GOOGLE_GEMINI_BASE_URL"],
     passthrough: true,
+};
+const OAUTH_CREDS_PATH: Switch = Switch::new("GEMINI_OAUTH_CREDS_PATH", On::Set);
+const FORCE_OAUTH: Switch = Switch::new("GEMINI_FORCE_OAUTH", On::Bool);
+/// OAuth and Vertex routing have no standard Gemini API endpoint to infer.
+pub const ROUTING: Routing = Routing {
+    opaque_auth: &[OAUTH_CREDS_PATH, FORCE_OAUTH, Switch::new("GOOGLE_GENAI_USE_VERTEXAI", On::Bool)],
+    credential_envs: &["GOOGLE_APPLICATION_CREDENTIALS"],
+    ..Routing::NONE
 };
 const SECRETS_DIR: &str = "/tmp/gemini-secrets";
 
@@ -61,9 +72,7 @@ impl GeminiCli {
     /// OAuth / Vertex routing has no standard Gemini API endpoint to infer.
     fn connection(&self) -> Resolved {
         let mut c = connection(&self.args, SPEC);
-        let opaque = self.args.get_env("GEMINI_OAUTH_CREDS_PATH").is_some()
-            || ["GEMINI_FORCE_OAUTH", "GOOGLE_GENAI_USE_VERTEXAI"].iter().any(|n| parse_bool_env(self.args.get_env(n), n).unwrap_or(false));
-        if opaque {
+        if ROUTING.opaque_auth_on(&env_lookup(&self.args)) {
             c.provider = None;
             c.base_url = None;
         }
@@ -72,16 +81,16 @@ impl GeminiCli {
 
     /// GEMINI_OAUTH_CREDS_PATH=<path> or GEMINI_FORCE_OAUTH=<truthy> (~/.gemini/oauth_creds.json).
     fn oauth_creds_path(&self) -> Result<Option<PathBuf>> {
-        if let Some(p) = self.args.get_env("GEMINI_OAUTH_CREDS_PATH") {
+        if let Some(p) = self.args.get_env(OAUTH_CREDS_PATH.env) {
             if !Path::new(&p).is_file() {
-                bail!("GEMINI_OAUTH_CREDS_PATH points to non-existent file: {p}");
+                bail!("{} points to non-existent file: {p}", OAUTH_CREDS_PATH.env);
             }
             return Ok(Some(p.into()));
         }
-        if parse_bool_env(self.args.get_env("GEMINI_FORCE_OAUTH"), "GEMINI_FORCE_OAUTH")? {
+        if parse_bool_env(self.args.get_env(FORCE_OAUTH.env), FORCE_OAUTH.env)? {
             let d = PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".gemini/oauth_creds.json");
             if !d.is_file() {
-                bail!("GEMINI_FORCE_OAUTH is set but {} does not exist", d.display());
+                bail!("{} is set but {} does not exist", FORCE_OAUTH.env, d.display());
             }
             return Ok(Some(d));
         }
@@ -259,16 +268,109 @@ pub fn load_gemini_session(text: &str) -> Option<Value> {
 }
 
 /// Token totals over `gemini` messages (cost comes from `gemini_cost`).
+/// A message's (prompt incl. cached, completion incl. thoughts, cached) tokens.
+fn message_tokens(m: &Value) -> (i64, i64, i64) {
+    let n = |k: &str| m["tokens"][k].as_i64().unwrap_or(0);
+    (n("input"), n("output") + n("tool") + n("thoughts"), n("cached"))
+}
+
 pub fn gemini_usage(session: &Value) -> AgentContext {
     let (mut i, mut o, mut c) = (0, 0, 0);
     for m in session["messages"].as_array().into_iter().flatten().filter(|m| m["type"] == "gemini") {
-        let t = &m["tokens"];
-        let n = |k: &str| t[k].as_i64().unwrap_or(0);
-        i += n("input");
-        o += n("output") + n("tool") + n("thoughts");
-        c += n("cached");
+        let (pi, po, pc) = message_tokens(m);
+        (i, o, c) = (i + pi, o + po, c + pc);
     }
     AgentContext { n_input_tokens: Some(i), n_cache_tokens: Some(c), n_output_tokens: Some(o), ..Default::default() }
+}
+
+/// A user message's text: a plain string, or the text of its parts.
+fn text_of(content: &Value) -> String {
+    match content.as_array() {
+        Some(parts) => parts.iter().filter_map(|p| p["text"].as_str()).collect::<Vec<_>>().join("\n"),
+        None => content.as_str().unwrap_or_default().into(),
+    }
+}
+
+/// A tool call's result: the `output` or `error` of its function responses.
+fn tool_output(call: &Value) -> Value {
+    let outputs: Vec<&Value> = call["result"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|part| &part["functionResponse"]["response"])
+        .map(|r| if r["output"].is_null() { &r["error"] } else { &r["output"] })
+        .filter(|o| !o.is_null())
+        .collect();
+    match outputs.as_slice() {
+        [] => call["resultDisplay"].clone(),
+        [one] => (*one).clone(),
+        many => json!(many),
+    }
+}
+
+/// One `gemini` message, a model response with its tool calls and their results, as an agent step.
+fn agent_step(m: &Value) -> atif::Step {
+    let calls = m["toolCalls"].as_array().map(Vec::as_slice).unwrap_or_default();
+    let thoughts: Vec<&str> = m["thoughts"].as_array().into_iter().flatten().filter_map(|t| t["description"].as_str()).collect();
+    let (prompt, completion, cached) = message_tokens(m);
+    let tool_calls: Vec<atif::ToolCall> = calls
+        .iter()
+        .map(|c| atif::ToolCall {
+            tool_call_id: c["id"].as_str().unwrap_or_default().into(),
+            function_name: c["name"].as_str().unwrap_or_default().into(),
+            arguments: c["args"].clone(),
+            extra: None,
+        })
+        .collect();
+    let results: Vec<atif::ObservationResult> = calls
+        .iter()
+        .map(|c| atif::ObservationResult {
+            source_call_id: c["id"].as_str().map(String::from),
+            content: Some(tool_output(c)),
+            ..Default::default()
+        })
+        .collect();
+    atif::Step {
+        source: "agent".into(),
+        timestamp: m["timestamp"].as_str().map(String::from),
+        model_name: m["model"].as_str().map(String::from),
+        message: json!(text_of(&m["content"])),
+        reasoning_content: (!thoughts.is_empty()).then(|| thoughts.join("\n")),
+        tool_calls: (!tool_calls.is_empty()).then_some(tool_calls),
+        observation: (!results.is_empty()).then_some(atif::Observation { results }),
+        metrics: m["tokens"].is_object().then(|| atif::Metrics {
+            prompt_tokens: Some(prompt),
+            completion_tokens: Some(completion),
+            cached_tokens: Some(cached),
+            ..Default::default()
+        }),
+        ..Default::default()
+    }
+}
+
+/// A loaded Gemini CLI session -> ATIF. `info`, `warning` and `error` messages are the CLI's own, not the model's.
+pub fn atif_trajectory(session: &Value, version: Option<&str>, model: Option<&str>) -> Option<atif::Trajectory> {
+    let steps = session["messages"]
+        .as_array()?
+        .iter()
+        .filter_map(|m| match m["type"].as_str() {
+            Some("user") => Some(atif::Step {
+                source: "user".into(),
+                timestamp: m["timestamp"].as_str().map(String::from),
+                message: json!(text_of(&m["content"])),
+                ..Default::default()
+            }),
+            Some("gemini") => Some(agent_step(m)),
+            _ => None,
+        })
+        .collect();
+    let agent = atif::Agent {
+        name: "gemini-cli".into(),
+        version: version.unwrap_or("unknown").into(),
+        model_name: model.map(String::from),
+        ..Default::default()
+    };
+    atif::assemble(agent, session["sessionId"].as_str().map(String::from), steps)
 }
 
 const VERSION_CMD: &str = concat!(nvm_load!(), "; gemini --version");
@@ -412,6 +514,10 @@ impl Agent for GeminiCli {
                 self.args.model_name.as_deref().and_then(|m| {
                     gemini_cost(m, c.n_input_tokens.unwrap_or(0), c.n_output_tokens.unwrap_or(0), c.n_cache_tokens.unwrap_or(0))
                 });
+            if let Some(mut t) = atif_trajectory(&s, self.version.as_deref(), self.args.model_name.as_deref()) {
+                t.final_metrics.get_or_insert_default().total_cost_usd = ctx.cost_usd;
+                atif::write_trajectory(logs_dir, &t);
+            }
         }
     }
 }
@@ -474,6 +580,61 @@ mod tests {
             agent(json!({}), &[], None).unwrap().acp_command().unwrap(),
             vec!["env", "GEMINI_CLI_TRUST_WORKSPACE=true", "gemini", "--acp"]
         );
+    }
+
+    #[test]
+    fn session_to_atif() {
+        let session = json!({"sessionId": "s1", "messages": [
+            {"id": "m1", "timestamp": "2026-03-05T19:47:23.449Z", "type": "user", "content": [{"text": "task"}]},
+            {"id": "m2", "timestamp": "2026-03-05T19:47:30.427Z", "type": "gemini", "content": "I will check.", "model": "gemini-3-flash-preview",
+             "thoughts": [{"subject": "Plan", "description": "check first", "timestamp": "2026-03-05T19:47:25.765Z"}],
+             "tokens": {"input": 8438, "output": 48, "cached": 100, "thoughts": 609, "tool": 0, "total": 9095},
+             "toolCalls": [
+                 {"id": "c1", "name": "run_shell_command", "args": {"command": "R --version"}, "status": "success",
+                  "result": [{"functionResponse": {"id": "c1", "name": "run_shell_command", "response": {"output": "Output: 4.3"}}}]},
+                 {"id": "c2", "name": "read_file", "args": {"path": "x"}, "status": "error",
+                  "result": [{"functionResponse": {"id": "c2", "name": "read_file", "response": {"error": "no such file"}}}]},
+                 {"id": "c3", "name": "write_file", "args": {}, "status": "cancelled", "result": null, "resultDisplay": "Cancelled"}]},
+            {"id": "m3", "type": "info", "content": "note"},
+            {"id": "m4", "timestamp": "2026-03-05T19:47:32.608Z", "type": "gemini", "content": "done", "thoughts": [], "tokens": null, "model": "gemini-3-flash-preview"}
+        ]});
+        let a = atif_trajectory(&session, Some("0.64.0"), Some("google/gemini-3-flash-preview")).unwrap();
+        assert_eq!((a.session_id.as_deref(), a.agent.name.as_str(), a.agent.version.as_str()), (Some("s1"), "gemini-cli", "0.64.0"));
+        assert_eq!(a.steps.iter().map(|s| (s.step_id, s.source.as_str())).collect::<Vec<_>>(), [(1, "user"), (2, "agent"), (3, "agent")]);
+        assert_eq!(a.steps[0].message, json!("task"));
+        let call = &a.steps[1];
+        assert_eq!((call.message.as_str(), call.reasoning_content.as_deref()), (Some("I will check."), Some("check first")));
+        assert_eq!(call.tool_calls.as_ref().unwrap()[0].arguments, json!({"command": "R --version"}));
+        let results = &call.observation.as_ref().unwrap().results;
+        assert_eq!(
+            results.iter().map(|r| (r.source_call_id.clone().unwrap(), r.content.clone().unwrap())).collect::<Vec<_>>(),
+            [("c1".to_string(), json!("Output: 4.3")), ("c2".to_string(), json!("no such file")), ("c3".to_string(), json!("Cancelled"))]
+        );
+        let m = call.metrics.as_ref().unwrap();
+        assert_eq!((m.prompt_tokens, m.completion_tokens, m.cached_tokens), (Some(8438), Some(657), Some(100)));
+        assert!(a.steps[2].metrics.is_none());
+        let f = a.final_metrics.as_ref().unwrap();
+        let c = gemini_usage(&session);
+        assert_eq!(
+            (f.total_prompt_tokens, f.total_completion_tokens, f.total_cached_tokens, f.total_steps),
+            (c.n_input_tokens, c.n_output_tokens, c.n_cache_tokens, Some(3))
+        );
+        assert!(atif_trajectory(&json!({"messages": []}), None, None).is_none());
+    }
+
+    #[test]
+    fn collect_usage_writes_atif() {
+        let dir = std::env::temp_dir().join(format!("hbench-gemini-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let log = "{\"sessionId\":\"s\"}\n{\"id\":\"m1\",\"type\":\"user\",\"content\":\"hi\"}\n\
+            {\"id\":\"m2\",\"type\":\"gemini\",\"content\":\"ok\",\"tokens\":{\"input\":3,\"output\":1}}\n";
+        std::fs::write(dir.join("gemini-cli.trajectory.jsonl"), log).unwrap();
+        let mut ctx = AgentContext::default();
+        agent(json!({}), &[], Some("google/gemini-2.5-flash")).unwrap().collect_usage(&dir, &mut ctx);
+        let t: atif::Trajectory = serde_json::from_str(&std::fs::read_to_string(dir.join("trajectory.json")).unwrap()).unwrap();
+        let f = t.final_metrics.unwrap();
+        assert_eq!((t.steps.len(), f.total_prompt_tokens, f.total_cost_usd), (2, ctx.n_input_tokens, ctx.cost_usd));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

@@ -12,7 +12,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
@@ -175,7 +175,30 @@ pub fn error_kind(e: &anyhow::Error) -> ErrorKind {
 /// records, closes stdin and runs the command. Secrets and commands then never appear on a command
 /// line, where any local user could read them with `ps` or /proc, on the host or in the container.
 /// Works the same on rootless Docker and Docker Desktop, since only `docker compose exec`'s stdin is used.
-const EXEC_FROM_STDIN: &str = r#"while IFS= read -r -d '' __hb && [ -n "$__hb" ]; do export -- "$__hb"; done; IFS= read -r -d '' __hb_cmd; unset __hb; exec </dev/null; eval "$__hb_cmd""#;
+/// Given a deadline `$1` and a grace `$2` in whole seconds, the command runs as its own process group, which gets
+/// SIGTERM at the deadline and SIGKILL after the grace: a command that times out stops in the container too,
+/// instead of running on (holding apt's lock, say) after hbench gave up on it. Needs only bash, `sleep` and `kill`.
+const EXEC_FROM_STDIN: &str = r#"__hb_t=$1; __hb_k=$2; set --
+while IFS= read -r -d '' __hb && [ -n "$__hb" ]; do export -- "$__hb"; done; IFS= read -r -d '' __hb_cmd; unset __hb; exec </dev/null
+if [ -z "$__hb_t" ]; then unset __hb_t __hb_k; eval "$__hb_cmd"; exit; fi
+set -m
+{ set +m; unset __hb_t __hb_k; eval "$__hb_cmd"; } &
+__hb_pid=$!
+{ sleep "$__hb_t"; kill -TERM -"$__hb_pid"; sleep "$__hb_k"; kill -KILL -"$__hb_pid"; } </dev/null >/dev/null 2>&1 &
+__hb_watchdog=$!
+set +m
+wait "$__hb_pid"; __hb_rc=$?
+kill -KILL -"$__hb_watchdog" 2>/dev/null
+exit "$__hb_rc""#;
+
+/// How long a timed-out exec's processes get between SIGTERM and SIGKILL in the container.
+const EXEC_KILL_GRACE: Duration = Duration::from_secs(5);
+
+/// The `$1 $2` of [`EXEC_FROM_STDIN`]: `sleep` portably takes whole seconds, and the deadline must not be 0.
+fn exec_deadline_args(t: Duration) -> [String; 2] {
+    let deadline = (t.as_secs() + u64::from(t.subsec_nanos() > 0)).max(1);
+    [deadline.to_string(), EXEC_KILL_GRACE.as_secs().to_string()]
+}
 
 /// The stdin [`EXEC_FROM_STDIN`] reads: env records, an empty record, then the command.
 fn exec_stdin(env: &BTreeMap<String, String>, command: &str) -> Vec<u8> {
@@ -330,6 +353,8 @@ fn egress_compose(
 ) -> Result<Value> {
     let mut sidecar = json!({
         "image": image,
+        // Built locally; a missing image must not turn into an anonymous Docker Hub pull.
+        "pull_policy": "never",
         "entrypoint": ["/opt/egress-sidecar/entrypoint.sh"],
         "init": true,
         "environment": {
@@ -491,9 +516,13 @@ fn ssh_not_connected(r: &ExecResult) -> bool {
     r.code != 0 && e.contains("dial-stdio") && pre_session
 }
 
-/// Pull/registry/daemon failures worth another `up`, as opposed to errors in the task's compose setup.
+/// Pull/registry/builder/daemon failures worth another `up` or `build`, as opposed to errors in the
+/// task's compose setup or Dockerfile.
 fn transient_docker_error(stderr: &str) -> bool {
     let s = stderr.to_ascii_lowercase();
+    if s.contains("no space left on device") {
+        return false;
+    }
     [
         "toomanyrequests",
         "too many requests",
@@ -506,6 +535,11 @@ fn transient_docker_error(stderr: &str) -> bool {
         "temporary failure in name resolution",
         "503 service unavailable",
         "502 bad gateway",
+        "504 gateway timeout",
+        "500 internal server error",
+        // BuildKit losing its builder or connection mid-build (e.g. another job switched or removed it).
+        "graceful_stop",
+        "code = unavailable",
     ]
     .iter()
     .any(|p| s.contains(p))
@@ -620,45 +654,42 @@ async fn docker_output(args: &[&str], timeout: Duration) -> Result<std::process:
         .map_err(Into::into)
 }
 
-/// Build (once) the vendored egress sidecar image, content-addressed.
+/// The vendored egress sidecar image, content-addressed, built if it's missing. Checked on every call,
+/// not memoized: an image pruned mid-run must be rebuilt, and compose never pulls it (`pull_policy: never`).
 async fn egress_image(log: &TrialLog) -> Result<String> {
-    static IMAGE: tokio::sync::OnceCell<String> = tokio::sync::OnceCell::const_new();
-    IMAGE
-        .get_or_try_init(|| async {
-            let files: [(&str, &str, u32); 5] = [
-                ("Dockerfile", include_str!("../assets/egress-sidecar/Dockerfile"), 0o644),
-                ("gost.yaml", include_str!("../assets/egress-sidecar/gost.yaml"), 0o644),
-                ("allowlist.txt", "", 0o644),
-                ("entrypoint.sh", include_str!("../assets/egress-sidecar/entrypoint.sh"), 0o755),
-                ("bin/network-policy", include_str!("../assets/egress-sidecar/bin/network-policy"), 0o755),
-            ];
-            let mut h = sha2::Sha256::default();
-            for (n, c, _) in files {
-                sha2::Digest::update(&mut h, n.as_bytes());
-                sha2::Digest::update(&mut h, c.as_bytes());
-            }
-            let hash = crate::task::hex(&sha2::Digest::finalize(h))[..12].to_string();
-            let image = format!("hbench-egress-sidecar:{hash}");
-            let exists = docker_output(&["image", "inspect", &image], QUICK_COMMAND_TIMEOUT).await?.status.success();
-            if !exists {
-                let dir = cache_root().join("egress-sidecar").join(&hash);
-                std::fs::create_dir_all(dir.join("bin"))?;
-                for (n, c, mode) in files {
-                    let p = dir.join(n);
-                    std::fs::write(&p, c)?;
-                    use std::os::unix::fs::PermissionsExt;
-                    std::fs::set_permissions(&p, std::fs::Permissions::from_mode(mode))?;
-                }
-                log.line(&format!("building egress sidecar image {image}"));
-                let out = docker_output(&["build", "-t", &image, &dir.to_string_lossy()], SIDECAR_BUILD_TIMEOUT).await?;
-                if !out.status.success() {
-                    bail!("building egress sidecar failed: {}", String::from_utf8_lossy(&out.stderr));
-                }
-            }
-            Ok(image)
-        })
-        .await
-        .cloned()
+    static BUILD: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    let _guard = BUILD.lock().await;
+    let files: [(&str, &str, u32); 5] = [
+        ("Dockerfile", include_str!("../assets/egress-sidecar/Dockerfile"), 0o644),
+        ("gost.yaml", include_str!("../assets/egress-sidecar/gost.yaml"), 0o644),
+        ("allowlist.txt", "", 0o644),
+        ("entrypoint.sh", include_str!("../assets/egress-sidecar/entrypoint.sh"), 0o755),
+        ("bin/network-policy", include_str!("../assets/egress-sidecar/bin/network-policy"), 0o755),
+    ];
+    let mut h = sha2::Sha256::default();
+    for (n, c, _) in files {
+        sha2::Digest::update(&mut h, n.as_bytes());
+        sha2::Digest::update(&mut h, c.as_bytes());
+    }
+    let hash = crate::task::hex(&sha2::Digest::finalize(h))[..12].to_string();
+    let image = format!("hbench-egress-sidecar:{hash}");
+    let exists = docker_output(&["image", "inspect", &image], QUICK_COMMAND_TIMEOUT).await?.status.success();
+    if !exists {
+        let dir = cache_root().join("egress-sidecar").join(&hash);
+        std::fs::create_dir_all(dir.join("bin"))?;
+        for (n, c, mode) in files {
+            let p = dir.join(n);
+            std::fs::write(&p, c)?;
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&p, std::fs::Permissions::from_mode(mode))?;
+        }
+        log.line(&format!("building egress sidecar image {image}"));
+        let out = docker_output(&["build", "-t", &image, &dir.to_string_lossy()], SIDECAR_BUILD_TIMEOUT).await?;
+        if !out.status.success() {
+            bail!("building egress sidecar failed: {}", String::from_utf8_lossy(&out.stderr));
+        }
+    }
+    Ok(image)
 }
 
 pub fn cache_root() -> PathBuf {
@@ -921,10 +952,7 @@ impl DockerEnv {
         let (status, stdout, stderr) = match timeout {
             Some(t) => match tokio::time::timeout(t, out).await {
                 Ok(r) => r?,
-                Err(_) => {
-                    self.log.line(&format!("timed out after {t:?}"));
-                    return Err(kind_err(ErrorKind::Timeout, format!("`{label}` timed out after {t:?}")));
-                }
+                Err(_) => return Err(self.timed_out(label, t)),
             },
             None => out.await?,
         };
@@ -934,6 +962,11 @@ impl DockerEnv {
             crate::observe::exit(self.log.who(), r.code);
         }
         Ok(r)
+    }
+
+    fn timed_out(&self, label: &str, t: Duration) -> anyhow::Error {
+        self.log.line(&format!("timed out after {t:?}"));
+        kind_err(ErrorKind::Timeout, format!("`{label}` timed out after {t:?}"))
     }
 
     async fn run_ok(&self, args: Vec<String>, timeout: Option<Duration>) -> Result<ExecResult> {
@@ -958,13 +991,16 @@ impl DockerEnv {
         let started = async move {
             if let Some(mut built) = built {
                 if !*built {
-                    self.run_ok(to_owned_args(&["build"]), None).await?;
+                    self.retrying(&["build"]).await?;
                     *built = true;
                 }
             } else if self.spec.env_dir.join("docker-compose.yaml").exists() {
-                self.run_ok(to_owned_args(&["build"]), None).await?;
+                self.retrying(&["build"]).await?;
             }
             let _ = self.run(to_owned_args(&["down", "--remove-orphans"]), Some(STOP_TIMEOUT), "down (stale)", None).await;
+            if self.egress.is_some() {
+                egress_image(&self.log).await?;
+            }
             self.up().await?;
             if self.egress == Some(EgressMethod::Proxy) && self.spec.baseline.mode != NetworkMode::Public {
                 self.check_isolated().await?;
@@ -1001,17 +1037,29 @@ impl DockerEnv {
         Ok(())
     }
 
-    /// `up --detach --wait`, retried when a pull or the daemon fails transiently.
     async fn up(&self) -> Result<()> {
+        self.retrying(&["up", "--detach", "--wait"]).await
+    }
+
+    /// `docker compose args`, retried when a pull, the builder or the daemon fails transiently.
+    async fn retrying(&self, args: &[&str]) -> Result<()> {
+        let label = args.join(" ");
         for attempt in 1.. {
-            let r = self.run(to_owned_args(&["up", "--detach", "--wait"]), None, "up --detach --wait", None).await?;
+            let r = self.run(to_owned_args(args), None, &label, None).await?;
             if r.code == 0 {
                 break;
             }
-            if attempt == 3 || !transient_docker_error(&r.stderr) {
-                bail!("docker compose up --detach --wait failed (exit {}): {}{}", r.code, tail(&r.stdout, 2000), tail(&r.stderr, 4000));
+            // Pruned between the check in start() and here: rebuild it and go again.
+            let sidecar_gone = self.egress.is_some()
+                && r.stderr.contains("hbench-egress-sidecar")
+                && r.stderr.to_ascii_lowercase().contains("no such image");
+            if attempt == 3 || !(sidecar_gone || transient_docker_error(&r.stderr)) {
+                bail!("docker compose {label} failed (exit {}): {}{}", r.code, tail(&r.stdout, 2000), tail(&r.stderr, 4000));
             }
-            self.log.line(&format!("transient docker error; retrying `up` (attempt {})", attempt + 1));
+            if sidecar_gone {
+                egress_image(&self.log).await?;
+            }
+            self.log.line(&format!("transient docker error; retrying `{label}` (attempt {})", attempt + 1));
             tokio::time::sleep(Duration::from_secs(10 * attempt)).await;
         }
         Ok(())
@@ -1046,11 +1094,17 @@ impl DockerEnv {
         if let Some(u) = user {
             args.extend(to_owned_args(&["-u", u]));
         }
-        args.extend(to_owned_args(&["main", "bash", "-c", EXEC_FROM_STDIN]));
+        args.extend(to_owned_args(&["main", "bash", "-c", EXEC_FROM_STDIN, "bash"]));
+        args.extend(timeout.into_iter().flat_map(exec_deadline_args));
         let keys: Vec<&str> = merged.keys().map(String::as_str).collect();
         // Log env keys only: values may be secrets.
         let label = format!("exec user={} env={keys:?}: {}", user.unwrap_or("-"), tail(command, 2000));
-        self.run(args, timeout, &label, Some(exec_stdin(&merged, command))).await
+        let Some(t) = timeout else {
+            return self.run(args, None, &label, Some(exec_stdin(&merged, command))).await;
+        };
+        let started = Instant::now();
+        let r = self.run(args, Some(t + 2 * EXEC_KILL_GRACE), &label, Some(exec_stdin(&merged, command))).await?;
+        if started.elapsed() >= t { Err(self.timed_out(&label, t)) } else { Ok(r) }
     }
 
     pub async fn exec_root(&self, command: &str, timeout: Option<Duration>) -> Result<ExecResult> {
@@ -1093,15 +1147,27 @@ impl DockerEnv {
     pub async fn download_dir(&self, service: &str, src: &str, dst: &Path) -> Result<()> {
         std::fs::create_dir_all(dst)?;
         self.run_ok(vec!["cp".into(), format!("{service}:{}/.", src.trim_end_matches('/')), dst.display().to_string()], Some(COPY_TIMEOUT))
-            .await
-            .map(|_| ())
+            .await?;
+        self.strip_links(dst);
+        Ok(())
+    }
+
+    /// `docker cp` keeps container symlinks (absolute targets intact) and special files; hbench's own
+    /// host readers and writers would follow them out of the trial dir, so nothing but files and dirs stays.
+    fn strip_links(&self, root: &Path) {
+        let n = strip_links(root);
+        if n > 0 {
+            self.log.line(&format!("removed {n} symlink(s) or special file(s) from {}", root.display()));
+        }
     }
 
     pub async fn download_file(&self, service: &str, src: &str, dst: &Path) -> Result<()> {
         if let Some(p) = dst.parent() {
             std::fs::create_dir_all(p)?;
         }
-        self.run_ok(vec!["cp".into(), format!("{service}:{src}"), dst.display().to_string()], Some(COPY_TIMEOUT)).await.map(|_| ())
+        self.run_ok(vec!["cp".into(), format!("{service}:{src}"), dst.display().to_string()], Some(COPY_TIMEOUT)).await?;
+        self.strip_links(dst);
+        Ok(())
     }
 
     /// Tar inside the service with `--exclude` patterns, copy the archive out, extract locally.
@@ -1122,6 +1188,7 @@ impl DockerEnv {
             if !out.status.success() {
                 bail!("extracting artifact archive failed: {}", String::from_utf8_lossy(&out.stderr));
             }
+            self.strip_links(dst);
             Ok(())
         }
         .await;
@@ -1341,6 +1408,20 @@ const PROC_LIST: &str = r#"for_each_proc() {
 /// $3 pgrp, $4 session, $5 tty, $6 terminal foreground pgrp, $20 starttime. A `docker exec` process has
 /// ppid 0 inside the container; an orphan is reparented to PID 1. Everything picked is stopped first, and
 /// the scan repeats until it finds nothing new, so no child is orphaned (and so spared) mid-way.
+/// Remove every symlink and non-regular file at or under `root` (links are not followed). Returns the count.
+fn strip_links(root: &Path) -> usize {
+    let Ok(meta) = root.symlink_metadata() else { return 0 };
+    let t = meta.file_type();
+    if t.is_dir() {
+        let Ok(entries) = std::fs::read_dir(root) else { return 0 };
+        entries.flatten().map(|e| strip_links(&e.path())).sum()
+    } else if t.is_file() {
+        0
+    } else {
+        usize::from(std::fs::remove_file(root).is_ok())
+    }
+}
+
 fn kill_agent_script(snapshot: &str) -> String {
     format!(
         r#"keep=" {snapshot} "
@@ -1433,16 +1514,35 @@ mod tests {
 
     use super::*;
 
-    /// What `docker compose exec ... main bash -c EXEC_FROM_STDIN` runs, with the same stdin.
-    fn run_from_stdin(env: &[(&str, &str)], command: &str) -> (i32, String) {
+    #[test]
+    fn strip_links_keeps_only_files_and_dirs() {
+        let d = std::env::temp_dir().join(format!("hbench-strip-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(d.join("sub")).unwrap();
+        std::fs::write(d.join("sub/keep.txt"), "x").unwrap();
+        std::os::unix::fs::symlink("/etc/hosts", d.join("trajectory.json")).unwrap();
+        std::os::unix::fs::symlink("/etc", d.join("sub/etc")).unwrap();
+        std::os::unix::fs::symlink("keep.txt", d.join("sub/rel")).unwrap();
+        assert!(std::process::Command::new("mkfifo").arg(d.join("reward.json")).status().unwrap().success());
+        assert_eq!(strip_links(&d), 4);
+        assert!(d.join("sub/keep.txt").is_file());
+        for gone in ["trajectory.json", "sub/etc", "sub/rel", "reward.json"] {
+            assert!(d.join(gone).symlink_metadata().is_err(), "{gone} survived");
+        }
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    /// What `docker compose exec ... main bash -c EXEC_FROM_STDIN bash [deadline grace]` runs, with the same stdin.
+    fn run_from_stdin(env: &[(&str, &str)], command: &str, timeout: Option<Duration>) -> (i32, String) {
         use std::io::Write as _;
         let env: BTreeMap<String, String> = env.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
         let mut c = std::process::Command::new("bash")
-            .args(["-c", EXEC_FROM_STDIN])
+            .args(["-c", EXEC_FROM_STDIN, "bash"])
+            .args(timeout.into_iter().flat_map(exec_deadline_args))
             .env_clear()
             .env("PATH", std::env::var("PATH").unwrap())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
+            .stderr(Stdio::null())
             .spawn()
             .unwrap();
         c.stdin.take().unwrap().write_all(&exec_stdin(&env, command)).unwrap();
@@ -1453,13 +1553,41 @@ mod tests {
     #[test]
     fn exec_passes_env_and_command_on_stdin() {
         let tricky = "sk-a=b 'c' \"d\" $(echo pwned) `e`\nline2\\";
-        let (code, out) = run_from_stdin(
-            &[("API_KEY", tricky), ("EMPTY", ""), ("PATH", &std::env::var("PATH").unwrap())],
-            "printf '%s|' \"$API_KEY\" \"${EMPTY-unset}\" \"$0\" \"$#\"; env | grep -c '^__hb' || true; cat; set -o pipefail; false | true; exit 7",
-        );
-        assert_eq!(code, 7);
-        assert_eq!(out, format!("{tricky}||bash|0|0\n"));
-        assert_eq!(run_from_stdin(&[], "echo ok").1, "ok\n");
+        for timeout in [None, Some(Duration::from_secs(60))] {
+            let (code, out) = run_from_stdin(
+                &[("API_KEY", tricky), ("EMPTY", ""), ("PATH", &std::env::var("PATH").unwrap())],
+                "printf '%s|' \"$API_KEY\" \"${EMPTY-unset}\" \"$0\" \"$#\"; env | grep -c '^__hb' || true; cat; set -o pipefail; false | true; exit 7",
+                timeout,
+            );
+            assert_eq!(code, 7);
+            assert_eq!(out, format!("{tricky}||bash|0|0\n"));
+            assert_eq!(run_from_stdin(&[], "echo ok", timeout).1, "ok\n");
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn timed_out_exec_stops_with_its_children_in_the_container() {
+        let started = std::time::Instant::now();
+        let path = std::env::var("PATH").unwrap();
+        let (code, out) =
+            run_from_stdin(&[("PATH", &path)], "trap '' TERM; sleep 60 & echo $!; sleep 60", Some(Duration::from_millis(200)));
+        assert!(started.elapsed() < Duration::from_secs(30), "the exec outlived its deadline");
+        assert_eq!(code, 128 + 9);
+        let child = format!("/proc/{}/stat", out.trim());
+        let until = std::time::Instant::now() + Duration::from_secs(5);
+        while std::fs::read_to_string(&child).is_ok_and(|s| !s.contains(") Z ")) {
+            assert!(std::time::Instant::now() < until, "the command's child survived the timeout");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    #[test]
+    fn exec_deadline_is_whole_seconds_rounded_up() {
+        let grace = EXEC_KILL_GRACE.as_secs().to_string();
+        assert_eq!(exec_deadline_args(Duration::from_secs(600)), ["600".to_string(), grace.clone()]);
+        assert_eq!(exec_deadline_args(Duration::from_millis(1500))[0], "2");
+        assert_eq!(exec_deadline_args(Duration::ZERO)[0], "1");
     }
 
     #[test]
@@ -1513,6 +1641,10 @@ mod tests {
         assert!(transient_docker_error("Error response from daemon: toomanyrequests: You have reached your pull rate limit"));
         assert!(transient_docker_error("net/http: TLS handshake timeout"));
         assert!(!transient_docker_error("service \"main\" refers to undefined network foo: invalid compose project"));
+        assert!(transient_docker_error(
+            "ERROR: failed to solve: rpc error: code = Unavailable desc = closing transport due to: graceful_stop"
+        ));
+        assert!(!transient_docker_error("failed to copy: write /var/lib/docker/tmp/x: no space left on device: unexpected EOF"));
     }
 
     #[test]

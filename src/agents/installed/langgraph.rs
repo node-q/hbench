@@ -598,12 +598,52 @@ impl Agent for LangGraph {
         }
         Ok(())
     }
+
+    fn collect_usage(&self, logs_dir: &std::path::Path, ctx: &mut AgentContext) {
+        let Ok(text) = std::fs::read_to_string(logs_dir.join("result.json")) else { return };
+        if let Some(mut t) = atif_trajectory(&text, self.version.as_deref(), self.args.model_name.as_deref()) {
+            let totals = t.final_metrics.get_or_insert_default();
+            totals.total_prompt_tokens = ctx.n_input_tokens.or(totals.total_prompt_tokens);
+            totals.total_completion_tokens = ctx.n_output_tokens.or(totals.total_completion_tokens);
+            crate::atif::write_trajectory(logs_dir, &t);
+        }
+    }
+}
+
+/// `result.json`, the graph's final state -> ATIF. Graphs without a LangChain `messages` list have no trajectory.
+pub fn atif_trajectory(text: &str, version: Option<&str>, model: Option<&str>) -> Option<crate::atif::Trajectory> {
+    let state: Value = serde_json::from_str(text).ok()?;
+    let steps = super::deerflow::langchain_steps(state["messages"].as_array()?);
+    let agent = crate::atif::Agent {
+        name: "langgraph".into(),
+        version: version.unwrap_or("unknown").into(),
+        model_name: model.map(String::from),
+        ..Default::default()
+    };
+    crate::atif::assemble(agent, None, steps)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::agents::installed::common::test_args as args;
+
+    #[test]
+    fn state_to_atif() {
+        let state = json!({"messages": [
+            {"type": "human", "content": "Write the line."},
+            {"type": "ai", "content": "", "tool_calls": [{"name": "shell", "args": {"command": "ls"}, "id": "c1"}],
+             "usage_metadata": {"input_tokens": 10, "output_tokens": 2, "input_token_details": {"cache_read": 4}}},
+            {"type": "tool", "content": "a.py", "tool_call_id": "c1"},
+            {"type": "ai", "content": "Done."}
+        ]});
+        let a = atif_trajectory(&state.to_string(), None, Some("openai/m")).unwrap();
+        assert_eq!(a.steps.iter().map(|s| s.source.as_str()).collect::<Vec<_>>(), ["user", "agent", "agent"]);
+        let result = &a.steps[1].observation.as_ref().unwrap().results[0];
+        assert_eq!((result.source_call_id.as_deref(), result.content.clone()), (Some("c1"), Some(json!("a.py"))));
+        assert_eq!(a.final_metrics.unwrap().total_cached_tokens, Some(4));
+        assert!(atif_trajectory(r#"{"answer": 1}"#, None, None).is_none());
+    }
 
     fn project(files: &[(&str, &str)]) -> PathBuf {
         let d = std::env::temp_dir().join(format!("hbench-lg-{}", uuid::Uuid::new_v4()));

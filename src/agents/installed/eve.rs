@@ -5,6 +5,7 @@ use super::common::{installed_dir, nvm_install_script, parse_bool_env_value, ski
 use super::pins;
 use super::{ensure_system_dependencies, exec_agent, exec_error, exec_root_checked};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
+use crate::atif;
 use crate::env::quote;
 use crate::fmt::single_quoted;
 use anyhow::{Result, anyhow, bail};
@@ -486,6 +487,99 @@ fn extract_actions(data: &Map<String, Value>) -> Vec<Map<String, Value>> {
     if data.is_empty() { vec![] } else { vec![data.clone()] }
 }
 
+fn first_of<'a>(map: &'a Map<String, Value>, keys: &[&str]) -> Option<&'a Value> {
+    keys.iter().find_map(|k| map.get(*k).filter(|v| !v.is_null()))
+}
+
+/// An action as a tool call.
+fn tool_call(action: &Map<String, Value>, fallback_id: String) -> atif::ToolCall {
+    atif::ToolCall {
+        tool_call_id: action_id(action, fallback_id),
+        function_name: first_of(action, &["name", "toolName", "tool", "action"]).and_then(Value::as_str).unwrap_or_default().into(),
+        arguments: first_of(action, &["arguments", "input", "args"]).cloned().unwrap_or(Value::Null),
+        extra: None,
+    }
+}
+
+/// `eve-events.ndjson` -> ATIF, with the steps [`event_totals`] counts. Actions without a request event have no call to
+/// attach to and are left out.
+fn atif_trajectory(text: &str, version: Option<&str>, model: Option<&str>) -> Option<atif::Trajectory> {
+    let empty = Map::new();
+    let mut steps: Vec<atif::Step> = vec![];
+    let (mut session_id, mut reasoning) = (None, None);
+    for line in text.lines().map(str::trim).filter(|l| !l.is_empty()) {
+        let Ok(Value::Object(ev)) = serde_json::from_str::<Value>(line) else { continue };
+        let data = ev.get("data").and_then(Value::as_object).unwrap_or(&empty);
+        session_id = session_id.or(data.get("sessionId").and_then(Value::as_str).map(String::from));
+        let timestamp = ev.get("timestamp").and_then(Value::as_str).map(String::from);
+        let said = message_from_data(data);
+        match ev.get("type").and_then(Value::as_str).unwrap_or("") {
+            "message.received" if !said.is_empty() => {
+                steps.push(atif::Step { source: "user".into(), timestamp, message: json!(said), ..Default::default() });
+            }
+            "actions.requested" => {
+                let id = steps.len() + 1;
+                let calls: Vec<atif::ToolCall> =
+                    extract_actions(data).iter().enumerate().map(|(i, a)| tool_call(a, format!("action-{id}-{}", i + 1))).collect();
+                if !calls.is_empty() {
+                    steps.push(atif::Step {
+                        source: "agent".into(),
+                        timestamp,
+                        message: json!(""),
+                        tool_calls: Some(calls),
+                        ..Default::default()
+                    });
+                }
+            }
+            "action.result" => {
+                let payload = ["result", "output", "value"].iter().find_map(|k| data.get(*k));
+                let nested = payload.and_then(Value::as_object).unwrap_or(if payload.is_none() { data } else { &empty });
+                let call_id = action_id(data, action_id(nested, String::new()));
+                atif::attach_result(&mut steps, &call_id, payload.cloned().unwrap_or(Value::Null));
+            }
+            "reasoning.completed" if !said.is_empty() => reasoning = Some(said),
+            "message.completed" if !said.is_empty() => {
+                let metrics = usage_metrics(data).map(step_metrics);
+                let reasoning_content = reasoning.take();
+                steps.push(atif::Step {
+                    source: "agent".into(),
+                    timestamp,
+                    message: json!(said),
+                    reasoning_content,
+                    metrics,
+                    ..Default::default()
+                });
+            }
+            "step.completed" => {
+                if let (Some(m), Some(last)) = (usage_metrics(data), steps.last_mut())
+                    && last.source == "agent"
+                    && last.metrics.is_none()
+                {
+                    last.metrics = Some(step_metrics(m));
+                }
+            }
+            _ => {}
+        }
+    }
+    let agent = atif::Agent {
+        name: "eve".into(),
+        version: version.unwrap_or("unknown").into(),
+        model_name: model.map(String::from),
+        ..Default::default()
+    };
+    atif::assemble(agent, session_id, steps)
+}
+
+fn step_metrics(m: Metrics) -> atif::Metrics {
+    atif::Metrics {
+        prompt_tokens: m.prompt,
+        completion_tokens: m.completion,
+        cached_tokens: m.cached,
+        cost_usd: m.cost,
+        ..Default::default()
+    }
+}
+
 /// Trajectory final_metrics totals: replays how events become steps (only the
 /// parts that affect metrics).
 /// Returns None when the trajectory would have no steps.
@@ -644,6 +738,11 @@ impl Agent for Eve {
 
     fn collect_usage(&self, logs_dir: &Path, ctx: &mut AgentContext) {
         populate(logs_dir, ctx);
+        let Ok(text) = std::fs::read_to_string(logs_dir.join("eve-events.ndjson")) else { return };
+        if let Some(mut t) = atif_trajectory(&text, self.version.as_deref(), self.args.model_name.as_deref()) {
+            atif::set_run_totals(&mut t, ctx.n_input_tokens, ctx.n_output_tokens, ctx.n_cache_tokens, ctx.cost_usd);
+            atif::write_trajectory(logs_dir, &t);
+        }
     }
 }
 
@@ -883,6 +982,25 @@ mod tests {
         ];
         let text = events.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("\n");
         assert_eq!(event_totals(&text), Some((10, 4, 2, 0.01)));
+        let a = atif_trajectory(&text, Some("1"), Some("openai/m")).unwrap();
+        assert_eq!(a.session_id.as_deref(), Some("s1"));
+        assert_eq!(a.steps.iter().map(|s| s.source.as_str()).collect::<Vec<_>>(), ["user", "agent", "agent"]);
+        let call = &a.steps[1].tool_calls.as_ref().unwrap()[0];
+        assert_eq!(
+            (call.tool_call_id.as_str(), call.function_name.as_str(), call.arguments.clone()),
+            ("call-1", "get_weather", json!({"city": "SF"}))
+        );
+        let result = &a.steps[1].observation.as_ref().unwrap().results[0];
+        assert_eq!((result.source_call_id.as_deref(), result.content.clone()), (Some("call-1"), Some(json!({"temperatureF": 72}))));
+        assert_eq!(
+            (a.steps[2].message.as_str(), a.steps[2].reasoning_content.as_deref()),
+            (Some("It is 72F."), Some("I checked the tool."))
+        );
+        let f = a.final_metrics.unwrap();
+        assert_eq!(
+            (f.total_prompt_tokens, f.total_completion_tokens, f.total_cached_tokens, f.total_cost_usd),
+            (Some(10), Some(4), Some(2), Some(0.01))
+        );
         std::fs::write(dir.join("eve-events.ndjson"), &text).unwrap();
         std::fs::write(dir.join("eve-result.json"), r#"{"status":"session.completed","sessionId":"s1","message":"Done","usage":{"inputTokens":5,"outputTokens":3,"cachedTokens":1,"costUsd":0.02}}"#).unwrap();
         let mut c = AgentContext::default();

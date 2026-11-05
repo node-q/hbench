@@ -6,10 +6,11 @@ use super::pins;
 use super::{connection, ensure_system_dependencies, exec_agent, exec_error, exec_root_checked};
 use crate::agents::model_connection::Spec;
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
+use crate::atif;
 use crate::env::quote;
 use crate::fmt::json_spaced;
 use anyhow::{Result, bail};
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -239,6 +240,76 @@ pub fn parse_trajectory(text: &str) -> Option<AgentContext> {
     })
 }
 
+/// A history message's text: a plain string, or the text of its parts.
+fn text_of(content: &Value) -> String {
+    match content.as_array() {
+        Some(parts) => parts.iter().filter_map(|p| p["text"].as_str()).collect::<Vec<_>>().join("\n"),
+        None => content.as_str().unwrap_or_default().into(),
+    }
+}
+
+/// A `.traj` step, one model call and the shell action it chose, as an agent step.
+fn agent_step(index: usize, step: &Value) -> atif::Step {
+    let action = step["action"].as_str().filter(|a| !a.trim().is_empty());
+    let id = format!("action-{}", index + 1);
+    atif::Step {
+        source: "agent".into(),
+        message: step["thought"].clone(),
+        tool_calls: action.map(|command| {
+            vec![atif::ToolCall {
+                tool_call_id: id.clone(),
+                function_name: "bash".into(),
+                arguments: json!({"command": command}),
+                extra: None,
+            }]
+        }),
+        observation: action.map(|_| atif::Observation {
+            results: vec![atif::ObservationResult {
+                source_call_id: Some(id.clone()),
+                content: Some(step["observation"].clone()),
+                ..Default::default()
+            }],
+        }),
+        ..Default::default()
+    }
+}
+
+/// A `.traj` file -> ATIF. Steps come from `trajectory`, the prompt from the history before the first response, leaving
+/// out demonstrations. Tokens are reported per run, in `model_stats`.
+pub fn atif_trajectory(text: &str, version: Option<&str>, model: Option<&str>) -> Option<atif::Trajectory> {
+    let t: Value = serde_json::from_str(text).ok()?;
+    let history = t["history"].as_array().map(Vec::as_slice).unwrap_or_default();
+    let prompt = history.iter().take_while(|m| m["role"] != "assistant").filter(|m| m["is_demo"] != true);
+    let mut steps: Vec<atif::Step> = prompt
+        .map(|m| atif::Step {
+            source: if m["role"] == "system" { "system" } else { "user" }.into(),
+            message: json!(text_of(&m["content"])),
+            ..Default::default()
+        })
+        .collect();
+    let trajectory = t["trajectory"].as_array()?;
+    if trajectory.is_empty() {
+        return None;
+    }
+    steps.extend(trajectory.iter().enumerate().map(|(i, s)| agent_step(i, s)));
+    let agent = atif::Agent {
+        name: N.into(),
+        version: t["info"]["swe_agent_version"].as_str().or(version).unwrap_or("unknown").into(),
+        model_name: model.map(String::from),
+        ..Default::default()
+    };
+    let mut trajectory = atif::assemble(agent, None, steps)?;
+    let stats = &t["info"]["model_stats"];
+    atif::set_run_totals(
+        &mut trajectory,
+        stats["tokens_sent"].as_i64(),
+        stats["tokens_received"].as_i64(),
+        None,
+        stats["instance_cost"].as_f64(),
+    );
+    Some(trajectory)
+}
+
 #[async_trait::async_trait]
 impl Agent for SweAgent {
     fn name(&self) -> &str {
@@ -325,10 +396,14 @@ impl Agent for SweAgent {
             1 => found.remove(0),
             _ => return,
         };
-        if let Some(c) = std::fs::read_to_string(path).ok().and_then(|t| parse_trajectory(&t)) {
+        let Ok(text) = std::fs::read_to_string(path) else { return };
+        if let Some(c) = parse_trajectory(&text) {
             ctx.cost_usd = c.cost_usd;
             ctx.n_input_tokens = c.n_input_tokens;
             ctx.n_output_tokens = c.n_output_tokens;
+        }
+        if let Some(t) = atif_trajectory(&text, self.version.as_deref(), self.args.model_name.as_deref()) {
+            atif::write_trajectory(logs_dir, &t);
         }
     }
 }
@@ -341,6 +416,44 @@ mod tests {
 
     fn agent(kwargs: Value, env: &[(&str, &str)], model: &str) -> Result<SweAgent> {
         SweAgent::new(args(kwargs, env, Some(model)))
+    }
+
+    #[test]
+    fn traj_to_atif() {
+        // The shape of the pinned repo's tests/test_data/trajectories, trimmed.
+        let t = json!({
+            "environment": "swe_main",
+            "history": [
+                {"role": "system", "content": "SETTING", "agent": "main"},
+                {"role": "user", "content": "demo", "agent": "main", "is_demo": true},
+                {"role": "user", "content": [{"type": "text", "text": "ISSUE"}], "agent": "main"},
+                {"role": "assistant", "content": "ls", "thought": "look", "action": "ls\n", "agent": "main"},
+                {"role": "user", "content": "OBSERVATION", "agent": "main"}
+            ],
+            "info": {"exit_status": "submitted", "swe_agent_version": "1.1.0",
+                     "model_stats": {"instance_cost": 0.5, "tokens_sent": 7000, "tokens_received": 300, "api_calls": 2}},
+            "trajectory": [
+                {"action": "ls\n", "observation": "a.py\n", "response": "look\n```\nls\n```", "state": "{}", "thought": "look"},
+                {"action": "", "observation": "", "response": "stuck", "state": "{}", "thought": "stuck"}
+            ]
+        });
+        let a = atif_trajectory(&t.to_string(), Some("9.9"), Some("openai/gpt-5")).unwrap();
+        assert_eq!((a.agent.name.as_str(), a.agent.version.as_str()), ("swe-agent", "1.1.0"));
+        assert_eq!(
+            a.steps.iter().map(|s| (s.step_id, s.source.as_str(), s.message.as_str().unwrap())).collect::<Vec<_>>(),
+            [(1, "system", "SETTING"), (2, "user", "ISSUE"), (3, "agent", "look"), (4, "agent", "stuck")]
+        );
+        let call = &a.steps[2];
+        assert_eq!(call.tool_calls.as_ref().unwrap()[0].arguments, json!({"command": "ls\n"}));
+        let result = &call.observation.as_ref().unwrap().results[0];
+        assert_eq!((result.source_call_id.as_deref(), result.content.clone()), (Some("action-1"), Some(json!("a.py\n"))));
+        assert!(a.steps[3].tool_calls.is_none() && a.steps[3].observation.is_none());
+        let f = a.final_metrics.unwrap();
+        assert_eq!(
+            (f.total_prompt_tokens, f.total_completion_tokens, f.total_cost_usd, f.total_steps),
+            (Some(7000), Some(300), Some(0.5), Some(4))
+        );
+        assert!(atif_trajectory(r#"{"trajectory": []}"#, None, None).is_none());
     }
 
     fn split_flag(flags: &str, flag: &str) -> String {

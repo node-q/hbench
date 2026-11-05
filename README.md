@@ -26,10 +26,25 @@ Run coding agents (Claude Code, Codex, Gemini CLI and more) on benchmark tasks, 
 You need Docker, on Linux or macOS.
 
 ```bash
-curl -fsSL https://nodeq.tech/install.sh | sh
+curl -fsSL https://github.com/node-q/hbench/releases/latest/download/install.sh | sh
 ```
 
 Later, `hbench update` installs the newest release.
+
+The script checks the archive it downloads against the release's `SHA256SUMS`. To check the script itself
+before running it, download it, read it, and verify that this repository's release workflow built it (releases
+after v0.3.7; `gh attestation verify` needs the [GitHub CLI](https://cli.github.com)):
+
+```bash
+curl -fsSLO https://github.com/node-q/hbench/releases/latest/download/install.sh
+curl -fsSLO https://github.com/node-q/hbench/releases/latest/download/SHA256SUMS
+grep ' install.sh$' SHA256SUMS | sha256sum -c    # macOS: shasum -a 256 -c
+gh attestation verify install.sh --repo node-q/hbench
+less install.sh
+sh install.sh
+```
+
+The release archives verify the same way: `gh attestation verify hbench-<version>-<target>.tar.gz --repo node-q/hbench`.
 
 Or build from source:
 
@@ -80,7 +95,8 @@ hbench jobs resume -p jobs/<job>
 
 # Tasks and datasets
 hbench init <org/name>                                    # a new task
-hbench check <tasks>                                      # check tasks
+hbench tasks check -p <tasks>                             # validate tasks: config, files, tests
+hbench check <tasks>                                      # review tasks against a rubric, with claude-code
 hbench datasets list|download
 
 # Other
@@ -96,7 +112,7 @@ Useful options: `-l 5` runs only 5 tasks, `-k 3` runs each task 3 times, `-n 4` 
 | Agent | What it runs | Example model (`-m`) | Key |
 |---|---|---|---|
 | `claude-code` | Claude Code | `anthropic/claude-opus-5-5` | `ANTHROPIC_API_KEY` |
-| `codex` | OpenAI Codex CLI | `openai/gpt-5` | `OPENAI_API_KEY` |
+| `codex` | OpenAI Codex CLI | `openai/gpt-6.1-sol` | `OPENAI_API_KEY` |
 | `gemini-cli` | Google Gemini CLI | `google/gemini-3-pro` | `GEMINI_API_KEY` |
 | `deepseek-harness` | DeepSeek's harness ([dsh](https://github.com/deepseek-ai/deepseek-harness)) | `deepseek/deepseek-v4-flash` | `DEEPSEEK_API_KEY` |
 | `cursor-cli` | Cursor CLI | `<provider>/<model>` | `CURSOR_API_KEY` |
@@ -116,5 +132,8 @@ Apache-2.0. See [LICENSE](LICENSE).
 hbench is built and maintained by [node-q](https://nodeq.tech). See the
 [contributors graph](https://github.com/node-q/hbench/graphs/contributors) for everyone who has contributed.
 
-Report bugs and request features in [GitHub issues](https://github.com/node-q/hbench/issues). The full reference is
-in [docs/REFERENCE.md](docs/REFERENCE.md); to add an agent, see [docs/ADDING_AN_AGENT.md](docs/ADDING_AN_AGENT.md).
+- Questions and help: [#support on Discord](https://discord.gg/5b6wCn5sEK)
+- New releases: [#announcements on Discord](https://discord.gg/dEvy6DCMTn)
+- Bugs and feature requests: [GitHub issues](https://github.com/node-q/hbench/issues)
+- The full reference: [docs/REFERENCE.md](docs/REFERENCE.md)
+- Adding an agent: [docs/ADDING_AN_AGENT.md](docs/ADDING_AN_AGENT.md)

@@ -283,7 +283,19 @@ impl App {
                 let p = agent.join("trajectory.json");
                 if !p.exists() {
                     // hbench extra: older claude-code runs only kept the native session; convert it like `hbench traces`.
-                    return ok_json(crate::atif::claude_code_trajectory(&agent).unwrap_or(Value::Null));
+                    if let Some(t) = crate::atif::claude_code_trajectory(&agent) {
+                        return ok_json(t);
+                    }
+                    // Older deepseek-harness runs that timed out have only the output stream.
+                    let model = trial_config(&dir).and_then(|c| c.agent.model_name);
+                    let model = model.as_deref().map(|m| m.rsplit('/').next().unwrap_or(m));
+                    let version = trial_result(&dir).and_then(|r| r["agent_info"]["version"].as_str().map(String::from));
+                    let t = crate::agents::installed::deepseek_harness::stream_trajectory_of(
+                        &agent,
+                        version.as_deref().unwrap_or("unknown"),
+                        model,
+                    );
+                    return ok_json(t.map_or(Value::Null, |t| serde_json::to_value(t).unwrap_or_default()));
                 }
                 ok_json(read_json(&p).ok_or_else(|| err(500, "Failed to parse trajectory.json"))?)
             }

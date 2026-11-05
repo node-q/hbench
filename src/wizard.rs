@@ -3,15 +3,15 @@
 
 use crate::config::{DatasetConfig, TaskRef};
 use crate::task::Task;
-use crate::{RunArgs, agents, auth_envs, oci, registry};
+use crate::{RunArgs, agents, oci, registry};
 use anyhow::{Context, Result, bail};
 use dialoguer::console::{Term, style};
 use dialoguer::theme::ColorfulTheme;
 use dialoguer::{Confirm, Input, MultiSelect, Select};
 use std::path::{Path, PathBuf};
 
-/// Same logo as the README.
-const LOGO: &str = "\
+/// Same logo as the README; also above `hbench`'s top-level help.
+pub const LOGO: &str = "\
 ██╗  ██╗██████╗ ███████╗███╗   ██╗ ██████╗██╗  ██╗
 ██║  ██║██╔══██╗██╔════╝████╗  ██║██╔════╝██║  ██║
 ███████║██████╔╝█████╗  ██╔██╗ ██║██║     ███████║
@@ -22,7 +22,7 @@ const LOGO: &str = "\
 /// Agents offered first, with the model suggested for each (None = the agent takes no model or has no default).
 const TOP_AGENTS: &[(&str, &str, Option<&str>)] = &[
     ("claude-code", "Claude Code · Anthropic", Some("anthropic/claude-opus-5-5")),
-    ("codex", "Codex · OpenAI", Some("openai/gpt-5")),
+    ("codex", "Codex · OpenAI", Some("openai/gpt-6.1-sol")),
     ("gemini-cli", "Gemini CLI · Google", Some("google/gemini-3-pro")),
     ("opencode", "OpenCode · any provider", None),
     ("terminus-2", "Terminus 2 · any provider", None),
@@ -35,7 +35,7 @@ const TOP_AGENTS: &[(&str, &str, Option<&str>)] = &[
 // "custom…" reach every other provider and model.
 const PROVIDERS: &[(&str, &[&str])] = &[
     ("anthropic", &["claude-opus-5-5", "claude-fable-5-1", "claude-sonnet-5-5", "claude-haiku-5-5"]),
-    ("openai", &["gpt-5.6", "gpt-5.6-sol", "gpt-5.5", "gpt-5"]),
+    ("openai", &["gpt-6.1-sol", "gpt-6-astra", "gpt-6-luna", "gpt-5.6-sol"]),
     ("google", &["gemini-3-pro", "gemini-3.5-flash"]),
     ("deepseek", &["deepseek-v4-flash", "deepseek-v4-pro"]),
     ("moonshot", &["kimi-k2.6"]),
@@ -247,7 +247,7 @@ async fn ask(a: &mut RunArgs) -> Result<()> {
             (n, m, true)
         }
     };
-    if let Some(names) = auth_envs(&agent)
+    if let Some(names) = agents::installed::credential_envs(&agent)
         && !names.iter().any(|n| std::env::var(n).is_ok_and(|v| !v.is_empty()))
     {
         bail!("{agent} needs credentials: `export {}=...` (or one of {}), then run again", names[0], names[1..].join(", "));

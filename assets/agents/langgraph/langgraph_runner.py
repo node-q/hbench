@@ -113,7 +113,7 @@ def plain(v: Any) -> Any:
     """JSON-safe copy of graph state; LangChain messages become small dicts."""
     if hasattr(v, "type") and hasattr(v, "content"):
         out = {"type": v.type, "content": plain(v.content)}
-        for extra in ("tool_calls", "usage_metadata"):
+        for extra in ("tool_calls", "tool_call_id", "usage_metadata"):
             if getattr(v, extra, None):
                 out[extra] = plain(getattr(v, extra))
         return out

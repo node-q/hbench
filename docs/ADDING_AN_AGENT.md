@@ -35,7 +35,8 @@ Each installed agent lives in `src/agents/installed/<name>.rs`, with any payload
    (`tee`). Upload secrets with `upload_text`.
 4. Errors: if the agent's output needs filtering before classification, filter the evidence, then call `exec_error`.
 5. `collect_usage`: fill `AgentContext` (n_input_tokens incl. cache, n_cache_tokens, n_output_tokens,
-   cost_usd) from the downloaded logs. ATIF trajectory conversion is optional.
+   cost_usd) from the downloaded logs. Writing `trajectory.json` (ATIF) is optional; a converter follows the token
+   conventions in REFERENCE.md (Output).
 6. Runner scripts uploaded into the container (`*_runner.py`, `.mjs`, wrappers) are embedded with `include_str!` from
    `assets/agents/<name>/`.
 7. Register MCP servers and skills if the agent supports them.

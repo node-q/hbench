@@ -1,10 +1,10 @@
 #!/bin/sh
 # Install hbench into HBENCH_INSTALL_DIR (default ~/.local/bin).
-#   curl -fsSL https://nodeq.tech/install.sh | sh
+#   curl -fsSL https://github.com/node-q/hbench/releases/latest/download/install.sh | sh
 # HBENCH_VERSION=vX.Y.Z pins a release; the default is the latest release of node-q/hbench.
 set -eu
 REPO=node-q/hbench
-# nodeq.tech/install.sh fills this in with the version Harness Playground's arenas use.
+# A site serving this script may fill in a default release here; HBENCH_VERSION still overrides it.
 DEFAULT_VERSION=
 DIR=${HBENCH_INSTALL_DIR:-$HOME/.local/bin}
 
@@ -19,8 +19,8 @@ esac
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-# /releases/latest redirects to /releases/tag/<tag>; reading the redirect avoids the API rate limit.
-tag=${HBENCH_VERSION:-${DEFAULT_VERSION:-$(curl -fsSLI -o /dev/null -w '%{url_effective}' "https://github.com/$REPO/releases/latest" | sed 's|.*/||')}}
+# /releases/latest redirects to /releases/tag/<tag>; reading the redirect, without fetching that page, avoids the API rate limit.
+tag=${HBENCH_VERSION:-${DEFAULT_VERSION:-$(curl -fsSI -o /dev/null -w '%{redirect_url}' "https://github.com/$REPO/releases/latest" | sed 's|.*/||')}}
 case "$tag" in v*) ;; *) echo "could not find the latest hbench release of $REPO" >&2; exit 1 ;; esac
 for f in "hbench-$tag-$target.tar.gz" SHA256SUMS; do
   curl -fsSL -o "$tmp/$f" "https://github.com/$REPO/releases/download/$tag/$f" || { echo "could not download $f of hbench $tag from $REPO" >&2; exit 1; }

@@ -272,7 +272,7 @@ export interface TrajectoryStep {
   message?: string | ContentPart[];
   reasoning_content?: string;
   tool_calls?: { tool_call_id: string; function_name: string; arguments: Obj | string }[];
-  observation?: { results: { source_call_id?: string; content?: string | ContentPart[]; subagent_trajectory_ref?: Obj[] }[] };
+  observation?: { results: { source_call_id?: string; content?: string | ContentPart[]; subagent_trajectory_ref?: Obj[]; extra?: Obj }[] };
   metrics?: { prompt_tokens?: number; completion_tokens?: number; cached_tokens?: number; cost_usd?: number; [k: string]: any };
   extra?: Obj;
   [k: string]: any;

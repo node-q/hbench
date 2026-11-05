@@ -5,9 +5,10 @@ use super::common::{detect_version, installed_dir, opts, skills_dir};
 use super::pins;
 use super::{ensure_system_dependencies, exec_agent, exec_error, parse_version};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
+use crate::atif;
 use crate::env::quote;
 use anyhow::Result;
-use serde_json::json;
+use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::time::Duration;
 
@@ -114,6 +115,87 @@ pub fn parse_copilot_usage(text: &str) -> Option<AgentContext> {
     (steps > 0).then(|| AgentContext { n_input_tokens: (input != 0).then_some(input), n_output_tokens: Some(output), ..Default::default() })
 }
 
+/// Add an `assistant.message` to the step of its model call: a response split at reasoning boundaries arrives as
+/// several messages sharing one `apiCallId`.
+fn add_message(steps: &mut Vec<atif::Step>, event: &Value) {
+    let d = &event["data"];
+    let same_call =
+        |s: &&mut atif::Step| d["apiCallId"].is_string() && s.extra.as_ref().is_some_and(|x| x.get("api_call_id") == Some(&d["apiCallId"]));
+    let step = match steps.last_mut().filter(same_call) {
+        Some(step) => step,
+        None => {
+            let extra =
+                d["apiCallId"].is_string().then(|| serde_json::Map::from_iter([("api_call_id".to_string(), d["apiCallId"].clone())]));
+            steps.push(atif::Step {
+                source: "agent".into(),
+                timestamp: event["timestamp"].as_str().map(String::from),
+                model_name: d["model"].as_str().map(String::from),
+                message: json!(""),
+                extra,
+                ..Default::default()
+            });
+            steps.last_mut().unwrap()
+        }
+    };
+    let text = d["content"].as_str().unwrap_or_default();
+    if !text.is_empty() {
+        let earlier = step.message.as_str().unwrap_or_default();
+        step.message = json!(if earlier.is_empty() { text.to_string() } else { format!("{earlier}\n{text}") });
+    }
+    if let Some(reasoning) = d["reasoningText"].as_str() {
+        step.reasoning_content = Some(match step.reasoning_content.take() {
+            Some(earlier) => format!("{earlier}\n{reasoning}"),
+            None => reasoning.into(),
+        });
+    }
+    for r in d["toolRequests"].as_array().into_iter().flatten() {
+        step.tool_calls.get_or_insert_default().push(atif::ToolCall {
+            tool_call_id: r["toolCallId"].as_str().unwrap_or_default().into(),
+            function_name: r["name"].as_str().unwrap_or_default().into(),
+            arguments: r["arguments"].clone(),
+            extra: None,
+        });
+    }
+    if let Some(output) = d["outputTokens"].as_i64() {
+        let metrics = step.metrics.get_or_insert_default();
+        metrics.completion_tokens = Some(metrics.completion_tokens.unwrap_or(0) + output);
+    }
+}
+
+/// The session-event stream of `--output-format=json` -> ATIF. The CLI keeps `assistant.usage` off stdout, so a step
+/// has its output tokens and no prompt tokens.
+pub fn atif_trajectory(text: &str, version: Option<&str>, model: Option<&str>) -> Option<atif::Trajectory> {
+    let (mut steps, mut session_id) = (vec![], None);
+    for e in parse_jsonl(text) {
+        let d = &e["data"];
+        match e["type"].as_str() {
+            Some("user.message") => steps.push(atif::Step {
+                source: "user".into(),
+                timestamp: e["timestamp"].as_str().map(String::from),
+                message: d["content"].clone(),
+                ..Default::default()
+            }),
+            Some("assistant.message") => add_message(&mut steps, &e),
+            Some("tool.execution_complete") => {
+                let output = if d["result"]["content"].is_null() { &d["error"]["message"] } else { &d["result"]["content"] };
+                atif::attach_result(&mut steps, d["toolCallId"].as_str().unwrap_or_default(), output.clone());
+            }
+            Some("result") => session_id = e["sessionId"].as_str().map(String::from),
+            _ => {}
+        }
+    }
+    if !steps.iter().any(|s| s.source == "agent") {
+        return None;
+    }
+    let agent = atif::Agent {
+        name: "copilot-cli".into(),
+        version: version.unwrap_or("unknown").into(),
+        model_name: model.map(String::from),
+        ..Default::default()
+    };
+    atif::assemble(agent, session_id, steps)
+}
+
 #[async_trait::async_trait]
 impl Agent for CopilotCli {
     fn name(&self) -> &str {
@@ -178,9 +260,13 @@ impl Agent for CopilotCli {
     }
 
     fn collect_usage(&self, logs_dir: &std::path::Path, ctx: &mut AgentContext) {
-        if let Some(c) = std::fs::read_to_string(logs_dir.join("copilot-cli.jsonl")).ok().and_then(|t| parse_copilot_usage(&t)) {
+        let Ok(text) = std::fs::read_to_string(logs_dir.join("copilot-cli.jsonl")) else { return };
+        if let Some(c) = parse_copilot_usage(&text) {
             ctx.n_input_tokens = c.n_input_tokens;
             ctx.n_output_tokens = c.n_output_tokens;
+        }
+        if let Some(t) = atif_trajectory(&text, self.version.as_deref(), self.args.model_name.as_deref()) {
+            atif::write_trajectory(logs_dir, &t);
         }
     }
 }
@@ -204,6 +290,38 @@ mod tests {
         assert!(create(common::test_args(json!({"reasoning_effort": "turbo"}), &[], None)).is_err());
         let fb = CopilotCli { version: None, args: common::test_args(json!({}), &[("COPILOT_CLI_EFFORT", "max")], None) };
         assert_eq!(fb.cli_flags().unwrap(), "--effort max");
+    }
+
+    #[test]
+    fn stream_to_atif() {
+        let stream = r#"{"type":"user.message","timestamp":"2026-10-30T10:00:00.000Z","data":{"content":"task"}}
+{"type":"assistant.message","timestamp":"2026-10-30T10:00:01.000Z","data":{"messageId":"m1","apiCallId":"a1","chunkIndex":0,"chunkCount":2,"model":"gpt-5","content":"first","reasoningText":"think","outputTokens":10,"toolRequests":[]}}
+{"type":"assistant.message","timestamp":"2026-10-30T10:00:01.500Z","data":{"messageId":"m2","apiCallId":"a1","chunkIndex":1,"chunkCount":2,"model":"gpt-5","content":"second","outputTokens":5,"toolRequests":[{"toolCallId":"t1","name":"bash","arguments":{"command":"ls"}},{"toolCallId":"t2","name":"view","arguments":{"path":"/x"}}]}}
+{"type":"tool.execution_start","data":{"toolCallId":"t1","toolName":"bash"}}
+{"type":"tool.execution_complete","data":{"toolCallId":"t1","success":true,"result":{"content":"ok"}}}
+{"type":"tool.execution_complete","data":{"toolCallId":"t2","success":false,"error":{"message":"no such file"}}}
+{"type":"assistant.message","timestamp":"2026-10-30T10:00:02.000Z","data":{"messageId":"m3","apiCallId":"a2","content":"done","toolRequests":[]}}
+{"type":"result","sessionId":"s1","exitCode":0}
+"#;
+        let a = atif_trajectory(stream, Some("1.0.98"), Some("openai/gpt-5")).unwrap();
+        assert_eq!((a.session_id.as_deref(), a.agent.name.as_str()), (Some("s1"), "copilot-cli"));
+        assert_eq!(a.steps.iter().map(|s| (s.step_id, s.source.as_str())).collect::<Vec<_>>(), [(1, "user"), (2, "agent"), (3, "agent")]);
+        let call = &a.steps[1];
+        assert_eq!(
+            (call.message.as_str(), call.reasoning_content.as_deref(), call.model_name.as_deref()),
+            (Some("first\nsecond"), Some("think"), Some("gpt-5"))
+        );
+        let results = &call.observation.as_ref().unwrap().results;
+        assert_eq!(
+            results.iter().map(|r| (r.source_call_id.clone().unwrap(), r.content.clone().unwrap())).collect::<Vec<_>>(),
+            [("t1".to_string(), json!("ok")), ("t2".to_string(), json!("no such file"))]
+        );
+        let m = call.metrics.as_ref().unwrap();
+        assert_eq!((m.prompt_tokens, m.completion_tokens), (None, Some(15)));
+        assert!(a.steps[2].metrics.is_none());
+        let (f, c) = (a.final_metrics.unwrap(), parse_copilot_usage(stream).unwrap());
+        assert_eq!((f.total_prompt_tokens, f.total_completion_tokens), (c.n_input_tokens, c.n_output_tokens));
+        assert!(atif_trajectory("Error: No authentication information found.\n", None, None).is_none());
     }
 
     #[test]

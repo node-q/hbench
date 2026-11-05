@@ -5,6 +5,7 @@ use super::common::{deep_merge, installed_dir, skills_dir};
 use super::pins;
 use super::{ensure_system_dependencies, exec_agent, exec_error, upload_text};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
+use crate::atif;
 use crate::env::{ExecResult, quote};
 use anyhow::{Result, bail};
 use serde_json::{Map, Value, json};
@@ -13,6 +14,9 @@ use std::time::Duration;
 
 /// Copies the session transcript named in the CLI envelope into /logs/agent (sent via `python3 -c`).
 const COPY_SESSION_SCRIPT: &str = include_str!("../../../assets/agents/openclaw/copy_session.py");
+/// OpenClaw keeps sessions in SQLite; this writes their bundle to `/logs/agent/.openclaw/trajectory-exports/session`.
+const EXPORT_TRAJECTORY: &str =
+    "openclaw sessions export-trajectory --session-key agent:main:main --workspace /logs/agent --output session --json";
 const SUPPORTED_PROVIDERS: [&str; 3] = ["anthropic", "nvidia", "openai"];
 const INSTALL_TIMEOUT: Duration = Duration::from_secs(1200);
 
@@ -180,6 +184,23 @@ pub fn parse_usage(raw: &str) -> Option<AgentContext> {
     })
 }
 
+/// `session-branch.json` of the exported bundle -> ATIF. Its entries are Pi's; a call that reports zero tokens has no
+/// metrics.
+pub fn atif_trajectory(text: &str, version: Option<&str>, model: Option<&str>) -> Option<atif::Trajectory> {
+    let branch: Value = serde_json::from_str(text).ok()?;
+    let mut steps = super::pi::session_steps(branch["entries"].as_array()?.iter());
+    for s in &mut steps {
+        s.metrics = s.metrics.take().filter(|m| m.prompt_tokens != Some(0) || m.completion_tokens != Some(0));
+    }
+    let agent = atif::Agent {
+        name: "openclaw".into(),
+        version: version.unwrap_or("unknown").into(),
+        model_name: model.map(String::from),
+        ..Default::default()
+    };
+    atif::assemble(agent, branch["header"]["id"].as_str().map(String::from), steps)
+}
+
 async fn exec_timeout(cx: &AgentCtx<'_>, cmd: &str) -> Result<ExecResult> {
     let r = cx.exec(&format!("set -o pipefail; {cmd}"), &BTreeMap::new(), Some(INSTALL_TIMEOUT)).await?;
     if r.code != 0 {
@@ -259,6 +280,7 @@ impl Agent for OpenClaw {
         exec_agent(cx, &cmd, &env).await?;
         // Best-effort copy of the native session transcript into /logs/agent.
         let _ = exec_agent(cx, &format!("python3 -c {}", quote(COPY_SESSION_SCRIPT)), &env).await;
+        let _ = exec_agent(cx, &nvm22(EXPORT_TRAJECTORY), &env).await;
         Ok(())
     }
 
@@ -268,6 +290,13 @@ impl Agent for OpenClaw {
             ctx.n_cache_tokens = c.n_cache_tokens;
             ctx.n_output_tokens = c.n_output_tokens;
             ctx.cost_usd = None;
+        }
+        let branch = std::fs::read_to_string(logs_dir.join(".openclaw/trajectory-exports/session/session-branch.json"));
+        if let Some(mut t) = branch.ok().and_then(|b| atif_trajectory(&b, self.version.as_deref(), self.args.model_name.as_deref())) {
+            if ctx.n_input_tokens.is_some() {
+                atif::set_run_totals(&mut t, ctx.n_input_tokens, ctx.n_output_tokens, ctx.n_cache_tokens, ctx.cost_usd);
+            }
+            atif::write_trajectory(logs_dir, &t);
         }
     }
 }
@@ -279,6 +308,31 @@ mod tests {
 
     fn oc(kwargs: Value, env: &[(&str, &str)]) -> OpenClaw {
         OpenClaw::new(args(kwargs, env, Some("openai/gpt-4.1"))).unwrap()
+    }
+
+    #[test]
+    fn session_branch_to_atif() {
+        // A real export, trimmed; the tool entries take the shape of Pi's, which the pinned code writes.
+        let branch = json!({"header": {"type": "session", "id": "s1"}, "leafId": "e", "entries": [
+            {"type": "model_change", "id": "a", "parentId": null, "provider": "openai", "modelId": "m"},
+            {"type": "message", "id": "b", "parentId": "a", "timestamp": "2026-10-31T11:06:54.454Z", "message": {"role": "user", "content": "Write the line."}},
+            {"type": "message", "id": "c", "parentId": "b", "timestamp": "2026-10-31T11:07:33.063Z", "message": {"role": "assistant", "model": "m",
+             "content": [{"type": "toolCall", "id": "call_1", "name": "exec", "arguments": {"command": "ls"}}],
+             "usage": {"input": 5, "output": 2, "cacheRead": 1, "cacheWrite": 0, "totalTokens": 8}}},
+            {"type": "message", "id": "d", "parentId": "c", "message": {"role": "toolResult", "toolCallId": "call_1", "content": [{"type": "text", "text": "a.py"}]}},
+            {"type": "message", "id": "e", "parentId": "d", "message": {"role": "assistant", "content": [{"type": "text", "text": "Done."}],
+             "usage": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "totalTokens": 0}}},
+            {"type": "custom", "customType": "openclaw:bootstrap-context:full", "id": "f", "parentId": "e"}
+        ]});
+        let a = atif_trajectory(&branch.to_string(), Some("2026.8.35"), Some("openai/m")).unwrap();
+        assert_eq!(a.session_id.as_deref(), Some("s1"));
+        assert_eq!(a.steps.iter().map(|s| s.source.as_str()).collect::<Vec<_>>(), ["user", "agent", "agent"]);
+        assert_eq!(a.steps[0].message, json!("Write the line."));
+        let result = &a.steps[1].observation.as_ref().unwrap().results[0];
+        assert_eq!((result.source_call_id.as_deref(), result.content.clone()), (Some("call_1"), Some(json!("a.py"))));
+        assert_eq!(a.steps[1].metrics.as_ref().unwrap().prompt_tokens, Some(6));
+        assert!(a.steps[2].metrics.is_none());
+        assert!(atif_trajectory("{}", None, None).is_none());
     }
 
     #[test]

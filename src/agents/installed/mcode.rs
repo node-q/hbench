@@ -6,10 +6,11 @@ use super::pins;
 use super::{connection, ensure_system_dependencies, exec_agent};
 use crate::agents::model_connection::{Spec, provider as provider_access};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
+use crate::atif;
 use crate::env::quote;
 use crate::fmt::title_case;
 use anyhow::{Result, anyhow, bail};
-use serde_json::{Map, json};
+use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
 
 const SPEC: Spec = Spec { default_provider: None, api_key_envs: &[], base_url_envs: &[], passthrough: true };
@@ -257,6 +258,92 @@ pub fn parse_usage(text: &str) -> Option<AgentContext> {
     })
 }
 
+/// The result text of a finished tool call: its `content` parts, else the raw output.
+fn tool_output(call: &Value) -> Value {
+    let parts = call["output"]["content"].as_array();
+    match parts.map(|p| p.iter().filter_map(|c| c["text"].as_str()).collect::<Vec<_>>().join("\n")) {
+        Some(text) => json!(text),
+        None if call["output"].is_null() => call["error"].clone(),
+        None => call["output"].clone(),
+    }
+}
+
+fn has_finished_call(step: &atif::Step) -> bool {
+    step.observation.is_some()
+}
+
+/// `mcode exec --output-format stream-json` -> ATIF. A model response's text items carry its message id, and its tool
+/// calls run after it ends, so a new id or a tool call after a finished one starts the next step. Usage comes per turn,
+/// not per model call, so steps have no metrics.
+pub fn atif_trajectory(text: &str, version: Option<&str>, model: Option<&str>) -> Option<atif::Trajectory> {
+    let (mut steps, mut session_id, mut response) = (Vec::<atif::Step>::new(), None, None::<String>);
+    for e in parse_jsonl(text) {
+        session_id = session_id.or(e["sessionId"].as_str().map(String::from));
+        let event = e["type"].as_str().unwrap_or_default();
+        if !matches!(event, "item.started" | "item.updated" | "item.completed") {
+            continue;
+        }
+        let item = &e["item"];
+        let id = item["id"].as_str().unwrap_or_default();
+        let kind = item["type"].as_str().unwrap_or_default();
+        let message_id = id.rsplit_once(':').map(|(m, _)| m);
+        let starts_step = match kind {
+            "reasoning" | "agent_message" => message_id != response.as_deref(),
+            "tool_call" => event == "item.started" && steps.last().is_none_or(has_finished_call),
+            _ => false,
+        };
+        if starts_step {
+            response = message_id.filter(|_| kind != "tool_call").map(String::from);
+            steps.push(atif::Step {
+                source: "agent".into(),
+                timestamp: e["timestampMs"].as_i64().and_then(atif::timestamp_of_millis),
+                model_name: model.map(String::from),
+                message: json!(""),
+                ..Default::default()
+            });
+        }
+        let Some(step) = steps.last_mut() else { continue };
+        match kind {
+            "reasoning" => {
+                let reasoning = step.reasoning_content.get_or_insert_default();
+                reasoning.push_str(item["contentDelta"].as_str().unwrap_or_default());
+            }
+            "agent_message" => {
+                let delta = item["contentDelta"].as_str().unwrap_or_default();
+                step.message = json!(format!("{}{delta}", step.message.as_str().unwrap_or_default()));
+            }
+            "tool_call" => {
+                let call = &item["toolCall"];
+                let calls = step.tool_calls.get_or_insert_default();
+                if !calls.iter().any(|c| c.tool_call_id == id) {
+                    calls.push(atif::ToolCall {
+                        tool_call_id: id.into(),
+                        function_name: call["name"].as_str().unwrap_or_default().into(),
+                        arguments: Value::Null,
+                        extra: None,
+                    });
+                }
+                if let Some(known) = calls.iter_mut().find(|c| c.tool_call_id == id)
+                    && !call["input"].is_null()
+                {
+                    known.arguments = call["input"].clone();
+                }
+                if event == "item.completed" {
+                    atif::attach_result(&mut steps, id, tool_output(call));
+                }
+            }
+            _ => {}
+        }
+    }
+    let agent = atif::Agent {
+        name: "mcode".into(),
+        version: version.unwrap_or("unknown").into(),
+        model_name: model.map(String::from),
+        ..Default::default()
+    };
+    atif::assemble(agent, session_id, steps)
+}
+
 #[async_trait::async_trait]
 impl Agent for MCode {
     fn name(&self) -> &str {
@@ -288,10 +375,14 @@ impl Agent for MCode {
     }
 
     fn collect_usage(&self, logs_dir: &std::path::Path, ctx: &mut AgentContext) {
-        if let Some(c) = std::fs::read_to_string(logs_dir.join("mcode.jsonl")).ok().and_then(|t| parse_usage(&t)) {
+        let Ok(text) = std::fs::read_to_string(logs_dir.join("mcode.jsonl")) else { return };
+        if let Some(c) = parse_usage(&text) {
             ctx.n_input_tokens = c.n_input_tokens;
             ctx.n_cache_tokens = c.n_cache_tokens;
             ctx.n_output_tokens = c.n_output_tokens;
+        }
+        if let Some(t) = atif_trajectory(&text, self.version.as_deref(), self.args.model_name.as_deref()) {
+            atif::write_trajectory(logs_dir, &t);
         }
     }
 }
@@ -300,6 +391,43 @@ impl Agent for MCode {
 mod tests {
     use super::*;
     use crate::agents::installed::common::test_args as args;
+
+    /// A real run's stream, trimmed; the second tool call is added, with no text of its own before it.
+    const STREAM: &str = r#"{"timestampMs":1793438581373,"sessionId":"mvs_1","type":"turn.started"}
+{"timestampMs":1793438597125,"sessionId":"mvs_1","type":"item.started","item":{"id":"b9:reasoning","type":"reasoning","contentDelta":"The"}}
+{"timestampMs":1793438597139,"sessionId":"mvs_1","type":"item.updated","item":{"id":"b9:reasoning","type":"reasoning","contentDelta":" user"}}
+{"timestampMs":1793438598858,"sessionId":"mvs_1","type":"item.started","item":{"id":"call_1","type":"tool_call","toolCall":{"id":"call_1","name":"write","status":4}}}
+{"timestampMs":1793438598912,"sessionId":"mvs_1","type":"item.updated","item":{"id":"call_1","type":"tool_call","toolCall":{"id":"call_1","name":"write","status":1,"input":{"path":"/app/hello.txt"}}}}
+{"timestampMs":1793438598959,"sessionId":"mvs_1","type":"item.completed","item":{"id":"b9:reasoning","type":"reasoning","content":"The user"}}
+{"timestampMs":1793438598959,"sessionId":"mvs_1","type":"item.completed","item":{"id":"call_1","type":"tool_call","toolCall":{"id":"call_1","name":"write","status":2,"input":{"path":"/app/hello.txt"},"output":{"content":[{"type":"text","text":"Successfully wrote 13 bytes"}],"details":{"created":true}}}}}
+{"timestampMs":1793438599000,"sessionId":"mvs_1","type":"item.started","item":{"id":"call_2","type":"tool_call","toolCall":{"id":"call_2","name":"read","status":4}}}
+{"timestampMs":1793438599100,"sessionId":"mvs_1","type":"item.completed","item":{"id":"call_2","type":"tool_call","toolCall":{"id":"call_2","name":"read","status":2,"input":{"path":"/x"},"output":{"content":[{"type":"text","text":"Hello"}]}}}}
+{"timestampMs":1793438599824,"sessionId":"mvs_1","type":"item.started","item":{"id":"30:message","type":"agent_message","contentDelta":"File"}}
+{"timestampMs":1793438600238,"sessionId":"mvs_1","type":"item.updated","item":{"id":"30:message","type":"agent_message","contentDelta":" written."}}
+{"timestampMs":1793438600265,"sessionId":"mvs_1","type":"item.completed","item":{"id":"30:message","type":"agent_message","content":"File written."}}
+{"timestampMs":1793438600360,"sessionId":"mvs_1","type":"turn.completed","usage":{"inputTokens":8862,"outputTokens":155,"cacheReadTokens":8930,"totalTokens":9017}}
+"#;
+
+    #[test]
+    fn stream_to_atif() {
+        let a = atif_trajectory(STREAM, Some("0.6.12"), Some("openai/m")).unwrap();
+        assert_eq!((a.session_id.as_deref(), a.agent.name.as_str()), (Some("mvs_1"), "mcode"));
+        assert_eq!(a.steps.len(), 3);
+        let first = &a.steps[0];
+        assert_eq!((first.reasoning_content.as_deref(), first.message.as_str()), (Some("The user"), Some("")));
+        assert_eq!(first.timestamp.as_deref(), Some("2026-10-31T09:23:17.125Z"));
+        let call = &first.tool_calls.as_ref().unwrap()[0];
+        assert_eq!((call.function_name.as_str(), call.arguments.clone()), ("write", json!({"path": "/app/hello.txt"})));
+        let result = &first.observation.as_ref().unwrap().results[0];
+        assert_eq!(
+            (result.source_call_id.as_deref(), result.content.clone()),
+            (Some("call_1"), Some(json!("Successfully wrote 13 bytes")))
+        );
+        assert_eq!(a.steps[1].tool_calls.as_ref().unwrap()[0].tool_call_id, "call_2");
+        assert_eq!(a.steps[2].message, json!("File written."));
+        assert!(a.steps.iter().all(|s| s.metrics.is_none()));
+        assert!(atif_trajectory("{\"type\":\"turn.started\"}\n", None, None).is_none());
+    }
 
     #[test]
     fn options_validation() {

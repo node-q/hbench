@@ -45,7 +45,7 @@ pub mod swe_agent;
 pub mod trae_agent;
 pub mod vibe;
 
-use super::model_connection::{self, Resolved, Spec};
+use super::model_connection::{self, Resolved, Routing, Spec};
 use super::{AgentArgs, AgentBox, AgentCtx};
 use crate::env::{ErrorKind, ExecResult, kind_err, quote, tail};
 use anyhow::{Result, bail};
@@ -164,9 +164,22 @@ fn package_spec(name: &str) -> Option<PackageSpec> {
 /// Shell function `hb_apt_install PKG...`: `apt-get update && apt-get install -y PKG...`, retried against the archive
 /// mirrors an EOL release moves to while its index stays up. Stage 1 points only the security suites at the archive,
 /// stage 2 every Debian/Ubuntu source. The rewritten sources go in a temp dir used via `-o Dir::Etc::*`, so the image's
-/// apt config is left as is.
-pub const APT_INSTALL_FN: &str = r#"hb_apt_install() {
-  if apt-get update && apt-get install -y "$@"; then return 0; fi
+/// apt config is left as is. Every apt-get waits up to 120 s for a lock another apt-get or dpkg holds: dpkg's through
+/// `DPkg::Lock::Timeout`, the others (the package lists', say), which apt-get does not wait for, by retrying.
+pub const APT_INSTALL_FN: &str = r#"hb_apt_get() {
+  _hb_lock_wait=120; _hb_waited=0; _hb_err=/tmp/hbench-apt-err.$$
+  while :; do
+    _hb_arc=0; apt-get -o DPkg::Lock::Timeout=$_hb_lock_wait "$@" 2>"$_hb_err" || _hb_arc=$?
+    cat "$_hb_err" >&2
+    if [ "$_hb_arc" = 0 ] || [ "$_hb_waited" -ge "$_hb_lock_wait" ] || ! grep -q 'Could not get lock' "$_hb_err"; then
+      rm -f "$_hb_err"; return "$_hb_arc"
+    fi
+    echo "hbench: waiting for another apt-get or dpkg to release its lock" >&2
+    sleep 5; _hb_waited=$((_hb_waited + 5))
+  done
+}
+hb_apt_install() {
+  if hb_apt_get update && hb_apt_get install -y "$@"; then return 0; fi
   _hb_rc=1
   for _hb_stage in 1 2; do
     echo "hbench: apt-get install failed; retrying with archived mirrors (stage $_hb_stage)" >&2
@@ -184,11 +197,11 @@ pub const APT_INSTALL_FN: &str = r#"hb_apt_install() {
       if [ -f "$_hb_f" ]; then sed "$_hb_s" "$_hb_f" > "$_hb_d/parts/${_hb_f##*/}"; fi
     done
     _hb_o="-o Dir::Etc::SourceList=$_hb_d/sources.list -o Dir::Etc::SourceParts=$_hb_d/parts -o Acquire::Check-Valid-Until=false"
-    _hb_rc=0; { APT_CONFIG="$_hb_d/apt.conf" apt-get $_hb_o update && APT_CONFIG="$_hb_d/apt.conf" apt-get $_hb_o install -y "$@"; } || _hb_rc=$?
+    _hb_rc=0; { APT_CONFIG="$_hb_d/apt.conf" hb_apt_get $_hb_o update && APT_CONFIG="$_hb_d/apt.conf" hb_apt_get $_hb_o install -y "$@"; } || _hb_rc=$?
     rm -rf "$_hb_d"
     if [ "$_hb_rc" = 0 ]; then break; fi
   done
-  apt-get update >/dev/null 2>&1 || true
+  hb_apt_get update >/dev/null 2>&1 || true
   return $_hb_rc
 }
 "#;
@@ -394,9 +407,9 @@ pub async fn exec_root_checked(cx: &AgentCtx<'_>, cmd: &str, env: &BTreeMap<Stri
     Ok(r)
 }
 
-/// Resolve a model connection with agent env (> host env) precedence.
-pub fn connection(args: &AgentArgs, spec: Spec) -> Resolved {
-    let get = |names: &[&str]| -> Option<(String, String)> {
+/// The first of `names` set in the agent env, else in the host env, as `(name, value)`.
+pub fn env_lookup(args: &AgentArgs) -> impl Fn(&[&str]) -> Option<(String, String)> + '_ {
+    |names: &[&str]| {
         for source in [Some(&args.extra_env), None] {
             for n in names {
                 let v = match source {
@@ -409,8 +422,25 @@ pub fn connection(args: &AgentArgs, spec: Spec) -> Resolved {
             }
         }
         None
-    };
-    model_connection::resolve(args.model_name.as_deref(), spec, &get)
+    }
+}
+
+/// Resolve a model connection with agent env (> host env) precedence.
+pub fn connection(args: &AgentArgs, spec: Spec) -> Resolved {
+    model_connection::resolve(args.model_name.as_deref(), spec, &env_lookup(args))
+}
+
+/// Agents with a fixed provider, whose credentials can be checked before a run.
+const FIXED_PROVIDER: &[(&str, Spec, &Routing)] = &[
+    ("claude-code", claude_code::SPEC, &claude_code::ROUTING),
+    ("codex", codex::SPEC, &codex::ROUTING),
+    ("gemini-cli", gemini_cli::SPEC, &gemini_cli::ROUTING),
+];
+
+/// Credential env vars an agent accepts, any one of which is enough (API keys, OAuth tokens, Bedrock/Vertex
+/// switches, custom endpoints). None = not decidable up front (passthrough agents depend on the model).
+pub fn credential_envs(agent: &str) -> Option<Vec<&'static str>> {
+    FIXED_PROVIDER.iter().find(|(n, _, _)| *n == agent).map(|(_, spec, routing)| model_connection::credential_envs(*spec, routing))
 }
 
 /// Write `content` to `path` in the container with mode 600, owned by the agent user.
@@ -461,6 +491,34 @@ mod tests {
     use super::*;
 
     #[test]
+    fn credential_envs_are_unchanged() {
+        let claude = [
+            "ANTHROPIC_API_KEY",
+            "ANTHROPIC_AUTH_TOKEN",
+            "CLAUDE_CODE_OAUTH_TOKEN",
+            "ANTHROPIC_BASE_URL",
+            "AWS_BEARER_TOKEN_BEDROCK",
+            "CLAUDE_CODE_USE_BEDROCK",
+            "CLAUDE_CODE_USE_VERTEX",
+        ];
+        assert_eq!(credential_envs("claude-code").unwrap(), claude);
+        let codex = ["OPENAI_API_KEY", "CODEX_AUTH_JSON_PATH", "CODEX_FORCE_AUTH_JSON", "OPENAI_BASE_URL", "OPENAI_API_BASE"];
+        assert_eq!(credential_envs("codex").unwrap(), codex);
+        let gemini = [
+            "GEMINI_API_KEY",
+            "GOOGLE_API_KEY",
+            "GOOGLE_GENERATIVE_AI_API_KEY",
+            "GEMINI_OAUTH_CREDS_PATH",
+            "GEMINI_FORCE_OAUTH",
+            "GOOGLE_GENAI_USE_VERTEXAI",
+            "GOOGLE_APPLICATION_CREDENTIALS",
+            "GOOGLE_GEMINI_BASE_URL",
+        ];
+        assert_eq!(credential_envs("gemini-cli").unwrap(), gemini);
+        assert!(credential_envs("opencode").is_none() && credential_envs("terminus-2").is_none());
+    }
+
+    #[test]
     fn classification_last_match_wins() {
         assert_eq!(classify("boom"), "NonZeroAgentExitCodeError");
         assert_eq!(classify("429 Too Many Requests"), "ApiRateLimitError");
@@ -483,6 +541,37 @@ mod tests {
             assert!(!matches!(created, Ok(None)), "{name} not constructed by create");
         }
         assert!(matches!(create("no-such-agent", common::test_args(serde_json::json!({}), &[], None)), Ok(None)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn apt_install_waits_for_a_held_lock() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = std::env::temp_dir().join(format!("hbench-apt-lock-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&d).unwrap();
+        let apt_get = r#"#!/bin/sh
+echo "$*" >> "$HB_TEST_DIR/calls"
+if [ "$(wc -l < "$HB_TEST_DIR/calls")" -le 2 ]; then
+  echo 'E: Could not get lock /var/lib/apt/lists/lock. It is held by process 43 (apt-get)' >&2; exit 100
+fi
+"#;
+        for (name, script) in [("apt-get", apt_get), ("sleep", "#!/bin/sh\n")] {
+            std::fs::write(d.join(name), script).unwrap();
+            std::fs::set_permissions(d.join(name), std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let out = std::process::Command::new("bash")
+            .args(["-c", &format!("{APT_INSTALL_FN}hb_apt_install tmux")])
+            .env("PATH", format!("{}:{}", d.display(), std::env::var("PATH").unwrap()))
+            .env("HB_TEST_DIR", &d)
+            .output()
+            .unwrap();
+        let calls = std::fs::read_to_string(d.join("calls")).unwrap();
+        std::fs::remove_dir_all(&d).unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        let update = "-o DPkg::Lock::Timeout=120 update\n";
+        assert_eq!(calls, format!("{update}{update}{update}-o DPkg::Lock::Timeout=120 install -y tmux\n"));
+        let waits = String::from_utf8_lossy(&out.stderr).matches("hbench: waiting for another apt-get or dpkg").count();
+        assert_eq!(waits, 2);
     }
 
     #[test]

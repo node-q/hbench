@@ -48,10 +48,11 @@ pub fn register(v: &str) {
 }
 
 /// Whether a variable's value is a secret, by its name: `*_KEY`, `*TOKEN`, `*SECRET*`, ... but not
-/// `GIT_AUTHOR_NAME` or `TOKENIZER`, which would scrub names and model ids everywhere.
+/// `GIT_AUTHOR_NAME` or `TOKENIZER`, which would scrub names and model ids everywhere. Model endpoints
+/// (`*_BASE_URL`, `base_url`, ...) count too: they can reveal private infrastructure.
 fn secret_name(k: &str) -> bool {
     let u = k.to_ascii_uppercase();
-    crate::config::is_sensitive_key(k) && !u.contains("AUTHOR") && !u.contains("TOKENIZER")
+    (crate::config::is_sensitive_key(k) && !u.contains("AUTHOR") && !u.contains("TOKENIZER")) || crate::config::is_endpoint_key(k)
 }
 
 /// Register the values of the sensitive keys in an env map.
@@ -181,6 +182,28 @@ pub fn scrub_dir(dir: &Path) -> usize {
     changed
 }
 
+/// Copy the files under `src` into `dst`, scrubbed, each replaced in one step: a reader of `dst` sees the
+/// old file or the clean new one, never raw bytes. Files are not read back from `dst`, so a read-only
+/// one can't stay raw the way an in-place scrub would leave it.
+pub fn publish_dir(src: &Path, dst: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for e in std::fs::read_dir(src)? {
+        let e = e?;
+        let (t, to) = (e.file_type()?, dst.join(e.file_name()));
+        if t.is_dir() {
+            publish_dir(&e.path(), &to)?;
+        } else if t.is_file() {
+            let raw = std::fs::read(e.path())?;
+            let tmp = dst.join(format!(".{}.publish", e.file_name().to_string_lossy()));
+            let _ = std::fs::remove_file(&tmp);
+            std::fs::write(&tmp, bytes(&raw).unwrap_or(raw))?;
+            std::fs::set_permissions(&tmp, e.metadata()?.permissions())?;
+            std::fs::rename(&tmp, to)?;
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 pub(crate) fn reset() {
     *registry().write().unwrap() = Registry::default();
@@ -244,7 +267,7 @@ mod tests {
     }
 
     #[test]
-    fn registers_only_sensitive_keys() {
+    fn registers_only_sensitive_keys_and_endpoints() {
         let _g = test_lock();
         reset();
         let env: std::collections::BTreeMap<String, String> = [
@@ -256,10 +279,12 @@ mod tests {
         .map(|(k, v)| (k.into(), v.into()))
         .collect();
         register_env(&env);
-        register_json(&serde_json::json!({"model": {"api_key": "nested-secret-123", "name": "gpt-long-name"}}));
+        register_json(
+            &serde_json::json!({"model": {"api_key": "nested-secret-123", "name": "gpt-long-name", "base_url": "http://10.9.8.7/v1"}}),
+        );
         assert_eq!(
-            text("sk-proj-abcdefgh https://api.example.com/v1 Ada Lovelace nested-secret-123 gpt-long-name"),
-            "[REDACTED] https://api.example.com/v1 Ada Lovelace [REDACTED] gpt-long-name"
+            text("sk-proj-abcdefgh https://api.example.com/v1/chat Ada Lovelace nested-secret-123 gpt-long-name http://10.9.8.7/v1"),
+            "[REDACTED] [REDACTED]/chat Ada Lovelace [REDACTED] gpt-long-name [REDACTED]"
         );
     }
 
@@ -281,5 +306,32 @@ mod tests {
 
         let v = value(serde_json::json!({"message": format!("401 for key {KEY}")}));
         assert_eq!(v["message"], "401 for key [REDACTED]");
+    }
+
+    #[test]
+    fn publish_dir_never_writes_a_raw_byte_to_the_destination() {
+        use std::os::unix::fs::PermissionsExt;
+        let _g = test_lock();
+        reset();
+        register("hunter2-long-secret");
+        let root = std::env::temp_dir().join(format!("hbench-publish-{}", uuid::Uuid::new_v4()));
+        let (src, dst) = (root.join("src"), root.join("dst"));
+        std::fs::create_dir_all(src.join("sessions")).unwrap();
+        std::fs::write(src.join("sessions/a.jsonl"), "key hunter2-long-secret\n").unwrap();
+        std::fs::write(src.join("plain.txt"), "nothing here").unwrap();
+        std::fs::write(src.join("locked.txt"), "hunter2-long-secret").unwrap();
+        std::fs::set_permissions(src.join("locked.txt"), std::fs::Permissions::from_mode(0o400)).unwrap();
+        std::os::unix::fs::symlink("/etc/hosts", src.join("link")).unwrap();
+        for _ in 0..2 {
+            publish_dir(&src, &dst).unwrap();
+        }
+        assert_eq!(std::fs::read_to_string(dst.join("sessions/a.jsonl")).unwrap(), format!("key {MASK}\n"));
+        assert_eq!(std::fs::read_to_string(dst.join("plain.txt")).unwrap(), "nothing here");
+        assert_eq!(std::fs::read_to_string(dst.join("locked.txt")).unwrap(), MASK);
+        assert_eq!(std::fs::metadata(dst.join("locked.txt")).unwrap().permissions().mode() & 0o777, 0o400);
+        let names: Vec<_> = std::fs::read_dir(&dst).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+        assert!(!names.iter().any(|n| n.ends_with(".publish") || n == "link"), "{names:?}");
+        std::fs::remove_dir_all(&root).unwrap();
+        reset();
     }
 }

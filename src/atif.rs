@@ -133,6 +133,61 @@ pub struct FinalMetrics {
     pub extra: Option<Obj>,
 }
 
+/// Number the steps of a converted trajectory and total their metrics; None without steps.
+pub fn assemble(agent: Agent, session_id: Option<String>, mut steps: Vec<Step>) -> Option<Trajectory> {
+    if steps.is_empty() {
+        return None;
+    }
+    let mut totals = FinalMetrics { total_steps: Some(steps.len()), ..Default::default() };
+    let add = |total: &mut Option<i64>, n: Option<i64>| *total = n.map(|n| total.unwrap_or(0) + n).or(*total);
+    for (i, s) in steps.iter_mut().enumerate() {
+        s.step_id = i + 1;
+        let Some(m) = &s.metrics else { continue };
+        add(&mut totals.total_prompt_tokens, m.prompt_tokens);
+        add(&mut totals.total_completion_tokens, m.completion_tokens);
+        add(&mut totals.total_cached_tokens, m.cached_tokens);
+        if let Some(c) = m.cost_usd {
+            totals.total_cost_usd = Some(totals.total_cost_usd.unwrap_or(0.0) + c);
+        }
+    }
+    Some(Trajectory { schema_version: "ATIF-v1.7".into(), session_id, agent, steps, final_metrics: Some(totals), ..Default::default() })
+}
+
+/// Totals of a run whose log reports usage for the run, not per model call.
+pub fn set_run_totals(
+    trajectory: &mut Trajectory,
+    prompt: Option<i64>,
+    completion: Option<i64>,
+    cached: Option<i64>,
+    cost_usd: Option<f64>,
+) {
+    let totals = trajectory.final_metrics.get_or_insert_default();
+    (totals.total_prompt_tokens, totals.total_completion_tokens, totals.total_cached_tokens, totals.total_cost_usd) =
+        (prompt, completion, cached, cost_usd);
+}
+
+/// Attach a tool's result to the agent step that made the call; false when no step did.
+pub fn attach_result(steps: &mut [Step], call_id: &str, content: Value) -> bool {
+    let made_call = |s: &Step| s.tool_calls.iter().flatten().any(|c| c.tool_call_id == call_id);
+    let Some(step) = steps.iter_mut().rev().find(|s| made_call(s)) else { return false };
+    step.observation.get_or_insert_with(Default::default).results.push(ObservationResult {
+        source_call_id: Some(call_id.into()),
+        content: Some(content),
+        ..Default::default()
+    });
+    true
+}
+
+/// `agent/trajectory.json` of a trial.
+pub fn write_trajectory(logs_dir: &Path, trajectory: &Trajectory) {
+    let _ = std::fs::write(logs_dir.join("trajectory.json"), serde_json::to_string_pretty(trajectory).unwrap_or_default());
+}
+
+/// An epoch-milliseconds time as an ATIF timestamp.
+pub fn timestamp_of_millis(ms: i64) -> Option<String> {
+    chrono::DateTime::from_timestamp_millis(ms).map(|t| t.to_rfc3339_opts(chrono::SecondsFormat::Millis, true))
+}
+
 /// Tool-result text of a value: strings as-is, `True`/`False`/`None` literals, spaced JSON otherwise.
 fn scalar_text(v: &Value) -> String {
     match v {

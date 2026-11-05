@@ -45,7 +45,7 @@ hbench run -d <name>@<version> --registry-url <registry-url> -a claude-code -m a
 ## Agents
 
 46 agents (`hbench agents list`): `oracle`, `nop`, `terminus-2` (also `terminus`, `terminus-1`), `claude-code`, `codex`,
-`gemini-cli`, `opencode`, `aider`, `goose`, `copilot-cli`, `cursor-cli`, `openhands`, `openhands-sdk`, `mini-swe-agent`,
+`gemini-cli`, `opencode`, `aider`, `goose`, `copilot-cli`, `cortex-code`, `cursor-cli`, `openhands`, `openhands-sdk`, `mini-swe-agent`,
 `swe-agent`, `trae-agent`, `qwen-coder`, `kimi-cli`, `kimi-code`, `grok-build`, `hermes`, `junie`, `rovodev-cli`,
 `cline-cli`, `cortex-code`, `code-puppy`, `devin`, `langgraph`, `deerflow`, `strands`, `nemo-agent`, `mimo`, `mcode`,
 `pi`, `openclaw`, `antigravity-cli`, `antigravity-sdk`, `eve`, `fx`, `fx-dev`, `vibe`, `muse-code`, `acp` (+ `acp:<id>`),
@@ -66,7 +66,7 @@ The most used ones:
 | Agent | What it runs | Model (`-m`) | Useful options (`--ak`) |
 |---|---|---|---|
 | `claude-code` | Anthropic's Claude Code; an API key or a subscription token (`claude setup-token`) | `anthropic/claude-opus-5-5` | `reasoning_effort`, `max_turns`, `max_budget_usd` |
-| `codex` | OpenAI's Codex CLI | `openai/gpt-5` | `reasoning_effort`, `web_search` |
+| `codex` | OpenAI's Codex CLI | `openai/gpt-6.1-sol` | `reasoning_effort`, `web_search` |
 | `gemini-cli` | Google's Gemini CLI | `google/gemini-3-pro` | `reasoning_effort`, `sandbox` |
 | `opencode` | opencode, with any provider's model | `<provider>/<model>` | `variant` |
 | `terminus-2` | A minimal tmux-based agent, with any provider's model | `<provider>/<model>` | `max_turns`, `temperature` |
@@ -89,9 +89,20 @@ Credentials are read from the host environment or `--ae KEY=VALUE` (`agent.env` 
 | `analyze`, `check` | run `claude-code` by default (`-a` picks another agent), so they need an Anthropic credential, usually `ANTHROPIC_API_KEY` | |
 
 `hbench agents schema <agent>` lists an agent's kwargs; `src/agents/model_connection.rs` has every provider's key names.
+With a ChatGPT login (`CODEX_AUTH_JSON_PATH`, `CODEX_FORCE_AUTH_JSON`), codex takes only the model names Codex lists, such as
+`gpt-6.1-sol` or `gpt-5.6-sol`; an API alias such as `gpt-5.6` fails there with HTTP 400.
 Other hbench variables: `DOCKER_CONTEXT`/`DOCKER_HOST` (which daemon), `HBENCH_EGRESS_METHOD=proxy` (see below).
 `HBENCH_NO_UPDATE_CHECK=1` stops the daily check for a newer release, which suggests `hbench update` (also off when `CI` is set or stderr is not a
 terminal); hbench reads the last result from `~/.cache/hbench/latest-release.json` and refreshes it in the background.
+While tasks download, a progress line on stderr counts tasks and bytes and ends as a summary:
+
+```
+Downloading terminal-bench@2.0.1  █████████░░░░░░░░░░░░░░░  37/89 tasks  412 MB/1.1 GB
+✔ Downloaded terminal-bench@2.0.1 · 89 task(s) · 1.1 GB
+```
+
+`HBENCH_NO_PROGRESS=1` turns it off, as `--quiet` and `--observe` do for `hbench run`. It is also off when `CI` is set
+or stderr is not a terminal; hbench then prints one `downloading 89 task(s) from <reference>` line instead.
 
 ## Task format
 
@@ -167,8 +178,10 @@ hbench datasets list --registry oci://ghcr.io/<namespace>              # what it
 ```
 
 - `oci://<registry>/<namespace>`: `-d <name>@<version>` is the manifest tagged `<version>` in
-  `<registry>/<namespace>/<name>`. Pulls are anonymous (with a registry token where the registry asks for one, as
-  GHCR does) and over HTTPS, except to `localhost`, `127.0.0.1` and `::1`, which use plain HTTP.
+  `<registry>/<namespace>/<name>`. Pulls use the docker config's credentials for the registry, as `push` does (see
+  [Publishing datasets](#publishing-datasets)), so a private dataset runs after `docker login`; without any they are
+  anonymous (with a registry token where the registry asks for one, as GHCR does). They are over HTTPS, except to
+  `localhost`, `127.0.0.1` and `::1`, which use plain HTTP.
 - `oci-layout:<dir>`: `<dir>/<name>` is an OCI image layout, and the dataset is the manifest in its `index.json`
   whose `org.opencontainers.image.ref.name` is `<version>`. `oras cp <registry>/<namespace>/<name>:<version>
   --to-oci-layout <dir>/<name>:<version>` makes one, for offline use.
@@ -234,7 +247,7 @@ hbench datasets export -d hello@1.0 --registry oci://ghcr.io/<namespace> --oci-l
   targets, `task_checksum` and package digest. Any difference fails the command.
 - `export` copies `name@version` from `--registry` (as `run` takes it) into `<dir>/<name>`, tagged with the version and
   checked blob by blob, so that `--registry oci-layout:<dir>` runs it offline. It reads with the docker config's
-  credentials; `run` and `datasets download` pull anonymously.
+  credentials, as `run` and `datasets download` do.
 
 ### Dataset format
 
@@ -314,6 +327,14 @@ jobs/<job>/<task>__<id>/{config.json, lock.json, result.json, trial.log, excepti
                          agent/, verifier/, artifacts/{manifest.json, logs/artifacts/...}, steps/<name>/...}
 ```
 
+`agent/trajectory.json` is the trial's trajectory in ATIF. `acp`, `claude-code`, `cline-cli`, `code-puppy`, `codex`, `copilot-cli`, `cursor-cli`, `deepseek-harness`,
+`deerflow`, `dspy-rlm`, `eve`, `gemini-cli`, `goose`, `hermes`, `kimi-code`, `langgraph`, `mcode`, `mimo`, `mini-swe-agent`, `muse-code`, `openclaw`, `opencode`, `pi`, `qwen-coder`, `rovodev-cli`, `strands`, `swe-agent`, `trae-agent` and `vibe` convert their native session logs into it; `terminus-2`, `computer-1`, `openhands-sdk`, `antigravity-sdk` and `nemo-agent` write it
+themselves. In a converted trajectory each agent step is one model call and its metrics are that call's alone:
+`prompt_tokens` is the whole prompt, cached and cache-written tokens included, and `cached_tokens` the cached part of
+it. A step whose call the native log reports no usage for has no metrics; `acp`, `cortex-code`, `cursor-cli`, `dspy-rlm`, `goose`, `hermes`, `mcode` and `swe-agent` report usage per run or per turn, so their steps have none, and `copilot-cli` reports output tokens only. `opencode` steps count tokens as its usage does, without cache writes and reasoning, which stay in `metrics.extra`. A `deepseek-harness` run with no exported
+session log, as in jobs from before the export ran after a timeout, gets its trajectory from `dsh`'s output stream
+instead: the instruction and timestamps are missing, long text is cut at 8 KiB, and `notes` says so.
+
 `trials.json` is written only for jobs not planned from their config (`jobs regrade`, `run --diff`), so they can be
 resumed. The job's `result.json` has per-eval metrics (mean/sum/min/max/uv-script), pass@k, reward/exception stats, tokens,
 and cost. Failed trials are retried by error type (`--max-retries`, include/exclude).
@@ -324,11 +345,40 @@ the version. `manifest.json`, written last, holds the SHA-256 of the job's confi
 file its trials wrote; `hbench jobs verify -p jobs/<job>` reports any file changed, removed or added since. It shows
 the files are the ones this build wrote, not that the run was real: anyone can rebuild hbench.
 
+Each trial's `lock.json` and `result.json` (`agent_info`) record which kind of service answered the model's
+requests, never where it was:
+
+```json
+"model_endpoint": {"backend": "custom", "model_served_by": "lmstudio", "model_quantization": "q4_k_m"}
+```
+
+- `backend` is one of these values:
+  - `provider`: the provider's own API at its built-in endpoint. This includes Claude Code's subscription
+    OAuth.
+  - `bedrock` or `vertex`: Claude Code with `AWS_BEARER_TOKEN_BEDROCK`, `CLAUDE_CODE_USE_BEDROCK` or
+    `CLAUDE_CODE_USE_VERTEX`.
+  - `custom`: a base URL override was set, through a provider env such as `OPENAI_BASE_URL`, a kwarg such as
+    `api_base`, or the agent's own config (Claude Code settings' `env`, Codex `openai_base_url`).
+  - `null`: hbench can't tell. That covers Codex with an `auth.json` login or a `model_provider` in its config,
+    agents that forward the environment to a CLI that reads its own config, and agents that don't declare their
+    model access yet. `terminus-2`, `computer-1` (litellm provider), `claude-code` and `codex` record a
+    backend. Other agents record `null`.
+- `model_served_by` and `model_quantization` are what the run declares, with `agent.model_served_by` /
+  `agent.model_quantization` in a job config or `--model-served-by` / `--model-quantization`. Each is 1-64
+  letters, digits and `. _ - : +`, recorded as given. They are `null` when not declared.
+- No URL, host, IP address, port, env value or credential is recorded, not even hashed. Oracle and `nop` record
+  no `model_endpoint`.
+
 Secrets stay out of the output and off command lines:
 
 - hbench treats as secret the value of every environment variable whose name looks like one (`*_KEY`, `*TOKEN`,
   `*SECRET*`, `*PASSWORD*`, `*CREDENTIAL*`, `*AUTH*`), from the host, the agent's `env`, agent kwargs and a task's
   `env` tables. Values shorter than 8 characters are not treated as secrets.
+- Model endpoints are treated the same way, since a base URL can reveal private infrastructure. That covers the
+  value of every variable or kwarg named like one (`*_BASE_URL`, `*_API_BASE`, `*_ENDPOINT`, `*_HOST`,
+  `base_url`, `api_base`). A written `config.json` or `lock.json` keeps the name but records the value as
+  `${NAME}` when it equals the host variable, or as `[set]` otherwise. Resuming a job whose config says `[set]`
+  fails with a message that names the endpoint. Pass endpoints as `${VAR}` templates to keep a job resumable.
 - When a trial ends, these values are replaced with `[REDACTED]` in every file of the trial directory: trajectories,
   agent and verifier logs, artifacts and `result.json`. The job directory gets the same treatment when the job ends,
   and `trial.log` is scrubbed as it is written. Each value is matched raw, JSON-escaped, URL-encoded and in base64,
@@ -343,6 +393,19 @@ Agent setup is hardened so environment problems aren't charged to the agent:
   failure.
 - apt installs fall back to the image's sources minus the `*-security` suites. This matters for EOL releases like
   Debian bullseye, whose security index lists packages that are gone from the mirror.
+
+### Uploading a job
+
+`hbench jobs upload` sends a finished job to a server that takes one: the job folder as a gzipped tar (the same
+archive `tar czf job.tgz -C jobs <job>` makes) in one POST. It checks the job against its `manifest.json` first and
+sends nothing if a file changed. `--token-env` names an environment variable whose value goes out as
+`Authorization: Bearer …`, so the token stays off the command line; `-H` adds any other header. It prints the
+server's answer and exits 1 with the server's reason if it refused the job.
+
+```bash
+export UPLOAD_TOKEN=…
+hbench jobs upload -p jobs/<job> --url https://example.com/api/uploads --token-env UPLOAD_TOKEN -H 'run-token: …'
+```
 
 ## Troubleshooting
 
@@ -367,7 +430,7 @@ Agent setup is hardened so environment problems aren't charged to the agent:
 
 ### Viewer
 
-`hbench view` serves its own web UI (`viewer/`, React + Vite) for browsing jobs and tasks. It listens on 127.0.0.1 by
+`hbench view` serves its own web UI (`viewer/`, React + Vite) for browsing jobs and tasks. A trial's Map tab draws its trajectory as groups of similar work in lanes, and flags steps that fetched the benchmark's own sources: a keyword match on the command or URL, so check the steps it points to. It listens on 127.0.0.1 by
 default; with `--host` set to any non-loopback address it is read-only, because starting runs and deleting jobs would be
 open to anyone who can reach it. The built bundle (`viewer/dist`) is committed and embedded at compile time, so
 `cargo build` doesn't need Node. After changing the UI:
@@ -382,12 +445,20 @@ npm run dev                                    # hot reload; proxies /api to `hb
 - `cargo test`: unit tests for every module and agent.
 - `scripts/e2e.sh`: a fixture suite against a real docker daemon. It covers timeouts, missing rewards, reward.json,
   users/env, no-network, compose sidecars, prebuilt images, egress allowlists, and secrets (kept off command lines
-  and scrubbed from the job), and checks for leaked containers.
+  and scrubbed from the job). It then runs every other command of the CLI against the job dirs those runs left, the
+  example tasks, and inputs it makes on the spot: `jobs` (summary, verify, resume, regrade, upload to a stand-in
+  server), `trials`, `traces`, `datasets` (an OCI layout, a `registry:3` container it starts, a registry.json over a
+  local git checkout), the authoring commands, `tasks migrate` on a Terminal-Bench v1 task that is then run, `sweeps`,
+  `exec`, `analyze` and `check` with the nop agent, `tasks start-env`, `cache clean --dry`, and the viewer's API.
+  Last, it checks for leaked containers. Not covered: `hbench update` (it would install a release over the binary
+  under test) and the interactive paths (the `run` wizard, a real `trials handoff`, the `start-env` shell).
+  `E2E_PART=runs|isolation|cli` runs one part: the fixture suite and the commands that read its job; integrity,
+  egress and secrets; or the rest of the CLI. Unset, it runs all three.
 - `scripts/install-matrix.sh`: installs every installed agent into a real container (`install_only`).
 
 CI (`.github/workflows/ci.yml`) runs on GitHub-hosted runners: build + `cargo test` on Linux and macOS, `cargo fmt
 --check` and clippy, `cargo audit`, a check that the committed `viewer/dist` matches `viewer/src`, `scripts/e2e.sh`
-against a real Docker daemon, and the example tasks through
+against a real Docker daemon (its three parts in parallel jobs), and the example tasks through
 [node-q/hbench-action](https://github.com/node-q/hbench-action) with the latest release: every one must score 1 with
 the oracle and 0 with `nop`. On Linux it also runs the OCI tests against two local `registry:3` containers
 (`HBENCH_TEST_OCI_REGISTRY=localhost:5000 cargo test oci::tests`), the second taking basic auth with a password

@@ -160,6 +160,26 @@ async fn example_tasks_unpack_byte_identical_from_an_oci_layout() {
     assert_eq!((listed[0].config.name.as_str(), listed[0].config.version.as_str(), listed[0].layers.len()), ("examples", "1.0", 3));
 }
 
+/// Every layer of `repository@digest` fetched from `store` with one progress line, which must count each task once
+/// and every byte of its layer.
+async fn assert_download_counted(store: &super::store::Store, repository: &str, digest: &str) {
+    let dataset = super::open(store, repository, digest).await.unwrap();
+    let bytes: u64 = dataset.layers.iter().map(|l| l.size).sum();
+    let progress = crate::progress::Download::start("examples@1.0", dataset.layers.len(), bytes);
+    for layer in &dataset.layers {
+        super::fetch_layer(store, repository, layer, &progress).await.unwrap();
+    }
+    assert_eq!(progress.counts(), (dataset.layers.len(), bytes));
+}
+
+#[tokio::test]
+async fn a_download_counts_its_tasks_and_bytes() {
+    let (root, cache) = (scratch("layout"), scratch("cache"));
+    let digest = write_layout(&root, &info("examples", "1.0"), &example_tasks()).unwrap();
+    let store = super::store::Store::open(&format!("oci-layout:{}", root.display()), &cache).unwrap();
+    assert_download_counted(&store, "examples", &digest).await;
+}
+
 #[test]
 fn layers_depend_only_on_paths_contents_and_exec_bits() {
     let source = example("hello-world");
@@ -344,6 +364,26 @@ fn registry_specs() {
 }
 
 #[test]
+fn a_registry_store_reads_the_docker_config_and_a_layout_store_does_not() {
+    use oci_client::secrets::RegistryAuth;
+    let root = scratch("pull-auth");
+    let config = root.join("config.json");
+    std::fs::write(&config, r#"{"auths": {"registry.example": {"username": "reader", "password": "pw"}}}"#).unwrap();
+    let auth = |registry: &str| match super::store::Store::open_with_config(registry, &root, Some(&config)).unwrap() {
+        super::store::Store::Registry { auth, .. } => auth,
+        super::store::Store::Layout { .. } => panic!("{registry} is a registry"),
+    };
+    assert_eq!(auth("registry.example"), RegistryAuth::Basic("reader".into(), "pw".into()));
+    assert_eq!(auth("other.example"), RegistryAuth::Anonymous);
+
+    std::fs::write(&config, "not json").unwrap();
+    let err = super::store::Store::open_with_config("registry.example", &root, Some(&config)).err().unwrap();
+    assert!(format!("{err:#}").contains("parsing"), "{err:#}");
+    let layout = format!("oci-layout:{}", root.display());
+    assert!(matches!(super::store::Store::open_with_config(&layout, &root, Some(&config)), Ok(super::store::Store::Layout { .. })));
+}
+
+#[test]
 fn lock_json_records_oci_tasks() {
     let oci = OciTask {
         registry: "ghcr.io".into(),
@@ -408,6 +448,9 @@ async fn example_tasks_unpack_byte_identical_from_a_registry() {
         assert!(cache.join("blobs/sha256").join(&hex).is_file());
     }
     assert!(cache.join("blobs/sha256").join(digest.trim_start_matches("sha256:")).is_file(), "the manifest is cached by digest");
+    let fresh = scratch("fresh");
+    assert_download_counted(&super::store::Store::open(&registry, &fresh).unwrap(), &format!("{namespace}/examples"), &digest).await;
+    assert_download_counted(&super::store::Store::open(&registry, &fresh).unwrap(), &format!("{namespace}/examples"), &digest).await;
 
     let layer = cache.join("blobs/sha256").join(tasks[0].oci.as_ref().unwrap().layer_digest.trim_start_matches("sha256:"));
     std::fs::write(&layer, b"corrupt").unwrap();

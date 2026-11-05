@@ -719,6 +719,7 @@ pub fn resolve_env_vars(env: &BTreeMap<String, String>) -> Result<BTreeMap<Strin
 }
 
 pub fn resolve_template(k: &str, v: &str) -> Result<String> {
+    crate::config::check_endpoint_given(k, v)?;
     Ok(match v.strip_prefix("${").and_then(|s| s.strip_suffix('}')) {
         Some(inner) => {
             let (var, default) = match inner.split_once(":-") {

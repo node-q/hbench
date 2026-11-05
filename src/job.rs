@@ -138,6 +138,9 @@ pub fn trial_name(t: &TaskRef) -> String {
 
 /// Resolve tasks + datasets into task refs; download git and OCI tasks.
 pub async fn resolve_tasks(cfg: &JobConfig) -> Result<Vec<TaskRef>> {
+    if cfg.quiet {
+        crate::progress::quiet();
+    }
     let mut v: Vec<TaskRef> = cfg.tasks.clone();
     for d in &cfg.datasets {
         v.extend(registry::dataset_tasks(d, cfg.verifier.disable).await?);
@@ -380,12 +383,12 @@ pub async fn run_job(
     }
     let quiet = cfg.quiet;
     let ticker = live.then(|| {
-        let progress = progress.clone();
+        let (progress, cancel) = (progress.clone(), cancel.clone());
         let started = std::time::Instant::now();
         tokio::spawn(async move {
             let mut frame = 0usize;
             loop {
-                eprint!("\r\x1b[2K{}", status_line(&locked(&progress), n_total, frame, started.elapsed()));
+                eprint!("\r\x1b[2K{}", status_line(&locked(&progress), n_total, frame, started.elapsed(), *cancel.borrow()));
                 frame = frame.wrapping_add(1);
                 tokio::time::sleep(Duration::from_millis(120)).await;
             }
@@ -527,7 +530,7 @@ pub(crate) fn paint_if(color: bool, code: &str, t: &str) -> String {
 }
 
 /// Erases the live status line before another line is printed over it.
-fn clear_line(live: bool) -> &'static str {
+pub(crate) fn clear_line(live: bool) -> &'static str {
     if live { "\r\x1b[2K" } else { "" }
 }
 
@@ -549,8 +552,8 @@ fn trial_line(r: &TrialResult) -> String {
     format!("  {} {:<40} {}  {}", paint_if(c, code, mark), r.task_name, paint_if(c, code, &what), paint_if(c, "2", &took))
 }
 
-/// `⠹ ████████░░░░  3/10  ✓ 2  ✗ 1  ! 0  · 30% pass · 4 running · 2m 10s`
-fn status_line(p: &JobProgress, n_total: usize, frame: usize, elapsed: Duration) -> String {
+/// `⠹ ████████░░░░  3/10  ✓ 2  ✗ 1  ! 0  · 30% pass · 4 running · 2m 10s` ("4 stopping" once cancelled).
+fn status_line(p: &JobProgress, n_total: usize, frame: usize, elapsed: Duration, cancelled: bool) -> String {
     const SPIN: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
     let c = use_color_on_stderr();
     let done = p.results.len();
@@ -571,13 +574,13 @@ fn status_line(p: &JobProgress, n_total: usize, frame: usize, elapsed: Duration)
         done - ok - err,
         paint_if(c, "33", "!"),
         err,
-        paint_if(c, "2", &format!("· {pass} · {} running · {took}", p.running)),
+        paint_if(c, "2", &format!("· {pass} · {} {} · {took}", p.running, if cancelled { "stopping" } else { "running" })),
     )
 }
 
 const BAR: usize = 24;
 
-fn bar(frac: f64) -> (String, String) {
+pub(crate) fn bar(frac: f64) -> (String, String) {
     let n = ((frac.clamp(0.0, 1.0) * BAR as f64).round() as usize).min(BAR);
     ("█".repeat(n), "░".repeat(BAR - n))
 }
@@ -773,7 +776,7 @@ mod tests {
             source: None,
             task_checksum: String::new(),
             config: cfg,
-            agent_info: AgentInfo { name: "oracle".into(), version: "1.0.0".into(), model_info: None },
+            agent_info: AgentInfo { name: "oracle".into(), version: "1.0.0".into(), model_info: None, model_endpoint: None },
             agent_result: None,
             verifier_result: reward
                 .map(|r| VerifierResult { rewards: Some([("reward".into(), serde_json::Number::from_f64(r).unwrap())].into()) }),
@@ -918,5 +921,13 @@ Job  runtime 1h 2m 5s
         std::fs::write(d.join("result.json"), "not json").unwrap();
         assert_ne!(carried_over(&d).0, fresh);
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn status_line_says_stopping_once_cancelled() {
+        let p = JobProgress { results: vec![], running: 3, retries: 0 };
+        let d = Duration::from_secs(65);
+        assert!(status_line(&p, 10, 0, d, false).contains("· – pass · 3 running · 1m 5s"));
+        assert!(status_line(&p, 10, 0, d, true).contains("· – pass · 3 stopping · 1m 5s"));
     }
 }

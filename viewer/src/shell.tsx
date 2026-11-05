@@ -88,10 +88,8 @@ export function Shell() {
           </a>
           <header className="bar">
             <NavLink to={tasksMode ? "/task-definitions" : "/"} className="bar__brand" aria-label="hbench home">
-              <svg width="18" height="18" viewBox="0 0 32 32" aria-hidden="true">
-                <rect x="4" y="17" width="6" height="11" fill="currentColor" opacity=".45" />
-                <rect x="13" y="10" width="6" height="18" fill="currentColor" opacity=".7" />
-                <rect x="22" y="3" width="6" height="25" fill="var(--color-accent)" />
+              <svg width="24" height="24" viewBox="0 0 64 64" fill="currentColor" aria-hidden="true">
+                <path d="M13.13724 0l10.15269 10.15263 10.15341-10.15263 12.72841 0-22.88204 22.88029-22.88043-22.88029 12.72796 0z m-13.13724 24.26167l0-12.72793 23.32843 23.32844 34.86233-34.86218 5.80924 0 0 6.91869-16.06904 16.06897 16.06904 16.06903 0 12.72793-22.43301-22.43302-34.64855 34.6484-6.91844 0 0-5.80948 16.96446-16.96439-16.96446-16.96446z m32.11455 39.73833l-12.72792 0 22.0503-22.05029 22.05029 22.05029-12.72792 0-9.32237-9.32237-9.32238 9.32237z" />
               </svg>
               hbench
             </NavLink>

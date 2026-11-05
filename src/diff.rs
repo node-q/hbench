@@ -123,25 +123,31 @@ fn without_task(v: &Value) -> Value {
     v
 }
 
+/// The name a target's results will carry (`[task].name`, else the dir), which is what sources match on.
+/// The lock's name is always the dir, so it can't be compared with `result.task_name`.
+fn target_task_name(c: &TrialConfig, lock: &Value) -> String {
+    crate::task::Task::load(&crate::registry::local_path(&c.task))
+        .map(|t| t.name())
+        .unwrap_or_else(|_| lock["task"]["name"].as_str().unwrap_or_default().to_string())
+}
+
 pub fn compare(targets: &[TrialConfig], sources: &[Source]) -> Result<Vec<TrialDiff>> {
     let locks: Vec<Value> = targets.iter().map(trial_lock).collect();
-    for (c, l) in targets.iter().zip(&locks) {
-        let name = l["task"]["name"].as_str().unwrap_or_default();
+    let names: Vec<String> = targets.iter().zip(&locks).map(|(c, l)| target_task_name(c, l)).collect();
+    for (l, name) in locks.iter().zip(&names) {
         if let Some(v) = l["task"]["version"].as_str() {
             semver(v)?;
-            for s in sources.iter().filter(|s| s.result.task_name == name && s.version() == Some(v)) {
+            for s in sources.iter().filter(|s| s.result.task_name == *name && s.version() == Some(v)) {
                 if s.lock["task"]["digest"] != l["task"]["digest"] {
                     bail!("Task '{name}' has version {v} in both source and target locks, but the digests differ.");
                 }
             }
         }
-        let _ = c;
     }
     let mut consumed: HashSet<usize> = HashSet::new();
     let mut regradable: BTreeMap<PathBuf, Option<String>> = BTreeMap::new();
     let mut out = vec![];
-    for (c, l) in targets.iter().zip(&locks) {
-        let task_name = l["task"]["name"].as_str().unwrap_or_default().to_string();
+    for ((c, l), task_name) in targets.iter().zip(&locks).zip(names) {
         let rerun = |reason: String, downgraded: bool| TrialDiff {
             action: Action::Rerun,
             target_trial_name: c.trial_name.clone(),
@@ -270,5 +276,26 @@ mod tests {
         assert_ne!(without_task(&lock("0.2.7", Some("0.2"))), without_task(&lock("0.3.0", Some("0.3"))));
         assert_ne!(without_task(&lock("0.2.5", None)), without_task(&lock("0.2.7", Some("0.2"))));
         assert_ne!(without_task(&lock("0.2.5", None)), without_task(&lock("0.2.6", None)));
+    }
+
+    #[test]
+    fn a_named_task_is_reused_from_its_earlier_trial() {
+        // hello-world's [task].name is "hbench/hello-world", not its dir name.
+        let task = crate::config::TaskRef { path: Some("examples/tasks/hello-world".into()), ..Default::default() };
+        let target = TrialConfig::new(task, "hello-world__new".into(), "jobs/new".into());
+        let lock = trial_lock(&target);
+        let result: TrialResult = serde_json::from_value(serde_json::json!({
+            "id": uuid::Uuid::new_v4(), "task_name": "hbench/hello-world", "trial_name": "hello-world__old",
+            "trial_uri": "", "task_id": null, "source": null, "task_checksum": "", "config": target,
+            "agent_info": {"name": "oracle", "version": "1", "model_info": null},
+            "agent_result": null, "verifier_result": {"rewards": {"reward": 1}}, "exception_info": null,
+            "started_at": "2026-01-01T00:00:00Z", "finished_at": "2026-01-01T00:01:00Z",
+            "environment_setup": null, "agent_setup": null, "agent_execution": null, "verifier": null,
+        }))
+        .unwrap();
+        let sources = [Source { dir: "jobs/old/hello-world__old".into(), result, lock }];
+        let d = compare(&[target], &sources).unwrap();
+        assert_eq!(d[0].action, Action::Reuse, "{}", d[0].reason);
+        assert_eq!(d[0].task_name, "hbench/hello-world");
     }
 }

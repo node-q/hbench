@@ -1,5 +1,6 @@
 //! One agent attempt on one task (single- or multi-step).
 
+use crate::agents::model_connection::ModelEndpoint;
 use crate::agents::{self, AgentBox, AgentContext, AgentCtx};
 use crate::artifacts::{self, Claims};
 use crate::config::TrialConfig;
@@ -69,6 +70,8 @@ pub struct AgentInfo {
     pub name: String,
     pub version: String,
     pub model_info: Option<ModelInfo>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_endpoint: Option<ModelEndpoint>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -130,6 +133,7 @@ impl TrialResult {
                 name: cfg.agent.name().into(),
                 version: "unknown".into(),
                 model_info: model_info(&cfg.agent.model_name),
+                model_endpoint: agents::model_endpoint(&cfg.agent, task),
             },
             config: cfg,
             agent_result: None,
@@ -215,6 +219,25 @@ const SETUP_ATTEMPTS: u32 = 3;
 /// Timeout of a step's workdir/setup.sh unless the agent config's `override_setup_timeout_sec`, which also
 /// bounds the agent install, sets one.
 const STEP_SETUP_TIMEOUT_SEC: f64 = 600.0;
+const LIVE_SYNC_INTERVAL: Duration = Duration::from_secs(5);
+
+/// A private temp dir for raw logs, removed even if the trial is cancelled mid-copy.
+struct Stage(PathBuf);
+
+impl Stage {
+    fn new() -> std::io::Result<Stage> {
+        use std::os::unix::fs::DirBuilderExt;
+        let dir = std::env::temp_dir().join(format!("hbench-logs-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::DirBuilder::new().mode(0o700).create(&dir)?;
+        Ok(Stage(dir))
+    }
+}
+
+impl Drop for Stage {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
 
 /// Context on an agent phase whose processes could not be stopped: grading then would be unsafe, so the
 /// trial ends there, still reporting the run's own error kind.
@@ -814,17 +837,20 @@ impl Trial {
             let r = match self.agent_ctx(self.agent_user(step), step) {
                 Err(e) => Err(e),
                 Ok(cx) => {
-                    let run = agent.run(instruction, &cx, &mut ctx, resume);
-                    match timeout {
-                        Some(d) => match tokio::time::timeout(d, run).await {
-                            Ok(r) => r,
-                            Err(_) => Err(kind_err(
-                                ErrorKind::AgentTimeout,
-                                format!("Agent execution timed out after {} seconds", d.as_secs_f64()),
-                            )),
-                        },
-                        None => run.await,
-                    }
+                    self.with_live_sync(async {
+                        let run = agent.run(instruction, &cx, &mut ctx, resume);
+                        match timeout {
+                            Some(d) => match tokio::time::timeout(d, run).await {
+                                Ok(r) => r,
+                                Err(_) => Err(kind_err(
+                                    ErrorKind::AgentTimeout,
+                                    format!("Agent execution timed out after {} seconds", d.as_secs_f64()),
+                                )),
+                            },
+                            None => run.await,
+                        }
+                    })
+                    .await
                 }
             };
             self.agent = Some(agent);
@@ -849,10 +875,25 @@ impl Trial {
                 Err(f)
             }
         };
+        if self.user_agent.is_none() {
+            self.export_agent_session(step).await;
+        }
         if switch && let Err(e) = self.env().set_network_policy(&plan.agent_env_baseline).await {
             return (ctx, t.finish(), Err(e));
         }
         (ctx, t.finish(), r)
+    }
+
+    /// After the agent is stopped and before its logs are downloaded. A failure costs detail, not the trial.
+    async fn export_agent_session(&self, step: Option<&StepConfig>) {
+        let Some(agent) = &self.agent else { return };
+        let r = match self.agent_ctx(self.agent_user(step), step) {
+            Ok(cx) => agent.export_session(&cx).await,
+            Err(e) => Err(e),
+        };
+        if let Err(e) = r {
+            self.log.line(&format!("agent session export failed: {e:#}"));
+        }
     }
 
     /// The user agent drives the target over the bridge; the bridge is closed (export + teardown) afterwards.
@@ -901,17 +942,62 @@ impl Trial {
         self.agent = Some(agent);
     }
 
-    async fn download_agent_logs(&self, target: &Path) -> Result<()> {
-        let env = self.env();
+    /// The agent's logs, raw, somewhere `hbench view` doesn't serve.
+    async fn stage_agent_logs(&self) -> Result<Stage> {
         let a = &self.cfg.agent;
-        let r = env.download_dir(MAIN, "/logs/agent", target).await;
-        if r.is_ok() && (!a.include_logs.is_empty() || !a.exclude_logs.is_empty()) {
-            filter_logs(target, &a.include_logs, &a.exclude_logs, &[]);
-        }
+        let stage = Stage::new()?;
+        let r = self.env().download_dir(MAIN, "/logs/agent", &stage.0).await;
         if let Err(e) = &r {
             self.log.line(&format!("agent log download failed: {e:#}"));
         }
-        r
+        r?;
+        if !a.include_logs.is_empty() || !a.exclude_logs.is_empty() {
+            filter_logs(&stage.0, &a.include_logs, &a.exclude_logs, &[]);
+        }
+        Ok(stage)
+    }
+
+    /// The trial dir is served while the trial runs, so logs only land there scrubbed.
+    async fn download_agent_logs(&self, target: &Path) -> Result<()> {
+        let a = &self.cfg.agent;
+        let stage = self.stage_agent_logs().await?;
+        crate::redact::publish_dir(&stage.0, target)?;
+        if !a.include_logs.is_empty() || !a.exclude_logs.is_empty() {
+            filter_logs(target, &a.include_logs, &a.exclude_logs, &[]);
+        }
+        Ok(())
+    }
+
+    /// Run `fut` while mirroring the agent's logs to the trial dir, so `hbench view` can follow a running trial.
+    /// A pass in progress finishes before this returns: it must not overwrite what sync_agent_output writes next.
+    async fn with_live_sync<T>(&self, fut: impl Future<Output = T>) -> T {
+        let (done, mut stop) = tokio::sync::oneshot::channel::<()>();
+        let sync = async {
+            let dir = self.dir.join("agent");
+            // A second instance: `fut` holds the real agent mutably, and collect_usage only reads logs.
+            let Ok(agent) = agents::create(&self.cfg.agent, dir.clone(), self.task.clone(), None) else { return };
+            let agent: Arc<dyn agents::Agent> = agent.into();
+            loop {
+                tokio::select! {
+                    _ = &mut stop => return,
+                    _ = tokio::time::sleep(LIVE_SYNC_INTERVAL) => {}
+                }
+                let Ok(stage) = self.stage_agent_logs().await else { continue };
+                let (agent, dir) = (agent.clone(), dir.clone());
+                // Parsing and scrubbing long logs would stall the runtime.
+                let _ = tokio::task::spawn_blocking(move || {
+                    agent.collect_usage(&stage.0, &mut AgentContext::default());
+                    crate::redact::publish_dir(&stage.0, &dir)
+                })
+                .await;
+            }
+        };
+        let run = async move {
+            let r = fut.await;
+            let _ = done.send(());
+            r
+        };
+        tokio::join!(run, sync).0
     }
 
     /// Download agent logs, fill usage, and push host-side files (e.g. exit-code.txt) back.
@@ -1030,6 +1116,11 @@ impl Trial {
         }
         if !self.cfg.verifier.disable {
             let t = TimingInfo::start();
+            if !separate {
+                // The agent could write here; a planted reward.json would outrank test.sh's reward.txt.
+                self.env().empty_dirs(&["/logs/verifier"], true).await?;
+                self.env().empty_dirs(&["/tests"], false).await?;
+            }
             let r = self.verify(None, &self.dir.join("artifacts")).await;
             self.result.verifier = Some(t.finish());
             if !separate {
@@ -1349,7 +1440,7 @@ fn sha256_prefixed(b: &[u8]) -> String {
     format!("sha256:{}", crate::task::hex(&<sha2::Sha256 as sha2::Digest>::digest(b)))
 }
 
-/// Trial lock (lock.json), with null fields omitted.
+/// Trial lock (lock.json), with null fields omitted except in `model_endpoint`, whose nulls mean unknown.
 pub fn trial_lock(c: &TrialConfig) -> Value {
     let local = crate::registry::local_path(&c.task);
     let task = Task::load(&local).ok();
@@ -1374,7 +1465,8 @@ pub fn trial_lock(c: &TrialConfig) -> Value {
         .map(|s| serde_json::json!({"name": Path::new(s).file_name().map(|n| n.to_string_lossy().into_owned()), "source": s, "digest": crate::task::package_digest(Path::new(s))}))
         .collect();
     let user_agent = c.user_agent.as_ref();
-    drop_nulls(serde_json::json!({
+    let model_endpoint = task.as_ref().and_then(|t| agents::model_endpoint(&c.agent, t));
+    let mut lock = drop_nulls(serde_json::json!({
         "schema_version": 2,
         // The build that ran this trial: a job resumed on another build has trials from both.
         "hbench": crate::build_info::json(),
@@ -1404,6 +1496,7 @@ pub fn trial_lock(c: &TrialConfig) -> Value {
         "environment_build_timeout_multiplier": c.environment_build_timeout_multiplier,
         "extra_instructions": if extra.is_empty() { Value::Null } else { Value::Array(extra) },
         "agent": c.agent,
+        "model_endpoint": model_endpoint,
         "prompt_template": c.agent.kwargs.get("prompt_template_path").and_then(Value::as_str)
             .map(|p| serde_json::json!({"path": p, "digest": file_digest(Path::new(p))})),
         "user_agent": user_agent,
@@ -1418,7 +1511,11 @@ pub fn trial_lock(c: &TrialConfig) -> Value {
         },
         "verifier": verifier,
         "source_trial": c.source_trial,
-    }))
+    }));
+    if let Some(e) = model_endpoint {
+        lock["model_endpoint"] = serde_json::to_value(e).unwrap_or_default();
+    }
+    lock
 }
 
 async fn cancellable<T>(mut cancel: watch::Receiver<bool>, fut: impl Future<Output = Result<T>>) -> Result<T> {
@@ -1593,6 +1690,17 @@ mod tests {
     }
 
     #[test]
+    fn a_stage_is_private_and_goes_away() {
+        use std::os::unix::fs::PermissionsExt;
+        let stage = Stage::new().unwrap();
+        let dir = stage.0.clone();
+        assert_eq!(std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777, 0o700);
+        std::fs::write(dir.join("raw.txt"), "x").unwrap();
+        drop(stage);
+        assert!(!dir.exists());
+    }
+
+    #[test]
     fn a_failed_stop_keeps_the_run_error_kind() {
         let timeout =
             kind_err(ErrorKind::AgentTimeout, "Agent execution timed out after 5 seconds").context(Unstopped("exec failed".into()));
@@ -1618,6 +1726,87 @@ mod tests {
         assert_eq!(lock["prompt_template"]["digest"], sha256_prefixed(b"Fix it: {{ instruction }}"));
         assert!(trial_lock(&cfg(serde_json::json!({}))).get("prompt_template").is_none());
         assert_eq!(lock["hbench"]["version"], env!("CARGO_PKG_VERSION"));
+    }
+
+    const LEAKS: [&str; 6] = ["SECRET123", "SECRET456", "SECRET789", "user:pass", "100.67.202.9", "gw.corp.example"];
+
+    /// config.json, lock.json and result.json as a trial with this agent config writes them.
+    fn written_files(agent: Value) -> [Value; 3] {
+        let task_dir = Path::new("examples/tasks/hello-world");
+        let cfg: TrialConfig = serde_json::from_value(serde_json::json!({
+            "task": {"path": task_dir}, "trial_name": "t", "trials_dir": tmp("endpoint"), "agent": agent,
+        }))
+        .unwrap();
+        let task = Task::load(task_dir).unwrap();
+        let result = serde_json::to_value(TrialResult::new(cfg.clone(), &task, &cfg.trials_dir)).unwrap();
+        [cfg.config_json(), trial_lock(&cfg), result]
+    }
+
+    fn assert_endpoint(agent: Value, expected: Value) {
+        let files = written_files(agent.clone());
+        for (name, v) in ["config.json", "lock.json", "result.json"].iter().zip(&files) {
+            let text = v.to_string();
+            for leak in LEAKS {
+                assert!(!text.contains(leak), "{name} of {agent} holds {leak:?}: {text}");
+            }
+        }
+        assert_eq!(files[1]["model_endpoint"], expected, "{agent}");
+        assert_eq!(files[2]["agent_info"]["model_endpoint"], expected, "{agent}");
+    }
+
+    #[test]
+    fn model_endpoint_records_no_url_host_or_credential() {
+        let url = "http://user:pass@100.67.202.9:1234/token/SECRET789?api_key=SECRET456";
+        // SAFETY: unique var names.
+        unsafe {
+            std::env::set_var("HBENCH_EP_TEST_KEY", "sk-test-SECRET123");
+            std::env::set_var("HBENCH_EP_TEST_URL", url);
+        }
+        let labels = serde_json::json!({"model_served_by": "lmstudio", "model_quantization": "q4_k_m"});
+        let overridden = serde_json::json!({"backend": "custom", "model_served_by": "lmstudio", "model_quantization": "q4_k_m"});
+        let plain = serde_json::json!({"backend": "provider", "model_served_by": null, "model_quantization": null});
+        let agent = |name: &str, model: &str, env: Value, extra: &Value| {
+            let mut a = serde_json::json!({"name": name, "model_name": model, "env": env});
+            a.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            a
+        };
+        for (name, model, key, base) in [
+            ("terminus-2", "openai/gpt-6.1-sol", "OPENAI_API_KEY", "OPENAI_BASE_URL"),
+            ("codex", "openai/gpt-6.1-sol", "OPENAI_API_KEY", "OPENAI_BASE_URL"),
+            ("claude-code", "anthropic/claude-x", "ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL"),
+        ] {
+            let literal = serde_json::json!({key: "sk-test-SECRET123", base: url});
+            assert_endpoint(agent(name, model, literal, &labels), overridden.clone());
+            let templated = serde_json::json!({key: "${HBENCH_EP_TEST_KEY}", base: "${HBENCH_EP_TEST_URL}"});
+            assert_endpoint(agent(name, model, templated, &labels), overridden.clone());
+            if name != "codex" || std::env::var("CODEX_AUTH_JSON_PATH").is_err() {
+                assert_endpoint(
+                    agent(name, model, serde_json::json!({key: "sk-test-SECRET123", base: ""}), &serde_json::json!({})),
+                    plain.clone(),
+                );
+            }
+        }
+        let gateway = serde_json::json!({"api_base": "https://gw.corp.example/v1?key=SECRET456"});
+        let kwargs = serde_json::json!({"kwargs": gateway});
+        assert_endpoint(agent("terminus-2", "openai/gpt-6.1-sol", serde_json::json!({"OPENAI_BASE_URL": ""}), &kwargs), {
+            serde_json::json!({"backend": "custom", "model_served_by": null, "model_quantization": null})
+        });
+        let unknown = serde_json::json!({"backend": null, "model_served_by": "vllm", "model_quantization": null});
+        assert_endpoint(
+            agent(
+                "aider",
+                "openai/gpt-6.1-sol",
+                serde_json::json!({"OPENAI_BASE_URL": url}),
+                &serde_json::json!({"model_served_by": "vllm"}),
+            ),
+            unknown,
+        );
+        let bedrock = serde_json::json!({"AWS_BEARER_TOKEN_BEDROCK": "SECRET123-bedrock", "ANTHROPIC_BASE_URL": url});
+        assert_endpoint(
+            agent("claude-code", "anthropic/claude-x", bedrock, &serde_json::json!({})),
+            serde_json::json!({"backend": "bedrock", "model_served_by": null, "model_quantization": null}),
+        );
+        assert!(written_files(serde_json::json!({"name": "oracle"}))[1].get("model_endpoint").is_none());
     }
 
     #[test]

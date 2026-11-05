@@ -6,6 +6,7 @@ use super::pins;
 use super::{connection, ensure_system_dependencies, exec_agent, exec_error};
 use crate::agents::model_connection::{Resolved, Spec, with_canonical_provider_envs};
 use crate::agents::{Agent, AgentArgs, AgentBox, AgentContext, AgentCtx};
+use crate::atif;
 use crate::env::quote;
 use crate::fmt::float_with_point;
 use anyhow::{Result, bail};
@@ -207,6 +208,78 @@ async fn exec_agent_10s(cx: &AgentCtx<'_>, cmd: &str, env: &BTreeMap<String, Str
     Ok(())
 }
 
+/// A `toolResponse` item's result: its text parts, or the error goose reports.
+fn tool_result(item: &Value) -> Value {
+    let result = &item["toolResult"];
+    let parts = result["value"]["content"].as_array();
+    match parts {
+        Some(parts) => json!(parts.iter().filter_map(|p| p["text"].as_str()).collect::<Vec<_>>().join("\n")),
+        None => result["error"].clone(),
+    }
+}
+
+/// goose's `--output-format stream-json` -> ATIF. An assistant message id is one model call, streamed in chunks; tool
+/// results arrive as user messages. Usage comes once per run, so steps have no metrics.
+pub fn atif_trajectory(text: &str, version: Option<&str>, model: Option<&str>) -> Option<atif::Trajectory> {
+    let (mut steps, mut ids) = (Vec::<atif::Step>::new(), BTreeMap::<String, usize>::new());
+    for e in parse_jsonl(text).iter().filter(|e| e["type"] == "message") {
+        let m = &e["message"];
+        let created = m["created"].as_i64().and_then(|s| atif::timestamp_of_millis(s * 1000));
+        let content = m["content"].as_array().map(Vec::as_slice).unwrap_or_default();
+        if m["role"] == "user" {
+            for item in content.iter().filter(|i| i["type"] == "toolResponse") {
+                atif::attach_result(&mut steps, item["id"].as_str().unwrap_or_default(), tool_result(item));
+            }
+            let said: String = content.iter().filter_map(|i| i["text"].as_str()).collect();
+            if !said.trim().is_empty() {
+                steps.push(atif::Step { source: "user".into(), timestamp: created, message: json!(said), ..Default::default() });
+            }
+            continue;
+        }
+        if m["role"] != "assistant" {
+            continue;
+        }
+        let new_step = |steps: &mut Vec<atif::Step>| {
+            steps.push(atif::Step { source: "agent".into(), timestamp: created.clone(), message: json!(""), ..Default::default() });
+            steps.len() - 1
+        };
+        let at = match m["id"].as_str() {
+            Some(id) => *ids.entry(id.into()).or_insert_with(|| new_step(&mut steps)),
+            None => new_step(&mut steps),
+        };
+        let step = &mut steps[at];
+        for item in content {
+            match item["type"].as_str() {
+                Some("text") => {
+                    step.message =
+                        json!(format!("{}{}", step.message.as_str().unwrap_or_default(), item["text"].as_str().unwrap_or_default()))
+                }
+                Some("thinking") => {
+                    let thought = item["thinking"].as_str().filter(|t| !t.is_empty()).or(item["text"].as_str()).unwrap_or_default();
+                    step.reasoning_content.get_or_insert_default().push_str(thought);
+                }
+                Some("toolRequest") => {
+                    let call = &item["toolCall"]["value"];
+                    step.tool_calls.get_or_insert_default().push(atif::ToolCall {
+                        tool_call_id: item["id"].as_str().unwrap_or_default().into(),
+                        function_name: call["name"].as_str().unwrap_or_default().into(),
+                        arguments: call["arguments"].clone(),
+                        extra: None,
+                    });
+                }
+                _ => {}
+            }
+        }
+    }
+    let agent = atif::Agent {
+        name: "goose".into(),
+        version: version.unwrap_or("unknown").into(),
+        model_name: model.map(String::from),
+        ..Default::default()
+    };
+    atif::assemble(agent, None, steps)
+}
+
 #[async_trait::async_trait]
 impl Agent for Goose {
     fn name(&self) -> &str {
@@ -280,7 +353,8 @@ impl Agent for Goose {
     }
 
     fn collect_usage(&self, logs_dir: &std::path::Path, ctx: &mut AgentContext) {
-        let Some(c) = std::fs::read_to_string(logs_dir.join("goose.txt")).ok().and_then(|t| parse_goose_usage(&t)) else { return };
+        let Ok(text) = std::fs::read_to_string(logs_dir.join("goose.txt")) else { return };
+        let Some(c) = parse_goose_usage(&text) else { return };
         ctx.n_input_tokens = c.n_input_tokens;
         ctx.n_output_tokens = c.n_output_tokens;
         if c.n_cache_tokens.is_some() {
@@ -288,6 +362,10 @@ impl Agent for Goose {
         }
         if c.cost_usd.is_some() {
             ctx.cost_usd = c.cost_usd;
+        }
+        if let Some(mut t) = atif_trajectory(&text, self.version.as_deref(), self.args.model_name.as_deref()) {
+            atif::set_run_totals(&mut t, c.n_input_tokens, c.n_output_tokens, c.n_cache_tokens, c.cost_usd);
+            atif::write_trajectory(logs_dir, &t);
         }
     }
 }
@@ -299,6 +377,43 @@ mod tests {
 
     fn goose(kwargs: Value, env: &[(&str, &str)], model: Option<&str>) -> Goose {
         Goose { version: None, args: common::test_args(kwargs, env, model) }
+    }
+
+    /// A real run's stream, trimmed.
+    const STREAM: &str = r#"Loading recipe: hbench-task
+
+{"type":"message","message":{"id":"chatcmpl-461","role":"assistant","created":1793438808,"content":[{"type":"thinking","thinking":"The user","signature":""}]}}
+{"type":"message","message":{"id":"chatcmpl-461","role":"assistant","created":1793438808,"content":[{"type":"thinking","thinking":" wants","signature":""}]}}
+{"type":"message","message":{"id":"chatcmpl-461","role":"assistant","created":1793438809,"content":[{"type":"toolRequest","id":"call_1","toolCall":{"status":"success","value":{"name":"write","arguments":{"path":"/app/hello.txt"}}}}]}}
+{"type":"message","message":{"id":"msg_1","role":"user","created":1793438809,"content":[{"type":"toolResponse","id":"call_1","toolResult":{"status":"success","value":{"resultType":"complete","content":[{"type":"text","text":"Created /app/hello.txt (1 lines)"}],"isError":false}}}]}}
+{"type":"message","message":{"id":"chatcmpl-116","role":"assistant","created":1793438810,"content":[{"type":"text","text":"Do"}]}}
+{"type":"message","message":{"id":"chatcmpl-116","role":"assistant","created":1793438810,"content":[{"type":"text","text":"ne"}]}}
+{"type":"complete","total_tokens":4992,"input_tokens":4888,"output_tokens":104,"cache_read_input_tokens":2405,"cache_write_input_tokens":0}
+"#;
+
+    #[test]
+    fn stream_to_atif() {
+        let mut a = atif_trajectory(STREAM, Some("1.55.0"), Some("openai/m")).unwrap();
+        assert_eq!(a.steps.iter().map(|s| (s.step_id, s.source.as_str())).collect::<Vec<_>>(), [(1, "agent"), (2, "agent")]);
+        let call = &a.steps[0];
+        assert_eq!(call.reasoning_content.as_deref(), Some("The user wants"));
+        assert_eq!(call.timestamp.as_deref(), Some("2026-10-31T09:26:48.000Z"));
+        assert_eq!(call.tool_calls.as_ref().unwrap()[0].arguments["path"], "/app/hello.txt");
+        let result = &call.observation.as_ref().unwrap().results[0];
+        assert_eq!(
+            (result.source_call_id.as_deref(), result.content.clone()),
+            (Some("call_1"), Some(json!("Created /app/hello.txt (1 lines)")))
+        );
+        assert_eq!(a.steps[1].message, json!("Done"));
+        assert!(a.steps.iter().all(|s| s.metrics.is_none()));
+        let c = parse_goose_usage(STREAM).unwrap();
+        atif::set_run_totals(&mut a, c.n_input_tokens, c.n_output_tokens, c.n_cache_tokens, c.cost_usd);
+        let f = a.final_metrics.unwrap();
+        assert_eq!(
+            (f.total_prompt_tokens, f.total_completion_tokens, f.total_cached_tokens, f.total_steps),
+            (Some(4888), Some(104), Some(2405), Some(2))
+        );
+        assert!(atif_trajectory("plain text\n", None, None).is_none());
     }
 
     #[test]
