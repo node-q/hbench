@@ -898,6 +898,9 @@ impl DockerEnv {
             let inspected = String::from_utf8_lossy(&inspected.stdout);
             let (main_image_id, labels) = inspected.trim().split_once(' ').ok_or_else(|| anyhow!("cannot inspect the main container"))?;
             let image = cache.image.clone().unwrap_or_else(|| setup_cache_image(&cache.key, main_image_id));
+            if image_id(&image).await?.is_some() {
+                return anyhow::Ok(format!("{image} is already there (another trial committed it)"));
+            }
             let labels: BTreeMap<String, String> = serde_json::from_str(labels).unwrap_or_default();
             let mut changes = vec!["LABEL dev.hbench.setup-cache=1".to_string()];
             changes.extend(labels.keys().filter(|k| k.starts_with("com.docker.compose.")).map(|k| format!("LABEL {k}=")));
