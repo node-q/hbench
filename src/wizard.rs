@@ -7,17 +7,17 @@ use crate::{RunArgs, agents, oci, registry};
 use anyhow::{Context, Result, bail};
 use dialoguer::console::{Term, style};
 use dialoguer::theme::ColorfulTheme;
-use dialoguer::{Confirm, Input, MultiSelect, Select};
+use dialoguer::{Confirm, Input, MultiSelect, Password, Select};
 use std::path::{Path, PathBuf};
 
-/// Same logo as the README; also above `hbench`'s top-level help.
+/// The Hbench mark and wordmark, as in the README; also above `hbench`'s top-level help.
 pub const LOGO: &str = "\
-██╗  ██╗██████╗ ███████╗███╗   ██╗ ██████╗██╗  ██╗
-██║  ██║██╔══██╗██╔════╝████╗  ██║██╔════╝██║  ██║
-███████║██████╔╝█████╗  ██╔██╗ ██║██║     ███████║
-██╔══██║██╔══██╗██╔══╝  ██║╚██╗██║██║     ██╔══██║
-██║  ██║██████╔╝███████╗██║ ╚████║╚██████╗██║  ██║
-╚═╝  ╚═╝╚═════╝ ╚══════╝╚═╝  ╚═══╝ ╚═════╝╚═╝  ╚═╝";
+▝▜█▄▗▟█▀ ▗▟█  ██╗  ██╗██████╗ ███████╗███╗   ██╗ ██████╗██╗  ██╗
+▙▖▝▜█▀ ▗▟█▀   ██║  ██║██╔══██╗██╔════╝████╗  ██║██╔════╝██║  ██║
+▀█▙▖ ▗▟██▙    ███████║██████╔╝█████╗  ██╔██╗ ██║██║     ███████║
+  ▀███▀ ▝▜█▄  ██╔══██║██╔══██╗██╔══╝  ██║╚██╗██║██║     ██╔══██║
+ ▗▟█▀ ▄█▙▖▝▜  ██║  ██║██████╔╝███████╗██║ ╚████║╚██████╗██║  ██║
+▟█▀ ▄█▛▘▀█▙▖  ╚═╝  ╚═╝╚═════╝ ╚══════╝╚═╝  ╚═══╝ ╚═════╝╚═╝  ╚═╝";
 
 /// Agents offered first, with the model suggested for each (None = the agent takes no model or has no default).
 const TOP_AGENTS: &[(&str, &str, Option<&str>)] = &[
@@ -67,7 +67,26 @@ struct Answers {
     tasks: Option<Tasks>,
     agent: Option<String>,
     model: Option<String>,
+    /// Agent env for a self-hosted endpoint, and what served the model.
+    local: Option<Local>,
 }
+
+/// A self-hosted model server the agent talks to.
+struct Local {
+    env: Vec<EnvAnswer>,
+    /// What served the model (`--model-served-by`), if given.
+    served_by: Option<String>,
+}
+
+/// An `--ae` value; `shown` is what the printed command carries (a `$VAR` for a secret).
+struct EnvAnswer {
+    name: String,
+    value: String,
+    shown: String,
+}
+
+/// Host env holding a self-hosted server's API key, if it has one.
+const SELF_HOSTED_KEY_ENV: &str = "SELF_HOSTED_API_KEY";
 
 /// Ask for the task source, tasks, agent and model, and fill them into `a`.
 pub async fn fill(a: &mut RunArgs) -> Result<()> {
@@ -247,15 +266,21 @@ async fn ask(a: &mut RunArgs) -> Result<()> {
             (n, m, true)
         }
     };
-    if let Some(names) = agents::installed::credential_envs(&agent)
-        && !names.iter().any(|n| std::env::var(n).is_ok_and(|v| !v.is_empty()))
+    let (model, local) = if matches!(agent.as_str(), "oracle" | "nop") || !a.models.is_empty() {
+        (None, None)
+    } else {
+        let (m, local) = pick_model(&t, &agent, suggested).await?;
+        (Some(m), local)
+    };
+    if local.is_none()
+        && let Some(names) = agents::installed::credential_envs(&agent)
+        && !names.iter().any(|n| std::env::var(n).is_ok_and(|v| !v.is_empty()) || a.agent_env.iter().any(|(k, _)| k == n))
     {
         bail!("{agent} needs credentials: `export {}=...` (or one of {}), then run again", names[0], names[1..].join(", "));
     }
-    let model = if matches!(agent.as_str(), "oracle" | "nop") || !a.models.is_empty() { None } else { Some(pick_model(&t, suggested)?) };
 
     let typed = std::iter::once("hbench".to_string()).chain(std::env::args().skip(1).map(|w| shell_quote(&w))).collect();
-    let cmd = apply(a, Answers { source, tasks, agent: asked_agent.then_some(agent), model }, typed);
+    let cmd = apply(a, Answers { source, tasks, agent: asked_agent.then_some(agent), model, local }, typed);
     eprintln!("\n  {}\n  {}\n", style("Same run without the questions:").dim(), style(cmd.join(" ")).cyan());
     if !Confirm::with_theme(&t).with_prompt("Start").default(true).interact()? {
         bail!("aborted");
@@ -397,11 +422,24 @@ fn apply(a: &mut RunArgs, ans: Answers, mut cmd: Vec<String>) -> Vec<String> {
         cmd.extend(["-m".into(), shell_quote(&m)]);
         a.models = vec![m];
     }
+    if let Some(local) = ans.local {
+        for e in local.env {
+            cmd.extend(["--ae".into(), format!("{}={}", e.name, e.shown)]);
+            a.agent_env.push((e.name, e.value));
+        }
+        if a.model_served_by.is_none()
+            && let Some(by) = local.served_by
+        {
+            cmd.extend(["--model-served-by".into(), by.clone()]);
+            a.model_served_by = Some(by);
+        }
+    }
     cmd
 }
 
-/// A provider from [`PROVIDERS`] (marked when its key is set), then one of its models; "other…" and "custom…" are typed.
-fn pick_model(t: &ColorfulTheme, suggested: Option<&str>) -> Result<String> {
+/// A provider from [`PROVIDERS`] (marked when its key is set), then one of its models; "other…" and "custom…" are
+/// typed. "self-hosted" asks for an OpenAI-compatible server instead and returns the env that points `agent` at it.
+async fn pick_model(t: &ColorfulTheme, agent: &str, suggested: Option<&str>) -> Result<(String, Option<Local>)> {
     let (sp, sm) = suggested.and_then(|m| m.split_once('/')).unzip();
     let mut labels: Vec<String> = PROVIDERS
         .iter()
@@ -413,10 +451,20 @@ fn pick_model(t: &ColorfulTheme, suggested: Option<&str>) -> Result<String> {
             }
         })
         .collect();
+    // gemini-cli speaks only Gemini's API, which self-hosted servers don't serve.
+    let offer_self_hosted = agent != "gemini-cli";
+    if offer_self_hosted {
+        labels.push(format!("{:<12}{}", "self-hosted", style("llama.cpp, vLLM, LM Studio, MLX… (OpenAI-compatible URL)").dim()));
+    }
     labels.push(format!("{:<12}{}", "other…", style("type provider/name").dim()));
     let def = PROVIDERS.iter().position(|(p, _)| Some(*p) == sp).unwrap_or(0);
-    let Some((p, models)) = PROVIDERS.get(Select::with_theme(t).with_prompt("Provider").items(&labels).default(def).interact()?) else {
-        return Ok(Input::with_theme(t).with_prompt("Model (provider/name)").interact_text()?);
+    let i = Select::with_theme(t).with_prompt("Provider").items(&labels).default(def).interact()?;
+    let Some((p, models)) = PROVIDERS.get(i) else {
+        if offer_self_hosted && i == PROVIDERS.len() {
+            let (m, local) = pick_self_hosted(t, agent).await?;
+            return Ok((m, Some(local)));
+        }
+        return Ok((Input::with_theme(t).with_prompt("Model (provider/name)").interact_text()?, None));
     };
     let mut items: Vec<&str> = models.to_vec();
     items.push("custom…");
@@ -430,7 +478,131 @@ fn pick_model(t: &ColorfulTheme, suggested: Option<&str>) -> Result<String> {
         Some(m) => m.to_string(),
         None => Input::<String>::with_theme(t).with_prompt(format!("Model ({p}/…)")).interact_text()?,
     };
-    Ok(format!("{p}/{name}"))
+    Ok((format!("{p}/{name}"), None))
+}
+
+/// The server root of a model server URL as typed (`host:port`, with or without scheme or `/v1`).
+fn server_root(typed: &str) -> String {
+    let u = typed.trim().trim_end_matches('/');
+    let u = u.strip_suffix("/v1").unwrap_or(u);
+    if u.contains("://") { u.to_string() } else { format!("http://{u}") }
+}
+
+/// `root` as the agent's container reaches it: this machine's loopback becomes `host.docker.internal`.
+fn from_container(root: &str) -> String {
+    let (scheme, rest) = root.split_once("://").unwrap_or(("http", root));
+    let (authority, path) = rest.find('/').map_or((rest, ""), |i| rest.split_at(i));
+    let host_end = if authority.starts_with('[') {
+        authority.find(']').map_or(authority.len(), |i| i + 1)
+    } else {
+        authority.find(':').unwrap_or(authority.len())
+    };
+    let (host, port) = authority.split_at(host_end);
+    let host = if matches!(host, "localhost" | "127.0.0.1" | "0.0.0.0" | "[::1]") { "host.docker.internal" } else { host };
+    format!("{scheme}://{host}{port}{path}")
+}
+
+/// The model ids `GET {root}/v1/models` lists, with the response's `Server` header; None when the server refuses
+/// `key` (or wants one).
+async fn server_models(root: &str, key: Option<&str>) -> Result<Option<(Vec<String>, Option<String>)>> {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let client = reqwest::Client::builder().timeout(std::time::Duration::from_secs(5)).build()?;
+    let mut req = client.get(format!("{root}/v1/models"));
+    if let Some(k) = key {
+        req = req.bearer_auth(k);
+    }
+    let resp = req.send().await?;
+    if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
+        return Ok(None);
+    }
+    let resp = resp.error_for_status()?;
+    let server = resp.headers().get(reqwest::header::SERVER).and_then(|v| v.to_str().ok()).map(String::from);
+    let body: serde_json::Value = serde_json::from_slice(&resp.bytes().await?)?;
+    let ids = body["data"].as_array().into_iter().flatten().filter_map(|m| m["id"].as_str().map(String::from)).collect();
+    Ok(Some((ids, server)))
+}
+
+/// Whether `s` is a valid `--model-served-by` label: 1-64 letters, digits and `. _ - : +`.
+fn served_by_ok(s: &str) -> bool {
+    (1..=64).contains(&s.len()) && s.chars().all(|c| c.is_ascii_alphanumeric() || "._-:+".contains(c))
+}
+
+/// A `--model-served-by` guess from a `Server` header (`llama.cpp`, `uvicorn`, `TensorFold/1.2` → `tensorfold`).
+fn served_by_guess(server: &str) -> Option<String> {
+    let name = server.split(['/', ' ']).next()?.to_lowercase();
+    served_by_ok(&name).then_some(name)
+}
+
+/// A self-hosted server's URL and model, and what served it; the model and env that point `agent` at it (Anthropic's API for
+/// claude-code, OpenAI's for every other agent).
+async fn pick_self_hosted(t: &ColorfulTheme, agent: &str) -> Result<(String, Local)> {
+    let typed: String = Input::with_theme(t).with_prompt("Server URL").default("http://localhost:8080".into()).interact_text()?;
+    let root = server_root(&typed);
+    let from_env = std::env::var(SELF_HOSTED_KEY_ENV).ok().filter(|k| !k.is_empty());
+    // Where the key came from decides how the printed command carries it.
+    let (mut key, mut typed_key) = (from_env, false);
+    let (ids, server) = loop {
+        match busy("asking it for its models", server_models(&root, key.as_deref())).await {
+            Ok(Some(found)) => break found,
+            Ok(None) => {
+                let why = if key.is_some() { "the server refused that API key" } else { "the server wants an API key" };
+                eprintln!("  {}", style(why).yellow());
+                key = Some(Password::with_theme(t).with_prompt("API key").interact()?);
+                typed_key = true;
+            }
+            Err(e) => {
+                eprintln!("  {}", style(format!("could not list {root}/v1/models: {e:#}")).yellow());
+                break (vec![], None);
+            }
+        }
+    };
+    let id = match ids.as_slice() {
+        [id] => {
+            eprintln!("  {} {}", style("serving").dim(), style(id).cyan());
+            id.clone()
+        }
+        [] => Input::with_theme(t).with_prompt("Model name").interact_text()?,
+        _ => ids[Select::with_theme(t).with_prompt("Model").items(&ids).default(0).max_length(12).interact()?].clone(),
+    };
+    let inside = from_container(&root);
+    if inside != root {
+        eprintln!("  {}", style(format!("the agent's container reaches it at {inside}")).dim());
+        if cfg!(target_os = "linux") {
+            eprintln!(
+                "  {}",
+                style("on Linux, bind the server to 0.0.0.0 and use this machine's IP if host.docker.internal doesn't resolve").dim()
+            );
+        }
+    }
+    let (provider, base_name, base, key_name) = if agent == "claude-code" {
+        ("anthropic", "ANTHROPIC_BASE_URL", inside, "ANTHROPIC_API_KEY")
+    } else {
+        ("openai", "OPENAI_BASE_URL", format!("{inside}/v1"), "OPENAI_API_KEY")
+    };
+    let key = match key {
+        Some(k) => {
+            if typed_key {
+                eprintln!("  {}", style(format!("to skip the key question next time: export {SELF_HOSTED_KEY_ENV}=...")).dim());
+            }
+            // Never print the key itself.
+            EnvAnswer { name: key_name.into(), value: k, shown: format!("\"${SELF_HOSTED_KEY_ENV}\"") }
+        }
+        // Agents want some key even when the server checks none.
+        None => EnvAnswer { name: key_name.into(), value: "no-key".into(), shown: "no-key".into() },
+    };
+    let env = vec![EnvAnswer { name: base_name.into(), shown: shell_quote(&base), value: base }, key];
+    let by: String = Input::with_theme(t)
+        .with_prompt(format!("Served by {}", style("(recorded with each trial, e.g. llama.cpp, vllm; blank to skip)").dim()))
+        .default(server.as_deref().and_then(served_by_guess).unwrap_or_default())
+        .allow_empty(true)
+        .validate_with(
+            |s: &String| {
+                if s.trim().is_empty() || served_by_ok(s.trim()) { Ok(()) } else { Err("1-64 letters, digits and . _ - : +") }
+            },
+        )
+        .interact_text()?;
+    let served_by = Some(by.trim().to_string()).filter(|b| !b.is_empty());
+    Ok((format!("{provider}/{id}"), Local { env, served_by }))
 }
 
 fn shell_quote(s: &str) -> String {
@@ -491,6 +663,41 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
+    #[test]
+    fn self_hosted_urls() {
+        assert_eq!(server_root("localhost:8080"), "http://localhost:8080");
+        assert_eq!(server_root(" http://10.0.0.5:8080/v1/ "), "http://10.0.0.5:8080");
+        assert_eq!(from_container("http://localhost:8080"), "http://host.docker.internal:8080");
+        assert_eq!(from_container("http://127.0.0.1:8080/llm"), "http://host.docker.internal:8080/llm");
+        assert_eq!(from_container("http://[::1]:8080"), "http://host.docker.internal:8080");
+        assert_eq!(from_container("https://gpu.lan:8443"), "https://gpu.lan:8443");
+        assert_eq!(served_by_guess("llama.cpp").as_deref(), Some("llama.cpp"));
+        assert_eq!(served_by_guess("TensorFold/1.2.2 (darwin)").as_deref(), Some("tensorfold"));
+        assert_eq!(served_by_guess("naïve"), None);
+    }
+
+    #[test]
+    fn a_self_hosted_answer_sets_agent_env_and_served_by() {
+        let mut a = run_args();
+        let env = vec![
+            EnvAnswer { name: "OPENAI_BASE_URL".into(), value: "http://h:8080/v1".into(), shown: "http://h:8080/v1".into() },
+            EnvAnswer { name: "OPENAI_API_KEY".into(), value: "sekrit".into(), shown: "\"$SELF_HOSTED_API_KEY\"".into() },
+        ];
+        let ans = Answers {
+            source: Source::Path("t".into()),
+            tasks: None,
+            agent: Some("codex".into()),
+            model: Some("openai/qwen".into()),
+            local: Some(Local { env, served_by: Some("llama.cpp".into()) }),
+        };
+        assert_eq!(
+            apply(&mut a, ans, typed(&["hbench", "run"])).join(" "),
+            "hbench run -p t -a codex -m openai/qwen --ae OPENAI_BASE_URL=http://h:8080/v1 --ae OPENAI_API_KEY=\"$SELF_HOSTED_API_KEY\" --model-served-by llama.cpp"
+        );
+        assert_eq!(a.agent_env[1], ("OPENAI_API_KEY".to_string(), "sekrit".to_string()));
+        assert_eq!(a.model_served_by.as_deref(), Some("llama.cpp"));
+    }
+
     fn run_args() -> Box<RunArgs> {
         let crate::Cmd::Run(a) = crate::Cli::parse_from(["hbench", "run"]).cmd else { panic!() };
         a
@@ -508,6 +715,7 @@ mod tests {
             tasks: Some(Tasks::First(3)),
             agent: Some("codex".into()),
             model: Some("openai/gpt-5".into()),
+            local: None,
         };
         let cmd = apply(&mut a, ans, typed(&["hbench", "run"])).join(" ");
         assert_eq!(cmd, "hbench run -d terminal-bench@2.0.1 --registry oci://ghcr.io/node-q/hbench-datasets -l 3 -a codex -m openai/gpt-5");
@@ -520,6 +728,7 @@ mod tests {
             tasks: Some(Tasks::Pick(vec!["fix-git".into(), "a b".into()])),
             agent: Some("oracle".into()),
             model: None,
+            local: None,
         };
         assert_eq!(
             apply(&mut a, ans, typed(&["hbench", "run"])).join(" "),
@@ -528,7 +737,13 @@ mod tests {
         assert_eq!((a.registry.registry_url.as_deref(), a.include.len(), a.n_tasks), (Some("https://x/registry.json"), 2, None));
 
         let mut a = run_args();
-        let ans = Answers { source: Source::Path("my tasks".into()), tasks: Some(Tasks::All), agent: Some("oracle".into()), model: None };
+        let ans = Answers {
+            source: Source::Path("my tasks".into()),
+            tasks: Some(Tasks::All),
+            agent: Some("oracle".into()),
+            model: None,
+            local: None,
+        };
         assert_eq!(apply(&mut a, ans, typed(&["hbench", "run"])).join(" "), "hbench run -p 'my tasks' -a oracle");
         assert_eq!(a.path, Some(PathBuf::from("my tasks")));
     }
@@ -537,7 +752,13 @@ mod tests {
     fn flags_on_the_command_line_are_kept_and_shown() {
         let words = ["hbench", "run", "-n", "4", "--registry", "oci://r.example/ns", "-a", "claude-code", "-m", "anthropic/x", "-l", "2"];
         let crate::Cmd::Run(mut a) = crate::Cli::parse_from(words).cmd else { panic!() };
-        let ans = Answers { source: Source::Dataset { registry: None, dataset: "tb@2.0".into() }, tasks: None, agent: None, model: None };
+        let ans = Answers {
+            source: Source::Dataset { registry: None, dataset: "tb@2.0".into() },
+            tasks: None,
+            agent: None,
+            model: None,
+            local: None,
+        };
         assert_eq!(
             apply(&mut a, ans, typed(&words)).join(" "),
             "hbench run -n 4 --registry oci://r.example/ns -a claude-code -m anthropic/x -l 2 -d tb@2.0"
