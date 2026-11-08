@@ -10,14 +10,16 @@ use dialoguer::theme::ColorfulTheme;
 use dialoguer::{Confirm, Input, MultiSelect, Password, Select};
 use std::path::{Path, PathBuf};
 
-/// Same logo as the README; also above `hbench`'s top-level help.
+/// The Hbench mark and wordmark, as in the README; also above `hbench`'s top-level help.
 pub const LOGO: &str = "\
-██╗  ██╗██████╗ ███████╗███╗   ██╗ ██████╗██╗  ██╗
-██║  ██║██╔══██╗██╔════╝████╗  ██║██╔════╝██║  ██║
-███████║██████╔╝█████╗  ██╔██╗ ██║██║     ███████║
-██╔══██║██╔══██╗██╔══╝  ██║╚██╗██║██║     ██╔══██║
-██║  ██║██████╔╝███████╗██║ ╚████║╚██████╗██║  ██║
-╚═╝  ╚═╝╚═════╝ ╚══════╝╚═╝  ╚═══╝ ╚═════╝╚═╝  ╚═╝";
+\x20▀██▄  ▄██▀  ▄██
+▄  ▀████▀  ▄██▀    ██╗  ██╗██████╗ ███████╗███╗   ██╗ ██████╗██╗  ██╗
+██▄  ▀▀  ▄██▀      ██║  ██║██╔══██╗██╔════╝████╗  ██║██╔════╝██║  ██║
+▀███▄  ▄█████▄     ███████║██████╔╝█████╗  ██╔██╗ ██║██║     ███████║
+  ▀█████▀   ▀██▄   ██╔══██║██╔══██╗██╔══╝  ██║╚██╗██║██║     ██╔══██║
+   ▄██▀  ▄▄   ▀█   ██║  ██║██████╔╝███████╗██║ ╚████║╚██████╗██║  ██║
+ ▄██▀  ▄████▄      ╚═╝  ╚═╝╚═════╝ ╚══════╝╚═╝  ╚═══╝ ╚═════╝╚═╝  ╚═╝
+██▀  ▄███▀ ▀██▄";
 
 /// Agents offered first, with the model suggested for each (None = the agent takes no model or has no default).
 const TOP_AGENTS: &[(&str, &str, Option<&str>)] = &[
