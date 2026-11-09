@@ -2,8 +2,10 @@
 # Install hbench into HBENCH_INSTALL_DIR (default ~/.local/bin).
 #   curl -fsSL https://github.com/node-q/hbench/releases/latest/download/install.sh | sh
 # HBENCH_VERSION=vX.Y.Z pins a release; the default is the latest release of node-q/hbench.
+# What GitHub fails to serve comes from the releases' copy at dl.nodeq.tech; HBENCH_MIRROR_ONLY=1 skips GitHub.
 set -eu
 REPO=node-q/hbench
+MIRROR=https://dl.nodeq.tech/hbench
 # A site serving this script may fill in a default release here; HBENCH_VERSION still overrides it.
 DEFAULT_VERSION=
 DIR=${HBENCH_INSTALL_DIR:-$HOME/.local/bin}
@@ -19,11 +21,25 @@ esac
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
+github() { [ "${HBENCH_MIRROR_ONLY:-0}" != 1 ]; }
+
 # /releases/latest redirects to /releases/tag/<tag>; reading the redirect, without fetching that page, avoids the API rate limit.
-tag=${HBENCH_VERSION:-${DEFAULT_VERSION:-$(curl -fsSI -o /dev/null -w '%{redirect_url}' "https://github.com/$REPO/releases/latest" | sed 's|.*/||')}}
+latest() {
+  { github && curl -fsSI -o /dev/null -w '%{redirect_url}' "https://github.com/$REPO/releases/latest" | sed 's|.*/||' | grep '^v'; } ||
+    curl -fsSL "$MIRROR/latest" || :
+}
+
+# fetch <file>: the release's file into $tmp, from GitHub or else from the mirror.
+fetch() {
+  if github && curl -fsSL -o "$tmp/$1" "https://github.com/$REPO/releases/download/$tag/$1"; then return; fi
+  github && echo "downloading $1 from $MIRROR instead" >&2
+  curl -fsSL -o "$tmp/$1" "$MIRROR/$tag/$1"
+}
+
+tag=${HBENCH_VERSION:-${DEFAULT_VERSION:-$(latest)}}
 case "$tag" in v*) ;; *) echo "could not find the latest hbench release of $REPO" >&2; exit 1 ;; esac
 for f in "hbench-$tag-$target.tar.gz" SHA256SUMS; do
-  curl -fsSL -o "$tmp/$f" "https://github.com/$REPO/releases/download/$tag/$f" || { echo "could not download $f of hbench $tag from $REPO" >&2; exit 1; }
+  fetch "$f" || { echo "could not download $f of hbench $tag from $REPO or $MIRROR" >&2; exit 1; }
 done
 
 cd "$tmp"

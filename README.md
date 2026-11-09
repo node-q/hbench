@@ -31,6 +31,10 @@ curl -fsSL https://github.com/node-q/hbench/releases/latest/download/install.sh 
 
 Later, `hbench update` installs the newest release.
 
+When GitHub fails to serve a release, the script and `hbench update` download it from its copy at
+`https://dl.nodeq.tech/hbench/` instead and check it the same way. If GitHub cannot serve the script either:
+`curl -fsSL https://dl.nodeq.tech/hbench/install.sh | sh`.
+
 The script checks the archive it downloads against the release's `SHA256SUMS`. To check the script itself
 before running it, download it, read it, and verify that this repository's release workflow built it (releases
 after v0.3.7; `gh attestation verify` needs the [GitHub CLI](https://cli.github.com)):

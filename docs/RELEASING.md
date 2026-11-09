@@ -18,3 +18,10 @@ job, in the `release` environment, creates the GitHub release with the archives,
 sums. The install script checks the archive it downloads against `SHA256SUMS` before unpacking it. Tags
 with a suffix (`v0.2.0-rc.1`) are published as prereleases, which the install script skips unless `HBENCH_VERSION`
 names one.
+
+The release workflow's last job, `mirror.yml`, copies the release to `https://dl.nodeq.tech/hbench/<tag>/`, and when it
+is the latest release also writes `hbench/install.sh` and `hbench/latest` (the tag). The install script and
+`hbench update` fall back to that copy for whatever GitHub fails to serve; `HBENCH_MIRROR_ONLY=1` makes the script use
+the copy alone, to check it. The `mirror` environment (deployment refs `master` and `v*` tags) holds an R2 token
+that can write the bucket alone; node-q/hpg-infra-cloud's `docs/runbooks/hbench-release-mirror.md` creates both. To
+copy an earlier release, or one whose mirror job failed: `gh workflow run mirror.yml -R node-q/hbench -f tag=v0.3.13`.
