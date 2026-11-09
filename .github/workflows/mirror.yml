@@ -1,0 +1,61 @@
+name: Mirror
+
+# Copies a published release to https://dl.nodeq.tech/hbench, which install.sh and `hbench update` fall back to when
+# GitHub's downloads fail: hbench/<tag>/ with the release's assets, then, only when the tag is the latest release,
+# hbench/install.sh and hbench/latest (the tag). release.yml runs it after publishing; for an earlier release, run it
+# by hand: gh workflow run mirror.yml -f tag=v0.3.13. The `mirror` environment (deployment refs: master and v* tags)
+# holds an R2 token that can write that bucket alone; node-q/hpg-infra-cloud's docs/runbooks/hbench-release-mirror.md
+# sets it up.
+on:
+  workflow_call:
+    inputs:
+      tag:
+        type: string
+        required: true
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "The release's tag, such as v0.3.13"
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  mirror:
+    name: Mirror ${{ inputs.tag }} to dl.nodeq.tech
+    runs-on: ubuntu-24.04
+    environment: mirror
+    timeout-minutes: 15
+    env:
+      TAG: ${{ inputs.tag }}
+      BUCKET: nodeq-hbench-releases
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      AWS_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT }}
+      AWS_DEFAULT_REGION: auto
+      # Checksums only where S3 requires them, as Cloudflare's R2 docs advise for AWS CLI 2.23 and later.
+      AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+      AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+    steps:
+      - name: Download the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+ ]] || { echo "::error::not a release tag: $TAG"; exit 1; }
+          gh release download "$TAG" -R "$GITHUB_REPOSITORY" -D dist
+          cd dist && sha256sum -c SHA256SUMS
+      - name: Upload hbench/${{ inputs.tag }}/
+        run: aws s3 cp dist "s3://$BUCKET/hbench/$TAG/" --recursive --cache-control "public, max-age=31536000, immutable"
+      - name: Point hbench/latest at it if it is the latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          latest=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)
+          if [ "$latest" != "$TAG" ]; then
+            echo "The latest release is $latest: hbench/latest and hbench/install.sh stay."
+            exit 0
+          fi
+          aws s3 cp dist/install.sh "s3://$BUCKET/hbench/install.sh" --cache-control "public, max-age=300"
+          printf '%s\n' "$TAG" | aws s3 cp - "s3://$BUCKET/hbench/latest" --cache-control "public, max-age=300" --content-type text/plain

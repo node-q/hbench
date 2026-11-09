@@ -7,6 +7,7 @@ name: Release
 # tagged commit, so only a commit that passed CI on master is released. Only the publish job
 # can write: it attests install.sh and SHA256SUMS and creates this repo's release, with the tagged
 # commit's scripts/install.sh beside the archives, so `curl -fsSL https://github.com/node-q/hbench/releases/latest/download/install.sh | sh` installs the latest release.
+# The mirror job then copies the release to dl.nodeq.tech (mirror.yml).
 on:
   push:
     tags: ["v[0-9]+.[0-9]+.[0-9]+*"]
@@ -154,3 +155,10 @@ jobs:
           flags=(--verify-tag --title "hbench $GITHUB_REF_NAME" --generate-notes)
           [ "$PRERELEASE" = true ] && flags+=(--prerelease)
           gh release create "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" "${flags[@]}" dist/*.tar.gz dist/install.sh dist/SHA256SUMS
+
+  mirror:
+    name: Mirror
+    needs: publish
+    uses: ./.github/workflows/mirror.yml
+    with:
+      tag: ${{ github.ref_name }}
