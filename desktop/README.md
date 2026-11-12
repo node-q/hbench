@@ -25,10 +25,33 @@ with [Tauri 2](https://tauri.app).
   killed, the server stops.
 - Settings (`settings.json`) live in the app config dir and the server log (`hbench-view.log`) in the app log dir.
   On first launch the app opens `~/Actuaria`.
+- When a run finishes, the app shows a toast if its window is focused, or a system notification if it is in
+  the background.
+- The window title names the open tab and the folder, e.g. `Compare — my-evals`.
+
+## Shortcuts
+
+| Shortcut | Action |
+| --- | --- |
+| ⌘N | New run |
+| ⌘O | Open folder |
+| ⌘⇧R | Reveal the folder in Finder |
+| ⌘W / ⌥⌘T | Close tab / close other tabs |
+| ⌘⇧W | Close window |
+| ⌘⇧] / ⌘⇧[ | Next / previous tab |
+| ⌘[ / ⌘] | Back / forward |
+| ⌘P, ⌘⇧P, ⌘K | Command palette |
+| ⌘1 / ⌘2 / ⌘3 | Jobs / Compare / New run |
+| ⌘B | Toggle the side bar |
+| ⌘⇧L | Toggle light / dark |
+| ⌘= / ⌘- / ⌘0 | Zoom in / out / reset |
+
+In the explorer, arrow keys move between rows, Right and Left expand and collapse a job, and Enter opens the row.
 
 ## Build
 
-You need Rust, Node 22+ and, on macOS, Xcode command line tools.
+You need Rust, Node 22+ and, on macOS, Xcode command line tools. The app runs on macOS 13 or later (the layout
+uses CSS container queries).
 
 ```sh
 cd desktop
@@ -36,6 +59,10 @@ npm install
 npm run dev     # debug hbench + app with hot Rust rebuilds
 npm run build   # release hbench + Actuaria.app and .dmg in src-tauri/target/release/bundle/
 ```
+
+Debug builds (`npm run dev`) keep their own settings and log (`settings.dev.json`, `hbench-view.dev.log`) and
+run beside an installed copy of the app without handing over to it. Quit the packaged app before `npm run build`
+replaces it.
 
 `npm run sidecar` builds hbench and copies it to `src-tauri/binaries/hbench-<target triple>`, where Tauri picks
 it up. hbench embeds the viewer from `viewer/dist`. After changing `viewer/src`, run `npm run build` in `viewer/`

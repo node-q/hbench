@@ -16,6 +16,7 @@ use tauri::menu::{AboutMetadataBuilder, Menu, MenuItemBuilder, Submenu, SubmenuB
 use tauri::webview::DownloadEvent;
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder, Wry};
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
+use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_opener::OpenerExt;
 use url::Url;
 
@@ -39,12 +40,18 @@ struct AppState {
     recent_menu: Mutex<Option<Submenu<Wry>>>,
 }
 
+/// Debug builds keep their own settings and log, and run beside the installed app instead of handing over
+/// to it, so developing the app never disturbs the one in use.
+const DEV: bool = cfg!(debug_assertions);
+
 fn settings_path(app: &AppHandle) -> Option<PathBuf> {
-    app.path().app_config_dir().ok().map(|d| d.join("settings.json"))
+    let name = if DEV { "settings.dev.json" } else { "settings.json" };
+    app.path().app_config_dir().ok().map(|d| d.join(name))
 }
 
 fn log_path(app: &AppHandle) -> PathBuf {
-    app.path().app_log_dir().unwrap_or_else(|_| std::env::temp_dir()).join("hbench-view.log")
+    let name = if DEV { "hbench-view.dev.log" } else { "hbench-view.log" };
+    app.path().app_log_dir().unwrap_or_else(|_| std::env::temp_dir()).join(name)
 }
 
 fn load_settings(app: &AppHandle) -> Settings {
@@ -155,9 +162,25 @@ fn page_action(app: AppHandle, url: Url) {
                 }
             }
             "reveal" => {
-                if let Some(f) = current_folder(&app) {
-                    let _ = app.opener().reveal_item_in_dir(f);
+                // The open folder, or one entry in it (`path`: a single name, never a path out of the folder).
+                let Some(folder) = current_folder(&app) else { return };
+                let target = match param("path") {
+                    Some(name) => {
+                        let mut parts = Path::new(&name).components();
+                        match (parts.next(), parts.next()) {
+                            (Some(std::path::Component::Normal(n)), None) => folder.join(n),
+                            _ => return,
+                        }
+                    }
+                    None => folder,
+                };
+                if target.exists() {
+                    let _ = app.opener().reveal_item_in_dir(target);
                 }
+            }
+            "notify" => {
+                let clip = |k: &str, max: usize| param(k).unwrap_or_default().chars().take(max).collect::<String>();
+                let _ = app.notification().builder().title(clip("title", 80)).body(clip("body", 300)).show();
             }
             "theme" => {
                 // The title bar shows the window's background colour: match the tab strip.
@@ -190,6 +213,10 @@ fn page_action(app: AppHandle, url: Url) {
 fn allow_navigation(app: &AppHandle, url: &Url) -> bool {
     if url.path().starts_with("/__actuaria/") {
         page_action(app.clone(), url.clone());
+        // The page sends its actions one at a time; tell it this one arrived.
+        if let Some(w) = main_window(app) {
+            let _ = w.eval("window.__actuaria && window.__actuaria.ack && window.__actuaria.ack()");
+        }
         return false;
     }
     let local_app = matches!(url.scheme(), "tauri" | "asset") || url.host_str() == Some("tauri.localhost");
@@ -277,7 +304,10 @@ fn build_menu(app: &AppHandle) -> tauri::Result<(Menu<Wry>, Submenu<Wry>)> {
         .separator()
         .item(&item("reveal", reveal, Some("CmdOrCtrl+Shift+R"))?)
         .separator()
-        .close_window();
+        // As in an editor, Cmd+W closes the tab; the window takes Shift.
+        .item(&item("close-tab", "Close Tab", Some("CmdOrCtrl+W"))?)
+        .item(&item("close-other-tabs", "Close Other Tabs", Some("Alt+CmdOrCtrl+T"))?)
+        .item(&item("close-window", "Close Window", Some("CmdOrCtrl+Shift+W"))?);
     if !cfg!(target_os = "macos") {
         file = file.separator().quit();
     }
@@ -303,9 +333,12 @@ fn build_menu(app: &AppHandle) -> tauri::Result<(Menu<Wry>, Submenu<Wry>)> {
         .item(&item("back", "Back", Some("CmdOrCtrl+["))?)
         .item(&item("forward", "Forward", Some("CmdOrCtrl+]"))?)
         .separator()
+        .item(&item("tab-next", "Next Tab", Some("CmdOrCtrl+Shift+]"))?)
+        .item(&item("tab-prev", "Previous Tab", Some("CmdOrCtrl+Shift+["))?)
+        .separator()
         .item(&item("palette", "Go to Job, Trial or Page…", Some("CmdOrCtrl+P"))?)
         .build()?;
-    let window = SubmenuBuilder::new(app, "Window").minimize().maximize().separator().close_window().build()?;
+    let window = SubmenuBuilder::new(app, "Window").minimize().maximize().build()?;
     let mut help = SubmenuBuilder::new(app, "Help")
         .item(&item("help:docs", "hbench Documentation", None)?)
         .item(&item("help:site", "Actuaria.io Website", None)?)
@@ -376,6 +409,11 @@ fn on_menu(app: &AppHandle, id: &str) {
                 let _ = w.eval("location.reload()");
             }
         }
+        "close-window" => {
+            if let Some(w) = main_window(app) {
+                let _ = w.close();
+            }
+        }
         "devtools" =>
         {
             #[cfg(debug_assertions)]
@@ -396,16 +434,21 @@ fn on_menu(app: &AppHandle, id: &str) {
 }
 
 fn main() {
-    tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+    let mut builder = tauri::Builder::default();
+    if !DEV {
+        // A second launch focuses the running app.
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(w) = main_window(app) {
                 let _ = w.unminimize();
                 let _ = w.set_focus();
             }
-        }))
+        }));
+    }
+    builder
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             let handle = app.handle().clone();
             let settings = load_settings(&handle);
@@ -431,6 +474,12 @@ fn main() {
                 .background_color(tauri::window::Color(0x13, 0x0a, 0x1c, 0xff))
                 .initialization_script(init_script())
                 .on_navigation(move |url| allow_navigation(&nav, url))
+                // The title bar names the open tab, then the folder: "Jobs — my-evals".
+                .on_document_title_changed(|w, title| {
+                    let Some(page) = title.strip_suffix(" · Actuaria") else { return };
+                    let folder = current_folder(w.app_handle()).map(|f| folder_name(&f)).unwrap_or_default();
+                    let _ = w.set_title(&if folder.is_empty() { page.to_string() } else { format!("{page} — {folder}") });
+                })
                 .on_download(move |_, event| {
                     if let DownloadEvent::Requested { url, destination } = event {
                         let name = destination
