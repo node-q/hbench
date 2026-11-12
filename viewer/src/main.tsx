@@ -8,8 +8,16 @@ import "@fontsource/ibm-plex-sans/latin-500.css";
 import "@fontsource/ibm-plex-sans/latin-600.css";
 import "@fontsource/ibm-plex-mono/latin-400.css";
 import "@fontsource/ibm-plex-mono/latin-500.css";
+import "@fontsource/geist-sans/latin-400.css";
+import "@fontsource/geist-sans/latin-500.css";
+import "@fontsource/geist-sans/latin-600.css";
+import "@fontsource/geist-mono/latin-400.css";
+import "@fontsource/geist-mono/latin-500.css";
+// Before the CSS and shell: marks the document when running inside the Actuaria desktop app.
+import "./desktop/bridge";
 import "./tokens.css";
 import "./base.css";
+import "./desktop/desktop.css";
 import { Shell, NotFound } from "./shell";
 import Home from "./pages/home/Home";
 import Job from "./pages/job/Job";

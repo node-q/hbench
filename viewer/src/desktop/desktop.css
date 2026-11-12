@@ -1,0 +1,517 @@
+/* Actuaria desktop theme + chrome. Applies only with html[data-shell="desktop"] (set by desktop/bridge.ts);
+ * the web viewer is untouched. Colours and type follow actuaria.io: plum darks, violet primary, lavender accent,
+ * Geist / Geist Mono, near-square corners. */
+
+:root[data-shell="desktop"] {
+  --font-display: "Geist Sans", "Geist", ui-sans-serif, system-ui, sans-serif;
+  --font-body: "Geist Sans", "Geist", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --radius-sm: 2px;
+  --radius: 3px;
+  --radius-lg: 4px;
+
+  --dk-activity-w: 48px;
+  --dk-tabs-h: 35px;
+  --dk-crumbs-h: 24px;
+  --dk-status-h: 24px;
+  /* Pages pin sticky headers below --bar-h: here, the tab strip plus breadcrumbs. */
+  --bar-h: calc(var(--dk-tabs-h) + var(--dk-crumbs-h));
+  --dk-primary: #6a35c9;
+}
+
+:root[data-shell="desktop"][data-mode="dark"] {
+  --color-paper: #130a1c;
+  --color-paper-2: #1a0f26;
+  --color-paper-3: #2a1547;
+  --color-raised: #1a0f26;
+  --color-rule: #33223f;
+  --color-rule-2: #46335a;
+  --color-ink: #f7f4f8;
+  --color-ink-2: #e4dcec;
+  --color-muted: #c3b8cf;
+  --color-faint: #887e94;
+  --color-accent: #c4adff;
+  --color-accent-2: #d8c9ff;
+  --color-accent-ink: #130a1c;
+  --color-accent-wash: #2a1547;
+  --color-focus: #c4adff;
+  --color-graphite: #0c0612;
+  --color-graphite-2: #1a0f26;
+  --color-graphite-ink: #e4dcec;
+  --color-graphite-muted: #887e94;
+  --color-code-key: #c4adff;
+  --color-phase-agent: #9d7bff;
+  --color-phase-setup: #6a35c9;
+  --color-heat-1: #9d7bff;
+  --shadow-pop: 0 12px 32px -12px rgb(0 0 0 / 0.7), 0 0 0 1px var(--color-rule-2);
+
+  --dk-activity-bg: #0c0612;
+  --dk-activity-ink: #887e94;
+  --dk-side-bg: #100817;
+  --dk-tabs-bg: #0c0612;
+  --dk-row-hover: #1f1230;
+  --dk-row-active: #2a1547;
+}
+
+:root[data-shell="desktop"]:not([data-mode="dark"]) {
+  --color-paper: #f7f4f8;
+  --color-paper-2: #efeaf3;
+  --color-paper-3: #ece4fb;
+  --color-raised: #ffffff;
+  --color-rule: #e2dbe8;
+  --color-rule-2: #cfc4da;
+  --color-ink: #1c1029;
+  --color-ink-2: #2f2340;
+  --color-muted: #5c5368;
+  --color-faint: #887e94;
+  --color-accent: #6a35c9;
+  --color-accent-2: #5a2bb0;
+  --color-accent-ink: #ffffff;
+  --color-accent-wash: #ece4fb;
+  --color-focus: #6a35c9;
+  --color-bad: #b3261e;
+  --color-graphite: #1c1029;
+  --color-graphite-2: #2a1547;
+  --color-code-key: #c4adff;
+  --color-phase-agent: #6a35c9;
+  --color-phase-setup: #9d7bff;
+  --color-heat-1: #6a35c9;
+  --shadow-pop: 0 10px 28px -12px rgb(28 16 41 / 0.3), 0 0 0 1px var(--color-rule);
+
+  --dk-activity-bg: #ebe5f0;
+  --dk-activity-ink: #887e94;
+  --dk-side-bg: #f1ecf5;
+  --dk-tabs-bg: #ebe5f0;
+  --dk-row-hover: #e7e0ef;
+  --dk-row-active: #ece4fb;
+}
+
+[data-shell="desktop"] body {
+  font-size: var(--text-sm);
+  /* Desktop app, not a document: no rubber-band overscroll, default cursor on chrome. */
+  overscroll-behavior: none;
+}
+[data-shell="desktop"] ::selection {
+  background: color-mix(in oklab, var(--dk-primary) 45%, transparent);
+}
+[data-shell="desktop"] .page {
+  padding: var(--space-md) var(--space-lg) var(--space-xl);
+}
+
+/* ── Activity bar ─────────────────────────────────────────────────────────── */
+.dk-activity {
+  position: fixed;
+  inset: 0 auto var(--dk-status-h) 0;
+  z-index: calc(var(--z-sticky) + 2);
+  width: var(--dk-activity-w);
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  padding-top: 4px;
+  background: var(--dk-activity-bg);
+  border-right: 1px solid var(--color-rule);
+}
+.dk-activity__spacer {
+  flex: 1;
+}
+.dk-activity__btn {
+  position: relative;
+  display: grid;
+  place-items: center;
+  height: 46px;
+  border: 0;
+  background: none;
+  color: var(--dk-activity-ink);
+  cursor: pointer;
+  transition: color var(--dur-micro) var(--ease-out);
+}
+.dk-activity__btn:hover,
+.dk-activity__btn[data-active="true"] {
+  color: var(--color-ink);
+}
+.dk-activity__btn[data-active="true"]::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 2px;
+  background: var(--color-accent);
+}
+.dk-activity__btn:focus-visible {
+  outline: 1px solid var(--color-focus);
+  outline-offset: -3px;
+}
+
+/* ── Side bar ─────────────────────────────────────────────────────────────── */
+.dk-side {
+  position: fixed;
+  inset: 0 auto var(--dk-status-h) var(--dk-activity-w);
+  z-index: calc(var(--z-sticky) + 1);
+  width: var(--dk-side-w);
+  display: flex;
+  flex-direction: column;
+  background: var(--dk-side-bg);
+  border-right: 1px solid var(--color-rule);
+  user-select: none;
+}
+.dk-side__title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: var(--dk-tabs-h);
+  padding: 0 var(--space-xs) 0 var(--space-md);
+  color: var(--color-muted);
+  font: 500 var(--text-2xs) / 1 var(--font-body);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.dk-side__actions {
+  display: flex;
+  gap: 2px;
+}
+.dk-side__section {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 var(--space-xs);
+  color: var(--color-ink);
+  font: 600 var(--text-2xs) / 1 var(--font-body);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.dk-side__mode {
+  margin-left: auto;
+  padding: 1px 5px;
+  border: 1px solid var(--color-rule-2);
+  border-radius: var(--radius-sm);
+  color: var(--color-faint);
+  font: 500 10px / 1.3 var(--font-mono);
+  text-transform: lowercase;
+  letter-spacing: 0;
+}
+.dk-icon {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--color-muted);
+  cursor: pointer;
+}
+.dk-icon:hover {
+  background: var(--dk-row-hover);
+  color: var(--color-ink);
+}
+.dk-filter {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 4px var(--space-xs) 6px;
+  padding: 0 6px;
+  height: 26px;
+  border: 1px solid var(--color-rule);
+  border-radius: var(--radius-sm);
+  background: var(--color-paper);
+  color: var(--color-faint);
+}
+.dk-filter:focus-within {
+  border-color: var(--color-focus);
+}
+.dk-filter input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: none;
+  color: var(--color-ink);
+  font: 400 var(--text-xs) / 1 var(--font-body);
+}
+.dk-tree {
+  flex: 1;
+  overflow: auto;
+  padding-bottom: var(--space-md);
+  scrollbar-width: thin;
+}
+.dk-tree__note {
+  display: grid;
+  gap: var(--space-xs);
+  justify-items: start;
+  padding: var(--space-xs) var(--space-md);
+  color: var(--color-faint);
+  font-size: var(--text-xs);
+}
+.dk-tree__note--nested {
+  padding-left: 40px;
+}
+.dk-tree__note--bad {
+  color: var(--color-bad);
+}
+.dk-tree__cta {
+  color: var(--color-accent);
+  font-weight: 500;
+}
+.dk-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 var(--space-xs) 0 4px;
+  color: var(--color-ink-2);
+  font-size: var(--text-xs);
+  text-decoration: none;
+  cursor: pointer;
+  outline: 1px solid transparent;
+  outline-offset: -1px;
+}
+.dk-row--nested {
+  padding-left: 30px;
+}
+.dk-row:hover {
+  background: var(--dk-row-hover);
+}
+.dk-row.active {
+  background: var(--dk-row-active);
+  color: var(--color-ink);
+  outline-color: color-mix(in oklab, var(--color-accent) 55%, transparent);
+}
+.dk-row:focus-visible {
+  outline-color: var(--color-focus);
+}
+.dk-row__label {
+  flex: 1;
+  min-width: 0;
+}
+.dk-row__meta {
+  color: var(--color-faint);
+  font-size: 10.5px;
+}
+.dk-twisty {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--color-muted);
+  cursor: pointer;
+}
+.dk-dot {
+  width: 7px;
+  height: 7px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--color-faint);
+}
+.dk-dot--ok {
+  background: var(--color-good);
+}
+.dk-dot--warn {
+  background: var(--color-warn);
+}
+.dk-dot--fail,
+.dk-dot--bad {
+  background: var(--color-bad);
+}
+.dk-dot--bad {
+  border-radius: 1px;
+  transform: rotate(45deg) scale(0.9);
+}
+.dk-dot--none {
+  background: none;
+  box-shadow: inset 0 0 0 1.5px var(--color-faint);
+}
+.dk-spin {
+  width: 10px;
+  height: 10px;
+  flex-shrink: 0;
+  border: 1.5px solid color-mix(in oklab, currentColor 25%, transparent);
+  border-top-color: var(--color-accent);
+  border-radius: 50%;
+  animation: dk-spin 0.8s linear infinite;
+}
+@keyframes dk-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dk-spin {
+    animation-duration: 2.4s;
+  }
+}
+.dk-resizer {
+  position: absolute;
+  inset: 0 -3px 0 auto;
+  width: 6px;
+  cursor: col-resize;
+  z-index: 1;
+}
+.dk-resizer:hover,
+.dk-resizer:active {
+  background: linear-gradient(90deg, transparent 2px, var(--color-accent) 2px, var(--color-accent) 4px, transparent 4px);
+}
+
+/* ── Editor: tabs, breadcrumbs, content ───────────────────────────────────── */
+.dk-main {
+  margin-left: calc(var(--dk-activity-w) + var(--dk-side-w, 0px));
+  padding-bottom: var(--dk-status-h);
+  min-height: 100vh;
+  min-width: 0;
+}
+.dk-head {
+  position: sticky;
+  top: 0;
+  z-index: var(--z-sticky);
+  background: var(--color-paper);
+}
+.dk-tabs {
+  display: flex;
+  height: var(--dk-tabs-h);
+  overflow-x: auto;
+  overflow-y: hidden;
+  background: var(--dk-tabs-bg);
+  scrollbar-width: none;
+}
+.dk-tabs__fill {
+  flex: 1;
+  border-bottom: 1px solid var(--color-rule);
+}
+.dk-tab {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 110px;
+  max-width: 240px;
+  padding: 0 6px 0 12px;
+  border-right: 1px solid var(--color-rule);
+  border-bottom: 1px solid var(--color-rule);
+  color: var(--color-muted);
+  font-size: var(--text-xs);
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+.dk-tab:hover {
+  color: var(--color-ink-2);
+}
+.dk-tab[data-active="true"] {
+  background: var(--color-paper);
+  border-bottom-color: transparent;
+  color: var(--color-ink);
+}
+.dk-tab[data-active="true"]::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 1px;
+  background: var(--color-accent);
+}
+.dk-tab > svg {
+  flex-shrink: 0;
+  color: var(--color-accent);
+}
+.dk-tab .trunc {
+  flex: 1;
+}
+.dk-tab__close {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: inherit;
+  opacity: 0;
+  cursor: pointer;
+}
+.dk-tab:hover .dk-tab__close,
+.dk-tab[data-active="true"] .dk-tab__close {
+  opacity: 1;
+}
+.dk-tab__close:hover {
+  background: var(--dk-row-hover);
+}
+.dk-crumbs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: var(--dk-crumbs-h);
+  padding: 0 var(--space-md);
+  overflow: hidden;
+  border-bottom: 1px solid var(--color-rule);
+  color: var(--color-muted);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+.dk-crumbs__root,
+.dk-crumbs__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.dk-crumbs__item:last-child {
+  color: var(--color-ink);
+}
+.dk-crumbs__link {
+  color: inherit;
+  text-decoration: none;
+}
+.dk-crumbs__link:hover {
+  color: var(--color-ink);
+  text-decoration: underline;
+}
+
+/* ── Status bar ───────────────────────────────────────────────────────────── */
+.dk-status {
+  position: fixed;
+  inset: auto 0 0 0;
+  z-index: calc(var(--z-sticky) + 3);
+  display: flex;
+  align-items: stretch;
+  height: var(--dk-status-h);
+  padding: 0 4px;
+  background: var(--dk-primary);
+  color: #fff;
+  font: 400 11.5px / 1 var(--font-body);
+  user-select: none;
+}
+.dk-status__brand,
+.dk-status__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 320px;
+  padding: 0 8px;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  white-space: nowrap;
+}
+.dk-status__brand {
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: #fff;
+  background: rgb(0 0 0 / 0.18);
+}
+button.dk-status__item {
+  cursor: pointer;
+}
+button.dk-status__item:hover {
+  background: rgb(255 255 255 / 0.12);
+}
+.dk-status__item[data-live="true"] .dk-spin {
+  border-color: rgb(255 255 255 / 0.3);
+  border-top-color: #fff;
+}
+.dk-status__item--bad {
+  background: #b3261e;
+}
+.dk-status__fill {
+  flex: 1;
+}

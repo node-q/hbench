@@ -7,6 +7,8 @@ import { useApi } from "./lib/api";
 import { useKey } from "./lib/state";
 import type { AppConfig, JobSummary, Page, TaskDefinitionSummary } from "./lib/types";
 import { ToastProvider } from "./ui/overlay";
+import { isDesktop } from "./desktop/bridge";
+import { DesktopChrome } from "./desktop/DesktopChrome";
 
 export interface Command {
   id: string;
@@ -78,6 +80,25 @@ export function Shell() {
         { to: "/compare", label: "Compare" },
         { to: "/run", label: "New run" },
       ];
+  const openPalette = useCallback(() => setPaletteOpen(true), []);
+
+  if (isDesktop) {
+    return (
+      <ConfigCtx.Provider value={config.data}>
+        <CommandsCtx.Provider value={register}>
+          <ToastProvider>
+            <a href="#main" className="sr-only">
+              Skip to content
+            </a>
+            <DesktopChrome config={config.data} mode={mode} toggleMode={toggleMode} openPalette={openPalette}>
+              <Outlet />
+            </DesktopChrome>
+            <Palette open={paletteOpen} onClose={() => setPaletteOpen(false)} tasksMode={tasksMode} pageCmds={pageCmds} toggleMode={toggleMode} />
+          </ToastProvider>
+        </CommandsCtx.Provider>
+      </ConfigCtx.Provider>
+    );
+  }
 
   return (
     <ConfigCtx.Provider value={config.data}>
@@ -260,7 +281,8 @@ function Palette({ open, onClose, tasksMode, pageCmds, toggleMode }: { open: boo
 /** Document title helper. */
 export function useTitle(title: string | undefined) {
   useEffect(() => {
-    document.title = title ? `${title} · hbench` : "hbench";
+    const app = isDesktop ? "Actuaria" : "hbench";
+    document.title = title ? `${title} · ${app}` : app;
   }, [title]);
 }
 
