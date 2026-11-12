@@ -1,0 +1,16 @@
+{
+  "name": "actuaria-desktop",
+  "private": true,
+  "license": "Apache-2.0",
+  "scripts": {
+    "sidecar": "sh scripts/sidecar.sh release",
+    "sidecar:debug": "sh scripts/sidecar.sh debug",
+    "dev": "sh scripts/sidecar.sh debug && tauri dev",
+    "build": "sh scripts/sidecar.sh release && tauri build",
+    "icons": "tauri icon assets/icon.png --output src-tauri/icons",
+    "tauri": "tauri"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.12.4"
+  }
+}
