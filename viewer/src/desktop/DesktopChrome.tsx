@@ -68,15 +68,19 @@ function useTabs() {
     }
   });
   const active = describe(loc.pathname).key;
+  // No tab open: the last one was closed. The route stays where it was, so the editor shows a welcome
+  // screen until the next navigation (even one to the same page) opens a tab again.
+  const [empty, setEmpty] = useState(false);
   useEffect(() => {
     const href = loc.pathname + loc.search;
+    setEmpty(false);
     setTabs((ts) => {
       const i = ts.findIndex((t) => t.key === active);
       let next = i >= 0 ? ts.map((t, j) => (j === i ? { ...t, href } : t)) : [...ts, { key: active, href }];
       if (next.length > MAX_TABS) next = next.filter((t, j) => t.key === active || j >= next.length - MAX_TABS);
       return next;
     });
-  }, [active, loc.pathname, loc.search]);
+  }, [active, loc.pathname, loc.search, loc.key]);
   useEffect(() => sessionStorage.setItem(TABS_KEY, JSON.stringify(tabs)), [tabs]);
 
   const close = useCallback(
@@ -85,8 +89,9 @@ function useTabs() {
       if (i < 0) return;
       const next = tabs.filter((t) => t.key !== key);
       setTabs(next);
-      // Closing the active tab shows its neighbour; closing the last one goes home.
-      if (key === active) navigate(next[Math.min(i, next.length - 1)]?.href ?? "/");
+      // Closing the active tab shows its neighbour; closing the last one leaves the editor empty.
+      if (!next.length) setEmpty(true);
+      else if (key === active) navigate(next[Math.min(i, next.length - 1)].href);
     },
     [tabs, active, navigate],
   );
@@ -99,7 +104,7 @@ function useTabs() {
     },
     [tabs, active, navigate],
   );
-  return { tabs, active, close, closeOthers, step };
+  return { tabs, active: empty ? "" : active, empty, close, closeOthers, step };
 }
 
 function useSideWidth(): [number, (w: number) => void] {
@@ -158,7 +163,7 @@ export function DesktopChrome({
       return !o;
     });
   }, []);
-  const { tabs, active, close, closeOthers, step } = useTabs();
+  const { tabs, active, empty, close, closeOthers, step } = useTabs();
   const where = describe(loc.pathname);
   const busy = useBusy();
   const [collapseAll, setCollapseAll] = useState(0);
@@ -177,7 +182,7 @@ export function DesktopChrome({
       else if (cmd === "theme") toggleMode();
       else if (cmd === "back") navigate(-1);
       else if (cmd === "forward") navigate(1);
-      else if (cmd === "close-tab") close(active);
+      else if (cmd === "close-tab") active && close(active);
       else if (cmd === "close-other-tabs") closeOthers();
       else if (cmd === "tab-next") step(1);
       else if (cmd === "tab-prev") step(-1);
@@ -240,17 +245,17 @@ export function DesktopChrome({
   const folderName = folder.split("/").filter(Boolean).pop() ?? folder;
 
   return (
-    <div className="dk" data-side={sideOpen ? "open" : "closed"} data-resizing={resizing} style={{ "--dk-side-w": `${sideW}px` } as React.CSSProperties}>
+    <div className="dk" data-side={sideOpen ? "open" : "closed"} data-resizing={resizing} data-empty={empty} style={{ "--dk-side-w": `${sideW}px` } as React.CSSProperties}>
       <nav className="dk-activity" aria-label="Views">
         <ActivityButton label={`Explorer (${kbd("B")})`} active={sideOpen} kind="view" onClick={toggleSide}>
           <Icon.Files size={22} />
         </ActivityButton>
         {!tasksMode && (
           <>
-            <ActivityButton label="Compare jobs" active={loc.pathname === "/compare"} kind="page" onClick={() => navigate("/compare")}>
+            <ActivityButton label="Compare jobs" active={!empty && loc.pathname === "/compare"} kind="page" onClick={() => navigate("/compare")}>
               <Icon.Columns size={22} />
             </ActivityButton>
-            <ActivityButton label={`New run (${kbd("N")})`} active={loc.pathname === "/run"} kind="page" onClick={() => navigate("/run")}>
+            <ActivityButton label={`New run (${kbd("N")})`} active={!empty && loc.pathname === "/run"} kind="page" onClick={() => navigate("/run")}>
               <Icon.Play size={22} />
             </ActivityButton>
           </>
@@ -340,7 +345,7 @@ export function DesktopChrome({
               <Icon.Folder size={13} />
               {folderName}
             </span>
-            {where.crumbs.map((c, i) => (
+            {(empty ? [] : where.crumbs).map((c, i) => (
               <span key={i} className="dk-crumbs__item">
                 <Icon.Chevron size={11} />
                 {c.to ? (
@@ -356,7 +361,7 @@ export function DesktopChrome({
           <div className="dk-progress" data-busy={busy} aria-hidden="true" />
         </div>
         <main id="main" className="dk-editor" ref={editor} tabIndex={-1} onScroll={(e) => scrolls.current.set(active, e.currentTarget.scrollTop)}>
-          {children}
+          {empty ? <Welcome tasksMode={tasksMode} openPalette={openPalette} /> : children}
         </main>
       </div>
 
@@ -390,6 +395,35 @@ export function DesktopChrome({
           {desktopInfo ? `Actuaria v${desktopInfo.version}` : "Desktop preview"}
         </button>
       </footer>
+    </div>
+  );
+}
+
+/** The editor with no tab open: the mark and the ways to get going. */
+function Welcome({ tasksMode, openPalette }: { tasksMode: boolean; openPalette: () => void }) {
+  const navigate = useNavigate();
+  const items: { label: string; keys: string; run: () => void }[] = [
+    ...(tasksMode
+      ? [{ label: "Show tasks", keys: kbd("1"), run: () => navigate("/task-definitions") }]
+      : [
+          { label: "Show jobs", keys: kbd("1"), run: () => navigate("/") },
+          { label: "Compare jobs", keys: kbd("2"), run: () => navigate("/compare") },
+          { label: "Start a new run", keys: kbd("N"), run: () => navigate("/run") },
+        ]),
+    { label: "Open a folder", keys: kbd("O"), run: () => native("open-folder") },
+    { label: "Go to a job, trial or page", keys: kbd("K"), run: openPalette },
+  ];
+  return (
+    <div className="dk-welcome">
+      <Mark size={96} />
+      <div className="dk-welcome__list">
+        {items.map((it) => (
+          <button key={it.label} className="dk-welcome__item" onClick={it.run}>
+            <span>{it.label}</span>
+            <kbd>{it.keys}</kbd>
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
