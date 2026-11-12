@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 export class ApiError extends Error {
   constructor(
@@ -52,12 +52,28 @@ async function request(path: string, init?: RequestInit): Promise<Response> {
   return r;
 }
 
+// GETs in flight, for a loading indicator.
+let inFlight = 0;
+const busyListeners = new Set<() => void>();
+function track<T>(work: Promise<T>): Promise<T> {
+  const bump = (by: number) => {
+    inFlight += by;
+    busyListeners.forEach((l) => l());
+  };
+  bump(1);
+  return work.finally(() => bump(-1));
+}
+const subscribeBusy = (l: () => void) => (busyListeners.add(l), () => busyListeners.delete(l));
+
+/** Whether any GET is in flight. */
+export const useBusy = () => useSyncExternalStore(subscribeBusy, () => inFlight > 0);
+
 export async function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
-  return (await request(path, { signal })).json();
+  return track(request(path, { signal }).then((r) => r.json()));
 }
 
 export async function getText(path: string, signal?: AbortSignal): Promise<string> {
-  return (await request(path, { signal })).text();
+  return track(request(path, { signal }).then((r) => r.text()));
 }
 
 export async function send<T>(method: "POST" | "DELETE", path: string, body?: unknown): Promise<T> {

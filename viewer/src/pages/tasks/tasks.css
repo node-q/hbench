@@ -81,7 +81,7 @@
 .files__tree {
   position: sticky;
   top: calc(var(--bar-h) + var(--space-md));
-  max-height: calc(100vh - var(--bar-h) - 2 * var(--space-md));
+  max-height: calc(var(--viewport-h) - var(--bar-h) - 2 * var(--space-md));
   overflow: auto;
   padding: var(--space-2xs);
 }
@@ -111,7 +111,7 @@
   border: 1px solid var(--color-rule);
   border-radius: var(--radius);
 }
-@media (max-width: 760px) {
+@container page (max-width: 760px) {
   .files {
     grid-template-columns: minmax(0, 1fr);
   }

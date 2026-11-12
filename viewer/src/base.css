@@ -166,7 +166,12 @@ pre,
   justify-content: space-between;
   gap: var(--space-md);
 }
-@media (max-width: 640px) {
+/* Pages respond to the width of <main>, which the desktop shell's side bar narrows; in the web viewer it is
+ * the window's width. */
+main {
+  container: page / inline-size;
+}
+@container page (max-width: 640px) {
   .page {
     padding: var(--space-md) var(--space-sm) var(--space-xl);
   }
@@ -995,7 +1000,7 @@ dialog.dialog::backdrop {
 .toasts {
   position: fixed;
   right: var(--space-md);
-  bottom: var(--space-md);
+  bottom: calc(var(--space-md) + var(--chrome-bottom));
   z-index: var(--z-toast);
   display: grid;
   gap: var(--space-xs);

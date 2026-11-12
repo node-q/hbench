@@ -1,6 +1,7 @@
 // App shell: top bar (wordmark, section links, ⌘K search pill, theme toggle) + command palette.
 // Pages add their own palette entries with `useCommands([...])`.
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { flushSync } from "react-dom";
 import { NavLink, Outlet, useNavigate } from "react-router";
 import * as Icon from "./ui/icons";
 import { useApi } from "./lib/api";
@@ -37,9 +38,15 @@ function useMode(): [string, () => void] {
   const [mode, setMode] = useState(() => document.documentElement.dataset.mode ?? "light");
   const toggle = useCallback(() => {
     const next = mode === "dark" ? "light" : "dark";
-    document.documentElement.dataset.mode = next;
-    localStorage.setItem("hb:mode", next);
-    setMode(next);
+    const apply = () => {
+      document.documentElement.dataset.mode = next;
+      localStorage.setItem("hb:mode", next);
+      setMode(next);
+    };
+    // The desktop shell cross-fades between themes where the engine can.
+    const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (isDesktop && !still && document.startViewTransition) document.startViewTransition(() => flushSync(apply));
+    else apply();
   }, [mode]);
   return [mode, toggle];
 }
@@ -287,6 +294,7 @@ export function useTitle(title: string | undefined) {
 }
 
 export function NotFound({ what = "Page" }: { what?: string }): ReactNode {
+  useTitle(`${what} not found`);
   return (
     <div className="page">
       <div className="empty">

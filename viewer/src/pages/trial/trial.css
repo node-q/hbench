@@ -92,7 +92,7 @@
   height: 8px;
   border-radius: 2px;
 }
-@media (max-width: 820px) {
+@container page (max-width: 820px) {
   .trial-summary {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -290,7 +290,7 @@
 .long__more {
   justify-self: start;
 }
-@media (max-width: 640px) {
+@container page (max-width: 640px) {
   .tstep__head {
     grid-template-columns: 14px auto auto minmax(0, 1fr);
   }
@@ -344,7 +344,7 @@
 .tfiles__tree {
   position: sticky;
   top: calc(var(--bar-h) + var(--space-sm));
-  max-height: calc(100vh - var(--bar-h) - var(--space-xl));
+  max-height: calc(var(--viewport-h) - var(--bar-h) - var(--space-xl));
   overflow: auto;
   margin: 0;
   padding: var(--space-2xs);
@@ -417,7 +417,7 @@
 .tfiles__manifest[open] summary {
   border-bottom: 1px solid var(--color-rule);
 }
-@media (max-width: 760px) {
+@container page (max-width: 760px) {
   .tfiles {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -454,7 +454,7 @@
 .tanalyze-form__err {
   grid-column: 1 / -1;
 }
-@media (max-width: 760px) {
+@container page (max-width: 760px) {
   .tanalyze-form {
     grid-template-columns: minmax(0, 1fr);
   }

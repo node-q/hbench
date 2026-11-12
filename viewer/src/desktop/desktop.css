@@ -16,7 +16,11 @@
   --dk-status-h: 24px;
   /* Pages pin sticky headers below --bar-h: here, the tab strip plus breadcrumbs. */
   --bar-h: calc(var(--dk-tabs-h) + var(--dk-crumbs-h));
+  /* The status bar covers the window's bottom edge: pages size and pin against what is left. */
+  --viewport-h: calc(100vh - var(--dk-status-h));
+  --chrome-bottom: var(--dk-status-h);
   --dk-primary: #6a35c9;
+  --dk-slide: 200ms var(--ease-out);
 }
 
 :root[data-shell="desktop"][data-mode="dark"] {
@@ -97,9 +101,25 @@
 [data-shell="desktop"] .page {
   padding: var(--space-md) var(--space-lg) var(--space-xl);
 }
+/* The breadcrumb bar above the editor already says where this page is. */
+[data-shell="desktop"] .page-head__crumbs {
+  display: none !important;
+}
+.dk[data-side="open"] {
+  --dk-side-cur: var(--dk-side-w);
+}
+.dk[data-side="closed"] {
+  --dk-side-cur: 0px;
+}
+/* The theme toggle cross-fades (View Transitions, where the engine has them). */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 220ms;
+}
 
 /* ── Activity bar ─────────────────────────────────────────────────────────── */
 .dk-activity {
+  isolation: isolate;
   position: fixed;
   inset: 0 auto var(--dk-status-h) 0;
   z-index: calc(var(--z-sticky) + 2);
@@ -129,12 +149,34 @@
 .dk-activity__btn[data-active="true"] {
   color: var(--color-ink);
 }
-.dk-activity__btn[data-active="true"]::before {
+/* The open view (the side bar) carries the edge marker; the page on show gets a tinted tile. */
+.dk-activity__btn[data-kind="view"]::before {
   content: "";
   position: absolute;
   inset: 0 auto 0 0;
   width: 2px;
   background: var(--color-accent);
+  transform: scaleY(0);
+  transition: transform var(--dk-slide);
+}
+.dk-activity__btn[data-kind="view"][data-active="true"]::before {
+  transform: scaleY(1);
+}
+.dk-activity__btn[data-kind="page"]::after {
+  content: "";
+  position: absolute;
+  inset: 6px 7px;
+  z-index: -1;
+  border-radius: var(--radius-lg);
+  background: var(--dk-row-active);
+  opacity: 0;
+  transition: opacity var(--dur-micro) var(--ease-out);
+}
+.dk-activity__btn[data-kind="page"][data-active="true"]::after {
+  opacity: 1;
+}
+.dk-activity__btn[data-kind="page"][data-active="true"] {
+  color: var(--color-accent);
 }
 .dk-activity__btn:focus-visible {
   outline: 1px solid var(--color-focus);
@@ -151,6 +193,26 @@
   flex-direction: column;
   background: var(--dk-side-bg);
   border-right: 1px solid var(--color-rule);
+  user-select: none;
+  transition:
+    transform var(--dk-slide),
+    visibility 0s;
+}
+/* Closed: slid under the activity bar, and out of the way of clicks and focus once there. */
+.dk[data-side="closed"] .dk-side {
+  transform: translateX(-100%);
+  visibility: hidden;
+  transition:
+    transform var(--dk-slide),
+    visibility 0s 200ms;
+}
+/* Dragging the edge must track the pointer, not ease after it. */
+.dk[data-resizing="true"] .dk-side,
+.dk[data-resizing="true"] .dk-main {
+  transition: none;
+}
+.dk[data-resizing="true"] {
+  cursor: col-resize;
   user-select: none;
 }
 .dk-side__title {
@@ -203,6 +265,13 @@
 .dk-icon:hover {
   background: var(--dk-row-hover);
   color: var(--color-ink);
+}
+.dk-icon:focus-visible,
+.dk-tab__close:focus-visible,
+.dk-twisty:focus-visible,
+.dk-row__act:focus-visible {
+  outline: 1px solid var(--color-focus);
+  outline-offset: -1px;
 }
 .dk-filter {
   display: flex;
@@ -264,6 +333,7 @@
   cursor: pointer;
   outline: 1px solid transparent;
   outline-offset: -1px;
+  transition: background-color 80ms linear;
 }
 .dk-row--nested {
   padding-left: 30px;
@@ -294,13 +364,70 @@
   height: 16px;
   padding: 0;
   border: 0;
+  border-radius: var(--radius-sm);
   background: none;
   color: var(--color-muted);
   cursor: pointer;
 }
+.dk-twisty svg {
+  transition: transform var(--dur-micro) var(--ease-out);
+}
+.dk-twisty[data-open="true"] svg {
+  transform: rotate(90deg);
+}
+/* Row action (reveal): shown on hover or keyboard focus, in place of the count. */
+.dk-row__act {
+  display: none;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  margin-right: -4px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--color-muted);
+  cursor: pointer;
+}
+.dk-row__act:hover {
+  background: var(--color-paper-3);
+  color: var(--color-ink);
+}
+.dk-row:hover .dk-row__act,
+.dk-row:focus-visible .dk-row__act {
+  display: grid;
+}
+.dk-row:has(.dk-row__act):hover .dk-row__meta,
+.dk-row:has(.dk-row__act):focus-visible .dk-row__meta {
+  display: none;
+}
+/* A job's trials unfold. */
+.dk-group > .dk-row {
+  animation: dk-row-in 160ms var(--ease-out) backwards;
+}
+.dk-group > .dk-row:nth-child(2) {
+  animation-delay: 15ms;
+}
+.dk-group > .dk-row:nth-child(3) {
+  animation-delay: 30ms;
+}
+.dk-group > .dk-row:nth-child(4) {
+  animation-delay: 45ms;
+}
+.dk-group > .dk-row:nth-child(n + 5) {
+  animation-delay: 60ms;
+}
+@keyframes dk-row-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
 .dk-dot {
   width: 7px;
   height: 7px;
+  /* Same 10px slot as the spinner, so labels line up. */
+  margin: 0 1.5px;
   flex-shrink: 0;
   border-radius: 50%;
   background: var(--color-faint);
@@ -337,9 +464,11 @@
     transform: rotate(360deg);
   }
 }
+/* Still a running indicator under reduced motion (base.css stops every other animation after one pass). */
 @media (prefers-reduced-motion: reduce) {
   .dk-spin {
-    animation-duration: 2.4s;
+    animation-iteration-count: infinite !important;
+    animation-duration: 1.6s !important;
   }
 }
 .dk-resizer {
@@ -356,10 +485,11 @@
 
 /* ── Editor: tabs, breadcrumbs, content ───────────────────────────────────── */
 .dk-main {
-  margin-left: calc(var(--dk-activity-w) + var(--dk-side-w, 0px));
+  margin-left: calc(var(--dk-activity-w) + var(--dk-side-cur, 0px));
   padding-bottom: var(--dk-status-h);
   min-height: 100vh;
   min-width: 0;
+  transition: margin-left var(--dk-slide);
 }
 .dk-head {
   position: sticky;
@@ -384,9 +514,15 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  min-width: 110px;
-  max-width: 240px;
+  /* Tabs keep their width and the strip scrolls, as in an editor. */
+  flex: none;
+  min-width: 96px;
+  max-width: 220px;
   padding: 0 6px 0 12px;
+  animation: dk-tab-in 180ms var(--ease-out);
+  transition:
+    background-color 80ms linear,
+    color 80ms linear;
   border-right: 1px solid var(--color-rule);
   border-bottom: 1px solid var(--color-rule);
   color: var(--color-muted);
@@ -395,20 +531,38 @@
   user-select: none;
   white-space: nowrap;
 }
+@keyframes dk-tab-in {
+  from {
+    min-width: 0;
+    max-width: 0;
+    padding-inline: 0;
+    opacity: 0;
+  }
+}
 .dk-tab:hover {
   color: var(--color-ink-2);
+  background: color-mix(in oklab, var(--color-paper) 55%, transparent);
+}
+.dk-tab:focus-visible {
+  outline: 1px solid var(--color-focus);
+  outline-offset: -1px;
 }
 .dk-tab[data-active="true"] {
   background: var(--color-paper);
   border-bottom-color: transparent;
   color: var(--color-ink);
 }
-.dk-tab[data-active="true"]::before {
+.dk-tab::before {
   content: "";
   position: absolute;
   inset: 0 0 auto 0;
   height: 1px;
   background: var(--color-accent);
+  transform: scaleX(0);
+  transition: transform var(--dk-slide);
+}
+.dk-tab[data-active="true"]::before {
+  transform: scaleX(1);
 }
 .dk-tab > svg {
   flex-shrink: 0;
@@ -420,6 +574,7 @@
 .dk-tab__close {
   display: grid;
   place-items: center;
+  flex-shrink: 0;
   width: 20px;
   height: 20px;
   border: 0;
@@ -428,6 +583,10 @@
   color: inherit;
   opacity: 0;
   cursor: pointer;
+  transition: opacity 80ms linear;
+}
+.dk-tab__close:focus-visible {
+  opacity: 1;
 }
 .dk-tab:hover .dk-tab__close,
 .dk-tab[data-active="true"] .dk-tab__close {
@@ -447,6 +606,45 @@
   color: var(--color-muted);
   font-size: var(--text-xs);
   white-space: nowrap;
+}
+/* Loading line under the breadcrumbs. It waits 250ms, so quick local requests never show it. */
+.dk-progress {
+  position: absolute;
+  inset: auto 0 -1px 0;
+  height: 2px;
+  overflow: hidden;
+  opacity: 0;
+  transition: opacity 150ms linear;
+  pointer-events: none;
+}
+.dk-progress[data-busy="true"] {
+  opacity: 1;
+  transition-delay: 250ms;
+}
+.dk-progress::after {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 30%;
+  background: var(--color-accent);
+  animation: dk-progress 1.1s var(--ease-in-out) infinite;
+}
+.dk-progress:not([data-busy="true"])::after {
+  animation-play-state: paused;
+}
+@keyframes dk-progress {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(340%);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dk-progress::after {
+    width: 100%;
+    animation: none;
+  }
 }
 .dk-crumbs__root,
 .dk-crumbs__item {
@@ -502,8 +700,15 @@
 button.dk-status__item {
   cursor: pointer;
 }
+button.dk-status__item {
+  transition: background-color 80ms linear;
+}
 button.dk-status__item:hover {
   background: rgb(255 255 255 / 0.12);
+}
+button.dk-status__item:focus-visible {
+  outline: 1px solid #fff;
+  outline-offset: -2px;
 }
 .dk-status__item[data-live="true"] .dk-spin {
   border-color: rgb(255 255 255 / 0.3);
@@ -514,4 +719,29 @@ button.dk-status__item:hover {
 }
 .dk-status__fill {
   flex: 1;
+}
+
+/* ── Scrollbars ───────────────────────────────────────────────────────────── */
+/* Slim, themed scrollbars for panels inside the window (tables, code, the explorer). The window's own
+ * scrollbar stays native. */
+[data-shell="desktop"] body *::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+[data-shell="desktop"] body *::-webkit-scrollbar-track,
+[data-shell="desktop"] body *::-webkit-scrollbar-corner {
+  background: transparent;
+}
+[data-shell="desktop"] body *::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 5px;
+  background: color-mix(in oklab, var(--color-faint) 55%, transparent);
+  background-clip: content-box;
+}
+[data-shell="desktop"] body *::-webkit-scrollbar-thumb:hover {
+  background-color: var(--color-faint);
+}
+/* The tab strip scrolls without one. */
+.dk-tabs::-webkit-scrollbar {
+  display: none;
 }

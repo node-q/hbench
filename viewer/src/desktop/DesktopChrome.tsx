@@ -1,16 +1,18 @@
 // Desktop (Actuaria) chrome: activity bar, explorer side bar, editor tabs with breadcrumbs, status bar.
 // Replaces the web top bar when the viewer runs inside the desktop app; pages render unchanged in the editor area.
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router";
 import * as Icon from "../ui/icons";
-import { useApi } from "../lib/api";
+import { useApi, useBusy } from "../lib/api";
 import { useKey } from "../lib/state";
 import type { AppConfig, JobSummary, Page, TaskDefinitionSummary, TrialSummary } from "../lib/types";
+import { useToast } from "../ui/overlay";
 import { desktopInfo, isMac, native, onCommand } from "./bridge";
 
 const SIDE_KEY = "hb:dk-side";
 const TABS_KEY = "hb:dk-tabs";
 const MAX_TABS = 14;
+const SIDE_DEFAULT = 272;
 
 export const Mark = ({ size = 16 }: { size?: number }) => (
   <svg width={size} height={size} viewBox="0 0 64 64" fill="currentColor" aria-hidden="true" style={{ flexShrink: 0 }}>
@@ -20,6 +22,7 @@ export const Mark = ({ size = 16 }: { size?: number }) => (
 
 const running = (j: JobSummary) => !!j.started_at && !j.finished_at;
 const kbd = (k: string) => (isMac ? `⌘${k}` : `Ctrl+${k}`);
+const jobPath = (job: string) => `/jobs/${encodeURIComponent(job)}`;
 
 interface Where {
   key: string;
@@ -33,9 +36,8 @@ function describe(pathname: string): Where {
   const seg = pathname.split("/").filter(Boolean).map(decodeURIComponent);
   if (seg[0] === "jobs" && seg[1]) {
     const job = seg[1];
-    const jobTo = `/jobs/${encodeURIComponent(job)}`;
     if (seg[2] === "trials" && seg[3]) {
-      return { key: pathname, label: seg[3], icon: Icon.File, crumbs: [{ label: "Jobs", to: "/" }, { label: job, to: jobTo }, { label: seg[3] }] };
+      return { key: pathname, label: seg[3], icon: Icon.File, crumbs: [{ label: "Jobs", to: "/" }, { label: job, to: jobPath(job) }, { label: seg[3] }] };
     }
     return { key: pathname, label: job, icon: Icon.Folder, crumbs: [{ label: "Jobs", to: "/" }, { label: job }] };
   }
@@ -76,31 +78,59 @@ function useTabs() {
     });
   }, [active, loc.pathname, loc.search]);
   useEffect(() => sessionStorage.setItem(TABS_KEY, JSON.stringify(tabs)), [tabs]);
+
   const close = useCallback(
     (key: string) => {
-      setTabs((ts) => {
-        const i = ts.findIndex((t) => t.key === key);
-        const next = ts.filter((t) => t.key !== key);
-        if (key === active) {
-          const to = next[Math.min(i, next.length - 1)];
-          navigate(to ? to.href : "/");
-        }
-        return next;
-      });
+      const i = tabs.findIndex((t) => t.key === key);
+      if (i < 0) return;
+      const next = tabs.filter((t) => t.key !== key);
+      setTabs(next);
+      // Closing the active tab shows its neighbour; closing the last one goes home.
+      if (key === active) navigate(next[Math.min(i, next.length - 1)]?.href ?? "/");
     },
-    [active, navigate],
+    [tabs, active, navigate],
   );
-  return { tabs, active, close };
+  const closeOthers = useCallback(() => setTabs((ts) => ts.filter((t) => t.key === active)), [active]);
+  const step = useCallback(
+    (by: number) => {
+      if (tabs.length < 2) return;
+      const i = tabs.findIndex((t) => t.key === active);
+      navigate(tabs[(i + by + tabs.length) % tabs.length].href);
+    },
+    [tabs, active, navigate],
+  );
+  return { tabs, active, close, closeOthers, step };
 }
 
 function useSideWidth(): [number, (w: number) => void] {
-  const [w, setW] = useState(() => Number(localStorage.getItem(`${SIDE_KEY}-w`)) || 272);
+  const [w, setW] = useState(() => Number(localStorage.getItem(`${SIDE_KEY}-w`)) || SIDE_DEFAULT);
   const set = useCallback((n: number) => {
-    const c = Math.round(Math.min(560, Math.max(200, n)));
+    // Leave the editor at least 480px.
+    const c = Math.round(Math.min(560, innerWidth - 48 - 480, Math.max(200, n)));
     localStorage.setItem(`${SIDE_KEY}-w`, String(c));
     setW(c);
   }, []);
   return [w, set];
+}
+
+/** Toast (window focused) or native notification (in the background) when a running job finishes. */
+function useFinishNotices(jobs: JobSummary[] | undefined) {
+  const toast = useToast();
+  const navigate = useNavigate();
+  const before = useRef<Set<string> | null>(null);
+  useEffect(() => {
+    if (!jobs) return;
+    const now = new Set(jobs.filter(running).map((j) => j.name));
+    const prev = before.current;
+    before.current = now;
+    for (const name of prev ?? []) {
+      const j = jobs.find((x) => x.name === name);
+      if (!j || now.has(name)) continue;
+      const summary = `${j.n_completed_trials}/${j.n_total_trials} trials${j.n_errored_trials ? `, ${j.n_errored_trials} errored` : ""}`;
+      if (document.hasFocus()) toast({ text: `Run finished: ${name} · ${summary}`, action: { label: "Open", run: () => navigate(jobPath(name)) } }, 8000);
+      else native("notify", { title: "Run finished", body: `${name}\n${summary}` });
+    }
+  }, [jobs, toast, navigate]);
 }
 
 export function DesktopChrome({
@@ -121,20 +151,24 @@ export function DesktopChrome({
   const tasksMode = config?.mode === "tasks";
   const [sideOpen, setSideOpen] = useState(() => localStorage.getItem(SIDE_KEY) !== "closed");
   const [sideW, setSideW] = useSideWidth();
+  const [resizing, setResizing] = useState(false);
   const toggleSide = useCallback(() => {
     setSideOpen((o) => {
       localStorage.setItem(SIDE_KEY, o ? "closed" : "open");
       return !o;
     });
   }, []);
-  const { tabs, active, close } = useTabs();
+  const { tabs, active, close, closeOthers, step } = useTabs();
   const where = describe(loc.pathname);
+  const busy = useBusy();
+  const [collapseAll, setCollapseAll] = useState(0);
 
   // Jobs feed the explorer and the status bar; poll faster while something runs.
   const [live, setLive] = useState(false);
   const jobs = useApi<Page<JobSummary>>(config && !tasksMode ? "/api/jobs?page_size=100" : null, { poll: live ? 4000 : 15000 });
   const nRunning = jobs.data?.items.filter(running).length ?? 0;
   useEffect(() => setLive(nRunning > 0), [nRunning]);
+  useFinishNotices(jobs.data?.items);
 
   useEffect(() => {
     onCommand((cmd) => {
@@ -143,10 +177,14 @@ export function DesktopChrome({
       else if (cmd === "theme") toggleMode();
       else if (cmd === "back") navigate(-1);
       else if (cmd === "forward") navigate(1);
+      else if (cmd === "close-tab") close(active);
+      else if (cmd === "close-other-tabs") closeOthers();
+      else if (cmd === "tab-next") step(1);
+      else if (cmd === "tab-prev") step(-1);
       else if (cmd.startsWith("go:")) navigate(tasksMode && cmd === "go:/" ? "/task-definitions" : cmd.slice(3));
     });
     return () => onCommand(null);
-  }, [openPalette, toggleSide, toggleMode, navigate, tasksMode]);
+  }, [openPalette, toggleSide, toggleMode, navigate, tasksMode, close, closeOthers, step, active]);
   // In the app the native menu owns these shortcuts; the browser preview needs them here.
   const preview = !desktopInfo;
   useKey("mod+b", useCallback((e: KeyboardEvent) => (e.preventDefault(), toggleSide()), [toggleSide]), preview);
@@ -154,61 +192,94 @@ export function DesktopChrome({
   // The native title bar follows the page's theme.
   useEffect(() => native("theme", { mode }), [mode]);
 
-  const sideW_ = sideOpen ? sideW : 0;
+  // Keep the active tab in view; a vertical wheel scrolls the strip sideways.
+  const strip = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const show = () => strip.current?.querySelector('[data-active="true"]')?.scrollIntoView({ block: "nearest", inline: "nearest", behavior: still ? "auto" : "smooth" });
+    show();
+    // A new tab is still growing to its width; look again once it has.
+    const later = setTimeout(show, 220);
+    return () => clearTimeout(later);
+  }, [active, tabs.length]);
+
+  // A short fade when the editor shows another tab (opacity only: transforms would unpin sticky headers).
+  const editor = useRef<HTMLElement>(null);
+  const shown = useRef(active);
+  useEffect(() => {
+    if (shown.current === active) return;
+    shown.current = active;
+    if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    editor.current?.animate([{ opacity: 0.25 }, { opacity: 1 }], { duration: 160, easing: "cubic-bezier(0.16, 1, 0.3, 1)" });
+  }, [active]);
+
   const folder = config?.folder ?? "";
   const folderName = folder.split("/").filter(Boolean).pop() ?? folder;
 
   return (
-    <div className="dk" style={{ "--dk-side-w": `${sideW_}px` } as React.CSSProperties}>
+    <div className="dk" data-side={sideOpen ? "open" : "closed"} data-resizing={resizing} style={{ "--dk-side-w": `${sideW}px` } as React.CSSProperties}>
       <nav className="dk-activity" aria-label="Views">
-        <ActivityButton label={`Explorer (${kbd("B")})`} active={sideOpen} onClick={toggleSide}>
+        <ActivityButton label={`Explorer (${kbd("B")})`} active={sideOpen} kind="view" onClick={toggleSide}>
           <Icon.Files size={22} />
         </ActivityButton>
         {!tasksMode && (
           <>
-            <ActivityButton label="Compare jobs" active={loc.pathname === "/compare"} onClick={() => navigate("/compare")}>
+            <ActivityButton label="Compare jobs" active={loc.pathname === "/compare"} kind="page" onClick={() => navigate("/compare")}>
               <Icon.Columns size={22} />
             </ActivityButton>
-            <ActivityButton label={`New run (${kbd("N")})`} active={loc.pathname === "/run"} onClick={() => navigate("/run")}>
+            <ActivityButton label={`New run (${kbd("N")})`} active={loc.pathname === "/run"} kind="page" onClick={() => navigate("/run")}>
               <Icon.Play size={22} />
             </ActivityButton>
           </>
         )}
-        <ActivityButton label={`Command palette (${kbd("K")})`} onClick={openPalette}>
+        <ActivityButton label={`Command palette (${kbd("K")})`} kind="page" onClick={openPalette}>
           <Icon.Search size={22} />
         </ActivityButton>
         <div className="dk-activity__spacer" />
-        <ActivityButton label={mode === "dark" ? "Light theme" : "Dark theme"} onClick={toggleMode}>
+        <ActivityButton label={mode === "dark" ? "Light theme" : "Dark theme"} kind="page" onClick={toggleMode}>
           {mode === "dark" ? <Icon.Sun size={20} /> : <Icon.Moon size={20} />}
         </ActivityButton>
       </nav>
 
-      {sideOpen && (
-        <aside className="dk-side" aria-label="Explorer">
-          <div className="dk-side__title">
-            <span>Explorer</span>
-            <span className="dk-side__actions">
-              <button className="dk-icon" title="Open folder…" aria-label="Open folder" onClick={() => native("open-folder")}>
-                <Icon.Folder size={14} />
-              </button>
-              <button className="dk-icon" title="Refresh" aria-label="Refresh" onClick={jobs.reload}>
-                <Icon.Refresh size={14} />
-              </button>
-            </span>
-          </div>
-          <div className="dk-side__section" title={folder}>
-            <Icon.ChevronDown size={12} />
-            <span className="trunc">{folderName || "No folder"}</span>
-            <span className="dk-side__mode">{tasksMode ? "tasks" : "jobs"}</span>
-          </div>
-          {tasksMode ? <TaskTree /> : <JobTree jobs={jobs.data?.items} loading={jobs.loading && !jobs.data} error={jobs.error} />}
-          <Resizer width={sideW} onWidth={setSideW} />
-        </aside>
-      )}
+      <aside className="dk-side" aria-label="Explorer" inert={!sideOpen}>
+        <div className="dk-side__title">
+          <span>Explorer</span>
+          <span className="dk-side__actions">
+            <button className="dk-icon" title="Open folder…" aria-label="Open folder" onClick={() => native("open-folder")}>
+              <Icon.Folder size={14} />
+            </button>
+            {!tasksMode && (
+              <>
+                <button className="dk-icon" title="Refresh" aria-label="Refresh" onClick={jobs.reload}>
+                  <Icon.Refresh size={14} />
+                </button>
+                <button className="dk-icon" title="Collapse all" aria-label="Collapse all" onClick={() => setCollapseAll((n) => n + 1)}>
+                  <Icon.CollapseAll size={14} />
+                </button>
+              </>
+            )}
+          </span>
+        </div>
+        <div className="dk-side__section" title={folder}>
+          <Icon.ChevronDown size={12} />
+          <span className="trunc">{folderName || "No folder"}</span>
+          <span className="dk-side__mode">{tasksMode ? "tasks" : "jobs"}</span>
+        </div>
+        {tasksMode ? <TaskTree /> : <JobTree jobs={jobs.data?.items} loading={jobs.loading && !jobs.data} error={jobs.error} collapseAll={collapseAll} />}
+        <Resizer width={sideW} onWidth={setSideW} onDrag={setResizing} />
+      </aside>
 
       <div className="dk-main">
         <div className="dk-head">
-          <div className="dk-tabs" role="tablist" aria-label="Open editors">
+          <div
+            className="dk-tabs"
+            role="tablist"
+            aria-label="Open editors"
+            ref={strip}
+            onWheel={(e) => {
+              if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) e.currentTarget.scrollLeft += e.deltaY;
+            }}
+          >
             {tabs.map((t) => {
               const d = describe(t.key);
               const isActive = t.key === active;
@@ -228,6 +299,7 @@ export function DesktopChrome({
                   <button
                     className="dk-tab__close"
                     aria-label={`Close ${d.label}`}
+                    title={isActive ? `Close (${kbd("W")})` : "Close"}
                     onClick={(e) => {
                       e.stopPropagation();
                       close(t.key);
@@ -258,8 +330,9 @@ export function DesktopChrome({
               </span>
             ))}
           </div>
+          <div className="dk-progress" data-busy={busy} aria-hidden="true" />
         </div>
-        <main id="main" className="dk-editor">
+        <main id="main" className="dk-editor" ref={editor}>
           {children}
         </main>
       </div>
@@ -298,29 +371,41 @@ export function DesktopChrome({
   );
 }
 
-function ActivityButton({ label, active, onClick, children }: { label: string; active?: boolean; onClick: () => void; children: ReactNode }) {
+function ActivityButton({ label, active, kind, onClick, children }: { label: string; active?: boolean; kind: "view" | "page"; onClick: () => void; children: ReactNode }) {
   return (
-    <button className="dk-activity__btn" data-active={!!active} aria-label={label} title={label} onClick={onClick}>
+    <button className="dk-activity__btn" data-active={!!active} data-kind={kind} aria-label={label} aria-pressed={kind === "view" ? !!active : undefined} title={label} onClick={onClick}>
       {children}
     </button>
   );
 }
 
-function Resizer({ width, onWidth }: { width: number; onWidth: (w: number) => void }) {
+function Resizer({ width, onWidth, onDrag }: { width: number; onWidth: (w: number) => void; onDrag: (on: boolean) => void }) {
   const start = useRef<{ x: number; w: number } | null>(null);
+  const end = () => {
+    start.current = null;
+    onDrag(false);
+  };
   return (
     <div
       className="dk-resizer"
       role="separator"
       aria-orientation="vertical"
       aria-label="Resize side bar"
+      aria-valuenow={width}
+      tabIndex={0}
       onPointerDown={(e) => {
         start.current = { x: e.clientX, w: width };
-        (e.target as HTMLElement).setPointerCapture(e.pointerId);
+        e.currentTarget.setPointerCapture(e.pointerId);
+        onDrag(true);
       }}
       onPointerMove={(e) => start.current && onWidth(start.current.w + e.clientX - start.current.x)}
-      onPointerUp={() => (start.current = null)}
-      onDoubleClick={() => onWidth(272)}
+      onPointerUp={end}
+      onPointerCancel={end}
+      onDoubleClick={() => onWidth(SIDE_DEFAULT)}
+      onKeyDown={(e) => {
+        if (e.key === "ArrowLeft") onWidth(width - 16);
+        else if (e.key === "ArrowRight") onWidth(width + 16);
+      }}
     />
   );
 }
@@ -339,7 +424,23 @@ function Filter({ value, onChange, placeholder }: { value: string; onChange: (v:
   );
 }
 
-function JobTree({ jobs, loading, error }: { jobs: JobSummary[] | undefined; loading: boolean; error: Error | undefined }) {
+/** Arrow-key movement between a tree's rows (`.dk-row`); `sides` handles Left/Right for expandable rows. */
+function treeKeys(e: ReactKeyboardEvent<HTMLElement>, sides?: (row: HTMLElement, key: "ArrowLeft" | "ArrowRight", focus: (el: HTMLElement | undefined) => void) => void) {
+  const rows = [...e.currentTarget.querySelectorAll<HTMLElement>(".dk-row")];
+  const row = (e.target as HTMLElement).closest<HTMLElement>(".dk-row");
+  if (!row) return;
+  const i = rows.indexOf(row);
+  const focus = (el: HTMLElement | undefined) => el?.focus();
+  if (e.key === "ArrowDown") focus(rows[i + 1]);
+  else if (e.key === "ArrowUp") focus(rows[i - 1]);
+  else if (e.key === "Home") focus(rows[0]);
+  else if (e.key === "End") focus(rows[rows.length - 1]);
+  else if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && sides) sides(row, e.key, focus);
+  else return;
+  e.preventDefault();
+}
+
+function JobTree({ jobs, loading, error, collapseAll }: { jobs: JobSummary[] | undefined; loading: boolean; error: Error | undefined; collapseAll: number }) {
   const [q, setQ] = useState("");
   const [open, setOpen] = useState<Record<string, boolean>>({});
   const loc = useLocation();
@@ -352,11 +453,31 @@ function JobTree({ jobs, loading, error }: { jobs: JobSummary[] | undefined; loa
   useEffect(() => {
     if (current) setOpen((o) => (o[current] === undefined ? { ...o, [current]: true } : o));
   }, [current]);
+  useEffect(() => {
+    if (collapseAll) setOpen((o) => Object.fromEntries(Object.keys(o).map((k) => [k, false])));
+  }, [collapseAll]);
+  // One row is a tab stop (the page's own, else the first); arrow keys reach the rest.
+  const onTrial = loc.pathname.includes("/trials/") && !!open[current];
+  const stop = !onTrial && shown.some((j) => j.name === current) ? current : onTrial ? "" : shown[0]?.name;
 
   return (
     <>
       <Filter value={q} onChange={setQ} placeholder="Filter jobs, agents, models" />
-      <div className="dk-tree" role="tree" aria-label="Jobs">
+      <div
+        className="dk-tree"
+        role="tree"
+        aria-label="Jobs"
+        onKeyDown={(e) =>
+          treeKeys(e, (row, key, focus) => {
+            const job = row.dataset.job;
+            const tree = row.closest(".dk-tree")!;
+            if (key === "ArrowRight" && job && !open[job]) setOpen((o) => ({ ...o, [job]: true }));
+            else if (key === "ArrowLeft" && job && open[job]) setOpen((o) => ({ ...o, [job]: false }));
+            // Left on a trial goes to its job.
+            else if (key === "ArrowLeft" && row.dataset.parent) focus(tree.querySelector<HTMLElement>(`.dk-row[data-job="${CSS.escape(row.dataset.parent)}"]`) ?? undefined);
+          })
+        }
+      >
         {loading && <div className="dk-tree__note">Loading jobs…</div>}
         {error && <div className="dk-tree__note dk-tree__note--bad">{error.message}</div>}
         {jobs && !shown.length && (
@@ -370,27 +491,39 @@ function JobTree({ jobs, loading, error }: { jobs: JobSummary[] | undefined; loa
           </div>
         )}
         {shown.map((j) => {
-          const to = `/jobs/${encodeURIComponent(j.name)}`;
           const isOpen = !!open[j.name];
-          const done = j.n_completed_trials;
           return (
             <div key={j.name} role="treeitem" aria-expanded={isOpen}>
-              <NavLink to={to} end className="dk-row" title={[j.name, j.agents.join(", "), j.models.join(", ")].filter(Boolean).join("\n")}>
+              <NavLink to={jobPath(j.name)} end className="dk-row" data-job={j.name} tabIndex={j.name === stop ? 0 : -1} title={[j.name, j.agents.join(", "), j.models.join(", ")].filter(Boolean).join("\n")}>
                 <button
                   className="dk-twisty"
+                  data-open={isOpen}
+                  tabIndex={-1}
                   aria-label={isOpen ? "Collapse" : "Expand"}
                   onClick={(e) => {
                     e.preventDefault();
                     setOpen((o) => ({ ...o, [j.name]: !isOpen }));
                   }}
                 >
-                  {isOpen ? <Icon.ChevronDown size={12} /> : <Icon.Chevron size={12} />}
+                  <Icon.Chevron size={12} />
                 </button>
                 <JobState j={j} />
                 <span className="trunc dk-row__label">{j.name}</span>
                 <span className="dk-row__meta mono">
-                  {done}/{j.n_total_trials}
+                  {j.n_completed_trials}/{j.n_total_trials}
                 </span>
+                <button
+                  className="dk-row__act"
+                  tabIndex={-1}
+                  title={`Reveal in ${isMac ? "Finder" : "file manager"}`}
+                  aria-label={`Reveal ${j.name} in ${isMac ? "Finder" : "file manager"}`}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    native("reveal", { path: j.name });
+                  }}
+                >
+                  <Icon.External size={12} />
+                </button>
               </NavLink>
               {isOpen && <TrialRows job={j.name} live={running(j)} />}
             </div>
@@ -408,19 +541,22 @@ function JobState({ j }: { j: JobSummary }) {
 }
 
 function TrialRows({ job, live }: { job: string; live: boolean }) {
+  const loc = useLocation();
   const trials = useApi<Page<TrialSummary>>(`/api/jobs/${encodeURIComponent(job)}/trials?page_size=100`, { poll: live ? 4000 : undefined });
   if (!trials.data) return <div className="dk-tree__note dk-tree__note--nested">{trials.error ? trials.error.message : "Loading…"}</div>;
   if (!trials.data.items.length) return <div className="dk-tree__note dk-tree__note--nested">No trials yet.</div>;
   return (
-    <div role="group">
+    <div role="group" className="dk-group">
       {trials.data.items.map((t) => {
         const state = !t.finished_at ? "run" : t.error_type ? "bad" : t.reward == null ? "none" : t.reward > 0 ? "ok" : "fail";
         return (
           <NavLink
             key={t.name}
-            to={`/jobs/${encodeURIComponent(job)}/trials/${encodeURIComponent(t.name)}`}
+            to={`${jobPath(job)}/trials/${encodeURIComponent(t.name)}`}
             className="dk-row dk-row--nested"
             role="treeitem"
+            data-parent={job}
+            tabIndex={decodeURIComponent(loc.pathname) === `/jobs/${job}/trials/${t.name}` ? 0 : -1}
             title={[t.name, t.model_name, t.error_type].filter(Boolean).join("\n")}
           >
             {state === "run" ? <span className="dk-spin" /> : <span className={`dk-dot dk-dot--${state}`} />}
@@ -440,10 +576,11 @@ function TaskTree() {
   return (
     <>
       <Filter value={q} onChange={setQ} placeholder="Filter tasks" />
-      <div className="dk-tree" role="tree" aria-label="Tasks">
+      <div className="dk-tree" role="tree" aria-label="Tasks" onKeyDown={(e) => treeKeys(e)}>
         {!tasks.data && <div className="dk-tree__note">{tasks.error ? tasks.error.message : "Loading tasks…"}</div>}
-        {shown.map((t) => (
-          <NavLink key={t.name} to={`/task-definitions/${encodeURIComponent(t.name)}`} className="dk-row" role="treeitem">
+        {tasks.data && !shown.length && <div className="dk-tree__note">{q ? "Nothing matches." : "No tasks in this folder."}</div>}
+        {shown.map((t, i) => (
+          <NavLink key={t.name} to={`/task-definitions/${encodeURIComponent(t.name)}`} className="dk-row" role="treeitem" tabIndex={i === 0 ? 0 : -1}>
             <Icon.File size={13} />
             <span className="trunc dk-row__label">{t.name}</span>
           </NavLink>

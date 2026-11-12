@@ -99,6 +99,11 @@ export const Folder = (p: P) => (
     <path d="M2 4.5V13h12V5.5H7.5L6 3.5H2z" strokeLinejoin="round" />
   </I>
 );
+export const CollapseAll = (p: P) => (
+  <I {...p}>
+    <path d="M5.5 2.5h8v8M2.5 5.5h8v8h-8z M4.75 9.5h3.5" strokeLinejoin="round" />
+  </I>
+);
 export const Files = (p: P) => (
   <I {...p}>
     <path d="M5.5 4.5V1.75h5l2.75 2.75v7.75H10.5 M10.25 1.75V4.75h3" strokeLinejoin="round" />
