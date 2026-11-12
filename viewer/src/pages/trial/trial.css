@@ -54,8 +54,20 @@
 .trial-summary__cell + .trial-summary__cell {
   border-left: 1px solid var(--color-rule);
 }
+/* The value keeps its width; a long metric name gives way and truncates (its title has it in full). */
 .trial-summary__kv {
-  grid-template-columns: max-content minmax(0, 1fr);
+  grid-template-columns: minmax(0, max-content) max-content;
+  column-gap: var(--space-md);
+}
+/* Each pair sits in a display:contents wrapper, so .kv's own dd reset does not reach these. */
+.trial-summary__kv > div > dd {
+  margin: 0;
+}
+.trial-summary__kv > div > dt {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .trial-summary__exc {
   grid-column: 1 / -1;

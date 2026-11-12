@@ -42,7 +42,9 @@ export function Summary({ r, step, running }: { r: TrialResult; step?: StepResul
           <dl className="kv trial-summary__kv">
             {rewards.map(([k, v]) => (
               <div key={k} style={{ display: "contents" }}>
-                <dt className="mono">{k}</dt>
+                <dt className="mono" title={k}>
+                  {k}
+                </dt>
                 <dd>{typeof v === "number" ? <Reward value={v} /> : <span className="mono">{String(v)}</span>}</dd>
               </div>
             ))}

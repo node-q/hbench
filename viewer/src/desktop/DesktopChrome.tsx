@@ -206,11 +206,34 @@ export function DesktopChrome({
   // A short fade when the editor shows another tab (opacity only: transforms would unpin sticky headers).
   const editor = useRef<HTMLElement>(null);
   const shown = useRef(active);
+  // Each tab keeps its scroll position (the editor area is the scroller).
+  const scrolls = useRef(new Map<string, number>());
   useEffect(() => {
+    const el = editor.current;
+    if (!el) return;
+    // Space, Page Down and the arrows scroll the editor unless something else has focus.
+    if (document.activeElement === document.body) el.focus({ preventScroll: true });
     if (shown.current === active) return;
     shown.current = active;
-    if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-    editor.current?.animate([{ opacity: 0.25 }, { opacity: 1 }], { duration: 160, easing: "cubic-bezier(0.16, 1, 0.3, 1)" });
+    const top = scrolls.current.get(active) ?? 0;
+    el.scrollTop = top;
+    if (!matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      el.animate([{ opacity: 0.25 }, { opacity: 1 }], { duration: 160, easing: "cubic-bezier(0.16, 1, 0.3, 1)" });
+    }
+    // A page that is still loading is not tall enough yet: keep trying for a moment, unless the user scrolls.
+    let tries = 0;
+    const retry = setInterval(() => {
+      if (el.scrollTop === top || ++tries > 15) return stop();
+      el.scrollTop = top;
+    }, 100);
+    const stop = () => {
+      clearInterval(retry);
+      el.removeEventListener("wheel", stop);
+      el.removeEventListener("keydown", stop);
+    };
+    el.addEventListener("wheel", stop, { passive: true });
+    el.addEventListener("keydown", stop);
+    return stop;
   }, [active]);
 
   const folder = config?.folder ?? "";
@@ -332,7 +355,7 @@ export function DesktopChrome({
           </div>
           <div className="dk-progress" data-busy={busy} aria-hidden="true" />
         </div>
-        <main id="main" className="dk-editor" ref={editor}>
+        <main id="main" className="dk-editor" ref={editor} tabIndex={-1} onScroll={(e) => scrolls.current.set(active, e.currentTarget.scrollTop)}>
           {children}
         </main>
       </div>
@@ -557,10 +580,10 @@ function TrialRows({ job, live }: { job: string; live: boolean }) {
             role="treeitem"
             data-parent={job}
             tabIndex={decodeURIComponent(loc.pathname) === `/jobs/${job}/trials/${t.name}` ? 0 : -1}
-            title={[t.name, t.model_name, t.error_type].filter(Boolean).join("\n")}
+            title={[t.task_name, t.name, t.model_name, t.error_type].filter(Boolean).join("\n")}
           >
             {state === "run" ? <span className="dk-spin" /> : <span className={`dk-dot dk-dot--${state}`} />}
-            <span className="trunc dk-row__label">{t.task_name}</span>
+            <span className="trunc dk-row__label">{t.task_name.split("/").pop()}</span>
             <span className="dk-row__meta mono">{t.error_type ? "error" : t.reward == null ? "–" : t.reward.toFixed(2)}</span>
           </NavLink>
         );

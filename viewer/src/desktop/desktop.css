@@ -14,10 +14,11 @@
   --dk-tabs-h: 35px;
   --dk-crumbs-h: 24px;
   --dk-status-h: 24px;
-  /* Pages pin sticky headers below --bar-h: here, the tab strip plus breadcrumbs. */
-  --bar-h: calc(var(--dk-tabs-h) + var(--dk-crumbs-h));
-  /* The status bar covers the window's bottom edge: pages size and pin against what is left. */
-  --viewport-h: calc(100vh - var(--dk-status-h));
+  /* The editor area is the scroller (the window never scrolls), so nothing sits above a page's sticky headers
+   * and a page can be as tall as the editor. */
+  --bar-h: 0px;
+  --viewport-h: calc(100vh - var(--dk-status-h) - var(--dk-tabs-h) - var(--dk-crumbs-h));
+  /* The status bar covers the window's bottom edge (toasts clear it). */
   --chrome-bottom: var(--dk-status-h);
   --dk-primary: #6a35c9;
   --dk-slide: 200ms var(--ease-out);
@@ -91,6 +92,7 @@
 }
 
 [data-shell="desktop"] body {
+  overflow: hidden;
   font-size: var(--text-sm);
   /* Desktop app, not a document: no rubber-band overscroll, default cursor on chrome. */
   overscroll-behavior: none;
@@ -485,17 +487,30 @@
 
 /* ── Editor: tabs, breadcrumbs, content ───────────────────────────────────── */
 .dk-main {
-  margin-left: calc(var(--dk-activity-w) + var(--dk-side-cur, 0px));
-  padding-bottom: var(--dk-status-h);
-  min-height: 100vh;
+  position: fixed;
+  inset: 0 0 var(--dk-status-h) calc(var(--dk-activity-w) + var(--dk-side-cur, 0px));
+  display: flex;
+  flex-direction: column;
   min-width: 0;
-  transition: margin-left var(--dk-slide);
+  transition: left var(--dk-slide);
 }
 .dk-head {
-  position: sticky;
-  top: 0;
+  position: relative;
+  flex: none;
   z-index: var(--z-sticky);
   background: var(--color-paper);
+}
+/* The one scroller: its scrollbar runs from under the breadcrumbs to the status bar, as in an editor. */
+.dk-editor {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  /* Sticky footers inside it pin to its own bottom edge. */
+  --chrome-bottom: 0px;
+}
+.dk-editor:focus {
+  outline: none;
 }
 .dk-tabs {
   display: flex;
