@@ -78,7 +78,8 @@ with `npm run icons`.
 
 Tagging an hbench release (`vX.Y.Z`) also builds the app. `.github/workflows/release.yml` builds `Actuaria.app`
 for Apple Silicon and Intel around that release's own `hbench` binary, gives it the release's version, and
-attaches `Actuaria-vX.Y.Z-<target>.dmg` to the GitHub release, listed in `SHA256SUMS` and attested.
+attaches `Actuaria-vX.Y.Z-<target>.dmg` to the GitHub release, listed in `SHA256SUMS` and attested. It does the
+same for Linux, as a `.deb` and an `.rpm` per architecture.
 
 Signing happens in a separate job that runs only `scripts/package-macos.sh` (Apple's tools, no npm or cargo
 code). It reads these secrets of the `release` environment:
@@ -99,5 +100,10 @@ To package a local build the same way: `scripts/package-macos.sh <Actuaria.app> 
 
 ## Platforms
 
-macOS is built and tested. hbench's own releases cover macOS and Linux, so a Linux build should work the same
-way (untested). Windows needs a Windows build of hbench first.
+- **macOS** (13 or later): `.dmg` for Apple Silicon and Intel, signed and notarized by the release.
+- **Linux**: `.deb` and `.rpm` for x86_64 and aarch64, built on Ubuntu 22.04, so they need its glibc (2.35) and
+  WebKitGTK 4.1 or newer: Ubuntu 22.04+, Debian 12+, Fedora 38+. They are not signed; verify them with
+  `SHA256SUMS` or `gh attestation verify`. The package installs `Actuaria` and the bundled `hbench` in
+  `/usr/bin`. To build locally: `sh scripts/linux-deps.sh`, then `npm run sidecar && npx tauri build --bundles deb,rpm`.
+- **Windows**: not yet. hbench itself does not compile on Windows (it uses Unix file modes, symlinks and
+  signals), and the app needs an `hbench.exe` to bundle.
