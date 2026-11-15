@@ -1,6 +1,9 @@
-name: Release
+name: Release build
 
-# Bump `version` in Cargo.toml, commit, then: git tag vX.Y.Z && git push origin vX.Y.Z
+# How to release: Actions → Release → Run workflow → pick bump → approve.
+# That workflow (release-start.yml) bumps the version in a "Release x.y.z" pull request, tags its merge commit
+# and starts this one on the tag. By hand still works: bump with scripts/set-version.sh in a pull request,
+# merge it, then git tag vX.Y.Z on the merge commit and git push origin vX.Y.Z. See docs/RELEASING.md.
 #
 # Each build job builds one binary on a GitHub-hosted runner, with no secrets and a read-only
 # token, and attests its archive's build provenance. The ci job waits for ci.yml's run on the
@@ -24,6 +27,9 @@ name: Release
 on:
   push:
     tags: ["v[0-9]+.[0-9]+.[0-9]+*"]
+  # release-start.yml starts this on the tag it creates, since a tag pushed with GITHUB_TOKEN starts no
+  # workflow. Run on anything but a v* tag, the ci job fails and nothing is signed or published.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -37,18 +43,32 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       actions: read
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Wait for ci.yml on the tagged commit
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Check this is a v* tag on master
         run: |
+          [ "$GITHUB_REF_TYPE" = tag ] && [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+ ]] ||
+            { echo "::error::release from a v* tag, not $GITHUB_REF"; exit 1; }
+          status=$(gh api "repos/$GITHUB_REPOSITORY/compare/master...$GITHUB_SHA" --jq .status)
+          case "$status" in
+            identical|behind) ;;
+            *) echo "::error::$GITHUB_REF_NAME ($GITHUB_SHA) is not on master ($status): tag a commit on master"; exit 1 ;;
+          esac
+      - name: Wait for ci.yml on the tagged commit
+        run: |
+          # A push to master runs ci.yml; so does release-start.yml, on the tag, when the commit was merged under
+          # GITHUB_TOKEN (whose push starts no workflow). Either run counts; a pull request's run does not.
           while :; do
-            run=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&event=push&per_page=1" \
-              --jq '.workflow_runs[0] | select(.) | "\(.status) \(.conclusion) \(.html_url)"') || run="unreadable"
+            run=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&per_page=20" \
+              --jq '[.workflow_runs[] | select(.event == "push" or .event == "workflow_dispatch")]
+                    | (map(select(.conclusion == "success")) + map(select(.status != "completed")) + .)[0] | select(.)
+                    | "\(.status) \(.conclusion) \(.html_url)"') || run="unreadable"
             case "$run" in
               "completed success "*) echo "CI passed: ${run##* }"; exit 0 ;;
               completed*) echo "::error::CI did not pass on $GITHUB_SHA: $run"; exit 1 ;;
-              "") [ "$SECONDS" -lt 120 ] || { echo "::error::ci.yml never ran on a push of $GITHUB_SHA: tag a commit on master"; exit 1; } ;;
+              "") [ "$SECONDS" -lt 300 ] || { echo "::error::ci.yml never ran on $GITHUB_SHA: tag a commit on master"; exit 1; } ;;
             esac
             [ "$SECONDS" -lt 2700 ] || { echo "::error::CI on $GITHUB_SHA still not finished after 45 minutes: $run"; exit 1; }
             sleep 30
@@ -472,3 +492,10 @@ jobs:
           [ "$PRERELEASE" = true ] && flags+=(--prerelease)
           shopt -s nullglob
           gh release create "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" "${flags[@]}" dist/*.tar.gz dist/*.zip dist/Actuaria-* dist/install.sh dist/SHA256SUMS
+      - name: Summarize the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --json url,assets --jq \
+            '"## hbench \(.url | split("/") | last)\n\n**Release:** \(.url)\n\n| File | Size |\n|---|---:|",
+             (.assets[] | "| [\(.name)](\(.url)) | \(.size / 1048576 * 10 | round / 10) MB |")' >> "$GITHUB_STEP_SUMMARY"

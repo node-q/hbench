@@ -143,3 +143,4 @@ hbench is built and maintained by [node-q](https://nodeq.tech). See the
 - Bugs and feature requests: [GitHub issues](https://github.com/node-q/hbench/issues)
 - The full reference: [docs/REFERENCE.md](docs/REFERENCE.md)
 - Adding an agent: [docs/ADDING_AN_AGENT.md](docs/ADDING_AN_AGENT.md)
+- Making a release (Actions → Release → Run workflow → pick bump → approve): [docs/RELEASING.md](docs/RELEASING.md)

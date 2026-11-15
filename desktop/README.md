@@ -76,6 +76,10 @@ with `npm run icons`.
 
 ## Releases
 
+The app's version is hbench's. `scripts/set-version.sh` (run by the Release workflow, see
+[docs/RELEASING.md](../docs/RELEASING.md)) writes it into `src-tauri/Cargo.toml`, `src-tauri/Cargo.lock` and
+`src-tauri/tauri.conf.json` along with hbench's own files, and each release build sets it again from the tag.
+
 Tagging an hbench release (`vX.Y.Z`) also builds the app. `.github/workflows/release.yml` builds `Actuaria.app`
 for Apple Silicon and Intel around that release's own `hbench` binary, gives it the release's version, and
 attaches `Actuaria-vX.Y.Z-<target>.dmg` to the GitHub release, listed in `SHA256SUMS` and attested. It does the
