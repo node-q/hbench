@@ -11,6 +11,7 @@
 #   APPLE_API_KEY_ID             its key ID
 #   APPLE_API_ISSUER             its issuer ID
 # Without a certificate the app is ad-hoc signed: it runs, but Gatekeeper blocks a downloaded copy.
+# PACKAGE_UNSIGNED=1 says that is intended (a CI or local test build), and silences the warnings.
 set -euo pipefail
 app="${1:?usage: package-macos.sh <Actuaria.app> <out.dmg>}"
 dmg="${2:?usage: package-macos.sh <Actuaria.app> <out.dmg>}"
@@ -22,7 +23,9 @@ cleanup() {
   rm -rf "$work"
 }
 trap cleanup EXIT
-warn() { echo "${GITHUB_ACTIONS:+::warning::}$*" >&2; }
+warn() {
+  if [ -n "${PACKAGE_UNSIGNED:-}" ]; then echo "note: $*" >&2; else echo "${GITHUB_ACTIONS:+::warning::}$*" >&2; fi
+}
 
 identity=""
 if [ -n "${APPLE_CERTIFICATE:-}" ]; then
