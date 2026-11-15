@@ -1,24 +1,39 @@
-// /run — build a JobConfig, launch `hbench run`, follow the launch until the job page has data.
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link, useNavigate } from "react-router";
+// /run — pick a domain, a dataset from its catalog, then the agent; launch `hbench run` and follow the launch
+// until the job page has data. The step is in the URL: ?domain=<id> lists a domain's datasets, ?step= names
+// another, and a bare /run goes to the agent step once the draft has something to run.
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { Link, useNavigate, useSearchParams } from "react-router";
 import "./run.css";
 import * as Icon from "../../ui/icons";
 import { CodeView } from "../../ui/content";
-import { Empty, ErrorBox, Loading, PageHead, Seg, Spinner } from "../../ui/kit";
+import { Empty, ErrorBox, Loading, PageHead, Spinner } from "../../ui/kit";
 import { useToast } from "../../ui/overlay";
 import { ApiError, enc, send, useApi } from "../../lib/api";
 import { ago } from "../../lib/fmt";
 import { useDebounced, useStored } from "../../lib/state";
-import type { KwargSpec, Obj, RunOptions, RunStatus } from "../../lib/types";
+import type { Catalog, CatalogDataset, KwargSpec, Obj, RunOptions, RunStatus } from "../../lib/types";
 import { useCommands, useTitle, type Command } from "../../shell";
 import { Area, Check, KvRows, KwargField, Num, Section, Select, ShowAllErrors, Text } from "./fields";
-import { draftErrors, emptyDraft, fromConfig, jsonError, newAgent, numError, sourceError, sourceLabel, toConfig, type AgentDraft, type Draft, type Source } from "./form";
+import { CUSTOM, DatasetCatalog, DomainGrid, domainHref, useCatalog } from "./catalog";
+import { draftErrors, emptyDraft, fromConfig, hasSource, jsonError, newAgent, numError, sourceError, sourceLabel, toConfig, versionError, type AgentDraft, type Draft, type Source } from "./form";
 
 type History = { job_name: string; config: Obj }[];
+type Step = "domain" | "dataset" | "configure";
+const CONFIGURE = "/run?step=configure";
+
+/** The catalog's entry for the dataset the draft runs, unless the draft names it by hand or in another registry. */
+function catalogEntry(d: Draft, catalog: Catalog | undefined): CatalogDataset | undefined {
+  const ds = d.dataset;
+  if (d.source !== "dataset" || ds.manual || ds.registry_url.trim() || ds.registry_path.trim()) return undefined;
+  return catalog?.datasets.find((x) => x.name === ds.name.trim());
+}
 
 export default function Run() {
   useTitle("New run");
+  const navigate = useNavigate();
+  const [params] = useSearchParams();
   const options = useApi<RunOptions>("/api/run/options");
+  const catalog = useCatalog();
   const history = useApi<History>("/api/run/history?limit=20");
   const models = useApi<{ models: string[] }>("/api/run/models");
   const [draft, setDraft] = useStored<Draft>("run:draft", emptyDraft());
@@ -28,7 +43,7 @@ export default function Run() {
   const [busy, setBusy] = useState(false);
   const toast = useToast();
 
-  const specs = options.data?.agent_kwargs ?? {};
+  const specs = useMemo(() => options.data?.agent_kwargs ?? {}, [options.data]);
   const up = useCallback(
     (fn: (d: Draft) => void) => {
       const next = structuredClone(draft);
@@ -42,10 +57,46 @@ export default function Run() {
       setDraft(fromConfig(cfg, specs));
       setSubmitted(false);
       setSubmitError(null);
+      navigate(CONFIGURE);
       toast({ text: `Loaded the settings of ${name}.` });
     },
-    [setDraft, specs, toast],
+    [setDraft, specs, toast, navigate],
   );
+
+  const entry = catalogEntry(draft, catalog.data);
+  // A picked dataset always runs a version the registry has.
+  useEffect(() => {
+    if (entry && !draft.dataset.version.trim()) up((d) => void (d.dataset.version = entry.version));
+  }, [entry, draft.dataset.version, up]);
+
+  const domainParam = params.get("domain");
+  const stepParam = params.get("step");
+  const step: Step = domainParam ? "dataset" : stepParam === "configure" ? "configure" : stepParam === "domain" ? "domain" : hasSource(draft) ? "configure" : "domain";
+  // Where the draft's source sits in the catalog, for the way back from the agent step.
+  const draftDomain = draft.source !== "dataset" || draft.dataset.manual || (hasSource(draft) && catalog.data && !entry) ? CUSTOM : entry?.domain;
+  const domainId = domainParam ?? draftDomain;
+
+  const pick = (d: CatalogDataset) => {
+    up((x) => {
+      // Task filters and download settings belong to the dataset they were set for.
+      if (catalogEntry(x, catalog.data)?.name !== d.name) x.dataset = { ...emptyDraft().dataset, name: d.name, version: d.version };
+      x.source = "dataset";
+    });
+    setSubmitted(false);
+    navigate(CONFIGURE);
+  };
+  const pickCustom = (source: Source) => {
+    up((x) => {
+      if (source === "dataset") {
+        // A dataset already named by hand stays; one picked from the catalog makes way for a name.
+        if (x.source !== "dataset" || catalogEntry(x, catalog.data)) x.dataset = emptyDraft().dataset;
+        x.dataset.manual = true;
+      }
+      x.source = source;
+    });
+    setSubmitted(false);
+    navigate(CONFIGURE);
+  };
 
   const commands: Command[] = useMemo(() => {
     const last = history.data?.[0];
@@ -78,22 +129,60 @@ export default function Run() {
   const jobNameServerError = /already exists/.test(serverMsg) ? serverMsg : undefined;
   const sourceServerError = /dataset, a task, or a local path/.test(serverMsg) ? serverMsg : undefined;
 
-  if (options.error) return <div className="page"><ErrorBox error={options.error} title="Couldn't load the run options" onRetry={options.reload} /></div>;
-  if (!options.data) return <div className="page"><Loading label="Loading agents and environments…" /></div>;
   const opts = options.data;
-
-  return (
-    <div className="page">
+  const head = (
+    <>
       <PageHead
         crumbs={[{ to: "/", label: "Jobs" }]}
         title="New run"
         meta={
-          <span>
-            Writes to <span className="mono">{opts.jobs_dir}</span>
-          </span>
+          opts && (
+            <span>
+              Writes to <span className="mono">{opts.jobs_dir}</span>
+            </span>
+          )
         }
       />
+      <Steps step={step} domainId={domainId} ready={hasSource(draft)} />
       {launched && <LaunchPanel job={launched} onDismiss={() => setLaunched(null)} />}
+    </>
+  );
+
+  if (step === "domain") {
+    return (
+      <div className="page">
+        {head}
+        <div className="run-pick">
+          <div className="run-pick__intro">
+            <h2>What do you want to benchmark?</h2>
+            <p className="muted">Pick a domain to see its datasets, then choose the agent to run them.</p>
+          </div>
+          <DomainGrid catalog={catalog} />
+        </div>
+      </div>
+    );
+  }
+  if (step === "dataset") {
+    return (
+      <div className="page">
+        {head}
+        <DatasetCatalog
+          catalog={catalog}
+          domainId={domainId ?? CUSTOM}
+          picked={entry?.name}
+          custom={hasSource(draft) && draftDomain === CUSTOM ? draft.source : undefined}
+          onPick={pick}
+          onCustom={pickCustom}
+        />
+      </div>
+    );
+  }
+  if (options.error) return <div className="page">{head}<ErrorBox error={options.error} title="Couldn't load the run options" onRetry={options.reload} /></div>;
+  if (!opts) return <div className="page">{head}<Loading label="Loading agents and environments…" /></div>;
+
+  return (
+    <div className="page">
+      {head}
       {submitError && (
         <div style={{ marginBottom: "var(--space-md)" }}>
           <ErrorBox error={submitError} title="The run didn't start" />
@@ -119,10 +208,10 @@ export default function Run() {
             }}
             noValidate
           >
-            <SourceSection draft={draft} up={up} serverError={sourceServerError} />
+            <SourceSection draft={draft} up={up} entry={entry} changeTo={draftDomain ? domainHref(draftDomain) : "/run?step=domain"} serverError={sourceServerError} />
             <section className="run-block" aria-labelledby="run-agents">
               <div className="run-block__head">
-                <h2 id="run-agents">Agents</h2>
+                <h2 id="run-agents">Agent</h2>
                 <span className="muted run-block__note">Each agent runs every task.</span>
               </div>
               <datalist id="run-models">
@@ -158,12 +247,13 @@ export default function Run() {
                   setDraft(emptyDraft());
                   setSubmitted(false);
                   setSubmitError(null);
+                  navigate("/run?step=domain");
                 }}
               >
-                Reset form
+                Start over
               </button>
               <span className="toolbar__spacer" />
-              {submitted && errors.length > 0 && <span className="run-submit__msg">{errors.length} to fix</span>}
+              {submitted && errors.length > 0 ? <span className="run-submit__msg">{errors.length} to fix</span> : <RunSize draft={draft} entry={entry} />}
               <button type="submit" className="btn btn--primary" disabled={busy} data-state={busy ? "loading" : undefined}>
                 {busy ? <Spinner label="Starting" /> : <Icon.Play size={13} />}
                 {busy ? "Starting…" : "Start run"}
@@ -184,7 +274,7 @@ type Up = (fn: (d: Draft) => void) => void;
 
 // ---------------------------------------------------------------- task source
 
-function SourceSection({ draft, up, serverError }: { draft: Draft; up: Up; serverError?: string }) {
+function SourceSection({ draft, up, entry, changeTo, serverError }: { draft: Draft; up: Up; entry?: CatalogDataset; changeTo: string; serverError?: string }) {
   const ds = draft.dataset;
   const [pickMsg, setPickMsg] = useState<string>();
   const [picking, setPicking] = useState(false);
@@ -201,37 +291,40 @@ function SourceSection({ draft, up, serverError }: { draft: Draft; up: Up; serve
     }
   };
   const err = serverError ?? sourceError(draft);
+  const filters = [ds.task_names.trim() && `only ${ds.task_names.trim()}`, ds.exclude_task_names.trim() && `not ${ds.exclude_task_names.trim()}`, ds.n_tasks.trim() && `first ${ds.n_tasks.trim()}`].filter(Boolean).join(" · ");
+  const download = [ds.registry_url, ds.registry_path, ds.download_dir, ds.overwrite && "re-download"].filter(Boolean).join(" · ");
   return (
     <section className="run-block" aria-labelledby="run-source">
       <div className="run-block__head">
-        <h2 id="run-source">Tasks</h2>
-        <Seg<Source>
-          label="Task source"
-          value={draft.source}
-          onChange={(v) => up((d) => void (d.source = v))}
-          options={[
-            { id: "dataset", label: "Registry dataset" },
-            { id: "path", label: "Local folder" },
-            { id: "git", label: "Git task" },
-          ]}
-        />
+        <h2 id="run-source">{draft.source === "dataset" ? "Dataset" : draft.source === "path" ? "Local folder" : "Git task"}</h2>
+        <Link to={changeTo} className="btn btn--sm">
+          Change
+        </Link>
       </div>
       {draft.source === "dataset" && (
         <>
-          <div className="run-row run-row--name">
-            <Text label="Dataset" required value={ds.name} onChange={(v) => up((d) => void (d.dataset.name = v))} placeholder="terminal-bench" mono error={err} help="Name in the registry." />
-            <Text label="Version" value={ds.version} onChange={(v) => up((d) => void (d.dataset.version = v))} placeholder="2.0" mono help="Blank = latest." />
-          </div>
-          <div className="run-row">
-            <Text label="Include tasks" value={ds.task_names} onChange={(v) => up((d) => void (d.dataset.task_names = v))} placeholder="*api*, test_*" mono help="Comma-separated names or globs." />
-            <Text label="Exclude tasks" value={ds.exclude_task_names} onChange={(v) => up((d) => void (d.dataset.exclude_task_names = v))} placeholder="slow_*" mono help="Applied after include." />
-            <Num label="Max tasks" value={ds.n_tasks} onChange={(v) => up((d) => void (d.dataset.n_tasks = v))} placeholder="all" error={numError(ds.n_tasks, { int: true, min: 1 })} help="Blank = every task." />
-          </div>
-          <Section title="Registry & download" summary={[ds.registry_url, ds.registry_path, ds.download_dir].filter(Boolean).join(" · ") || "none set: a named dataset needs a registry"}>
-            <div className="run-row">
-              <Text label="Registry URL" value={ds.registry_url} onChange={(v) => up((d) => void (d.dataset.registry_url = v))} placeholder="https://…/registry.json" mono help="A registry.json URL. A named dataset needs this or a registry path." />
-              <Text label="Registry path" value={ds.registry_path} onChange={(v) => up((d) => void (d.dataset.registry_path = v))} placeholder="./registry.json" mono help="A local registry.json instead of a URL." />
+          {entry ? (
+            <DatasetSummary entry={entry} version={ds.version} onVersion={(v) => up((d) => void (d.dataset.version = v))} />
+          ) : (
+            <div className="run-row run-row--name">
+              <Text label="Dataset" required value={ds.name} onChange={(v) => up((d) => void (d.dataset.name = v))} placeholder="terminal-bench" mono error={err} help="Its name in the registry." />
+              <Text label="Version" value={ds.version} onChange={(v) => up((d) => void (d.dataset.version = v))} placeholder="2.0" mono error={versionError(draft)} help="The default registry needs one." />
             </div>
+          )}
+          <Section title="Tasks to run" summary={filters || (entry && ds.version === entry.version ? `all ${entry.n_tasks}` : "all")}>
+            <div className="run-row">
+              <Text label="Include tasks" value={ds.task_names} onChange={(v) => up((d) => void (d.dataset.task_names = v))} placeholder="*api*, test_*" mono help="Comma-separated names or globs." />
+              <Text label="Exclude tasks" value={ds.exclude_task_names} onChange={(v) => up((d) => void (d.dataset.exclude_task_names = v))} placeholder="slow_*" mono help="Applied after include." />
+              <Num label="Max tasks" value={ds.n_tasks} onChange={(v) => up((d) => void (d.dataset.n_tasks = v))} placeholder="all" error={numError(ds.n_tasks, { int: true, min: 1 })} help="Blank = every task." />
+            </div>
+          </Section>
+          <Section title={entry ? "Download" : "Registry & download"} summary={download || (entry ? "default cache" : "default registry")}>
+            {!entry && (
+              <div className="run-row">
+                <Text label="Registry URL" value={ds.registry_url} onChange={(v) => up((d) => void (d.dataset.registry_url = v))} placeholder="https://…/registry.json" mono help="A registry.json to use instead of the default registry." />
+                <Text label="Registry path" value={ds.registry_path} onChange={(v) => up((d) => void (d.dataset.registry_path = v))} placeholder="./registry.json" mono help="A local registry.json instead of a URL." />
+              </div>
+            )}
             <Text label="Download dir" value={ds.download_dir} onChange={(v) => up((d) => void (d.dataset.download_dir = v))} placeholder="~/.cache/…" mono help="Blank = the default cache." />
             <Check label="Re-download the dataset even if it's cached" checked={ds.overwrite} onChange={(v) => up((d) => void (d.dataset.overwrite = v))} />
           </Section>
@@ -267,7 +360,106 @@ function SourceSection({ draft, up, serverError }: { draft: Draft; up: Up; serve
   );
 }
 
+/** The dataset picked from the catalog: what it is, and which of its versions runs. */
+function DatasetSummary({ entry, version, onVersion }: { entry: CatalogDataset; version: string; onVersion: (v: string) => void }) {
+  // Newest first; a version the registry no longer lists (an old run's) stays selectable.
+  const versions = [...entry.versions].reverse();
+  if (version && !versions.includes(version)) versions.push(version);
+  return (
+    <div className="panel run-ds">
+      <div className="run-ds__head">
+        <Icon.Layers size={15} />
+        <strong className="mono ink run-ds__name">{entry.name}</strong>
+        {versions.length > 1 ? (
+          <select className="select run-ds__version" aria-label="Version" value={version} onChange={(e) => onVersion(e.target.value)}>
+            {versions.map((v) => (
+              <option key={v} value={v}>
+                {v}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <span className="chip">{version || entry.version}</span>
+        )}
+        {version === entry.version && (
+          <span className="num run-ds__tasks">
+            {entry.n_tasks} task{entry.n_tasks === 1 ? "" : "s"}
+          </span>
+        )}
+      </div>
+      {entry.description && <p className="run-ds__desc">{entry.description}</p>}
+      <p className="run-ds__meta">
+        {[entry.creator, entry.license].filter(Boolean).join(" · ")}
+        {entry.upstream_url && (
+          <a className="link" href={entry.upstream_url} target="_blank" rel="noreferrer">
+            Source <Icon.External size={11} />
+          </a>
+        )}
+      </p>
+    </div>
+  );
+}
+
+/** Where the launcher is: domain, dataset, agent. Steps already reachable are links. */
+function Steps({ step, domainId, ready }: { step: Step; domainId?: string; ready: boolean }) {
+  const items: { id: Step; label: string; to?: string }[] = [
+    { id: "domain", label: "Domain", to: "/run?step=domain" },
+    { id: "dataset", label: "Dataset", to: domainId ? domainHref(domainId) : undefined },
+    { id: "configure", label: "Agent", to: ready ? CONFIGURE : undefined },
+  ];
+  const at = items.findIndex((i) => i.id === step);
+  return (
+    <nav className="run-steps" aria-label="Steps">
+      {items.map((it, i) => {
+        const body = (
+          <>
+            <span className="run-steps__n">{i < at ? <Icon.Check size={11} /> : i + 1}</span>
+            {it.label}
+          </>
+        );
+        return (
+          <Fragment key={it.id}>
+            {i > 0 && <Icon.Chevron size={12} className="run-steps__sep" />}
+            {it.to && i !== at ? (
+              <Link to={it.to} className="run-steps__item" data-done={i < at}>
+                {body}
+              </Link>
+            ) : (
+              <span className="run-steps__item" aria-current={i === at ? "step" : undefined} aria-disabled={i !== at || undefined}>
+                {body}
+              </span>
+            )}
+          </Fragment>
+        );
+      })}
+    </nav>
+  );
+}
+
+/** How many trials the draft starts, when the catalog says how many tasks the dataset has. */
+function RunSize({ draft, entry }: { draft: Draft; entry?: CatalogDataset }) {
+  const ds = draft.dataset;
+  if (draft.source !== "dataset" || !entry || ds.version !== entry.version) return null;
+  const whole = (s: string, fallback: number) => (Number.isInteger(Number(s)) && Number(s) > 0 ? Number(s) : fallback);
+  const tasks = Math.min(entry.n_tasks, whole(ds.n_tasks, entry.n_tasks));
+  const runs = draft.agents.length * whole(draft.job.n_attempts, 1);
+  const filtered = !!(ds.task_names.trim() || ds.exclude_task_names.trim());
+  const trials = tasks * runs;
+  return (
+    <span className="run-submit__size num" title={`${tasks} tasks × ${draft.agents.length} agent${draft.agents.length === 1 ? "" : "s"} × ${whole(draft.job.n_attempts, 1)} attempt${whole(draft.job.n_attempts, 1) === 1 ? "" : "s"}`}>
+      {filtered && "up to "}
+      {trials.toLocaleString()} trial{trials === 1 ? "" : "s"}
+    </span>
+  );
+}
+
 // ---------------------------------------------------------------- agents
+
+/** What the agents that are not a product do. */
+const AGENT_NOTES: Record<string, string> = {
+  oracle: "Runs each task's reference solution: checks the setup, needs no model.",
+  nop: "Does nothing: the score of an untouched environment.",
+};
 
 function AgentCard({ index, agent, agents, specs, removable, onChange, onRemove }: { index: number; agent: AgentDraft; agents: string[]; specs: KwargSpec[]; removable: boolean; onChange: (a: AgentDraft) => void; onRemove: () => void }) {
   const set = (patch: Partial<AgentDraft>) => onChange({ ...agent, ...patch });
@@ -276,7 +468,7 @@ function AgentCard({ index, agent, agents, specs, removable, onChange, onRemove 
   return (
     <div className="run-agent">
       <div className="run-row run-row--agent">
-        <Select label={`Agent ${index + 1}`} value={agent.name} onChange={(name) => onChange({ ...agent, name, kwargs: {} })} options={agents} />
+        <Select label={`Agent ${index + 1}`} value={agent.name} onChange={(name) => onChange({ ...agent, name, kwargs: {} })} options={agents} help={AGENT_NOTES[agent.name]} />
         <Text label="Model" value={agent.model} onChange={(model) => set({ model })} list="run-models" placeholder="provider/model" mono autoComplete="off" help="Any LiteLLM name; suggestions as you type." />
         {removable && (
           <button type="button" className="btn btn--ghost btn--icon run-agent__remove" aria-label={`Remove agent ${index + 1}`} title="Remove agent" onClick={onRemove}>

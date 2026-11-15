@@ -10,6 +10,7 @@ import { FilterMenu, SelectMenu } from "../../ui/popover";
 import { CopyButton, Empty, ErrorBox, PageHead, Pagination, Reward, SearchField, SkeletonRows } from "../../ui/kit";
 import { Dialog, useToast } from "../../ui/overlay";
 import * as Icon from "../../ui/icons";
+import { DomainGrid, useCatalog } from "../run/catalog";
 import "./home.css";
 
 const DATES = [
@@ -140,6 +141,8 @@ export default function Home() {
     url.set({ q: null, agent: null, provider: null, model: null, date: null });
   };
   const data = jobs.data;
+  // Nothing to search or filter until the folder has a job.
+  const fresh = !!data && data.total === 0 && !anyFilter;
 
   return (
     <div className="page">
@@ -160,49 +163,45 @@ export default function Home() {
         }
       />
 
-      <div className="toolbar">
-        <SearchField value={search} onChange={setSearch} placeholder="Search jobs, agents, models" width="min(280px, 100%)" />
-        <FilterMenu label="Agent" options={options.data?.agents} selected={filters.agent} onChange={(v) => url.set({ agent: v })} />
-        <FilterMenu label="Provider" options={options.data?.providers} selected={filters.provider} onChange={(v) => url.set({ provider: v })} />
-        <FilterMenu label="Model" options={options.data?.models} selected={filters.model} onChange={(v) => url.set({ model: v })} />
-        <SelectMenu
-          label="Started"
-          value={filters.date[0] ?? "any"}
-          options={[{ id: "any", label: "Any time" }, ...DATES.map((d) => ({ id: d.value, label: d.label }))]}
-          onChange={(v) => url.set({ date: v === "any" ? null : v })}
-        />
-        {anyFilter && (
-          <button className="btn btn--ghost btn--sm" onClick={clearFilters}>
-            Clear
-          </button>
-        )}
-        <span className="toolbar__spacer" />
-        {selected.length > 0 && (
-          <>
-            <span className="muted num home-selcount">{selected.length} selected</span>
-            <button className="btn btn--sm" onClick={compare}>
-              Compare {selected.length}
+      {!fresh && (
+        <div className="toolbar">
+          <SearchField value={search} onChange={setSearch} placeholder="Search jobs, agents, models" width="min(280px, 100%)" />
+          <FilterMenu label="Agent" options={options.data?.agents} selected={filters.agent} onChange={(v) => url.set({ agent: v })} />
+          <FilterMenu label="Provider" options={options.data?.providers} selected={filters.provider} onChange={(v) => url.set({ provider: v })} />
+          <FilterMenu label="Model" options={options.data?.models} selected={filters.model} onChange={(v) => url.set({ model: v })} />
+          <SelectMenu
+            label="Started"
+            value={filters.date[0] ?? "any"}
+            options={[{ id: "any", label: "Any time" }, ...DATES.map((d) => ({ id: d.value, label: d.label }))]}
+            onChange={(v) => url.set({ date: v === "any" ? null : v })}
+          />
+          {anyFilter && (
+            <button className="btn btn--ghost btn--sm" onClick={clearFilters}>
+              Clear
             </button>
-            <button className="btn btn--sm btn--danger" onClick={() => setDeleting(selected)}>
-              <Icon.Trash size={13} /> Delete
-            </button>
-          </>
-        )}
-        {picker}
-      </div>
+          )}
+          <span className="toolbar__spacer" />
+          {selected.length > 0 && (
+            <>
+              <span className="muted num home-selcount">{selected.length} selected</span>
+              <button className="btn btn--sm" onClick={compare}>
+                Compare {selected.length}
+              </button>
+              <button className="btn btn--sm btn--danger" onClick={() => setDeleting(selected)}>
+                <Icon.Trash size={13} /> Delete
+              </button>
+            </>
+          )}
+          {picker}
+        </div>
+      )}
 
       {jobs.error && !data ? (
         <ErrorBox error={jobs.error} onRetry={jobs.reload} />
       ) : !data ? (
         <SkeletonRows />
-      ) : data.total === 0 && !anyFilter ? (
-        <Empty title="No jobs in this folder yet">
-          <span>Start one from the command line, or use New run.</span>
-          <span className="home-cmd">
-            <code>hbench run -d &lt;dataset&gt;</code>
-            <CopyButton text="hbench run -d <dataset>" label="Copy command" />
-          </span>
-        </Empty>
+      ) : fresh ? (
+        <Start />
       ) : (
         <>
           <DataTable
@@ -242,6 +241,23 @@ export default function Home() {
         }}
       />
     </div>
+  );
+}
+
+/** A folder with no jobs yet: the launcher's first step, so a first run is one tile away. */
+function Start() {
+  const catalog = useCatalog();
+  return (
+    <section className="home-start" aria-labelledby="home-start">
+      <div className="home-start__intro">
+        <h2 id="home-start">Benchmark an agent</h2>
+        <p className="muted">No jobs in this folder yet. Pick a domain, choose a dataset, then the agent to run it.</p>
+      </div>
+      <DomainGrid catalog={catalog} />
+      <p className="home-start__cli faint">
+        Or from the command line: <code>hbench run -d &lt;dataset&gt;@&lt;version&gt; -a &lt;agent&gt;</code>
+      </p>
+    </section>
   );
 }
 

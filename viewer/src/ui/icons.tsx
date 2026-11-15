@@ -173,3 +173,86 @@ export const Dots = (p: P) => (
     <path d="M3.5 8h.5M7.75 8h.5M12 8h.5" strokeWidth={2.2} strokeLinecap="round" />
   </I>
 );
+export const Code = (p: P) => (
+  <I {...p}>
+    <path d="M5.5 4.5 2 8l3.5 3.5M10.5 4.5 14 8l-3.5 3.5" />
+  </I>
+);
+export const Shield = (p: P) => (
+  <I {...p}>
+    <path d="M8 2 13 4v4c0 3-2.2 5-5 6-2.8-1-5-3-5-6V4z" strokeLinejoin="round" />
+    <path d="M5.8 8.2 7.4 9.8 10.4 6.5" />
+  </I>
+);
+export const Clipboard = (p: P) => (
+  <I {...p}>
+    <path d="M5.5 3.5h-2V14h9V3.5h-2" strokeLinejoin="round" />
+    <rect x="5.5" y="2" width="5" height="3" />
+    <path d="M5.75 8h4.5M5.75 10.75h3" />
+  </I>
+);
+export const Chart = (p: P) => (
+  <I {...p}>
+    <path d="M2.5 2.5v11h11" />
+    <path d="M5 10.5 7.5 7.5l2 2L13 5" />
+  </I>
+);
+export const Layers = (p: P) => (
+  <I {...p}>
+    <path d="M8 2.5 13.5 5.25 8 8 2.5 5.25z" strokeLinejoin="round" />
+    <path d="M2.5 8 8 10.75 13.5 8M2.5 10.75 8 13.5l5.5-2.75" strokeLinejoin="round" />
+  </I>
+);
+export const Branch = (p: P) => (
+  <I {...p}>
+    <circle cx="4.5" cy="3.75" r="1.5" />
+    <circle cx="4.5" cy="12.25" r="1.5" />
+    <circle cx="11.5" cy="5.75" r="1.5" />
+    <path d="M4.5 5.25v5.5M11.5 7.25c0 2.25-3 2.5-7 2.5" />
+  </I>
+);
+export const Bars = (p: P) => (
+  <I {...p}>
+    <path d="M3 13.5V9M6.5 13.5V3M10 13.5V6.5M13.5 13.5V10.5" />
+  </I>
+);
+export const Coin = (p: P) => (
+  <I {...p}>
+    <circle cx="8" cy="8" r="5.75" />
+    <path d="M9.9 6.4C9.5 5.8 8.8 5.5 8 5.5c-1.1 0-1.9.55-1.9 1.3 0 1.75 3.8.75 3.8 2.5 0 .7-.8 1.2-1.9 1.2-.9 0-1.6-.3-2-.9M8 4.25V5.5M8 10.5v1.25" strokeLinecap="round" />
+  </I>
+);
+export const Scales = (p: P) => (
+  <I {...p}>
+    <path d="M8 2.5v11M5 13.5h6M3.5 4.5h9" />
+    <path d="M3.5 4.5 1.75 9h3.5zM12.5 4.5 10.75 9h3.5z" strokeLinejoin="round" />
+  </I>
+);
+export const Cross = (p: P) => (
+  <I {...p}>
+    <path d="M6 2.5h4V6h3.5v4H10v3.5H6V10H2.5V6H6z" strokeLinejoin="round" />
+  </I>
+);
+export const Chat = (p: P) => (
+  <I {...p}>
+    <path d="M2.5 3h11v8H7.5l-3 2.5V11h-2z" strokeLinejoin="round" />
+    <path d="M5.5 6h5M5.5 8.25h3" />
+  </I>
+);
+export const Lock = (p: P) => (
+  <I {...p}>
+    <rect x="3.5" y="7" width="9" height="6.5" />
+    <path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2M8 9.5v1.5" />
+  </I>
+);
+export const Book = (p: P) => (
+  <I {...p}>
+    <path d="M8 4.5C6.5 3.5 4.5 3.25 2.5 3.5v9c2-.25 4 0 5.5 1 1.5-1 3.5-1.25 5.5-1v-9c-2-.25-4 0-5.5 1zM8 4.5v9" strokeLinejoin="round" />
+  </I>
+);
+export const Monitor = (p: P) => (
+  <I {...p}>
+    <rect x="2" y="3" width="12" height="8" />
+    <path d="M5.5 13.5h5M8 11v2.5" />
+  </I>
+);
