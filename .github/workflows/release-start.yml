@@ -85,7 +85,7 @@ jobs:
         working-directory: repo
         env:
           BUMP: patch
-          VERSION_INPUT: ""
+          VERSION_INPUT: "0.3.15"
           DRY_RUN: true
         run: |
           fail() { echo "::error::$*"; exit 1; }
