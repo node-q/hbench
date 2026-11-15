@@ -24,7 +24,8 @@ export interface AgentDraft {
 
 export interface Draft {
   source: Source;
-  dataset: { name: string; version: string; registry_url: string; registry_path: string; task_names: string; exclude_task_names: string; n_tasks: string; overwrite: boolean; download_dir: string };
+  /** `manual`: the name was typed (Dataset by name), not picked from the catalog. */
+  dataset: { name: string; version: string; manual?: boolean; registry_url: string; registry_path: string; task_names: string; exclude_task_names: string; n_tasks: string; overwrite: boolean; download_dir: string };
   path: string;
   git: { git_url: string; git_commit_id: string; path: string };
   agents: AgentDraft[];
@@ -141,6 +142,19 @@ export function kwargError(spec: KwargSpec, raw: string | undefined): string | u
   return undefined;
 }
 
+/** Whether the draft names something to run, so the launcher can go straight to the agent step. */
+export function hasSource(d: Draft): boolean {
+  if (d.source === "dataset") return !!(d.dataset.name.trim() || d.dataset.registry_path.trim());
+  return d.source === "path" ? !!d.path.trim() : !!(d.git.git_url.trim() || d.git.path.trim());
+}
+
+/** A dataset in the default (OCI) registry is named with its version; a registry.json may hold a single one. */
+export function versionError(d: Draft): string | undefined {
+  const ds = d.dataset;
+  if (d.source !== "dataset" || !ds.name.trim() || ds.version.trim() || ds.registry_url.trim() || ds.registry_path.trim()) return undefined;
+  return "Give the version, e.g. 2.0.";
+}
+
 export function sourceError(d: Draft): string | undefined {
   if (d.source === "dataset" && !d.dataset.name.trim() && !d.dataset.registry_path.trim()) return "Name a registry dataset.";
   if (d.source === "path" && !d.path.trim()) return "Enter a task or dataset folder.";
@@ -152,6 +166,7 @@ export function sourceError(d: Draft): string | undefined {
 export function draftErrors(d: Draft, specs: Record<string, KwargSpec[]>): string[] {
   const errs: (string | undefined)[] = [
     sourceError(d),
+    versionError(d),
     numError(d.dataset.n_tasks, { int: true, min: 1 }),
     numError(d.job.n_attempts, { int: true, min: 1 }),
     numError(d.job.n_concurrent_trials, { int: true, min: 1 }),

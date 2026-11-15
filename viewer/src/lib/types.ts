@@ -314,6 +314,34 @@ export interface RunOptions {
   jobs_dir: string;
 }
 
+/** A domain tile of the dataset catalog (`/api/run/catalog`). */
+export interface CatalogDomain {
+  id: string;
+  title: string;
+  description: string;
+  n_datasets: number;
+}
+
+/** A registry dataset, described by its newest version. */
+export interface CatalogDataset {
+  name: string;
+  version: string;
+  /** Oldest first. */
+  versions: string[];
+  description: string;
+  n_tasks: number;
+  license: string;
+  domain: string;
+  upstream_url: string | null;
+  creator: string | null;
+}
+
+export interface Catalog {
+  registry: string;
+  domains: CatalogDomain[];
+  datasets: CatalogDataset[];
+}
+
 export interface RunStatus {
   running: boolean;
   returncode: number | null;

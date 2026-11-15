@@ -1,5 +1,5 @@
 // Round-trip check for form.ts (not bundled): `npx tsx src/pages/run/form.check.ts` from viewer/.
-import { draftErrors, emptyDraft, fromConfig, newAgent, toConfig } from "./form";
+import { draftErrors, emptyDraft, fromConfig, hasSource, newAgent, toConfig, versionError } from "./form";
 import type { KwargSpec } from "../../lib/types";
 
 const d = emptyDraft();
@@ -12,4 +12,10 @@ console.assert(c.agents[0].kwargs.thinking_tokens === 2000 && c.agents[0].kwargs
 const back = fromConfig(c, specs);
 console.assert(back.dataset.name === "terminal-bench" && back.agents[0].kwargs.thinking_tokens === "2000" && back.agents[0].custom[0].k === "x", "round trip");
 console.assert(draftErrors(emptyDraft(), {}).includes("Name a registry dataset."), "source required");
+const noVersion = emptyDraft();
+noVersion.dataset.name = "terminal-bench";
+console.assert(!hasSource(emptyDraft()) && hasSource(noVersion), "a named dataset is a source");
+console.assert(draftErrors(noVersion, {}).length === 1 && !!versionError(noVersion), "the default registry needs a version");
+noVersion.dataset.registry_url = "https://example.com/registry.json";
+console.assert(draftErrors(noVersion, {}).length === 0, "a registry.json dataset may leave the version out");
 console.log("form.ts ok");

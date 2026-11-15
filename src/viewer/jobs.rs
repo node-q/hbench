@@ -403,6 +403,7 @@ impl App {
                     "defaults": serde_json::to_value(crate::config::JobConfig::default()).unwrap_or_default(), "jobs_dir": self.folder.to_string_lossy(),
                 }))
             }
+            ["run", "catalog"] => self.catalog(q.get("refresh").is_some_and(|r| r == "1")),
             ["run", "history"] => {
                 let limit = q.int("limit", 50, None, None)?;
                 let mut items: Vec<(std::time::SystemTime, String, Value)> = vec![];

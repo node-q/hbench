@@ -2,6 +2,7 @@
 //! over a jobs or tasks folder. Response shapes, ordering, filters, sorting and error codes are kept stable for
 //! the SPA.
 
+mod catalog;
 mod compare;
 mod http;
 mod jobs;
@@ -59,10 +60,12 @@ pub struct App {
     /// request gives, so they must not be reachable from the network.
     bound_to_loopback: bool,
     runs: Mutex<HashMap<String, LaunchedRun>>,
+    /// The dataset catalog as last listed.
+    catalog_cache: Mutex<Option<catalog::Listed>>,
 }
 
 impl App {
     pub fn new(folder: PathBuf, mode: Mode, bound_to_loopback: bool) -> App {
-        App { folder, mode, bound_to_loopback, runs: Mutex::new(HashMap::new()) }
+        App { folder, mode, bound_to_loopback, runs: Mutex::new(HashMap::new()), catalog_cache: Mutex::new(None) }
     }
 }

@@ -1,0 +1,74 @@
+[
+  {
+    "id": "coding",
+    "title": "Coding",
+    "description": "Resolve GitHub issues, work in a terminal, and write, fix and reason about code.",
+    "datasets": ["swebench*", "terminal-bench*", "humaneval*", "mbpp*", "cruxeval*"]
+  },
+  {
+    "id": "data-analysis",
+    "title": "Data analysis",
+    "description": "Query, clean and model data, and report what it shows.",
+    "datasets": ["data-analysis*"]
+  },
+  {
+    "id": "finance",
+    "title": "Finance",
+    "description": "Read filings, build models, and close the books.",
+    "datasets": ["finance*"]
+  },
+  {
+    "id": "legal",
+    "title": "Legal",
+    "description": "Review contracts, research the law, and draft.",
+    "datasets": ["legal*"]
+  },
+  {
+    "id": "healthcare",
+    "title": "Healthcare",
+    "description": "Clinical reasoning, coding and documentation.",
+    "datasets": ["healthcare*"]
+  },
+  {
+    "id": "customer-support",
+    "title": "Customer support",
+    "description": "Resolve customer requests with the right tools and policies.",
+    "datasets": ["customer-support*"]
+  },
+  {
+    "id": "security",
+    "title": "Security",
+    "description": "Find, exploit and fix vulnerabilities.",
+    "datasets": ["security*"]
+  },
+  {
+    "id": "research",
+    "title": "Research",
+    "description": "Find sources, read them, and answer hard questions.",
+    "datasets": ["research*"]
+  },
+  {
+    "id": "computer-use",
+    "title": "Computer use",
+    "description": "Operate browsers and desktop apps to get office work done.",
+    "datasets": ["computer-use*"]
+  },
+  {
+    "id": "underwriting",
+    "title": "Underwriting",
+    "description": "Assess submissions and risks, apply guidelines, and decide terms.",
+    "datasets": ["underwriting*"]
+  },
+  {
+    "id": "claims",
+    "title": "Claims",
+    "description": "Triage, investigate and settle claims against policy wording.",
+    "datasets": ["claims*"]
+  },
+  {
+    "id": "actuarial",
+    "title": "Actuarial",
+    "description": "Pricing, reserving and capital work on real portfolios.",
+    "datasets": ["actuarial*"]
+  }
+]

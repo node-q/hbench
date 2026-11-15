@@ -269,3 +269,117 @@
   display: grid;
   gap: var(--space-xs);
 }
+
+/* Steps: domain, dataset, agent. */
+.run-steps {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2xs) var(--space-xs);
+  margin: calc(-1 * var(--space-xs)) 0 var(--space-lg);
+  font-size: var(--text-sm);
+}
+.run-steps__item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  padding: var(--space-2xs) var(--space-xs) var(--space-2xs) var(--space-2xs);
+  border-radius: var(--radius);
+  color: var(--color-muted);
+  font-weight: 500;
+}
+.run-steps__item[aria-disabled="true"] {
+  color: var(--color-faint);
+}
+.run-steps__item[aria-current="step"] {
+  color: var(--color-ink);
+}
+.run-steps__n {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border: 1px solid var(--color-rule-2);
+  border-radius: 50%;
+  font: 500 var(--text-2xs) / 1 var(--font-mono);
+}
+.run-steps__item[aria-current="step"] .run-steps__n {
+  border-color: var(--color-accent);
+  background: var(--color-accent);
+  color: var(--color-accent-ink);
+}
+.run-steps__item[data-done="true"] .run-steps__n {
+  border-color: transparent;
+  background: var(--color-accent-wash);
+  color: var(--color-accent);
+}
+.run-steps__sep {
+  color: var(--color-faint);
+}
+@media (hover: hover) {
+  a.run-steps__item:hover {
+    background: var(--color-paper-2);
+    color: var(--color-ink);
+  }
+}
+
+/* Step 1: the domain tiles under a short prompt. */
+.run-pick {
+  display: grid;
+  gap: var(--space-lg);
+}
+.run-pick__intro {
+  display: grid;
+  gap: var(--space-2xs);
+  font-size: var(--text-sm);
+}
+
+/* The dataset picked from the catalog. */
+.run-ds {
+  display: grid;
+  gap: var(--space-xs);
+  padding: var(--space-sm) var(--space-md);
+}
+.run-ds__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2xs) var(--space-xs);
+  color: var(--color-muted);
+}
+.run-ds__name {
+  font-size: var(--text-md);
+  overflow-wrap: anywhere;
+}
+.run-ds__version {
+  height: 24px;
+  padding: 0 var(--space-xs);
+  font: 500 var(--text-xs) / 1 var(--font-mono);
+}
+.run-ds__tasks {
+  margin-left: auto;
+  color: var(--color-ink-2);
+  font-size: var(--text-xs);
+}
+.run-ds__desc {
+  color: var(--color-muted);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+.run-ds__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2xs) var(--space-sm);
+  color: var(--color-faint);
+  font-size: var(--text-xs);
+}
+.run-ds__meta .link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2xs);
+}
+.run-submit__size {
+  color: var(--color-muted);
+  font-size: var(--text-xs);
+}
