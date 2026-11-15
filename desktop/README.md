@@ -105,5 +105,8 @@ To package a local build the same way: `scripts/package-macos.sh <Actuaria.app> 
   WebKitGTK 4.1 or newer: Ubuntu 22.04+, Debian 12+, Fedora 38+. They are not signed; verify them with
   `SHA256SUMS` or `gh attestation verify`. The package installs `Actuaria` and the bundled `hbench` in
   `/usr/bin`. To build locally: `sh scripts/linux-deps.sh`, then `npm run sidecar && npx tauri build --bundles deb,rpm`.
-- **Windows**: not yet. hbench itself does not compile on Windows (it uses Unix file modes, symlinks and
-  signals), and the app needs an `hbench.exe` to bundle.
+- **Windows** (10 or later, x86_64): an installer, `Actuaria-vX.Y.Z-x86_64-pc-windows-msvc-setup.exe`, that
+  installs for the current user. It is not Authenticode-signed, so SmartScreen warns on first run; verify it
+  with `SHA256SUMS` or `gh attestation verify`. The app has been built in CI but not yet launched on Windows.
+  Unlike on macOS and Linux, a crash or a kill of the app leaves its `hbench view` running; a normal quit
+  stops it.
