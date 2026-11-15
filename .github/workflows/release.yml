@@ -28,7 +28,8 @@ on:
   push:
     tags: ["v[0-9]+.[0-9]+.[0-9]+*"]
   # release-start.yml starts this on the tag it creates, since a tag pushed with GITHUB_TOKEN starts no
-  # workflow. Run on anything but a v* tag, the ci job fails and nothing is signed or published.
+  # workflow. Run on anything but a v* tag on master, the build and ci jobs fail and nothing is signed,
+  # attested or published.
   workflow_dispatch:
 
 permissions:
@@ -112,6 +113,7 @@ jobs:
           persist-credentials: false
       - name: Verify tag matches Cargo.toml version
         run: |
+          [ "$GITHUB_REF_TYPE" = tag ] || { echo "::error::build releases from a tag, not $GITHUB_REF"; exit 1; }
           v=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
           [ "v$v" = "$GITHUB_REF_NAME" ] || { echo "::error::tag $GITHUB_REF_NAME != Cargo.toml version v$v"; exit 1; }
       - name: Set up Rust toolchain
@@ -165,6 +167,7 @@ jobs:
           persist-credentials: false
       - name: Verify tag matches Cargo.toml version
         run: |
+          [ "$GITHUB_REF_TYPE" = tag ] || { echo "::error::build releases from a tag, not $GITHUB_REF"; exit 1; }
           v=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
           [ "v$v" = "$GITHUB_REF_NAME" ] || { echo "::error::tag $GITHUB_REF_NAME != Cargo.toml version v$v"; exit 1; }
       - name: Set up Rust toolchain
