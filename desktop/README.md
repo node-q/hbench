@@ -74,6 +74,29 @@ over SSH), build with `CI=true npm run build`, which skips the cosmetic layout.
 Icons come from `assets/icon.png`, a 1024px white mark on `#2f45ff` like actuaria.io's favicon. Regenerate them
 with `npm run icons`.
 
+## Releases
+
+Tagging an hbench release (`vX.Y.Z`) also builds the app. `.github/workflows/release.yml` builds `Actuaria.app`
+for Apple Silicon and Intel around that release's own `hbench` binary, gives it the release's version, and
+attaches `Actuaria-vX.Y.Z-<target>.dmg` to the GitHub release, listed in `SHA256SUMS` and attested.
+
+Signing happens in a separate job that runs only `scripts/package-macos.sh` (Apple's tools, no npm or cargo
+code). It reads these secrets of the `release` environment:
+
+| Secret | What it is |
+| --- | --- |
+| `APPLE_CERTIFICATE` | A "Developer ID Application" certificate exported as `.p12`, base64-encoded |
+| `APPLE_CERTIFICATE_PASSWORD` | That `.p12`'s password |
+| `APPLE_API_KEY` | The contents of an App Store Connect API key (`.p8`), used to notarize |
+| `APPLE_API_KEY_ID` | The key's ID |
+| `APPLE_API_ISSUER` | The key's issuer ID |
+
+Until they are set, the `.dmg` is ad-hoc signed and the job warns: the app runs, but Gatekeeper blocks a
+downloaded copy until the user allows it in System Settings. With the certificate alone it is signed but not
+notarized. A desktop failure does not hold back the hbench release.
+
+To package a local build the same way: `scripts/package-macos.sh <Actuaria.app> <out.dmg>`.
+
 ## Platforms
 
 macOS is built and tested. hbench's own releases cover macOS and Linux, so a Linux build should work the same

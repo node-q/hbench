@@ -160,6 +160,38 @@ jobs:
           git status --porcelain -- dist
           test -z "$(git status --porcelain -- dist)" || { echo "::error::viewer/dist is stale; run 'npm run build' in viewer/ and commit"; exit 1; }
 
+  desktop:
+    # The release builds the Actuaria app (desktop/) the same way; this keeps that build working.
+    name: Desktop App (macOS)
+    runs-on: macos-15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Rust toolchain
+        uses: ./.github/actions/setup-rust
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - name: Build hbench as the app's sidecar
+        run: sh desktop/scripts/sidecar.sh debug
+      - name: Lint the app
+        working-directory: desktop/src-tauri
+        run: |
+          cargo fmt --check
+          cargo clippy --locked
+      - name: Build Actuaria.app
+        working-directory: desktop
+        run: |
+          npm ci --ignore-scripts
+          npx tauri build --debug --bundles app
+      - name: Package it unsigned
+        run: bash desktop/scripts/package-macos.sh "desktop/src-tauri/target/debug/bundle/macos/Actuaria.app" "$RUNNER_TEMP/Actuaria.dmg"
+
   e2e:
     # The integrity guarantees (stopping the agent at timeout, the hidden-test scrub, the egress allowlist)
     # only show against a real daemon.
