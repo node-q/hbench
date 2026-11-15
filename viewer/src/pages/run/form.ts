@@ -404,7 +404,7 @@ export function sourceLabel(c: Obj): string {
   const ds = c.datasets?.[0];
   const t = c.tasks?.[0];
   if (ds?.name) return ds.version ? `${ds.name}@${ds.version}` : ds.name;
-  if (ds?.path) return ds.path.split("/").pop() || ds.path;
-  if (t?.path) return t.path.split("/").pop() || t.path;
+  if (ds?.path) return ds.path.split(/[\\/]/).pop() || ds.path;
+  if (t?.path) return t.path.split(/[\\/]/).pop() || t.path;
   return "—";
 }

@@ -242,7 +242,7 @@ export function DesktopChrome({
   }, [active]);
 
   const folder = config?.folder ?? "";
-  const folderName = folder.split("/").filter(Boolean).pop() ?? folder;
+  const folderName = folder.split(/[\\/]/).filter(Boolean).pop() ?? folder;
 
   return (
     <div className="dk" data-side={sideOpen ? "open" : "closed"} data-resizing={resizing} data-empty={empty} style={{ "--dk-side-w": `${sideW}px` } as React.CSSProperties}>

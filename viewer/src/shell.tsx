@@ -139,7 +139,7 @@ export function Shell() {
             <div className="bar__right">
               {config.data && (
                 <span className="bar__folder mono" title={config.data.folder}>
-                  {config.data.folder.split("/").slice(-2).join("/")}
+                  {config.data.folder.split(/[\\/]/).slice(-2).join("/")}
                 </span>
               )}
               <button className="btn btn--ghost btn--icon" onClick={toggleMode} aria-label={mode === "dark" ? "Switch to light mode" : "Switch to dark mode"} title="Toggle theme">

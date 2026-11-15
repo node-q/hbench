@@ -37,9 +37,15 @@ fn command(bin: &Path) -> Command {
     c
 }
 
+/// Elsewhere hbench runs directly and is killed when the server is dropped. On Windows it gets a console
+/// without a window, which the docker and hbench processes it starts inherit, so none of them flashes one up.
 #[cfg(not(unix))]
 fn command(bin: &Path) -> Command {
-    Command::new(bin)
+    #[allow(unused_mut)]
+    let mut c = Command::new(bin);
+    #[cfg(windows)]
+    std::os::windows::process::CommandExt::creation_flags(&mut c, 0x0800_0000); // CREATE_NO_WINDOW
+    c
 }
 
 /// hbench next to the app's own executable (where Tauri puts `externalBin`).
