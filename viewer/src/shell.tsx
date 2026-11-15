@@ -1,12 +1,15 @@
 // App shell: top bar (wordmark, section links, ⌘K search pill, theme toggle) + command palette.
 // Pages add their own palette entries with `useCommands([...])`.
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { flushSync } from "react-dom";
 import { NavLink, Outlet, useNavigate } from "react-router";
 import * as Icon from "./ui/icons";
 import { useApi } from "./lib/api";
 import { useKey } from "./lib/state";
 import type { AppConfig, JobSummary, Page, TaskDefinitionSummary } from "./lib/types";
 import { ToastProvider } from "./ui/overlay";
+import { isDesktop } from "./desktop/bridge";
+import { DesktopChrome } from "./desktop/DesktopChrome";
 
 export interface Command {
   id: string;
@@ -35,9 +38,15 @@ function useMode(): [string, () => void] {
   const [mode, setMode] = useState(() => document.documentElement.dataset.mode ?? "light");
   const toggle = useCallback(() => {
     const next = mode === "dark" ? "light" : "dark";
-    document.documentElement.dataset.mode = next;
-    localStorage.setItem("hb:mode", next);
-    setMode(next);
+    const apply = () => {
+      document.documentElement.dataset.mode = next;
+      localStorage.setItem("hb:mode", next);
+      setMode(next);
+    };
+    // The desktop shell cross-fades between themes where the engine can.
+    const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (isDesktop && !still && document.startViewTransition) document.startViewTransition(() => flushSync(apply));
+    else apply();
   }, [mode]);
   return [mode, toggle];
 }
@@ -78,6 +87,25 @@ export function Shell() {
         { to: "/compare", label: "Compare" },
         { to: "/run", label: "New run" },
       ];
+  const openPalette = useCallback(() => setPaletteOpen(true), []);
+
+  if (isDesktop) {
+    return (
+      <ConfigCtx.Provider value={config.data}>
+        <CommandsCtx.Provider value={register}>
+          <ToastProvider>
+            <a href="#main" className="sr-only">
+              Skip to content
+            </a>
+            <DesktopChrome config={config.data} mode={mode} toggleMode={toggleMode} openPalette={openPalette}>
+              <Outlet />
+            </DesktopChrome>
+            <Palette open={paletteOpen} onClose={() => setPaletteOpen(false)} tasksMode={tasksMode} pageCmds={pageCmds} toggleMode={toggleMode} />
+          </ToastProvider>
+        </CommandsCtx.Provider>
+      </ConfigCtx.Provider>
+    );
+  }
 
   return (
     <ConfigCtx.Provider value={config.data}>
@@ -260,11 +288,13 @@ function Palette({ open, onClose, tasksMode, pageCmds, toggleMode }: { open: boo
 /** Document title helper. */
 export function useTitle(title: string | undefined) {
   useEffect(() => {
-    document.title = title ? `${title} · hbench` : "hbench";
+    const app = isDesktop ? "Actuaria" : "hbench";
+    document.title = title ? `${title} · ${app}` : app;
   }, [title]);
 }
 
 export function NotFound({ what = "Page" }: { what?: string }): ReactNode {
+  useTitle(`${what} not found`);
   return (
     <div className="page">
       <div className="empty">

@@ -251,7 +251,7 @@ function FileView({ task, path }: { task: string; path: string }) {
       ) : text.data == null ? (
         <SkeletonRows rows={10} />
       ) : (
-        <CodeView code={text.data} path={path} maxHeight="calc(100vh - 260px)" />
+        <CodeView code={text.data} path={path} maxHeight="calc(var(--viewport-h) - 260px)" />
       )}
     </div>
   );

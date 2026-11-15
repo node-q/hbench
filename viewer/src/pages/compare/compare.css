@@ -17,7 +17,7 @@
   color: var(--color-bad);
 }
 .cmp-wrap {
-  max-height: calc(100vh - var(--bar-h) - 13rem);
+  max-height: calc(var(--viewport-h) - var(--bar-h) - 13rem);
 }
 .cmp {
   border-collapse: separate;

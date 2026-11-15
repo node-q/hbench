@@ -209,7 +209,7 @@ export function PageHead({ crumbs, title, meta, actions }: { crumbs?: { to: stri
     <header className="page-head">
       <div className="page-head__title">
         {crumbs && crumbs.length > 0 && (
-          <nav aria-label="Breadcrumb" className="label" style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          <nav aria-label="Breadcrumb" className="label page-head__crumbs" style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
             {crumbs.map((c) => (
               <span key={c.to} style={{ display: "inline-flex", gap: 6 }}>
                 <Link to={c.to} className="link" style={{ color: "var(--color-muted)" }}>

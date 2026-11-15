@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Actuaria</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --dark: #130a1c;
+        --deep: #2a1547;
+        --line: #33223f;
+        --accent: #c4adff;
+        --primary: #6a35c9;
+        --muted: #c3b8cf;
+        --grey: #887e94;
+      }
+      * { box-sizing: border-box; }
+      html, body { height: 100%; margin: 0; }
+      body {
+        display: grid;
+        place-items: center;
+        background: radial-gradient(1200px 700px at 50% 38%, #1f1030 0%, var(--dark) 62%);
+        color: #fff;
+        font: 400 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+        -webkit-font-smoothing: antialiased;
+        user-select: none;
+        cursor: default;
+      }
+      .card { display: grid; justify-items: center; gap: 22px; width: min(560px, 90vw); }
+      .brand { display: inline-flex; align-items: center; gap: 12px; font-size: 30px; font-weight: 600; letter-spacing: -0.04em; }
+      .brand svg { fill: var(--accent); stroke: var(--accent); stroke-width: 2; overflow: visible; }
+      .brand svg path { stroke-dasharray: 100; stroke-dashoffset: 100; fill-opacity: 0; animation: draw 1.1s cubic-bezier(.65,0,.35,1) forwards; }
+      .brand svg path:nth-child(2) { animation-delay: .15s; }
+      .brand svg path:nth-child(3) { animation-delay: .3s; }
+      @keyframes draw { 70% { stroke-dashoffset: 0; fill-opacity: 0; } 100% { stroke-dashoffset: 0; fill-opacity: 1; } }
+      .brand .io { color: var(--accent); }
+      .status { display: flex; align-items: center; gap: 10px; color: var(--muted); font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; }
+      .bar { width: 220px; height: 2px; background: var(--line); overflow: hidden; }
+      .bar::after { content: ""; display: block; width: 40%; height: 100%; background: var(--accent); animation: slide 1.2s ease-in-out infinite; }
+      @keyframes slide { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
+      .error { display: none; width: 100%; border: 1px solid var(--line); background: #1c1029; border-radius: 2px; }
+      .error h2 { margin: 0; padding: 10px 14px; border-bottom: 1px solid var(--line); font-size: 13px; font-weight: 600; color: #ffb4ab; }
+      .error pre { margin: 0; padding: 12px 14px; max-height: 240px; overflow: auto; white-space: pre-wrap; word-break: break-word; color: var(--muted); font: 12px/1.5 ui-monospace, "SF Mono", Menlo, monospace; user-select: text; }
+      .error .actions { display: flex; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--line); }
+      a.btn { display: inline-flex; align-items: center; height: 28px; padding: 0 12px; border-radius: 2px; font-weight: 500; text-decoration: none; color: #fff; background: var(--primary); }
+      a.btn.ghost { background: transparent; border: 1px solid var(--line); color: var(--muted); }
+      a.btn:hover { filter: brightness(1.12); }
+      .foot { position: fixed; bottom: 18px; color: var(--grey); font-size: 11px; letter-spacing: 0.02em; }
+      body.failed .loading { display: none; }
+      body.failed .error { display: block; }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <div class="brand" aria-label="Actuaria.io">
+        <svg width="40" height="40" viewBox="-6 -6 76 76" aria-hidden="true">
+          <path pathLength="100" d="M13.13724 0l10.15269 10.15263 10.15341-10.15263 12.72841 0-22.88204 22.88029-22.88043-22.88029 12.72796 0z" />
+          <path pathLength="100" d="M0 24.26167l0-12.72793 23.32843 23.32844 34.86233-34.86218 5.80924 0 0 6.91869-16.06904 16.06897 16.06904 16.06903 0 12.72793-22.43301-22.43302-34.64855 34.6484-6.91844 0 0-5.80948 16.96446-16.96439-16.96446-16.96446z" />
+          <path pathLength="100" d="M32.11455 64l-12.72792 0 22.0503-22.05029 22.05029 22.05029-12.72792 0-9.32237-9.32237-9.32238 9.32237z" />
+        </svg>
+        <span>Actuaria<span class="io">.io</span></span>
+      </div>
+      <div class="loading status"><div class="bar"></div></div>
+      <div class="loading status">Starting the studio…</div>
+      <div class="error" role="alert">
+        <h2>Couldn’t start</h2>
+        <pre id="msg"></pre>
+        <div class="actions">
+          <a class="btn" href="/__actuaria/open-folder">Open another folder…</a>
+          <a class="btn ghost" href="/__actuaria/server-log">Show server log</a>
+        </div>
+      </div>
+    </div>
+    <div class="foot">Built on hbench by node-q</div>
+    <script>
+      window.showError = function (msg) {
+        document.getElementById("msg").textContent = msg;
+        document.body.classList.add("failed");
+      };
+    </script>
+  </body>
+</html>

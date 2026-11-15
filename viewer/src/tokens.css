@@ -43,6 +43,9 @@
   --z-tooltip: 600;
 
   --bar-h: 52px;
+  /* The height pages can use and what covers the window's bottom edge; the desktop shell's status bar changes both. */
+  --viewport-h: 100vh;
+  --chrome-bottom: 0px;
 }
 
 /* Light: cool engineered paper, cool charcoal ink, one cobalt signal. */

@@ -210,7 +210,7 @@
 .analyze-form__wide {
   grid-column: 1 / -1;
 }
-@media (max-width: 480px) {
+@container page (max-width: 480px) {
   .analyze-form {
     grid-template-columns: minmax(0, 1fr);
   }

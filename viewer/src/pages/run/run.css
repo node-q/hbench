@@ -18,7 +18,7 @@
   gap: var(--space-md);
   min-width: 0;
 }
-@media (max-width: 1000px) {
+@container page (max-width: 1000px) {
   .run-grid {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -72,7 +72,7 @@
 .run-agent__remove {
   margin-top: calc(var(--text-xs) * 1.5 + var(--space-2xs));
 }
-@media (max-width: 560px) {
+@container page (max-width: 560px) {
   .run-row--name,
   .run-row--agent,
   .run-row--browse {
@@ -177,7 +177,7 @@
   gap: var(--space-2xs);
   padding: var(--space-2xs) 0 var(--space-md) calc(12px + var(--space-xs));
 }
-@media (max-width: 560px) {
+@container page (max-width: 560px) {
   .run-section__body {
     padding-left: 0;
   }
@@ -195,7 +195,7 @@
 /* Sticky submit bar at the bottom of the form. */
 .run-submit {
   position: sticky;
-  bottom: 0;
+  bottom: var(--chrome-bottom);
   z-index: var(--z-raised);
   display: flex;
   align-items: center;

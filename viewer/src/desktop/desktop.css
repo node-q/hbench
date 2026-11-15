@@ -1,0 +1,826 @@
+/* Actuaria desktop theme + chrome. Applies only with html[data-shell="desktop"] (set by desktop/bridge.ts);
+ * the web viewer is untouched. Colours and type follow actuaria.io: plum darks, violet primary, lavender accent,
+ * Geist / Geist Mono, near-square corners. */
+
+:root[data-shell="desktop"] {
+  --font-display: "Geist Sans", "Geist", ui-sans-serif, system-ui, sans-serif;
+  --font-body: "Geist Sans", "Geist", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --radius-sm: 2px;
+  --radius: 3px;
+  --radius-lg: 4px;
+
+  --dk-activity-w: 48px;
+  --dk-tabs-h: 35px;
+  --dk-crumbs-h: 24px;
+  --dk-status-h: 24px;
+  /* The editor area is the scroller (the window never scrolls), so nothing sits above a page's sticky headers
+   * and a page can be as tall as the editor. */
+  --bar-h: 0px;
+  --viewport-h: calc(100vh - var(--dk-status-h) - var(--dk-tabs-h) - var(--dk-crumbs-h));
+  /* The status bar covers the window's bottom edge (toasts clear it). */
+  --chrome-bottom: var(--dk-status-h);
+  --dk-primary: #6a35c9;
+  --dk-slide: 200ms var(--ease-out);
+}
+
+:root[data-shell="desktop"][data-mode="dark"] {
+  --color-paper: #130a1c;
+  --color-paper-2: #1a0f26;
+  --color-paper-3: #2a1547;
+  --color-raised: #1a0f26;
+  --color-rule: #33223f;
+  --color-rule-2: #46335a;
+  --color-ink: #f7f4f8;
+  --color-ink-2: #e4dcec;
+  --color-muted: #c3b8cf;
+  --color-faint: #887e94;
+  --color-accent: #c4adff;
+  --color-accent-2: #d8c9ff;
+  --color-accent-ink: #130a1c;
+  --color-accent-wash: #2a1547;
+  --color-focus: #c4adff;
+  --color-graphite: #0c0612;
+  --color-graphite-2: #1a0f26;
+  --color-graphite-ink: #e4dcec;
+  --color-graphite-muted: #887e94;
+  --color-code-key: #c4adff;
+  --color-phase-agent: #9d7bff;
+  --color-phase-setup: #6a35c9;
+  --color-heat-1: #9d7bff;
+  --shadow-pop: 0 12px 32px -12px rgb(0 0 0 / 0.7), 0 0 0 1px var(--color-rule-2);
+
+  --dk-activity-bg: #0c0612;
+  --dk-activity-ink: #887e94;
+  --dk-side-bg: #100817;
+  --dk-tabs-bg: #0c0612;
+  --dk-row-hover: #1f1230;
+  --dk-row-active: #2a1547;
+}
+
+:root[data-shell="desktop"]:not([data-mode="dark"]) {
+  --color-paper: #f7f4f8;
+  --color-paper-2: #efeaf3;
+  --color-paper-3: #ece4fb;
+  --color-raised: #ffffff;
+  --color-rule: #e2dbe8;
+  --color-rule-2: #cfc4da;
+  --color-ink: #1c1029;
+  --color-ink-2: #2f2340;
+  --color-muted: #5c5368;
+  --color-faint: #887e94;
+  --color-accent: #6a35c9;
+  --color-accent-2: #5a2bb0;
+  --color-accent-ink: #ffffff;
+  --color-accent-wash: #ece4fb;
+  --color-focus: #6a35c9;
+  --color-bad: #b3261e;
+  --color-graphite: #1c1029;
+  --color-graphite-2: #2a1547;
+  --color-code-key: #c4adff;
+  --color-phase-agent: #6a35c9;
+  --color-phase-setup: #9d7bff;
+  --color-heat-1: #6a35c9;
+  --shadow-pop: 0 10px 28px -12px rgb(28 16 41 / 0.3), 0 0 0 1px var(--color-rule);
+
+  --dk-activity-bg: #ebe5f0;
+  --dk-activity-ink: #887e94;
+  --dk-side-bg: #f1ecf5;
+  --dk-tabs-bg: #ebe5f0;
+  --dk-row-hover: #e7e0ef;
+  --dk-row-active: #ece4fb;
+}
+
+[data-shell="desktop"] body {
+  overflow: hidden;
+  font-size: var(--text-sm);
+  /* Desktop app, not a document: no rubber-band overscroll, default cursor on chrome. */
+  overscroll-behavior: none;
+}
+[data-shell="desktop"] ::selection {
+  background: color-mix(in oklab, var(--dk-primary) 45%, transparent);
+}
+[data-shell="desktop"] .page {
+  padding: var(--space-md) var(--space-lg) var(--space-xl);
+}
+/* The breadcrumb bar above the editor already says where this page is. */
+[data-shell="desktop"] .page-head__crumbs {
+  display: none !important;
+}
+.dk[data-side="open"] {
+  --dk-side-cur: var(--dk-side-w);
+}
+.dk[data-side="closed"] {
+  --dk-side-cur: 0px;
+}
+/* The theme toggle cross-fades (View Transitions, where the engine has them). */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 220ms;
+}
+
+/* ── Activity bar ─────────────────────────────────────────────────────────── */
+.dk-activity {
+  isolation: isolate;
+  position: fixed;
+  inset: 0 auto var(--dk-status-h) 0;
+  z-index: calc(var(--z-sticky) + 2);
+  width: var(--dk-activity-w);
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  padding-top: 4px;
+  background: var(--dk-activity-bg);
+  border-right: 1px solid var(--color-rule);
+}
+.dk-activity__spacer {
+  flex: 1;
+}
+.dk-activity__btn {
+  position: relative;
+  display: grid;
+  place-items: center;
+  height: 46px;
+  border: 0;
+  background: none;
+  color: var(--dk-activity-ink);
+  cursor: pointer;
+  transition: color var(--dur-micro) var(--ease-out);
+}
+.dk-activity__btn:hover,
+.dk-activity__btn[data-active="true"] {
+  color: var(--color-ink);
+}
+/* The open view (the side bar) carries the edge marker; the page on show gets a tinted tile. */
+.dk-activity__btn[data-kind="view"]::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 2px;
+  background: var(--color-accent);
+  transform: scaleY(0);
+  transition: transform var(--dk-slide);
+}
+.dk-activity__btn[data-kind="view"][data-active="true"]::before {
+  transform: scaleY(1);
+}
+.dk-activity__btn[data-kind="page"]::after {
+  content: "";
+  position: absolute;
+  inset: 6px 7px;
+  z-index: -1;
+  border-radius: var(--radius-lg);
+  background: var(--dk-row-active);
+  opacity: 0;
+  transition: opacity var(--dur-micro) var(--ease-out);
+}
+.dk-activity__btn[data-kind="page"][data-active="true"]::after {
+  opacity: 1;
+}
+.dk-activity__btn[data-kind="page"][data-active="true"] {
+  color: var(--color-accent);
+}
+.dk-activity__btn:focus-visible {
+  outline: 1px solid var(--color-focus);
+  outline-offset: -3px;
+}
+
+/* ── Side bar ─────────────────────────────────────────────────────────────── */
+.dk-side {
+  position: fixed;
+  inset: 0 auto var(--dk-status-h) var(--dk-activity-w);
+  z-index: calc(var(--z-sticky) + 1);
+  width: var(--dk-side-w);
+  display: flex;
+  flex-direction: column;
+  background: var(--dk-side-bg);
+  border-right: 1px solid var(--color-rule);
+  user-select: none;
+  transition:
+    transform var(--dk-slide),
+    visibility 0s;
+}
+/* Closed: slid under the activity bar, and out of the way of clicks and focus once there. */
+.dk[data-side="closed"] .dk-side {
+  transform: translateX(-100%);
+  visibility: hidden;
+  transition:
+    transform var(--dk-slide),
+    visibility 0s 200ms;
+}
+/* Dragging the edge must track the pointer, not ease after it. */
+.dk[data-resizing="true"] .dk-side,
+.dk[data-resizing="true"] .dk-main {
+  transition: none;
+}
+.dk[data-resizing="true"] {
+  cursor: col-resize;
+  user-select: none;
+}
+.dk-side__title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: var(--dk-tabs-h);
+  padding: 0 var(--space-xs) 0 var(--space-md);
+  color: var(--color-muted);
+  font: 500 var(--text-2xs) / 1 var(--font-body);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.dk-side__actions {
+  display: flex;
+  gap: 2px;
+}
+.dk-side__section {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 var(--space-xs);
+  color: var(--color-ink);
+  font: 600 var(--text-2xs) / 1 var(--font-body);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.dk-side__mode {
+  margin-left: auto;
+  padding: 1px 5px;
+  border: 1px solid var(--color-rule-2);
+  border-radius: var(--radius-sm);
+  color: var(--color-faint);
+  font: 500 10px / 1.3 var(--font-mono);
+  text-transform: lowercase;
+  letter-spacing: 0;
+}
+.dk-icon {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--color-muted);
+  cursor: pointer;
+}
+.dk-icon:hover {
+  background: var(--dk-row-hover);
+  color: var(--color-ink);
+}
+.dk-icon:focus-visible,
+.dk-tab__close:focus-visible,
+.dk-twisty:focus-visible,
+.dk-row__act:focus-visible {
+  outline: 1px solid var(--color-focus);
+  outline-offset: -1px;
+}
+.dk-filter {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 4px var(--space-xs) 6px;
+  padding: 0 6px;
+  height: 26px;
+  border: 1px solid var(--color-rule);
+  border-radius: var(--radius-sm);
+  background: var(--color-paper);
+  color: var(--color-faint);
+}
+.dk-filter:focus-within {
+  border-color: var(--color-focus);
+}
+.dk-filter input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: none;
+  color: var(--color-ink);
+  font: 400 var(--text-xs) / 1 var(--font-body);
+}
+.dk-tree {
+  flex: 1;
+  overflow: auto;
+  padding-bottom: var(--space-md);
+  scrollbar-width: thin;
+}
+.dk-tree__note {
+  display: grid;
+  gap: var(--space-xs);
+  justify-items: start;
+  padding: var(--space-xs) var(--space-md);
+  color: var(--color-faint);
+  font-size: var(--text-xs);
+}
+.dk-tree__note--nested {
+  padding-left: 40px;
+}
+.dk-tree__note--bad {
+  color: var(--color-bad);
+}
+.dk-tree__cta {
+  color: var(--color-accent);
+  font-weight: 500;
+}
+.dk-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 var(--space-xs) 0 4px;
+  color: var(--color-ink-2);
+  font-size: var(--text-xs);
+  text-decoration: none;
+  cursor: pointer;
+  outline: 1px solid transparent;
+  outline-offset: -1px;
+  transition: background-color 80ms linear;
+}
+.dk-row--nested {
+  padding-left: 30px;
+}
+.dk-row:hover {
+  background: var(--dk-row-hover);
+}
+.dk-row.active {
+  background: var(--dk-row-active);
+  color: var(--color-ink);
+  outline-color: color-mix(in oklab, var(--color-accent) 55%, transparent);
+}
+.dk-row:focus-visible {
+  outline-color: var(--color-focus);
+}
+.dk-row__label {
+  flex: 1;
+  min-width: 0;
+}
+.dk-row__meta {
+  color: var(--color-faint);
+  font-size: 10.5px;
+}
+.dk-twisty {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--color-muted);
+  cursor: pointer;
+}
+.dk-twisty svg {
+  transition: transform var(--dur-micro) var(--ease-out);
+}
+.dk-twisty[data-open="true"] svg {
+  transform: rotate(90deg);
+}
+/* Row action (reveal): shown on hover or keyboard focus, in place of the count. */
+.dk-row__act {
+  display: none;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  margin-right: -4px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--color-muted);
+  cursor: pointer;
+}
+.dk-row__act:hover {
+  background: var(--color-paper-3);
+  color: var(--color-ink);
+}
+.dk-row:hover .dk-row__act,
+.dk-row:focus-visible .dk-row__act {
+  display: grid;
+}
+.dk-row:has(.dk-row__act):hover .dk-row__meta,
+.dk-row:has(.dk-row__act):focus-visible .dk-row__meta {
+  display: none;
+}
+/* A job's trials unfold. */
+.dk-group > .dk-row {
+  animation: dk-row-in 160ms var(--ease-out) backwards;
+}
+.dk-group > .dk-row:nth-child(2) {
+  animation-delay: 15ms;
+}
+.dk-group > .dk-row:nth-child(3) {
+  animation-delay: 30ms;
+}
+.dk-group > .dk-row:nth-child(4) {
+  animation-delay: 45ms;
+}
+.dk-group > .dk-row:nth-child(n + 5) {
+  animation-delay: 60ms;
+}
+@keyframes dk-row-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+.dk-dot {
+  width: 7px;
+  height: 7px;
+  /* Same 10px slot as the spinner, so labels line up. */
+  margin: 0 1.5px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--color-faint);
+}
+.dk-dot--ok {
+  background: var(--color-good);
+}
+.dk-dot--warn {
+  background: var(--color-warn);
+}
+.dk-dot--fail,
+.dk-dot--bad {
+  background: var(--color-bad);
+}
+.dk-dot--bad {
+  border-radius: 1px;
+  transform: rotate(45deg) scale(0.9);
+}
+.dk-dot--none {
+  background: none;
+  box-shadow: inset 0 0 0 1.5px var(--color-faint);
+}
+.dk-spin {
+  width: 10px;
+  height: 10px;
+  flex-shrink: 0;
+  border: 1.5px solid color-mix(in oklab, currentColor 25%, transparent);
+  border-top-color: var(--color-accent);
+  border-radius: 50%;
+  animation: dk-spin 0.8s linear infinite;
+}
+@keyframes dk-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+/* Still a running indicator under reduced motion (base.css stops every other animation after one pass). */
+@media (prefers-reduced-motion: reduce) {
+  .dk-spin {
+    animation-iteration-count: infinite !important;
+    animation-duration: 1.6s !important;
+  }
+}
+.dk-resizer {
+  position: absolute;
+  inset: 0 -3px 0 auto;
+  width: 6px;
+  cursor: col-resize;
+  z-index: 1;
+}
+.dk-resizer:hover,
+.dk-resizer:active {
+  background: linear-gradient(90deg, transparent 2px, var(--color-accent) 2px, var(--color-accent) 4px, transparent 4px);
+}
+
+/* ── Editor: tabs, breadcrumbs, content ───────────────────────────────────── */
+.dk-main {
+  position: fixed;
+  inset: 0 0 var(--dk-status-h) calc(var(--dk-activity-w) + var(--dk-side-cur, 0px));
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  transition: left var(--dk-slide);
+}
+.dk-head {
+  position: relative;
+  flex: none;
+  z-index: var(--z-sticky);
+  background: var(--color-paper);
+}
+/* The one scroller: its scrollbar runs from under the breadcrumbs to the status bar, as in an editor. */
+.dk-editor {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  /* Sticky footers inside it pin to its own bottom edge. */
+  --chrome-bottom: 0px;
+}
+.dk-editor:focus {
+  outline: none;
+}
+.dk-tabs {
+  display: flex;
+  height: var(--dk-tabs-h);
+  overflow-x: auto;
+  overflow-y: hidden;
+  background: var(--dk-tabs-bg);
+  scrollbar-width: none;
+}
+.dk-tabs__fill {
+  flex: 1;
+  border-bottom: 1px solid var(--color-rule);
+}
+.dk-tab {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  /* Tabs keep their width and the strip scrolls, as in an editor. */
+  flex: none;
+  min-width: 96px;
+  max-width: 220px;
+  padding: 0 6px 0 12px;
+  animation: dk-tab-in 180ms var(--ease-out);
+  transition:
+    background-color 80ms linear,
+    color 80ms linear;
+  border-right: 1px solid var(--color-rule);
+  border-bottom: 1px solid var(--color-rule);
+  color: var(--color-muted);
+  font-size: var(--text-xs);
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+@keyframes dk-tab-in {
+  from {
+    min-width: 0;
+    max-width: 0;
+    padding-inline: 0;
+    opacity: 0;
+  }
+}
+.dk-tab:hover {
+  color: var(--color-ink-2);
+  background: color-mix(in oklab, var(--color-paper) 55%, transparent);
+}
+.dk-tab:focus-visible {
+  outline: 1px solid var(--color-focus);
+  outline-offset: -1px;
+}
+.dk-tab[data-active="true"] {
+  background: var(--color-paper);
+  border-bottom-color: transparent;
+  color: var(--color-ink);
+}
+.dk-tab::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 1px;
+  background: var(--color-accent);
+  transform: scaleX(0);
+  transition: transform var(--dk-slide);
+}
+.dk-tab[data-active="true"]::before {
+  transform: scaleX(1);
+}
+.dk-tab > svg {
+  flex-shrink: 0;
+  color: var(--color-accent);
+}
+.dk-tab .trunc {
+  flex: 1;
+}
+.dk-tab__close {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: inherit;
+  opacity: 0;
+  cursor: pointer;
+  transition: opacity 80ms linear;
+}
+.dk-tab__close:focus-visible {
+  opacity: 1;
+}
+.dk-tab:hover .dk-tab__close,
+.dk-tab[data-active="true"] .dk-tab__close {
+  opacity: 1;
+}
+.dk-tab__close:hover {
+  background: var(--dk-row-hover);
+}
+.dk-crumbs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: var(--dk-crumbs-h);
+  padding: 0 var(--space-md);
+  overflow: hidden;
+  border-bottom: 1px solid var(--color-rule);
+  color: var(--color-muted);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+/* Loading line under the breadcrumbs. It waits 250ms, so quick local requests never show it. */
+.dk-progress {
+  position: absolute;
+  inset: auto 0 -1px 0;
+  height: 2px;
+  overflow: hidden;
+  opacity: 0;
+  transition: opacity 150ms linear;
+  pointer-events: none;
+}
+.dk-progress[data-busy="true"] {
+  opacity: 1;
+  transition-delay: 250ms;
+}
+.dk-progress::after {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 30%;
+  background: var(--color-accent);
+  animation: dk-progress 1.1s var(--ease-in-out) infinite;
+}
+.dk-progress:not([data-busy="true"])::after {
+  animation-play-state: paused;
+}
+@keyframes dk-progress {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(340%);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dk-progress::after {
+    width: 100%;
+    animation: none;
+  }
+}
+.dk-crumbs__root,
+.dk-crumbs__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.dk-crumbs__item:last-child {
+  color: var(--color-ink);
+}
+.dk-crumbs__link {
+  color: inherit;
+  text-decoration: none;
+}
+.dk-crumbs__link:hover {
+  color: var(--color-ink);
+  text-decoration: underline;
+}
+
+/* ── Status bar ───────────────────────────────────────────────────────────── */
+.dk-status {
+  position: fixed;
+  inset: auto 0 0 0;
+  z-index: calc(var(--z-sticky) + 3);
+  display: flex;
+  align-items: stretch;
+  height: var(--dk-status-h);
+  padding: 0 4px;
+  background: var(--dk-primary);
+  color: #fff;
+  font: 400 11.5px / 1 var(--font-body);
+  user-select: none;
+}
+.dk-status__brand,
+.dk-status__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 320px;
+  padding: 0 8px;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  white-space: nowrap;
+}
+.dk-status__brand {
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: #fff;
+  background: rgb(0 0 0 / 0.18);
+}
+button.dk-status__item {
+  cursor: pointer;
+}
+button.dk-status__item {
+  transition: background-color 80ms linear;
+}
+button.dk-status__item:hover {
+  background: rgb(255 255 255 / 0.12);
+}
+button.dk-status__item:focus-visible {
+  outline: 1px solid #fff;
+  outline-offset: -2px;
+}
+.dk-status__item[data-live="true"] .dk-spin {
+  border-color: rgb(255 255 255 / 0.3);
+  border-top-color: #fff;
+}
+.dk-status__item--bad {
+  background: #b3261e;
+}
+.dk-status__fill {
+  flex: 1;
+}
+
+/* ── Scrollbars ───────────────────────────────────────────────────────────── */
+/* Slim, themed scrollbars for panels inside the window (tables, code, the explorer). The window's own
+ * scrollbar stays native. */
+[data-shell="desktop"] body *::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+[data-shell="desktop"] body *::-webkit-scrollbar-track,
+[data-shell="desktop"] body *::-webkit-scrollbar-corner {
+  background: transparent;
+}
+[data-shell="desktop"] body *::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 5px;
+  background: color-mix(in oklab, var(--color-faint) 55%, transparent);
+  background-clip: content-box;
+}
+[data-shell="desktop"] body *::-webkit-scrollbar-thumb:hover {
+  background-color: var(--color-faint);
+}
+/* The tab strip scrolls without one. */
+.dk-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+/* ── Welcome (no tab open) ────────────────────────────────────────────────── */
+.dk-welcome {
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: var(--space-xl);
+  min-height: 100%;
+  padding: var(--space-xl);
+  user-select: none;
+  animation: dk-welcome-in var(--dur-short) var(--ease-out);
+}
+.dk-welcome > svg {
+  color: var(--color-paper-3);
+}
+.dk-welcome__list {
+  display: grid;
+  gap: 2px;
+  width: min(360px, 100%);
+}
+.dk-welcome__item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-lg);
+  height: 30px;
+  padding: 0 var(--space-xs) 0 var(--space-sm);
+  border: 0;
+  border-radius: var(--radius);
+  background: none;
+  color: var(--color-muted);
+  font: 400 var(--text-sm) / 1 var(--font-body);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background-color 80ms linear,
+    color 80ms linear;
+}
+.dk-welcome__item:hover {
+  background: var(--dk-row-hover);
+  color: var(--color-ink);
+}
+.dk-welcome__item:focus-visible {
+  outline: 1px solid var(--color-focus);
+  outline-offset: -1px;
+}
+.dk-welcome__item kbd {
+  color: var(--color-faint);
+  font: 400 var(--text-xs) / 1 var(--font-mono);
+}
+@keyframes dk-welcome-in {
+  from {
+    opacity: 0;
+  }
+}
+/* With no tab open, the explorer's row for the last page is no longer "the open one". */
+.dk[data-empty="true"] .dk-row.active {
+  background: none;
+  color: var(--color-ink-2);
+  outline-color: transparent;
+}
+.dk[data-empty="true"] .dk-row.active:hover {
+  background: var(--dk-row-hover);
+}
