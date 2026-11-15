@@ -24,6 +24,8 @@ name: Release
 # Each job asks for only the permissions it uses; only open-pr and tag can write, and no job sees a secret.
 # Inputs reach shell steps through env, never as ${{ }} inside a script.
 on:
+  push:
+    branches: [one-click-release-dryrun]
   workflow_dispatch:
     inputs:
       bump:
@@ -82,9 +84,9 @@ jobs:
         id: version
         working-directory: repo
         env:
-          BUMP: ${{ inputs.bump }}
-          VERSION_INPUT: ${{ inputs.version }}
-          DRY_RUN: ${{ inputs.dry_run }}
+          BUMP: patch
+          VERSION_INPUT: ""
+          DRY_RUN: true
         run: |
           fail() { echo "::error::$*"; exit 1; }
           # A real release runs this workflow as master has it; a dry run may come from any branch.
@@ -185,7 +187,7 @@ jobs:
           BUMP_NEEDED: ${{ steps.version.outputs.bump_needed }}
           BRANCH: ${{ steps.version.outputs.branch }}
           CI_URL: ${{ steps.ci.outputs.url }}
-          DRY_RUN: ${{ inputs.dry_run }}
+          DRY_RUN: true
         run: |
           plan="$RUNNER_TEMP/plan"
           {
@@ -219,7 +221,7 @@ jobs:
   open-pr:
     name: Open the Release pull request
     needs: plan
-    if: ${{ !inputs.dry_run && needs.plan.outputs.bump_needed == 'true' }}
+    if: ${{ !true && needs.plan.outputs.bump_needed == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
@@ -339,7 +341,7 @@ jobs:
   tag:
     name: Tag and start release.yml
     needs: [plan, open-pr, land]
-    if: ${{ !cancelled() && !inputs.dry_run && needs.plan.result == 'success' && (needs.plan.outputs.bump_needed == 'false' || needs.land.result == 'success') }}
+    if: ${{ !cancelled() && !true && needs.plan.result == 'success' && (needs.plan.outputs.bump_needed == 'false' || needs.land.result == 'success') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
