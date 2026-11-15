@@ -829,6 +829,7 @@ mod tests {
         assert!(s("/a", Some("x/y"), Some("api")).validate().is_ok());
     }
 
+    #[cfg(unix)]
     #[test]
     fn hash_dir_skips_symlinked_dirs() {
         let d = std::env::temp_dir().join(format!("hbench-hash-{}", uuid::Uuid::new_v4()));

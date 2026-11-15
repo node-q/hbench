@@ -480,6 +480,7 @@ mod tests {
         assert_eq!(s.runner_env(&conn)["PYTHONPATH"], FACTORY_DIR);
     }
 
+    #[cfg(unix)]
     #[test]
     fn factory_staging_rejects_symlinks_and_ignores() {
         let src = std::env::temp_dir().join(format!("hbench-strands-{}", uuid::Uuid::new_v4()));

@@ -11,7 +11,6 @@ use super::format::{
 use anyhow::{Context, Result, bail};
 use serde_json::json;
 use std::io::Write;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 const GZIP_OS_UNIX: u8 = 3;
@@ -54,7 +53,9 @@ pub(super) fn entries(dir: &Path) -> Result<Vec<(String, Kind)>> {
     fn walk(root: &Path, dir: &Path, out: &mut Vec<(String, Kind)>) -> Result<()> {
         for e in std::fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {
             let p = e?.path();
-            let rel = p.strip_prefix(root)?.to_str().with_context(|| format!("{}: not a UTF-8 path", p.display()))?.to_string();
+            let rel = p.strip_prefix(root)?.to_str().with_context(|| format!("{}: not a UTF-8 path", p.display()))?;
+            // Layer entries are named with `/`, whatever this host separates paths with.
+            let rel = crate::fsutil::slash_path(Path::new(rel));
             let meta = p.symlink_metadata()?;
             let kind = if meta.file_type().is_symlink() {
                 let target = std::fs::read_link(&p)?;
@@ -66,7 +67,7 @@ pub(super) fn entries(dir: &Path) -> Result<Vec<(String, Kind)>> {
                 walk(root, &p, out)?;
                 Kind::Dir
             } else if meta.is_file() {
-                Kind::File { executable: meta.permissions().mode() & 0o111 != 0, len: meta.len() }
+                Kind::File { executable: crate::fsutil::is_executable(&p, &meta), len: meta.len() }
             } else {
                 bail!("{}: only files, directories and symlinks can be packed", p.display());
             };

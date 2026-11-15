@@ -403,7 +403,7 @@ pub fn build_file_tree(dir: &Path) -> String {
     let mut files = vec![];
     walk(dir, &mut files);
     files.sort();
-    let lines: Vec<String> = files.iter().map(|p| p.strip_prefix(dir).unwrap().to_string_lossy().into_owned()).collect();
+    let lines: Vec<String> = files.iter().map(|p| crate::fsutil::slash_path(p.strip_prefix(dir).unwrap())).collect();
     if lines.is_empty() { "No files found".into() } else { lines.join("\n") }
 }
 

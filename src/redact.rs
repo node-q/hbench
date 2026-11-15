@@ -308,6 +308,7 @@ mod tests {
         assert_eq!(v["message"], "401 for key [REDACTED]");
     }
 
+    #[cfg(unix)]
     #[test]
     fn publish_dir_never_writes_a_raw_byte_to_the_destination() {
         use std::os::unix::fs::PermissionsExt;

@@ -662,8 +662,7 @@ async fn egress_image(log: &TrialLog) -> Result<String> {
         for (n, c, mode) in files {
             let p = dir.join(n);
             std::fs::write(&p, c)?;
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&p, std::fs::Permissions::from_mode(mode))?;
+            crate::fsutil::set_mode(&p, mode)?;
         }
         log.line(&format!("building egress sidecar image {image}"));
         let out = docker_output(&["build", "-t", &image, &dir.to_string_lossy()], SIDECAR_BUILD_TIMEOUT).await?;
@@ -675,8 +674,8 @@ async fn egress_image(log: &TrialLog) -> Result<String> {
 }
 
 pub fn cache_root() -> PathBuf {
-    let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
-    home.join(".cache/hbench")
+    let home = crate::fsutil::home_dir().unwrap_or_else(std::env::temp_dir);
+    home.join(".cache").join("hbench")
 }
 
 impl DockerEnv {
@@ -831,7 +830,11 @@ impl DockerEnv {
             c.arg("-f").arg(f);
         }
         // Own process group: terminal Ctrl-C reaches only hbench, which then tears down cleanly.
-        c.args(args).envs(&self.compose_env).kill_on_drop(true).process_group(0);
+        c.args(args).envs(&self.compose_env).kill_on_drop(true);
+        #[cfg(unix)]
+        c.process_group(0);
+        #[cfg(windows)]
+        c.creation_flags(0x0000_0200); // CREATE_NEW_PROCESS_GROUP
         if self.spec.env_dir.is_dir() {
             c.current_dir(&self.spec.env_dir);
         }
@@ -1110,7 +1113,7 @@ impl DockerEnv {
         let local = std::env::temp_dir().join(format!("hbench-{}.tar.gz", uuid::Uuid::new_v4().simple()));
         let res = async {
             self.download_file(service, &tmp, &local).await?;
-            let out = Command::new("tar").arg("xzf").arg(&local).arg("-C").arg(dst).output().await?;
+            let out = Command::new(crate::fsutil::tar_program()).arg("xzf").arg(&local).arg("-C").arg(dst).output().await?;
             if !out.status.success() {
                 bail!("extracting artifact archive failed: {}", String::from_utf8_lossy(&out.stderr));
             }
@@ -1393,7 +1396,7 @@ echo $#"#
 }
 
 fn cache_home() -> PathBuf {
-    std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(std::env::temp_dir)
+    crate::fsutil::home_dir().unwrap_or_else(std::env::temp_dir)
 }
 
 /// Fail fast with a readable message when the docker daemon is unreachable.
@@ -1431,6 +1434,7 @@ mod tests {
 
     use super::*;
 
+    #[cfg(unix)]
     #[test]
     fn strip_links_keeps_only_files_and_dirs() {
         let d = std::env::temp_dir().join(format!("hbench-strip-{}", uuid::Uuid::new_v4()));

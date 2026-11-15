@@ -11,7 +11,8 @@ mod models;
 mod paths;
 mod print_config;
 mod task_toml;
-#[cfg(test)]
+// These tests compare Unix file modes and symlinks throughout.
+#[cfg(all(test, unix))]
 mod tests;
 mod toml_writer;
 

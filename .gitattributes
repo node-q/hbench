@@ -1,0 +1,3 @@
+# Text files are LF in every checkout. The build embeds shell scripts that run inside Linux containers,
+# where a Windows checkout's CRLF would break them.
+* text=auto eol=lf

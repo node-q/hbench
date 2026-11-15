@@ -18,7 +18,8 @@ env:
   RUSTFLAGS: -D warnings
 
 # GitHub-hosted runners. Linux runs the full suite, including the e2e job against a real
-# Docker daemon; macOS builds and runs the unit tests, since releases ship macOS binaries.
+# Docker daemon; macOS and Windows build and run the unit tests, since releases ship their binaries.
+# (Windows runners have no Linux-container Docker, so nothing there runs a trial.)
 jobs:
   test:
     name: Build & Test
@@ -68,6 +69,21 @@ jobs:
           persist-credentials: false
       - name: Set up Rust toolchain
         uses: ./.github/actions/setup-rust
+      - name: Run unit tests
+        run: cargo test --locked
+
+  test-windows:
+    name: Build & Test (Windows)
+    runs-on: windows-2025
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Rust toolchain
+        uses: ./.github/actions/setup-rust
+      - name: Lint
+        run: cargo clippy --locked --all-targets
       - name: Run unit tests
         run: cargo test --locked
 

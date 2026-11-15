@@ -7,7 +7,6 @@ use regex::Regex;
 use serde_yaml_ng::{Mapping, Value};
 use std::collections::HashSet;
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use yaml::to_yaml;
@@ -526,8 +525,7 @@ fn read_text(p: &Path) -> Result<String> {
 }
 
 fn chmod_x(p: &Path) -> Result<()> {
-    let mode = fs::metadata(p)?.permissions().mode();
-    fs::set_permissions(p, fs::Permissions::from_mode(mode | 0o111))?;
+    crate::fsutil::make_executable(p)?;
     Ok(())
 }
 
@@ -760,7 +758,7 @@ mod tests {
     }
 
     fn is_exec(p: PathBuf) -> bool {
-        fs::metadata(p).unwrap().permissions().mode() & 0o111 != 0
+        crate::fsutil::is_executable(&p, &fs::metadata(&p).unwrap())
     }
 
     const DEFAULT_COMPOSE: &str = "services:

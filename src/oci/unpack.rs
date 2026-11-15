@@ -7,7 +7,6 @@ use super::format::Layer;
 use super::{Sha256Reader, verify_file};
 use anyhow::{Context, Result, bail};
 use std::io::Read;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Component, Path, PathBuf};
 
 const DIR_MODE: u32 = 0o755;
@@ -90,7 +89,7 @@ fn real_parents(root: &Path, rel: &Path) -> Result<()> {
             Ok(_) => bail!("{}: a parent is not a directory", rel.display()),
             Err(_) => {
                 std::fs::create_dir(&dir)?;
-                std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(DIR_MODE))?;
+                crate::fsutil::set_mode(&dir, DIR_MODE)?;
             }
         }
     }
@@ -115,7 +114,7 @@ fn write_entry<R: Read>(root: &Path, entry: &mut tar::Entry<R>) -> Result<()> {
                 Ok(_) => bail!("{}: listed twice", rel.display()),
                 Err(_) => std::fs::create_dir(&target)?,
             }
-            std::fs::set_permissions(&target, std::fs::Permissions::from_mode(DIR_MODE))?;
+            crate::fsutil::set_mode(&target, DIR_MODE)?;
         }
         tar::EntryType::Regular | tar::EntryType::Continuous => {
             let mode = if entry.header().mode()? & ANY_EXEC_BIT != 0 { EXECUTABLE_MODE } else { FILE_MODE };
@@ -125,14 +124,14 @@ fn write_entry<R: Read>(root: &Path, entry: &mut tar::Entry<R>) -> Result<()> {
                 .open(&target)
                 .with_context(|| format!("{}: listed twice or not writable", rel.display()))?;
             std::io::copy(entry, &mut file)?;
-            std::fs::set_permissions(&target, std::fs::Permissions::from_mode(mode))?;
+            crate::fsutil::set_mode(&target, mode)?;
         }
         tar::EntryType::Symlink => {
             let link = entry.link_name()?.with_context(|| format!("{}: symlink without a target", rel.display()))?;
             if !stays_inside(&rel, &link) {
                 bail!("{}: symlink to {} leaves the task directory", rel.display(), link.display());
             }
-            std::os::unix::fs::symlink(&link, &target).with_context(|| format!("{}: listed twice", rel.display()))?;
+            crate::fsutil::symlink(&link, &target).with_context(|| format!("{}: listed twice or not creatable", rel.display()))?;
         }
         other => bail!("{}: {other:?} entries are not allowed in a task layer", rel.display()),
     }

@@ -9,6 +9,7 @@ use std::time::{Duration, SystemTime};
 
 const LATEST_URL: &str = "https://api.github.com/repos/node-q/hbench/releases/latest";
 const INSTALL: &str = "curl -fsSL https://github.com/node-q/hbench/releases/latest/download/install.sh | sh";
+const RELEASES_PAGE: &str = "https://github.com/node-q/hbench/releases/latest";
 const MAX_AGE: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// Prints a notice on stderr when the cached latest release is newer than this build, then refreshes a stale cache.
@@ -40,6 +41,9 @@ pub fn notify() {
 
 /// `hbench update`: runs the install script, which replaces this binary with the latest release.
 pub fn run() -> anyhow::Result<std::process::ExitCode> {
+    if cfg!(windows) {
+        anyhow::bail!("`hbench update` runs a shell install script, which Windows lacks: download the latest release from {RELEASES_PAGE}");
+    }
     let status = Command::new("sh").args(["-c", INSTALL]).status()?;
     Ok(if status.success() { std::process::ExitCode::SUCCESS } else { std::process::ExitCode::FAILURE })
 }
