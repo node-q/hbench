@@ -230,18 +230,20 @@ fn inside(root: &Path, p: &Path) -> bool {
     p.strip_prefix(root).is_ok_and(|r| !r.components().any(|c| c == Component::ParentDir))
 }
 
+/// `p`, a path inside the image, as an absolute `/`-separated string with `..` resolved. Built by hand: the
+/// host's path type would print it with the host's separator.
 fn normalize(p: &Path) -> String {
-    let mut out = PathBuf::from("/");
+    let mut parts: Vec<String> = vec![];
     for c in p.components() {
         match c {
-            Component::Normal(n) => out.push(n),
+            Component::Normal(n) => parts.push(n.to_string_lossy().into_owned()),
             Component::ParentDir => {
-                out.pop();
+                parts.pop();
             }
             _ => {}
         }
     }
-    out.display().to_string()
+    format!("/{}", parts.join("/"))
 }
 
 #[cfg(test)]

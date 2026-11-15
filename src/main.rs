@@ -1985,6 +1985,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn sighup_cancels() {
         let mut rx = cancel_on_signal(Vec::new); // handlers are registered before it returns

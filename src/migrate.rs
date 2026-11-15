@@ -754,7 +754,7 @@ mod tests {
     }
 
     fn files(dir: &Path) -> Vec<String> {
-        walk_files(dir).unwrap().iter().map(|p| p.strip_prefix(dir).unwrap().to_string_lossy().into_owned()).collect()
+        walk_files(dir).unwrap().iter().map(|p| crate::fsutil::slash_path(p.strip_prefix(dir).unwrap())).collect()
     }
 
     fn is_exec(p: PathBuf) -> bool {

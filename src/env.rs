@@ -1453,6 +1453,7 @@ mod tests {
     }
 
     /// What `docker compose exec ... main bash -c EXEC_FROM_STDIN bash [deadline grace]` runs, with the same stdin.
+    #[cfg_attr(not(unix), allow(dead_code))]
     fn run_from_stdin(env: &[(&str, &str)], command: &str, timeout: Option<Duration>) -> (i32, String) {
         use std::io::Write as _;
         let env: BTreeMap<String, String> = env.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
@@ -1471,6 +1472,8 @@ mod tests {
         (out.status.code().unwrap(), String::from_utf8(out.stdout).unwrap())
     }
 
+    // The wrapper runs in the container's bash; this drives it with the host's, which Windows lacks.
+    #[cfg(unix)]
     #[test]
     fn exec_passes_env_and_command_on_stdin() {
         let tricky = "sk-a=b 'c' \"d\" $(echo pwned) `e`\nline2\\";
