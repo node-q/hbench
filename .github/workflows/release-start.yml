@@ -1,0 +1,444 @@
+name: Release
+
+# How to release: Actions → Release → Run workflow → pick bump → approve.
+#
+#   bump      patch, minor or major: the next version after the latest v* tag
+#   version   or an exact version (0.4.0, 0.4.0-rc.1), which wins over bump
+#   dry_run   plan and show the bump, change nothing
+#
+# 1. plan (read-only) works out the version, refuses if its tag exists or master's latest CI run did not pass,
+#    applies scripts/set-version.sh (hbench's and the desktop app's version files) and lists the pull requests
+#    merged since the last tag. A dry run stops here and shows it all in the run summary.
+# 2. open-pr commits the bump through the API on a release/<version> branch, opens a "Release <version>" pull
+#    request, runs ci.yml on it and, once CI passes, turns on auto-merge. master's ruleset wants one approving
+#    review: approving that pull request is the one approval a release needs. When master already has the
+#    version (a release PR merged by hand but never tagged), there is no pull request and steps 2 and 3 are skipped.
+# 3. land waits for the pull request to merge (up to about six hours; after that, merge it and run this again).
+# 4. tag creates the annotated tag v<version> on the merge commit and starts release.yml on that tag, which
+#    builds, signs and publishes exactly as for a tag pushed by hand. A tag created with GITHUB_TOKEN starts no
+#    workflow, so tag starts release.yml (and ci.yml, if nothing ran CI on the commit) with workflow_dispatch,
+#    the one event GITHUB_TOKEN may trigger. release.yml runs on the tag's ref, so the `release` environment's
+#    rule that only v* tags may deploy to it still holds, unchanged.
+# 5. report waits for release.yml and puts the release's URL and files in this run's summary.
+#
+# Each job asks for only the permissions it uses; only open-pr and tag can write, and no job sees a secret.
+# Inputs reach shell steps through env, never as ${{ }} inside a script.
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Raise the patch, minor or major version (ignored when version is set)
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+      version:
+        description: Or an exact version, such as 0.4.0 or 0.4.0-rc.1 (empty to use bump)
+        type: string
+        required: false
+        default: ""
+      dry_run:
+        description: Dry run (plan only; open, tag and publish nothing)
+        type: boolean
+        default: false
+
+permissions: {}
+
+# One release at a time; a second run waits rather than racing for the same version.
+concurrency:
+  group: release-start
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    name: Plan the release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      previous: ${{ steps.version.outputs.previous }}
+      base: ${{ steps.version.outputs.base }}
+      bump_needed: ${{ steps.version.outputs.bump_needed }}
+      branch: ${{ steps.version.outputs.branch }}
+    steps:
+      - name: Check out the release scripts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts
+          path: tools
+      - name: Check out master with its history and tags
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: master
+          fetch-depth: 0
+          path: repo
+      - name: Work out the version
+        id: version
+        working-directory: repo
+        env:
+          BUMP: ${{ inputs.bump }}
+          VERSION_INPUT: ${{ inputs.version }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          fail() { echo "::error::$*"; exit 1; }
+          # A real release runs this workflow as master has it; a dry run may come from any branch.
+          [ "$DRY_RUN" = true ] || [ "$GITHUB_REF" = refs/heads/master ] ||
+            fail "run Release from master (this run is on $GITHUB_REF); only a dry run may use another branch"
+
+          previous=$(git tag -l 'v*' | grep -Ex 'v[0-9]+\.[0-9]+\.[0-9]+' | sort -V | tail -n1)
+          [ -n "$previous" ] || fail "no vX.Y.Z tag to count from"
+          IFS=. read -r major minor patch <<< "${previous#v}"
+          if [ -n "$VERSION_INPUT" ]; then
+            # The whole input, one line: semver core and an optional prerelease suffix, no build metadata.
+            semver='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'
+            [[ "$VERSION_INPUT" =~ $semver ]] || fail "version must be semver, like 0.4.0 or 0.4.0-rc.1 (no leading v)"
+            version="$VERSION_INPUT"
+          else
+            case "$BUMP" in
+              patch) version="$major.$minor.$((patch + 1))" ;;
+              minor) version="$major.$((minor + 1)).0" ;;
+              major) version="$((major + 1)).0.0" ;;
+              *) fail "bump must be patch, minor or major" ;;
+            esac
+          fi
+          # Newer than the latest release: compare the X.Y.Z part, so 0.4.0-rc.1 may follow 0.3.14.
+          newer() { [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -n1)" = "$1" ]; }
+          newer "${version%%-*}" "${previous#v}" || fail "$version is not newer than the latest release, $previous"
+          tag="v$version"
+          [ -z "$(git ls-remote --tags origin "refs/tags/$tag")" ] || fail "$tag already exists"
+
+          base=$(git rev-parse HEAD)
+          current=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          branch="release/$version"
+          if [ "$current" = "$version" ]; then
+            bump_needed=false
+            echo "master is already at $version: no bump, $tag goes on master's head"
+          else
+            newer "${current%%-*}" "${version%%-*}" && fail "master is already at $current, past $version: pick a later version"
+            [ -z "$(git ls-remote --heads origin "refs/heads/$branch")" ] ||
+              fail "branch $branch exists from an earlier run: merge its pull request and run Release again, or close it and delete the branch"
+            bump_needed=true
+          fi
+          {
+            echo "version=$version"
+            echo "tag=$tag"
+            echo "previous=$previous"
+            echo "base=$base"
+            echo "bump_needed=$bump_needed"
+            echo "branch=$branch"
+          } >> "$GITHUB_OUTPUT"
+      - name: Check master's latest CI run
+        id: ci
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # The release itself is gated again on CI of the tagged commit (release.yml's ci job); this stops a
+          # release from starting while master is red. A run still going is waited for, up to 40 minutes.
+          while :; do
+            run=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?branch=master&event=push&per_page=1" \
+              --jq '.workflow_runs[0] | select(.) | "\(.status) \(.conclusion) \(.html_url)"') || run="unreadable"
+            case "$run" in
+              "completed success "*) echo "master's latest CI passed: ${run##* }"; echo "url=${run##* }" >> "$GITHUB_OUTPUT"; exit 0 ;;
+              completed*) echo "::error::master's latest CI run did not pass: $run"; exit 1 ;;
+              "") echo "::error::ci.yml has never run on master"; exit 1 ;;
+            esac
+            [ "$SECONDS" -lt 2400 ] || { echo "::error::master's CI still not finished after 40 minutes: $run"; exit 1; }
+            sleep 30
+          done
+      - name: Bump the version files and list the changes
+        working-directory: repo
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+          PREVIOUS: ${{ steps.version.outputs.previous }}
+        run: |
+          plan="$RUNNER_TEMP/plan"
+          mkdir -p "$plan/files"
+          sh ../tools/scripts/set-version.sh "$VERSION"
+          sh ../tools/scripts/release-notes.sh "$PREVIOUS" HEAD > "$plan/notes.md"
+          git diff > "$plan/bump.diff"
+          # "mode path" per changed file, and the files themselves, for open-pr to commit.
+          git diff --name-only | while read -r path; do
+            echo "$(git ls-files -s -- "$path" | cut -d' ' -f1) $path"
+            mkdir -p "$plan/files/$(dirname "$path")"
+            cp "$path" "$plan/files/$path"
+          done > "$plan/files.txt"
+      - name: Keep the plan for the next jobs
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-plan
+          path: ${{ runner.temp }}/plan
+          if-no-files-found: error
+          retention-days: 7
+      - name: Summarize the plan
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ steps.version.outputs.tag }}
+          PREVIOUS: ${{ steps.version.outputs.previous }}
+          BASE: ${{ steps.version.outputs.base }}
+          BUMP_NEEDED: ${{ steps.version.outputs.bump_needed }}
+          BRANCH: ${{ steps.version.outputs.branch }}
+          CI_URL: ${{ steps.ci.outputs.url }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          plan="$RUNNER_TEMP/plan"
+          {
+            if [ "$DRY_RUN" = true ]; then echo "## Dry run: hbench $TAG"; else echo "## Releasing hbench $TAG"; fi
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Version | \`$VERSION\` (after \`$PREVIOUS\`) |"
+            echo "| master | \`$BASE\` |"
+            echo "| master's latest CI | $CI_URL |"
+            if [ "$BUMP_NEEDED" = true ]; then
+              echo "| Next | open \"Release $VERSION\" from \`$BRANCH\`, merge it once approved and CI passes, tag the merge commit |"
+            else
+              echo "| Next | master already says $VERSION: tag \`$BASE\` |"
+            fi
+            echo
+            echo "### Pull requests since $PREVIOUS"
+            echo
+            cat "$plan/notes.md"
+            echo
+            if [ "$BUMP_NEEDED" = true ]; then
+              echo "### The bump"
+              echo
+              echo '```diff'
+              cat "$plan/bump.diff"
+              echo '```'
+            fi
+            [ "$DRY_RUN" != true ] || { echo; echo "Dry run: nothing was pushed, opened, tagged or published."; }
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  open-pr:
+    name: Open the Release pull request
+    needs: plan
+    if: ${{ !inputs.dry_run && needs.plan.outputs.bump_needed == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: write # the release/<version> branch and its commit
+      pull-requests: write # open the pull request, turn on auto-merge
+      actions: write # run ci.yml on the branch: a push made with GITHUB_TOKEN starts no workflow
+    outputs:
+      number: ${{ steps.pr.outputs.number }}
+      commit: ${{ steps.commit.outputs.commit }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.plan.outputs.version }}
+      PREVIOUS: ${{ needs.plan.outputs.previous }}
+      BASE: ${{ needs.plan.outputs.base }}
+      BRANCH: ${{ needs.plan.outputs.branch }}
+    steps:
+      - name: Download the plan
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-plan
+          path: plan
+      - name: Commit the bump on a new branch
+        id: commit
+        run: |
+          # Through the API, so GitHub signs the commit and no git credentials touch the runner.
+          entries=$(while read -r mode path; do
+            blob=$(base64 -w0 "plan/files/$path" | jq -Rc '{content: ., encoding: "base64"}' |
+              gh api "repos/$GITHUB_REPOSITORY/git/blobs" --input - --jq .sha)
+            jq -nc --arg path "$path" --arg mode "$mode" --arg sha "$blob" '{path: $path, mode: $mode, type: "blob", sha: $sha}'
+          done < plan/files.txt | jq -sc .)
+          base_tree=$(gh api "repos/$GITHUB_REPOSITORY/git/commits/$BASE" --jq .tree.sha)
+          tree=$(jq -nc --arg base "$base_tree" --argjson tree "$entries" '{base_tree: $base, tree: $tree}' |
+            gh api "repos/$GITHUB_REPOSITORY/git/trees" --input - --jq .sha)
+          commit=$(jq -nc --arg msg "Release $VERSION" --arg tree "$tree" --arg parent "$BASE" \
+            '{message: $msg, tree: $tree, parents: [$parent]}' |
+            gh api "repos/$GITHUB_REPOSITORY/git/commits" --input - --jq .sha)
+          gh api "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/heads/$BRANCH" -f sha="$commit" > /dev/null
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+          echo "Release $VERSION: $commit on $BRANCH"
+      - name: Open the pull request
+        id: pr
+        run: |
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          {
+            echo "Bumps Cargo.toml and Cargo.lock, and the desktop app's version, to $VERSION. Changes since $PREVIOUS:"
+            echo
+            cat plan/notes.md
+            echo
+            echo "Opened by the [Release workflow]($run_url). **Approving this pull request releases v$VERSION:**"
+            echo "once CI passes it merges, then v$VERSION is tagged on the merge commit and published by release.yml."
+            echo "Close it (and delete \`$BRANCH\`) to cancel."
+          } > body.md
+          url=$(gh pr create -R "$GITHUB_REPOSITORY" --base master --head "$BRANCH" --title "Release $VERSION" --body-file body.md) ||
+            { echo "::error::could not open the pull request. If GitHub says Actions may not create pull requests, an admin turns on Settings → Actions → General → \"Allow GitHub Actions to create and approve pull requests\"."; exit 1; }
+          echo "number=${url##*/}" >> "$GITHUB_OUTPUT"
+          echo "Opened $url"
+          echo "### Approve $url to release v$VERSION" >> "$GITHUB_STEP_SUMMARY"
+      - name: Run CI on the pull request
+        env:
+          COMMIT: ${{ steps.commit.outputs.commit }}
+        run: |
+          gh workflow run ci.yml -R "$GITHUB_REPOSITORY" --ref "$BRANCH"
+          while :; do
+            run=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$COMMIT&event=workflow_dispatch&per_page=1" \
+              --jq '.workflow_runs[0] | select(.) | "\(.status) \(.conclusion) \(.html_url)"') || run="unreadable"
+            case "$run" in
+              "completed success "*) echo "CI passed: ${run##* }"; exit 0 ;;
+              completed*) echo "::error::CI did not pass on the Release pull request: $run"; exit 1 ;;
+              "") [ "$SECONDS" -lt 300 ] || { echo "::error::ci.yml did not start on $BRANCH"; exit 1; } ;;
+            esac
+            [ "$SECONDS" -lt 3000 ] || { echo "::error::CI on $BRANCH still not finished after 50 minutes: $run"; exit 1; }
+            sleep 30
+          done
+      - name: Merge once approved
+        env:
+          NUMBER: ${{ steps.pr.outputs.number }}
+          COMMIT: ${{ steps.commit.outputs.commit }}
+        run: |
+          # Merges at once if it is already approved (or a person merged it already); otherwise when it is.
+          [ "$(gh pr view "$NUMBER" -R "$GITHUB_REPOSITORY" --json state --jq .state)" = OPEN ] || exit 0
+          gh pr merge "$NUMBER" -R "$GITHUB_REPOSITORY" --auto --merge --match-head-commit "$COMMIT"
+
+  land:
+    name: Wait for the pull request to merge
+    needs: [plan, open-pr]
+    runs-on: ubuntu-24.04
+    # A GitHub-hosted job runs at most six hours. Past that, merge the pull request and run Release again:
+    # master then has the version, so the run skips straight to the tag.
+    timeout-minutes: 350
+    permissions:
+      pull-requests: read
+    outputs:
+      merge: ${{ steps.wait.outputs.merge }}
+    steps:
+      - name: Wait for the pull request to merge
+        id: wait
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NUMBER: ${{ needs.open-pr.outputs.number }}
+          COMMIT: ${{ needs.open-pr.outputs.commit }}
+        run: |
+          while :; do
+            pr=$(gh pr view "$NUMBER" -R "$GITHUB_REPOSITORY" --json state,headRefOid,mergeCommit \
+              --jq '"\(.state) \(.headRefOid) \(.mergeCommit.oid // "")"') || pr="unreadable"
+            read -r state head merge <<< "$pr"
+            case "$state" in
+              MERGED)
+                [ "$head" = "$COMMIT" ] || { echo "::error::#$NUMBER merged with commits the workflow did not make ($head): tag it by hand after a look"; exit 1; }
+                echo "#$NUMBER merged as $merge"
+                echo "merge=$merge" >> "$GITHUB_OUTPUT"
+                exit 0 ;;
+              CLOSED) echo "::error::#$NUMBER was closed without merging: nothing released"; exit 1 ;;
+            esac
+            sleep 30
+          done
+
+  tag:
+    name: Tag and start release.yml
+    needs: [plan, open-pr, land]
+    if: ${{ !cancelled() && !inputs.dry_run && needs.plan.result == 'success' && (needs.plan.outputs.bump_needed == 'false' || needs.land.result == 'success') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write # the tag; deleting release/<version> once merged
+      actions: write # start release.yml and, when needed, ci.yml on the tag
+    outputs:
+      run: ${{ steps.release.outputs.run }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.plan.outputs.version }}
+      TAG: ${{ needs.plan.outputs.tag }}
+      BRANCH: ${{ needs.plan.outputs.branch }}
+      BUMP_NEEDED: ${{ needs.plan.outputs.bump_needed }}
+      MERGE: ${{ needs.land.outputs.merge }}
+      BASE: ${{ needs.plan.outputs.base }}
+    steps:
+      - name: Check the commit to tag
+        id: target
+        run: |
+          fail() { echo "::error::$*"; exit 1; }
+          if [ "$BUMP_NEEDED" = true ]; then sha="$MERGE"; else sha="$BASE"; fi
+          [ -n "$sha" ] || fail "no commit to tag"
+          ! gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" > /dev/null 2>&1 || fail "$TAG already exists"
+          status=$(gh api "repos/$GITHUB_REPOSITORY/compare/master...$sha" --jq .status)
+          case "$status" in identical|behind) ;; *) fail "$sha is not on master ($status)" ;; esac
+          v=$(gh api "repos/$GITHUB_REPOSITORY/contents/Cargo.toml?ref=$sha" --jq .content | base64 -d | grep -m1 '^version' | cut -d'"' -f2)
+          [ "$v" = "$VERSION" ] || fail "Cargo.toml at $sha says $v, not $VERSION"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+      - name: Create the tag
+        env:
+          SHA: ${{ steps.target.outputs.sha }}
+        run: |
+          object=$(gh api "repos/$GITHUB_REPOSITORY/git/tags" -f tag="$TAG" -f message="hbench $TAG" -f object="$SHA" -f type=commit --jq .sha)
+          gh api "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/$TAG" -f sha="$object" > /dev/null
+          echo "Tagged $TAG on $SHA"
+          if [ "$BUMP_NEEDED" = true ]; then
+            gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/heads/$BRANCH" || echo "::warning::could not delete $BRANCH"
+          fi
+      - name: Run CI on the tag if nothing has
+        env:
+          SHA: ${{ steps.target.outputs.sha }}
+        run: |
+          # A merge made by auto-merge under GITHUB_TOKEN starts no push run of ci.yml; release.yml's ci job
+          # needs a passing run on this exact commit, so start one on the tag.
+          runs=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$SHA&per_page=20" \
+            --jq '[.workflow_runs[] | select(.event == "push" or .event == "workflow_dispatch")] | length')
+          if [ "$runs" -eq 0 ]; then
+            gh workflow run ci.yml -R "$GITHUB_REPOSITORY" --ref "$TAG"
+            echo "Started ci.yml on $TAG"
+          else
+            echo "ci.yml already ran on $SHA"
+          fi
+      - name: Start release.yml on the tag
+        id: release
+        env:
+          SHA: ${{ steps.target.outputs.sha }}
+        run: |
+          gh workflow run release.yml -R "$GITHUB_REPOSITORY" --ref "$TAG"
+          while :; do
+            run=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/release.yml/runs?head_sha=$SHA&event=workflow_dispatch&per_page=1" \
+              --jq '.workflow_runs[0] | select(.) | "\(.id) \(.html_url)"') || run=""
+            [ -z "$run" ] || break
+            [ "$SECONDS" -lt 300 ] || { echo "::error::release.yml did not start on $TAG"; exit 1; }
+            sleep 10
+          done
+          echo "run=${run%% *}" >> "$GITHUB_OUTPUT"
+          echo "### $TAG: building and publishing in ${run##* }" >> "$GITHUB_STEP_SUMMARY"
+
+  report:
+    name: Report the release
+    needs: [plan, tag]
+    if: ${{ !cancelled() && needs.tag.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Wait for release.yml and list the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.plan.outputs.tag }}
+          RUN: ${{ needs.tag.outputs.run }}
+        run: |
+          while :; do
+            read -r status conclusion url <<< "$(gh run view "$RUN" -R "$GITHUB_REPOSITORY" --json status,conclusion,url --jq '"\(.status) \(.conclusion) \(.url)"')" || status=unreadable
+            [ "$status" != completed ] || break
+            sleep 60
+          done
+          {
+            echo "## hbench $TAG"
+            echo
+            echo "release.yml: $conclusion, $url"
+            echo
+            if gh release view "$TAG" -R "$GITHUB_REPOSITORY" --json url > /dev/null 2>&1; then
+              gh release view "$TAG" -R "$GITHUB_REPOSITORY" --json url,assets --jq \
+                '"**Release:** \(.url)\n\n| File | Size |\n|---|---:|", (.assets[] | "| [\(.name)](\(.url)) | \(.size / 1048576 * 10 | round / 10) MB |")'
+            else
+              echo "No release was published for $TAG."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          [ "$conclusion" = success ] || { echo "::error::release.yml did not succeed: $url"; exit 1; }
