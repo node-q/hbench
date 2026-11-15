@@ -190,7 +190,14 @@ jobs:
           - name: Linux
             runner: ubuntu-22.04
             bundles: deb,rpm
+          - name: Windows
+            runner: windows-2025
+            bundles: nsis
     runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        # Windows runners default to PowerShell.
+        shell: bash
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -227,6 +234,13 @@ jobs:
           # Pull requests never see the Apple credentials; the release signs.
           PACKAGE_UNSIGNED: "1"
         run: bash desktop/scripts/package-macos.sh "desktop/src-tauri/target/debug/bundle/macos/Actuaria.app" "$RUNNER_TEMP/Actuaria.dmg"
+      - name: Check the Windows installer
+        if: runner.os == 'Windows'
+        run: |
+          installer=$(ls desktop/src-tauri/target/debug/bundle/nsis/*-setup.exe)
+          test -s "$installer"
+          # hbench.exe sits beside the app, where it looks for it.
+          test -s desktop/src-tauri/target/debug/hbench.exe
       - name: Check the Linux packages
         if: runner.os == 'Linux'
         run: |
