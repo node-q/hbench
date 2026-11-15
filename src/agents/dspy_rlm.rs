@@ -296,6 +296,7 @@ mod tests {
         assert!(Options::parse(&serde_json::from_value(json!({"extra_tools": ["x"]})).unwrap()).is_err());
     }
 
+    #[cfg_attr(not(unix), allow(dead_code))]
     struct MockExec(Arc<Mutex<Vec<(String, String)>>>);
     #[async_trait::async_trait]
     impl Exec for MockExec {
@@ -329,6 +330,8 @@ mod tests {
         assert!(atif_trajectory(&json!([{"step": 1}]).to_string(), None, None).is_none());
     }
 
+    // Runs the runner with the host's Python, which on Windows writes CRLF; in a trial it runs in a container.
+    #[cfg(unix)]
     #[tokio::test]
     async fn runner_bridges_tools_with_fake_dspy() {
         if std::process::Command::new(PYTHON).arg("--version").output().is_err() {

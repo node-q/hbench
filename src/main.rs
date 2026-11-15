@@ -1097,16 +1097,51 @@ fn trial_names(job_dirs: &[PathBuf]) -> Vec<String> {
         .collect()
 }
 
-/// Cancel on SIGINT/SIGTERM/SIGHUP: the first signal flips the returned flag (trials tear down);
-/// the second force-quits with 130 after a quick `docker compose down` of the projects of
-/// `trials()` (trial names; compose projects are named after them).
+/// Env naming a file whose appearance counts as a cancel signal. The viewer sets it for the runs it
+/// launches: Windows has no way to send another process a Ctrl-C.
+pub const STOP_FILE_ENV: &str = "HBENCH_STOP_FILE";
+
+/// Cancel on SIGINT/SIGTERM/SIGHUP (Ctrl-C, Ctrl-Break or the console closing on Windows) or the stop file
+/// appearing: the first signal flips the returned flag (trials tear down); the second force-quits with 130
+/// after a quick `docker compose down` of the projects of `trials()` (trial names; compose projects are
+/// named after them).
 pub fn cancel_on_signal(trials: impl Fn() -> Vec<String> + Send + 'static) -> tokio::sync::watch::Receiver<bool> {
-    use tokio::signal::unix::{SignalKind, signal};
     let (sig_tx, mut sigs) = tokio::sync::mpsc::unbounded_channel();
-    for kind in [SignalKind::interrupt(), SignalKind::terminate(), SignalKind::hangup()] {
-        let Ok(mut s) = signal(kind) else { continue };
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+        for kind in [SignalKind::interrupt(), SignalKind::terminate(), SignalKind::hangup()] {
+            let Ok(mut s) = signal(kind) else { continue };
+            let sig_tx = sig_tx.clone();
+            tokio::spawn(async move { while s.recv().await.is_some() && sig_tx.send(()).is_ok() {} });
+        }
+    }
+    #[cfg(windows)]
+    {
+        use tokio::signal::windows::{ctrl_break, ctrl_c, ctrl_close};
+        macro_rules! forward {
+            ($source:expr) => {
+                if let Ok(mut s) = $source {
+                    let sig_tx = sig_tx.clone();
+                    tokio::spawn(async move { while s.recv().await.is_some() && sig_tx.send(()).is_ok() {} });
+                }
+            };
+        }
+        forward!(ctrl_c());
+        forward!(ctrl_break());
+        forward!(ctrl_close());
+    }
+    if let Some(stop) = std::env::var_os(STOP_FILE_ENV).map(PathBuf::from) {
         let sig_tx = sig_tx.clone();
-        tokio::spawn(async move { while s.recv().await.is_some() && sig_tx.send(()).is_ok() {} });
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                // Each appearance is one signal: taking the file away lets a second one ask for a force quit.
+                if stop.exists() && (std::fs::remove_file(&stop).is_err() || sig_tx.send(()).is_err()) {
+                    break;
+                }
+            }
+        });
     }
     let (tx, rx) = tokio::sync::watch::channel(false);
     tokio::spawn(async move {
@@ -1688,8 +1723,17 @@ async fn run() -> Result<ExitCode> {
             let dir = trial_dir.canonicalize().with_context(|| format!("trial dir {}", trial_dir.display()))?;
             let cmd = tools::handoff_command(&dir, &std::env::current_dir()?)?;
             println!("Resuming session from trial {} with: {}", trial_dir.display(), cmd.join(" "));
-            use std::os::unix::process::CommandExt;
-            Err(std::process::Command::new(&cmd[0]).args(&cmd[1..]).exec().into())
+            #[cfg(unix)]
+            {
+                use std::os::unix::process::CommandExt;
+                Err(std::process::Command::new(&cmd[0]).args(&cmd[1..]).exec().into())
+            }
+            // Windows cannot replace this process: run the agent and pass its exit code on.
+            #[cfg(not(unix))]
+            {
+                let status = std::process::Command::new(&cmd[0]).args(&cmd[1..]).status().with_context(|| format!("running {}", cmd[0]))?;
+                Ok(ExitCode::from(u8::try_from(status.code().unwrap_or(1)).unwrap_or(1)))
+            }
         }
         Cmd::Agents { cmd: None | Some(AgentsCmd::List { json: false }) } => {
             for n in agents::agent_names() {
@@ -1941,6 +1985,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn sighup_cancels() {
         let mut rx = cancel_on_signal(Vec::new); // handlers are registered before it returns

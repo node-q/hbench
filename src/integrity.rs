@@ -124,7 +124,12 @@ fn copied(env: &Path, host: &Path, add: bool) -> Vec<Copied> {
             .map(|rel| {
                 let hidden_tests = rel.starts_with("tests")
                     && is_json(&rel)
-                    && Command::new("tar").arg("-xOf").arg(host).arg(&rel).output().is_ok_and(|o| holds_hidden_tests(&o.stdout));
+                    && Command::new(crate::fsutil::tar_program())
+                        .arg("-xOf")
+                        .arg(host)
+                        .arg(&rel)
+                        .output()
+                        .is_ok_and(|o| holds_hidden_tests(&o.stdout));
                 Copied { rel, unpacked: true, hidden_tests }
             })
             .collect();
@@ -148,7 +153,7 @@ fn tar_members(p: &Path) -> Option<Vec<PathBuf>> {
     if !compressed.iter().any(|m| head.starts_with(m)) && head.get(257..262) != Some(b"ustar") {
         return None;
     }
-    let out = Command::new("tar").arg("-tf").arg(p).output().ok().filter(|o| o.status.success())?;
+    let out = Command::new(crate::fsutil::tar_program()).arg("-tf").arg(p).output().ok().filter(|o| o.status.success())?;
     Some(
         String::from_utf8_lossy(&out.stdout)
             .lines()
@@ -225,18 +230,20 @@ fn inside(root: &Path, p: &Path) -> bool {
     p.strip_prefix(root).is_ok_and(|r| !r.components().any(|c| c == Component::ParentDir))
 }
 
+/// `p`, a path inside the image, as an absolute `/`-separated string with `..` resolved. Built by hand: the
+/// host's path type would print it with the host's separator.
 fn normalize(p: &Path) -> String {
-    let mut out = PathBuf::from("/");
+    let mut parts: Vec<String> = vec![];
     for c in p.components() {
         match c {
-            Component::Normal(n) => out.push(n),
+            Component::Normal(n) => parts.push(n.to_string_lossy().into_owned()),
             Component::ParentDir => {
-                out.pop();
+                parts.pop();
             }
             _ => {}
         }
     }
-    out.display().to_string()
+    format!("/{}", parts.join("/"))
 }
 
 #[cfg(test)]
@@ -336,7 +343,7 @@ mod tests {
             "FROM ubuntu:24.04\nWORKDIR /app\nADD bundle.tgz ./\nCOPY bundle.tgz /keep/\n",
             &[("bundle/tests/config.json", CONFIG), ("bundle/.oracle/solution.enc", "x"), ("solution/solve.sh", "solution.enc")],
         );
-        let tar = Command::new("tar")
+        let tar = Command::new(crate::fsutil::tar_program())
             .arg("-czf")
             .arg(d.join("environment/bundle.tgz"))
             .args(["-C", d.join("bundle").to_str().unwrap(), "tests", ".oracle"])

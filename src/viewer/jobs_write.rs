@@ -62,8 +62,13 @@ impl App {
                 if run.child.try_wait().ok().flatten().is_some() {
                     return Err(err(404, "No running launch for this job."));
                 }
-                // SIGINT: hbench's graceful cancel (tears down containers).
-                let _ = std::process::Command::new("kill").args(["-INT", &run.child.id().to_string()]).status();
+                // hbench's graceful cancel (tears down containers): SIGINT, or on Windows, which cannot send
+                // one to another process, the run's stop file.
+                if cfg!(unix) {
+                    let _ = std::process::Command::new("kill").args(["-INT", &run.child.id().to_string()]).status();
+                } else {
+                    let _ = std::fs::write(&run.stop_file, b"");
+                }
                 ok_json(json!({"stopped": true}))
             }
             _ => Err(err(405, "Method Not Allowed")),
@@ -120,16 +125,18 @@ impl App {
         let log_path = work.join("launch.log");
         let log = std::fs::File::create(&log_path).map_err(|e| err(500, e.to_string()))?;
         let exe = std::env::current_exe().map_err(|e| err(500, e.to_string()))?;
+        let stop_file = work.join("stop");
         let child = std::process::Command::new(exe)
             .args(["run", "-c"])
             .arg(&config_path)
             .args(["-y", "--quiet"])
+            .env(crate::STOP_FILE_ENV, &stop_file)
             .stdout(log.try_clone().map_err(|e| err(500, e.to_string()))?)
             .stderr(log)
             .stdin(std::process::Stdio::null())
             .spawn()
             .map_err(|e| err(500, e.to_string()))?;
-        runs.insert(job_name.clone(), LaunchedRun { child, log_path });
+        runs.insert(job_name.clone(), LaunchedRun { child, log_path, stop_file });
         ok_json(json!({"job_name": job_name}))
     }
 }
@@ -167,6 +174,11 @@ fn native_pick_directory() -> Result<Option<String>> {
     };
     if cfg!(target_os = "macos") {
         return run("osascript", &["-e", "POSIX path of (choose folder with prompt \"Select a dataset folder\")"]);
+    }
+    if cfg!(windows) {
+        let script = "Add-Type -AssemblyName System.Windows.Forms; $d = New-Object System.Windows.Forms.FolderBrowserDialog; \
+                      $d.Description = 'Select a dataset folder'; if ($d.ShowDialog() -eq 'OK') { $d.SelectedPath }";
+        return run("powershell", &["-NoProfile", "-STA", "-Command", script]);
     }
     if cfg!(target_os = "linux") {
         let which = |c: &str| std::process::Command::new("which").arg(c).output().is_ok_and(|o| o.status.success());

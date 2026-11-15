@@ -13,7 +13,8 @@ pub mod publish;
 mod store;
 mod unpack;
 
-#[cfg(test)]
+// These tests compare Unix file modes and symlinks throughout.
+#[cfg(all(test, unix))]
 mod tests;
 
 use crate::config::{DatasetConfig, OciTask, TaskRef};

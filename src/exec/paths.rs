@@ -4,9 +4,9 @@ use std::path::{Path, PathBuf};
 
 pub(super) fn expanduser(s: &str) -> String {
     if (s == "~" || s.starts_with("~/"))
-        && let Ok(home) = std::env::var("HOME")
+        && let Some(home) = crate::fsutil::home_dir()
     {
-        return format!("{}{}", home.trim_end_matches('/'), &s[1..]);
+        return format!("{}{}", home.to_string_lossy().trim_end_matches(['/', '\\']), &s[1..]);
     }
     s.to_string()
 }

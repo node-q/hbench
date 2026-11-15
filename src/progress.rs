@@ -75,7 +75,7 @@ impl Download {
     }
 
     /// (tasks, bytes) done so far.
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub fn counts(&self) -> (usize, u64) {
         let done = self.done();
         (done.tasks, done.bytes)

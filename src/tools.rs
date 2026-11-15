@@ -172,7 +172,7 @@ pub fn handoff_command(trial_dir: &Path, cwd: &Path) -> Result<Vec<String>> {
             }
             let config_dir = std::env::var_os("CLAUDE_CONFIG_DIR")
                 .map(PathBuf::from)
-                .unwrap_or_else(|| PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".claude"));
+                .unwrap_or_else(|| crate::fsutil::home_dir().unwrap_or_default().join(".claude"));
             let slug: String =
                 cwd.display().to_string().chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '-' }).collect();
             let project = config_dir.join("projects").join(slug);
@@ -199,7 +199,7 @@ pub fn handoff_command(trial_dir: &Path, cwd: &Path) -> Result<Vec<String>> {
             }
             let data = std::env::var_os("XDG_DATA_HOME")
                 .map(PathBuf::from)
-                .unwrap_or_else(|| PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".local/share"));
+                .unwrap_or_else(|| crate::fsutil::home_dir().unwrap_or_default().join(".local").join("share"));
             let store = data.join("muse/sessions");
             if walkdir(&store).iter().any(|p| p.to_string_lossy().contains(&format!("/{sid}/"))) {
                 bail!("Muse session {sid} already exists locally");

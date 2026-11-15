@@ -436,7 +436,7 @@ impl LangGraph {
         if !resolved.is_file() {
             bail!("node_loader must resolve to a file");
         }
-        Ok(format!("{PROJECT_DIR}/{}", resolved.strip_prefix(&self.project_path).unwrap().to_string_lossy()))
+        Ok(format!("{PROJECT_DIR}/{}", crate::fsutil::slash_path(resolved.strip_prefix(&self.project_path).unwrap())))
     }
 
     fn runner_args(&self, model: Option<&str>, model_kwargs_json: &str, configurable_json: &str) -> Vec<String> {

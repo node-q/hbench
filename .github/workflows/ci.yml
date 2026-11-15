@@ -18,7 +18,8 @@ env:
   RUSTFLAGS: -D warnings
 
 # GitHub-hosted runners. Linux runs the full suite, including the e2e job against a real
-# Docker daemon; macOS builds and runs the unit tests, since releases ship macOS binaries.
+# Docker daemon; macOS and Windows build and run the unit tests, since releases ship their binaries.
+# (Windows runners have no Linux-container Docker, so nothing there runs a trial.)
 jobs:
   test:
     name: Build & Test
@@ -68,6 +69,21 @@ jobs:
           persist-credentials: false
       - name: Set up Rust toolchain
         uses: ./.github/actions/setup-rust
+      - name: Run unit tests
+        run: cargo test --locked
+
+  test-windows:
+    name: Build & Test (Windows)
+    runs-on: windows-2025
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Rust toolchain
+        uses: ./.github/actions/setup-rust
+      - name: Lint
+        run: cargo clippy --locked --all-targets
       - name: Run unit tests
         run: cargo test --locked
 
@@ -162,13 +178,34 @@ jobs:
 
   desktop:
     # The release builds the Actuaria app (desktop/) the same way; this keeps that build working.
-    name: Desktop App (macOS)
-    runs-on: macos-15
+    name: Desktop App (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS
+            runner: macos-15
+            bundles: app
+          # The oldest Ubuntu the release supports: its glibc and WebKitGTK are the app's minimum.
+          - name: Linux
+            runner: ubuntu-22.04
+            bundles: deb,rpm
+          - name: Windows
+            runner: windows-2025
+            bundles: nsis
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        # Windows runners default to PowerShell.
+        shell: bash
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Install WebKitGTK and build dependencies
+        if: runner.os == 'Linux'
+        run: sh desktop/scripts/linux-deps.sh
       - name: Set up Rust toolchain
         uses: ./.github/actions/setup-rust
       - name: Set up Node.js
@@ -184,13 +221,35 @@ jobs:
         run: |
           cargo fmt --check
           cargo clippy --locked
-      - name: Build Actuaria.app
+      - name: Build and bundle the app
         working-directory: desktop
+        env:
+          BUNDLES: ${{ matrix.bundles }}
         run: |
           npm ci --ignore-scripts
-          npx tauri build --debug --bundles app
-      - name: Package it unsigned
+          npx tauri build --debug --bundles "$BUNDLES"
+      - name: Package the macOS app unsigned
+        if: runner.os == 'macOS'
+        env:
+          # Pull requests never see the Apple credentials; the release signs.
+          PACKAGE_UNSIGNED: "1"
         run: bash desktop/scripts/package-macos.sh "desktop/src-tauri/target/debug/bundle/macos/Actuaria.app" "$RUNNER_TEMP/Actuaria.dmg"
+      - name: Check the Windows installer
+        if: runner.os == 'Windows'
+        run: |
+          installer=$(ls desktop/src-tauri/target/debug/bundle/nsis/*-setup.exe)
+          test -s "$installer"
+          # hbench.exe sits beside the app, where it looks for it.
+          test -s desktop/src-tauri/target/debug/hbench.exe
+      - name: Check the Linux packages
+        if: runner.os == 'Linux'
+        run: |
+          deb=$(ls desktop/src-tauri/target/debug/bundle/deb/*.deb)
+          rpm=$(ls desktop/src-tauri/target/debug/bundle/rpm/*.rpm)
+          dpkg-deb --info "$deb"
+          # Both the app and the bundled hbench must be in the package.
+          dpkg-deb --contents "$deb" | grep -iE 'usr/bin/(actuaria|hbench)$' | wc -l | grep -qx 2
+          test -s "$rpm"
 
   e2e:
     # The integrity guarantees (stopping the agent at timeout, the hidden-test scrub, the egress allowlist)

@@ -837,7 +837,8 @@ mod tests {
             stats: compute_stats(&rs, 4, 0, 0, &[]),
         };
         let out = render_summary(&jr, Path::new("jobs/j"), false);
-        let expect = "\
+        let expect = format!(
+            "\
 adhoc • oracle
 ─────────────────────────────────────────────────────
   Trials                  4  finished · 3 graded · 1 exceptions
@@ -855,9 +856,11 @@ adhoc • oracle
   AgentTimeoutError       1  ██████░░░░░░░░░░░░░░░░░░  25%
 
 Job  runtime 1h 2m 5s
-     results jobs/j/result.json
+     results {}
      inspect hbench view jobs
-";
+",
+            Path::new("jobs/j").join("result.json").display()
+        );
         assert_eq!(out, expect);
         assert_eq!(
             group_title("claude-code__deepseek/deepseek-v4-flash__terminal-bench@2.0"),

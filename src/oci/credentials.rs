@@ -52,7 +52,7 @@ struct HelperCredentials {
 pub fn docker_config_path() -> Option<PathBuf> {
     match std::env::var_os("DOCKER_CONFIG") {
         Some(dir) => Some(PathBuf::from(dir).join("config.json")),
-        None => std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".docker/config.json")),
+        None => crate::fsutil::home_dir().map(|home| home.join(".docker").join("config.json")),
     }
 }
 
@@ -199,6 +199,7 @@ mod tests {
         assert!(auth_from(&c, "docker.io", &helper).unwrap_err().to_string().contains("identity token"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_credential_helper_is_asked_on_stdin() {
         let dir = std::env::temp_dir().join(format!("hbench-credentials-{}", uuid::Uuid::new_v4().simple()));

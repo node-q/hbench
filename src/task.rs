@@ -236,7 +236,8 @@ impl ArtifactSpec {
         }
         if let Some(d) = &self.destination {
             let p = Path::new(d);
-            if d.contains('\\') || p.is_absolute() || p.components().any(|c| c == Component::ParentDir) {
+            // `/abs` is not "absolute" to Windows's path type, which wants a drive.
+            if d.contains('\\') || d.starts_with('/') || p.is_absolute() || p.components().any(|c| c == Component::ParentDir) {
                 bail!("Artifact destination must be a relative forward-slash path without '..', got: {d:?}");
             }
             if d.trim_end_matches('/') == "manifest.json" {
@@ -829,6 +830,7 @@ mod tests {
         assert!(s("/a", Some("x/y"), Some("api")).validate().is_ok());
     }
 
+    #[cfg(unix)]
     #[test]
     fn hash_dir_skips_symlinked_dirs() {
         let d = std::env::temp_dir().join(format!("hbench-hash-{}", uuid::Uuid::new_v4()));

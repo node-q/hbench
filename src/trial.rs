@@ -226,9 +226,10 @@ struct Stage(PathBuf);
 
 impl Stage {
     fn new() -> std::io::Result<Stage> {
-        use std::os::unix::fs::DirBuilderExt;
         let dir = std::env::temp_dir().join(format!("hbench-logs-{}", uuid::Uuid::new_v4().simple()));
-        std::fs::DirBuilder::new().mode(0o700).create(&dir)?;
+        std::fs::create_dir(&dir)?;
+        // Windows's temp dir is already per-user.
+        crate::fsutil::set_mode(&dir, 0o700)?;
         Ok(Stage(dir))
     }
 }
@@ -1655,6 +1656,7 @@ mod tests {
         d
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_stage_is_private_and_goes_away() {
         use std::os::unix::fs::PermissionsExt;

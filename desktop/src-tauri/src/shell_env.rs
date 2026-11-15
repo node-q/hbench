@@ -48,7 +48,11 @@ pub fn resolve() -> HashMap<String, String> {
             env.insert(k, v);
         }
     }
-    let sep = if cfg!(windows) { ';' } else { ':' };
+    // Windows apps get the user's full environment, and Docker Desktop puts itself on PATH.
+    if cfg!(windows) {
+        return env;
+    }
+    let sep = ':';
     let mut path: Vec<String> = env.get("PATH").map(|p| p.split(sep).map(String::from).collect()).unwrap_or_default();
     if let Some(home) = env.get("HOME") {
         let docker_home = format!("{home}/.docker/bin");

@@ -48,6 +48,8 @@ impl Mode {
 struct LaunchedRun {
     child: std::process::Child,
     log_path: PathBuf,
+    /// Creating this file asks the run to cancel (see [`crate::STOP_FILE_ENV`]).
+    stop_file: PathBuf,
 }
 
 pub struct App {

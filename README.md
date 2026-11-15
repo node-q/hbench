@@ -23,13 +23,19 @@ Run coding agents (Claude Code, Codex, Gemini CLI and more) on benchmark tasks, 
 
 ## Installation
 
-You need Docker, on Linux or macOS.
+You need Docker, on Linux, macOS or Windows.
 
 ```bash
 curl -fsSL https://github.com/node-q/hbench/releases/latest/download/install.sh | sh
 ```
 
 Later, `hbench update` installs the newest release.
+
+On Windows (experimental), download `hbench-<version>-x86_64-pc-windows-msvc.zip` from the
+[latest release](https://github.com/node-q/hbench/releases/latest) and put `hbench.exe` on your `PATH`. It needs
+Docker Desktop running Linux containers. hbench's own tests pass on Windows, but no trial has been run there
+yet. Windows files have no execute bit, so `hbench datasets pack` there marks a file executable when it starts
+with `#!`. A task with symlinks needs Developer Mode to download.
 
 The script checks the archive it downloads against the release's `SHA256SUMS`. To check the script itself
 before running it, download it, read it, and verify that this repository's release workflow built it (releases
