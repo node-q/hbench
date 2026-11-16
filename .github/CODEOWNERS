@@ -1,0 +1,5 @@
+# Who can approve pull requests. With "Require review from Code Owners" on in master's ruleset
+# (Settings → Rules → Rulesets → default), a pull request merges only once one of these approves it,
+# the Release x.y.z pull request included. Nobody can approve their own pull request, so each one's
+# changes need the other's approval.
+* @luiyen @rzonyx

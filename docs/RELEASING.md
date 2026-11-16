@@ -24,6 +24,8 @@ after that, merge it and run Release again with the same version, which then jus
 
 - **Settings → Actions → General → "Allow GitHub Actions to create and approve pull requests"** must be on, or the
   run cannot open the Release pull request. The workflow itself never approves anything.
+- `master`'s ruleset requires an approval from a code owner (`.github/CODEOWNERS`), so only they can approve the
+  Release pull request.
 - The `release` environment keeps its rule that only `v*` tags may deploy to it. Add required reviewers there only
   if you want a second approval before publishing; each job in that environment then waits for one.
 - The `release` environment holds the desktop app's signing secrets: the Apple ones (see
