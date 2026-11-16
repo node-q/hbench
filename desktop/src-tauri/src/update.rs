@@ -127,11 +127,20 @@ async fn check(app: &AppHandle, manual: bool) {
             let updater =
                 app.updater_builder().on_before_exit(move || drop(stopper.state::<AppState>().server.lock().unwrap().take())).build();
             match updater {
-                Ok(u) => u.check().await.map(|u| {
-                    let v = u.as_ref().map(|u| u.version.clone());
-                    *app.state::<Updates>().update.lock().unwrap() = u;
-                    v
-                }),
+                Ok(u) => match u.check().await {
+                    Ok(u) => {
+                        let v = u.as_ref().map(|u| u.version.clone());
+                        *app.state::<Updates>().update.lock().unwrap() = u;
+                        Ok(v)
+                    }
+                    // The endpoint answered, but not with a manifest: the latest release has no `latest.json`
+                    // (one published before the updater, or without the signing key). Nothing to offer.
+                    Err(tauri_plugin_updater::Error::ReleaseNotFound) => {
+                        eprintln!("update check: the latest release has no latest.json");
+                        Ok(None)
+                    }
+                    Err(e) => Err(e),
+                },
                 Err(e) => Err(e),
             }
         }

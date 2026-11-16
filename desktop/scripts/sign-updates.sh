@@ -17,6 +17,8 @@ set -euo pipefail
 dist="${1:?usage: sign-updates.sh <dist dir> <tag> <owner/repo>}"
 tag="${2:?usage: sign-updates.sh <dist dir> <tag> <owner/repo>}"
 repo="${3:?usage: sign-updates.sh <dist dir> <tag> <owner/repo>}"
+# Absolute: the signer runs from the desktop directory, where its locked CLI is.
+dist="$(cd "$dist" && pwd)"
 version="${tag#v}"
 here="$(cd "$(dirname "$0")/.." && pwd)"
 : "${TAURI_SIGNING_PRIVATE_KEY:?TAURI_SIGNING_PRIVATE_KEY is not set}"
