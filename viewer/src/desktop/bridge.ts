@@ -18,6 +18,8 @@ function detect(): boolean {
   return sessionStorage.getItem(PREVIEW_KEY) === "1";
 }
 
+/** The desktop app's name (its tauri.conf.json productName; APP_NAME in desktop/src-tauri/src/main.rs). */
+export const APP_NAME = "Actuaria Studio Essentials";
 export const isDesktop = detect();
 export const desktopInfo = window.__ACTUARIA_DESKTOP__;
 export const isMac = (desktopInfo?.platform ?? navigator.platform.toLowerCase()).startsWith("mac");

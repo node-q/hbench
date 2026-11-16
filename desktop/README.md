@@ -1,6 +1,6 @@
-# Actuaria desktop
+# Actuaria Studio Essentials
 
-The Actuaria.io studio as a desktop app: hbench's viewer in a native window with a VS Code-style layout. Built
+The Actuaria.io studio as a desktop app, Actuaria Studio Essentials: hbench's viewer in a native window with a VS Code-style layout. Built
 with [Tauri 2](https://tauri.app).
 
 ## How it works
@@ -65,7 +65,7 @@ uses CSS container queries).
 cd desktop
 npm install
 npm run dev     # debug hbench + app with hot Rust rebuilds
-npm run build   # release hbench + Actuaria.app and .dmg in src-tauri/target/release/bundle/
+npm run build   # release hbench + the .app and .dmg in src-tauri/target/release/bundle/
 ```
 
 Debug builds (`npm run dev`) keep their own settings and log (`settings.dev.json`, `hbench-view.dev.log`) and
@@ -79,8 +79,9 @@ first.
 Building the `.dmg` arranges its window through Finder. If that step times out (no automation permission, e.g.
 over SSH), build with `CI=true npm run build`, which skips the cosmetic layout.
 
-Icons come from `assets/icon.png`, a 1024px white mark on `#2f45ff` like actuaria.io's favicon. Regenerate them
-with `npm run icons`.
+Icons come from `assets/icon.png`, actuaria.io's mark on the app's violet, a 1024px render of `assets/icon.svg`
+(any SVG renderer will do, e.g. headless Chrome with `--default-background-color=00000000`). Regenerate every
+size from it with `npm run icons`.
 
 ## Releases
 
@@ -88,9 +89,9 @@ The app's version is hbench's. `scripts/set-version.sh` (run by the Release work
 [docs/RELEASING.md](../docs/RELEASING.md)) writes it into `src-tauri/Cargo.toml`, `src-tauri/Cargo.lock` and
 `src-tauri/tauri.conf.json` along with hbench's own files, and each release build sets it again from the tag.
 
-Tagging an hbench release (`vX.Y.Z`) also builds the app. `.github/workflows/release.yml` builds `Actuaria.app`
+Tagging an hbench release (`vX.Y.Z`) also builds the app. `.github/workflows/release.yml` builds the app
 for Apple Silicon and Intel around that release's own `hbench` binary, gives it the release's version, and
-attaches `Actuaria-vX.Y.Z-<target>.dmg` to the GitHub release, listed in `SHA256SUMS` and attested. It does the
+attaches `Actuaria-Studio-Essentials-vX.Y.Z-<target>.dmg` to the GitHub release, listed in `SHA256SUMS` and attested. It does the
 same for Linux, as a `.deb` and an `.rpm` per architecture.
 
 Signing happens in a separate job that runs only `scripts/package-macos.sh` (Apple's tools, no npm or cargo
@@ -108,11 +109,11 @@ Until they are set, the `.dmg` is ad-hoc signed and the job warns: the app runs,
 downloaded copy until the user allows it in System Settings. With the certificate alone it is signed but not
 notarized. A desktop failure does not hold back the hbench release.
 
-To package a local build the same way: `scripts/package-macos.sh <Actuaria.app> <out.dmg>`.
+To package a local build the same way: `scripts/package-macos.sh "<Actuaria Studio Essentials.app>" <out.dmg>`.
 
 ### Updates
 
-Each release also carries what the in-app updater needs: `Actuaria-vX.Y.Z-<target>.app.tar.gz` (the signed macOS
+Each release also carries what the in-app updater needs: `Actuaria-Studio-Essentials-vX.Y.Z-<target>.app.tar.gz` (the signed macOS
 app, written by `package-macos.sh`), a `.sig` for it and for each Windows installer and Linux package, and
 `latest.json`, which lists them. The `desktop-updater` job makes the signatures and the manifest with
 `scripts/sign-updates.sh`, and is the only job that sees the updater key, two more secrets of the `release`
@@ -128,6 +129,12 @@ was made for and the app requires that, so an old package can't be passed off as
 means installed apps can't be updated any more: rotating it takes a release whose app carries the new public key,
 signed with the old one. Without the secrets the release ships without `latest.json` and the job warns.
 
+Before this name the app was called Actuaria. Its executable is still `Actuaria` and its identifier and data are
+unchanged, so an update carries settings over. The installers file an install under the app's name, though, so
+an update from Actuaria takes care of the old install: on macOS it replaces the bundle in place (which keeps
+its `Actuaria.app` file name); the `.deb` and `.rpm` replace the `actuaria` package; and the Windows installer
+silently uninstalls the old app after installing (`src-tauri/windows/hooks.nsh`).
+
 ## Platforms
 
 - **macOS** (13 or later): `.dmg` for Apple Silicon and Intel, signed and notarized by the release.
@@ -135,7 +142,7 @@ signed with the old one. Without the secrets the release ships without `latest.j
   WebKitGTK 4.1 or newer: Ubuntu 22.04+, Debian 12+, Fedora 38+. They are not signed; verify them with
   `SHA256SUMS` or `gh attestation verify`. The package installs `Actuaria` and the bundled `hbench` in
   `/usr/bin`. To build locally: `sh scripts/linux-deps.sh`, then `npm run sidecar && npx tauri build --bundles deb,rpm`.
-- **Windows** (10 or later, x86_64): an installer, `Actuaria-vX.Y.Z-x86_64-pc-windows-msvc-setup.exe`, that
+- **Windows** (10 or later, x86_64): an installer, `Actuaria-Studio-Essentials-vX.Y.Z-x86_64-pc-windows-msvc-setup.exe`, that
   installs for the current user. It is not Authenticode-signed, so SmartScreen warns on first run; verify it
   with `SHA256SUMS` or `gh attestation verify`. The app has been built in CI but not yet launched on Windows.
   Unlike on macOS and Linux, a crash or a kill of the app leaves its `hbench view` running; a normal quit

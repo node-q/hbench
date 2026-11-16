@@ -8,7 +8,7 @@ import { useApi } from "./lib/api";
 import { useKey } from "./lib/state";
 import type { AppConfig, JobSummary, Page, TaskDefinitionSummary } from "./lib/types";
 import { ToastProvider } from "./ui/overlay";
-import { isDesktop } from "./desktop/bridge";
+import { APP_NAME, isDesktop } from "./desktop/bridge";
 import { DesktopChrome } from "./desktop/DesktopChrome";
 
 export interface Command {
@@ -288,7 +288,7 @@ function Palette({ open, onClose, tasksMode, pageCmds, toggleMode }: { open: boo
 /** Document title helper. */
 export function useTitle(title: string | undefined) {
   useEffect(() => {
-    const app = isDesktop ? "Actuaria" : "hbench";
+    const app = isDesktop ? APP_NAME : "hbench";
     document.title = title ? `${title} · ${app}` : app;
   }, [title]);
 }

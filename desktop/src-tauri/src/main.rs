@@ -22,6 +22,8 @@ use tauri_plugin_opener::OpenerExt;
 use url::Url;
 
 const MAIN: &str = "main";
+/// The app's name, as `productName` in tauri.conf.json (the bundle, the installers) has it.
+const APP_NAME: &str = "Actuaria Studio Essentials";
 const MAX_RECENT: usize = 8;
 const DOCS_URL: &str = "https://github.com/node-q/hbench#readme";
 const SITE_URL: &str = "https://actuaria.io/";
@@ -121,7 +123,7 @@ fn open_folder(app: &AppHandle, folder: PathBuf) {
             let handle = app.clone();
             let _ = app.run_on_main_thread(move || rebuild_recent(&handle));
             if let Some(w) = main_window(app) {
-                let _ = w.set_title(&format!("{} — Actuaria", folder_name(&folder)));
+                let _ = w.set_title(&format!("{} — {APP_NAME}", folder_name(&folder)));
                 if let Ok(u) = Url::parse(&url) {
                     let _ = w.navigate(u);
                 }
@@ -292,7 +294,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<(Menu<Wry>, Submenu<Wry>)> {
         b.build(app)
     };
     let about = AboutMetadataBuilder::new()
-        .name(Some("Actuaria"))
+        .name(Some(APP_NAME))
         .version(Some(env!("CARGO_PKG_VERSION")))
         .copyright(Some("© 2026 NODEQ"))
         .comments(Some("Expert-verified AI agent benchmarking studio.\nBuilt on hbench by node-q."))
@@ -358,7 +360,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<(Menu<Wry>, Submenu<Wry>)> {
 
     let menu = Menu::new(app)?;
     if cfg!(target_os = "macos") {
-        let app_menu = SubmenuBuilder::new(app, "Actuaria")
+        let app_menu = SubmenuBuilder::new(app, APP_NAME)
             .about(Some(about))
             .item(&item("check-update", "Check for Updates…", None)?)
             .separator()
@@ -477,7 +479,7 @@ fn main() {
             let nav = handle.clone();
             let dl = handle.clone();
             WebviewWindowBuilder::new(app, MAIN, WebviewUrl::App("index.html".into()))
-                .title("Actuaria")
+                .title(APP_NAME)
                 .inner_size(1440.0, 900.0)
                 .min_inner_size(960.0, 600.0)
                 .background_color(tauri::window::Color(0x13, 0x0a, 0x1c, 0xff))
@@ -491,7 +493,8 @@ fn main() {
                 })
                 // The title bar names the open tab, then the folder: "Jobs — my-evals".
                 .on_document_title_changed(|w, title| {
-                    let Some(page) = title.strip_suffix(" · Actuaria") else { return };
+                    // The viewer titles its pages "<page> · <app name>" (useTitle in viewer/src/shell.tsx).
+                    let Some(page) = title.strip_suffix(&format!(" · {APP_NAME}")) else { return };
                     let folder = current_folder(w.app_handle()).map(|f| folder_name(&f)).unwrap_or_default();
                     let _ = w.set_title(&if folder.is_empty() { page.to_string() } else { format!("{page} — {folder}") });
                 })

@@ -4,7 +4,7 @@
 // In the browser preview, `?desktop&update=<version>` fakes an update so the flow can be tried without the app.
 import { useEffect, useState } from "react";
 import * as Icon from "../ui/icons";
-import { desktopInfo, native } from "./bridge";
+import { APP_NAME, desktopInfo, native } from "./bridge";
 
 export interface UpdateView {
   state: "none" | "available" | "downloading" | "ready" | "error";
@@ -82,7 +82,7 @@ export function UpdatePrompt({ u, nRunning }: { u: UpdateView; nRunning: number 
   let body: React.ReactNode;
   let actions: React.ReactNode = null;
   if (u.state === "available") {
-    title = `Actuaria ${v} is available`;
+    title = `${APP_NAME} ${v} is available`;
     body = (
       <>
         You have {u.current}.{" "}
@@ -104,7 +104,7 @@ export function UpdatePrompt({ u, nRunning }: { u: UpdateView; nRunning: number 
     );
   } else if (u.state === "downloading") {
     icon = <span className="dk-spin" aria-hidden="true" />;
-    title = `Downloading Actuaria ${v}…`;
+    title = `Downloading ${APP_NAME} ${v}…`;
     body = (
       <div className="dk-update__bar" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={u.progress == null ? undefined : Math.round(u.progress * 100)}>
         <span style={{ width: u.progress == null ? "100%" : pct(u.progress) }} data-indeterminate={u.progress == null} />
@@ -112,7 +112,7 @@ export function UpdatePrompt({ u, nRunning }: { u: UpdateView; nRunning: number 
     );
   } else if (u.state === "ready") {
     icon = <Icon.Check size={16} />;
-    title = `Actuaria ${v} is ready`;
+    title = `${APP_NAME} ${v} is ready`;
     body = (
       <>
         Restart to finish updating.
@@ -131,7 +131,7 @@ export function UpdatePrompt({ u, nRunning }: { u: UpdateView; nRunning: number 
     );
   } else {
     icon = <Icon.Alert size={16} />;
-    title = "Couldn't update Actuaria";
+    title = `Couldn't update ${APP_NAME}`;
     body = <span className="dk-update__error">{u.error}</span>;
     actions = (
       <>
@@ -168,13 +168,13 @@ export function UpdateStatus({ u, nRunning }: { u: UpdateView; nRunning: number 
   if (u.state === "none") return null;
   if (u.state === "available")
     return (
-      <button className="dk-status__item dk-status__item--update" title={`Download and install Actuaria ${v}`} onClick={() => choose(u.installRestarts && nRunning > 0 ? "show" : "install")}>
+      <button className="dk-status__item dk-status__item--update" title={`Download and install ${APP_NAME} ${v}`} onClick={() => choose(u.installRestarts && nRunning > 0 ? "show" : "install")}>
         <Icon.Download size={12} /> Update to {v}
       </button>
     );
   if (u.state === "downloading")
     return (
-      <button className="dk-status__item" title={`Downloading Actuaria ${v}`} onClick={() => choose("show")}>
+      <button className="dk-status__item" title={`Downloading ${APP_NAME} ${v}`} onClick={() => choose("show")}>
         <span className="dk-spin" aria-hidden="true" /> Updating {pct(u.progress)}
       </button>
     );

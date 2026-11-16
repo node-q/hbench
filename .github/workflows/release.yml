@@ -15,7 +15,7 @@ name: Release build
 # are attested but not Authenticode-signed, so SmartScreen warns on first run. Like the desktop
 # jobs, a Windows failure does not hold back the release.
 #
-# The Actuaria desktop app (desktop/) ships with the release: a .dmg per macOS architecture, and a
+# The desktop app, Actuaria Studio Essentials (desktop/), ships with the release: a .dmg per macOS architecture, and a
 # .deb and .rpm per Linux architecture (desktop-linux; unsigned, attested like the archives). The
 # desktop job builds the macOS app around that release's own hbench binary, again with no secrets.
 # desktop-sign then signs and notarizes it with Apple's tools alone. It is the only job that sees
@@ -26,7 +26,7 @@ name: Release build
 # failure does not hold back the hbench release: publish goes ahead without the missing packages.
 #
 # The app updates itself from the latest release's latest.json (desktop/src-tauri/tauri.conf.json → updater).
-# desktop-sign also writes each signed Actuaria.app as an update payload (.app.tar.gz); the Windows installer
+# desktop-sign also writes each signed app bundle as an update payload (.app.tar.gz); the Windows installer
 # and the Linux packages are their own payloads. desktop-updater signs them all with the updater key and writes
 # latest.json. It is the only job that sees that key, a secret of the `release` environment:
 #   TAURI_SIGNING_PRIVATE_KEY, TAURI_SIGNING_PRIVATE_KEY_PASSWORD   from `tauri signer generate`
@@ -249,7 +249,7 @@ jobs:
       - name: Name the installer after the release
         run: |
           mkdir out
-          cp desktop/src-tauri/target/release/bundle/nsis/*-setup.exe "out/Actuaria-$GITHUB_REF_NAME-$TARGET-setup.exe"
+          cp desktop/src-tauri/target/release/bundle/nsis/*-setup.exe "out/Actuaria-Studio-Essentials-$GITHUB_REF_NAME-$TARGET-setup.exe"
       - name: Attest build provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
@@ -304,7 +304,7 @@ jobs:
           cp "dist/$name/hbench" "desktop/src-tauri/binaries/hbench-$TARGET"
       - name: Give the app the release's version
         run: sh desktop/scripts/set-version.sh "${GITHUB_REF_NAME#v}"
-      - name: Build Actuaria.app
+      - name: Build the app bundle
         working-directory: desktop
         run: |
           npm ci --ignore-scripts
@@ -314,7 +314,7 @@ jobs:
         run: |
           # tar keeps the bundle's modes and symlinks, which a bare artifact upload would not.
           mkdir app
-          tar -C "desktop/src-tauri/target/$TARGET/release/bundle/macos" -cf "app/Actuaria-$TARGET.app.tar" Actuaria.app
+          tar -C "desktop/src-tauri/target/$TARGET/release/bundle/macos" -cf "app/Actuaria-$TARGET.app.tar" "Actuaria Studio Essentials.app"
       - name: Upload the app
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -385,8 +385,8 @@ jobs:
         run: |
           bundle=desktop/src-tauri/target/release/bundle
           mkdir out
-          cp "$bundle"/deb/*.deb "out/Actuaria-$GITHUB_REF_NAME-$TARGET.deb"
-          cp "$bundle"/rpm/*.rpm "out/Actuaria-$GITHUB_REF_NAME-$TARGET.rpm"
+          cp "$bundle"/deb/*.deb "out/Actuaria-Studio-Essentials-$GITHUB_REF_NAME-$TARGET.deb"
+          cp "$bundle"/rpm/*.rpm "out/Actuaria-Studio-Essentials-$GITHUB_REF_NAME-$TARGET.rpm"
       - name: Attest build provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
@@ -437,8 +437,8 @@ jobs:
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
         run: |
           tar -C app -xf "app/Actuaria-$TARGET.app.tar"
-          bash src/desktop/scripts/package-macos.sh app/Actuaria.app "dist/Actuaria-$GITHUB_REF_NAME-$TARGET.dmg" \
-            "update/Actuaria-$GITHUB_REF_NAME-$TARGET.app.tar.gz"
+          bash src/desktop/scripts/package-macos.sh "app/Actuaria Studio Essentials.app" "dist/Actuaria-Studio-Essentials-$GITHUB_REF_NAME-$TARGET.dmg" \
+            "update/Actuaria-Studio-Essentials-$GITHUB_REF_NAME-$TARGET.app.tar.gz"
       - name: Attest build provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:

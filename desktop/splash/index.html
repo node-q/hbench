@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <title>Actuaria</title>
+    <title>Actuaria Studio Essentials</title>
     <style>
       :root {
         color-scheme: dark;
@@ -34,6 +34,7 @@
       .brand svg path:nth-child(3) { animation-delay: .3s; }
       @keyframes draw { 70% { stroke-dashoffset: 0; fill-opacity: 0; } 100% { stroke-dashoffset: 0; fill-opacity: 1; } }
       .brand .io { color: var(--accent); }
+      .edition { margin-top: -14px; color: var(--muted); font-size: 12px; font-weight: 500; letter-spacing: 0.24em; text-transform: uppercase; }
       .status { display: flex; align-items: center; gap: 10px; color: var(--muted); font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; }
       .bar { width: 220px; height: 2px; background: var(--line); overflow: hidden; }
       .bar::after { content: ""; display: block; width: 40%; height: 100%; background: var(--accent); animation: slide 1.2s ease-in-out infinite; }
@@ -60,6 +61,7 @@
         </svg>
         <span>Actuaria<span class="io">.io</span></span>
       </div>
+      <div class="edition">Studio Essentials</div>
       <div class="loading status"><div class="bar"></div></div>
       <div class="loading status">Starting the studio…</div>
       <div class="error" role="alert">
