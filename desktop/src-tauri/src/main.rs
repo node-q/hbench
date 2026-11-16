@@ -6,6 +6,7 @@
 
 mod server;
 mod shell_env;
+mod update;
 
 use serde::{Deserialize, Serialize};
 use server::Server;
@@ -13,7 +14,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tauri::menu::{AboutMetadataBuilder, Menu, MenuItemBuilder, Submenu, SubmenuBuilder};
-use tauri::webview::DownloadEvent;
+use tauri::webview::{DownloadEvent, PageLoadEvent};
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder, Wry};
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 use tauri_plugin_notification::NotificationExt;
@@ -30,6 +31,9 @@ struct Settings {
     folder: Option<PathBuf>,
     #[serde(default)]
     recent: Vec<PathBuf>,
+    /// The update the user dismissed: not prompted for again at launch (the status bar still offers it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    skip_update: Option<String>,
 }
 
 struct AppState {
@@ -196,6 +200,7 @@ fn page_action(app: AppHandle, url: Url) {
             "server-log" => {
                 let _ = app.opener().open_path(log_path(&app).to_string_lossy(), None::<&str>);
             }
+            "update" => update::action(&app, param("do").as_deref().unwrap_or_default()),
             "open-external" => {
                 if let Some(u) = param("url").and_then(|u| Url::parse(&u).ok())
                     && matches!(u.scheme(), "http" | "https" | "mailto")
@@ -348,13 +353,14 @@ fn build_menu(app: &AppHandle) -> tauri::Result<(Menu<Wry>, Submenu<Wry>)> {
         help = help.separator().item(&item("devtools", "Toggle Developer Tools", Some("Alt+CmdOrCtrl+I"))?);
     }
     if !cfg!(target_os = "macos") {
-        help = help.separator().about(Some(about.clone()));
+        help = help.separator().item(&item("check-update", "Check for Updates…", None)?).about(Some(about.clone()));
     }
 
     let menu = Menu::new(app)?;
     if cfg!(target_os = "macos") {
         let app_menu = SubmenuBuilder::new(app, "Actuaria")
             .about(Some(about))
+            .item(&item("check-update", "Check for Updates…", None)?)
             .separator()
             .services()
             .separator()
@@ -395,6 +401,7 @@ fn on_menu(app: &AppHandle, id: &str) {
                 page_action(app.clone(), u);
             }
         }
+        "check-update" => update::check_now(app),
         "help:docs" => {
             let _ = app.opener().open_url(DOCS_URL, None::<&str>);
         }
@@ -449,6 +456,7 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             let handle = app.handle().clone();
             let settings = load_settings(&handle);
@@ -459,6 +467,7 @@ fn main() {
                 zoom: Mutex::new(1.0),
                 recent_menu: Mutex::new(None),
             });
+            app.manage(update::Updates::default());
             let (menu, recent) = build_menu(&handle)?;
             app.set_menu(menu)?;
             *app.state::<AppState>().recent_menu.lock().unwrap() = Some(recent);
@@ -474,6 +483,12 @@ fn main() {
                 .background_color(tauri::window::Color(0x13, 0x0a, 0x1c, 0xff))
                 .initialization_script(init_script())
                 .on_navigation(move |url| allow_navigation(&nav, url))
+                // Each page (the start screen, a folder's viewer, a reload) starts without the update state.
+                .on_page_load(|w, p| {
+                    if matches!(p.event(), PageLoadEvent::Finished) {
+                        update::push(w.app_handle());
+                    }
+                })
                 // The title bar names the open tab, then the folder: "Jobs — my-evals".
                 .on_document_title_changed(|w, title| {
                     let Some(page) = title.strip_suffix(" · Actuaria") else { return };
@@ -497,6 +512,7 @@ fn main() {
 
             let folder = app.state::<AppState>().settings.lock().unwrap().folder.clone().filter(|p| p.is_dir());
             let folder = folder.unwrap_or_else(|| default_folder(&handle));
+            update::start(&handle);
             std::thread::spawn(move || open_folder(&handle, folder));
             Ok(())
         })

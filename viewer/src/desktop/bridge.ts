@@ -22,7 +22,7 @@ export const isDesktop = detect();
 export const desktopInfo = window.__ACTUARIA_DESKTOP__;
 export const isMac = (desktopInfo?.platform ?? navigator.platform.toLowerCase()).startsWith("mac");
 
-export type NativeAction = "open-folder" | "reveal" | "server-log" | "open-recent" | "theme" | "notify";
+export type NativeAction = "open-folder" | "reveal" | "server-log" | "open-recent" | "theme" | "notify" | "update";
 
 // An action is a navigation the app cancels, and a second navigation started before the first is decided
 // replaces it. So actions go out one at a time: the next waits for the app's ack (or a short timeout).

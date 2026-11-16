@@ -24,6 +24,14 @@ name: Release build
 #   APPLE_API_KEY, APPLE_API_KEY_ID, APPLE_API_ISSUER    an App Store Connect API key, to notarize
 # Without them the .dmg is still built, ad-hoc signed, and the job says so in a warning. A desktop
 # failure does not hold back the hbench release: publish goes ahead without the missing packages.
+#
+# The app updates itself from the latest release's latest.json (desktop/src-tauri/tauri.conf.json → updater).
+# desktop-sign also writes each signed Actuaria.app as an update payload (.app.tar.gz); the Windows installer
+# and the Linux packages are their own payloads. desktop-updater signs them all with the updater key and writes
+# latest.json. It is the only job that sees that key, a secret of the `release` environment:
+#   TAURI_SIGNING_PRIVATE_KEY, TAURI_SIGNING_PRIVATE_KEY_PASSWORD   from `tauri signer generate`
+# Without it the release ships no latest.json, and installed apps see no update. A prerelease is never
+# "latest", so it is never offered.
 on:
   push:
     tags: ["v[0-9]+.[0-9]+.[0-9]+*"]
@@ -429,11 +437,14 @@ jobs:
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
         run: |
           tar -C app -xf "app/Actuaria-$TARGET.app.tar"
-          bash src/desktop/scripts/package-macos.sh app/Actuaria.app "dist/Actuaria-$GITHUB_REF_NAME-$TARGET.dmg"
+          bash src/desktop/scripts/package-macos.sh app/Actuaria.app "dist/Actuaria-$GITHUB_REF_NAME-$TARGET.dmg" \
+            "update/Actuaria-$GITHUB_REF_NAME-$TARGET.app.tar.gz"
       - name: Attest build provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          subject-path: dist/*.dmg
+          subject-path: |
+            dist/*.dmg
+            update/*.app.tar.gz
       - name: Upload the disk image
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -441,10 +452,89 @@ jobs:
           path: dist/*.dmg
           if-no-files-found: error
           retention-days: 7
+      - name: Upload the update payload
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: update-${{ matrix.target }}
+          path: update/*.app.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+  desktop-updater:
+    name: Sign app updates
+    needs: [ci, desktop-sign, desktop-linux, desktop-windows]
+    # Whatever desktop packages were built get offered; a missing one leaves its platform out of latest.json.
+    if: ${{ !cancelled() && needs.ci.result == 'success' }}
+    runs-on: ubuntu-24.04
+    # Only v* tags can deploy to this environment, so no other ref can read the updater key.
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    env:
+      HAS_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Node.js
+        if: env.HAS_KEY == 'true'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - name: Install the Tauri CLI
+        if: env.HAS_KEY == 'true'
+        # The same locked CLI that built the app (and so already shapes what users run) does the signing.
+        working-directory: desktop
+        run: npm ci --ignore-scripts
+      - name: Download the desktop packages
+        if: env.HAS_KEY == 'true'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: dist-desktop-*
+          merge-multiple: true
+          path: dist
+      - name: Download the macOS update payloads
+        if: env.HAS_KEY == 'true'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: update-*
+          merge-multiple: true
+          path: dist
+      - name: Sign the payloads and write latest.json
+        if: env.HAS_KEY == 'true'
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          bash desktop/scripts/sign-updates.sh dist "$GITHUB_REF_NAME" "$GITHUB_REPOSITORY"
+          # The packages themselves reach publish from their own jobs; this one adds what it made.
+          mkdir out
+          shopt -s nullglob
+          mv dist/*.sig dist/*.app.tar.gz dist/latest.json out/
+      - name: Say the release ships without updates
+        if: env.HAS_KEY != 'true'
+        run: |
+          echo "::warning::TAURI_SIGNING_PRIVATE_KEY is not set: this release has no latest.json, so installed apps are not offered it"
+      - name: Attest build provenance
+        if: env.HAS_KEY == 'true'
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: out/latest.json
+      - name: Upload the signatures and manifest
+        if: env.HAS_KEY == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist-updater
+          path: out/*
+          if-no-files-found: error
+          retention-days: 7
 
   publish:
     name: Publish
-    needs: [ci, build, build-windows, desktop-sign, desktop-linux, desktop-windows]
+    needs: [ci, build, build-windows, desktop-sign, desktop-linux, desktop-windows, desktop-updater]
     # hbench is released even when the desktop app failed to build or sign.
     if: ${{ !cancelled() && needs.ci.result == 'success' && needs.build.result == 'success' }}
     runs-on: ubuntu-24.04
@@ -475,11 +565,16 @@ jobs:
         run: |
           shopt -s nullglob
           # 2 .dmg (macOS), 2 .deb and 2 .rpm (Linux), 1 installer (Windows).
-          apps=(Actuaria-*)
+          apps=(Actuaria-*.dmg Actuaria-*.deb Actuaria-*.rpm Actuaria-*-setup.exe)
           [ "${#apps[@]}" -eq 7 ] || echo "::warning::expected 7 desktop packages, found ${#apps[@]} (${apps[*]}): this release ships without the missing ones"
           zips=(*.zip)
           [ "${#zips[@]}" -eq 1 ] || echo "::warning::hbench for Windows is missing from this release"
-          sha256sum -- *.tar.gz "${zips[@]}" "${apps[@]}" install.sh | tee SHA256SUMS
+          # The app's updates: macOS payloads, a signature per package and latest.json (desktop-updater).
+          updates=(Actuaria-*.app.tar.gz Actuaria-*.sig latest*.json)
+          [ -f latest.json ] || echo "::warning::latest.json is missing: installed apps will not be offered this release"
+          # *.tar.gz would list the macOS update payloads twice.
+          archives=(hbench-*.tar.gz)
+          sha256sum -- "${archives[@]}" "${zips[@]}" "${apps[@]}" "${updates[@]}" install.sh | tee SHA256SUMS
       - name: Attest install.sh and SHA256SUMS
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
@@ -494,7 +589,7 @@ jobs:
           flags=(--verify-tag --title "hbench $GITHUB_REF_NAME" --generate-notes)
           [ "$PRERELEASE" = true ] && flags+=(--prerelease)
           shopt -s nullglob
-          gh release create "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" "${flags[@]}" dist/*.tar.gz dist/*.zip dist/Actuaria-* dist/install.sh dist/SHA256SUMS
+          gh release create "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" "${flags[@]}" dist/hbench-*.tar.gz dist/*.zip dist/Actuaria-* dist/latest*.json dist/install.sh dist/SHA256SUMS
       - name: Summarize the release
         env:
           GH_TOKEN: ${{ github.token }}
