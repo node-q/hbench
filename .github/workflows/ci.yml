@@ -239,6 +239,16 @@ jobs:
           # The updater unpacks this over the installed bundle: Actuaria.app at the root, nothing else.
           test -z "$(tar -tzf "$RUNNER_TEMP/Actuaria.app.tar.gz" | grep -v '^Actuaria.app/')"
           tar -tzf "$RUNNER_TEMP/Actuaria.app.tar.gz" | grep -qx 'Actuaria.app/Contents/MacOS/Actuaria'
+      - name: Sign the update payload with a throwaway key
+        if: runner.os == 'macOS'
+        # As the release does (a relative dist dir from the repository root), with a key made here.
+        run: |
+          mkdir dist-update
+          cp "$RUNNER_TEMP/Actuaria.app.tar.gz" dist-update/Actuaria-v0.0.0-ci-aarch64-apple-darwin.app.tar.gz
+          (cd desktop && npx --no-install tauri signer generate --ci -p "" -w "$RUNNER_TEMP/ci-updater.key")
+          TAURI_SIGNING_PRIVATE_KEY="$(cat "$RUNNER_TEMP/ci-updater.key")" TAURI_SIGNING_PRIVATE_KEY_PASSWORD="" \
+            bash desktop/scripts/sign-updates.sh dist-update v0.0.0-ci "$GITHUB_REPOSITORY"
+          jq -e '.version == "0.0.0-ci" and (.platforms["darwin-aarch64"].signature | length > 0)' dist-update/latest.json
       - name: Check the Windows installer
         if: runner.os == 'Windows'
         run: |
