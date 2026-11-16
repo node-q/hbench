@@ -512,6 +512,13 @@ fn main() {
                     true
                 })
                 .build()?;
+            // The title bar takes the window's background colour (the theme action keeps it on the tab strip's)
+            // instead of the system grey. macOS 26 does that by itself only for apps built with its SDK; the
+            // release's runners build with an older one.
+            #[cfg(target_os = "macos")]
+            if let Some(w) = main_window(&handle) {
+                let _ = w.set_title_bar_style(tauri::TitleBarStyle::Transparent);
+            }
 
             let folder = app.state::<AppState>().settings.lock().unwrap().folder.clone().filter(|p| p.is_dir());
             let folder = folder.unwrap_or_else(|| default_folder(&handle));
