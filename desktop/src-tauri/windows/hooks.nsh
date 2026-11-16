@@ -1,6 +1,6 @@
 ; NSIS installer hooks (tauri.conf.json → bundle.windows.nsis.installerHooks).
 ;
-; Up to 0.3.17 the app was named "Actuaria". The installer files an install under the product name (its folder,
+; Before the rename the app was named "Actuaria". The installer files an install under the product name (its folder,
 ; its Add/Remove Programs entry), so the renamed app installs beside the old one rather than over it, the in-app
 ; update included. Once the new one is in, run the old one's uninstaller silently, as Add/Remove Programs would.
 ; Its data is kept: it lives under the bundle identifier, which did not change and which the new app uses, and the

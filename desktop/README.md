@@ -129,7 +129,7 @@ was made for and the app requires that, so an old package can't be passed off as
 means installed apps can't be updated any more: rotating it takes a release whose app carries the new public key,
 signed with the old one. Without the secrets the release ships without `latest.json` and the job warns.
 
-Up to 0.3.17 the app was named Actuaria. Its executable is still `Actuaria` and its identifier and data are
+Before this name the app was called Actuaria. Its executable is still `Actuaria` and its identifier and data are
 unchanged, so an update carries settings over. The installers file an install under the app's name, though, so
 an update from Actuaria takes care of the old install: on macOS it replaces the bundle in place (which keeps
 its `Actuaria.app` file name); the `.deb` and `.rpm` replace the `actuaria` package; and the Windows installer
