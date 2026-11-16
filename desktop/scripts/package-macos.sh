@@ -2,7 +2,10 @@
 # Signs Actuaria.app, wraps it in a .dmg, and notarizes that. Uses only tools that ship with macOS and
 # Xcode, so the Apple credentials never meet npm or cargo code.
 #
-#   package-macos.sh <Actuaria.app> <out.dmg>
+#   package-macos.sh <Actuaria.app> <out.dmg> [<out.app.tar.gz>]
+#
+# With a third argument it also writes the signed app as the in-app updater's macOS payload: a .tar.gz with
+# Actuaria.app at its root. The release signs that file with the updater key in a later job.
 #
 # Credentials come from the environment; each level is skipped (with a warning) when its are unset:
 #   APPLE_CERTIFICATE            base64 of a "Developer ID Application" .p12
@@ -14,7 +17,8 @@
 # PACKAGE_UNSIGNED=1 says that is intended (a CI or local test build), and silences the warnings.
 set -euo pipefail
 app="${1:?usage: package-macos.sh <Actuaria.app> <out.dmg>}"
-dmg="${2:?usage: package-macos.sh <Actuaria.app> <out.dmg>}"
+dmg="${2:?usage: package-macos.sh <Actuaria.app> <out.dmg> [<out.app.tar.gz>]}"
+update="${3:-}"
 [ -d "$app" ] || { echo "error: $app is not an app bundle" >&2; exit 1; }
 work="$(mktemp -d)"
 keychain="$work/signing.keychain-db"
@@ -67,8 +71,20 @@ if [ -n "$identity" ]; then
     xcrun notarytool submit "$dmg" --key "$work/AuthKey.p8" --key-id "${APPLE_API_KEY_ID:?}" --issuer "${APPLE_API_ISSUER:?}" --wait
     xcrun stapler staple "$dmg"
     spctl --assess --type open --context context:primary-signature -v "$dmg"
+    # The dmg's ticket covers the app inside it too; stapling the app lets the update payload pass Gatekeeper
+    # offline. Not fatal: Gatekeeper looks the ticket up online otherwise.
+    if [ -n "$update" ]; then
+      xcrun stapler staple "$app" || warn "couldn't staple the ticket to $(basename "$app"); its update payload relies on the online check"
+    fi
   else
     warn "APPLE_API_KEY is not set: $(basename "$dmg") is signed but not notarized, and Gatekeeper will still warn"
   fi
 fi
 echo "packaged: $dmg"
+
+if [ -n "$update" ]; then
+  mkdir -p "$(dirname "$update")"
+  # No AppleDouble (._*) files: the updater unpacks every entry into the bundle.
+  COPYFILE_DISABLE=1 tar -C "$(dirname "$app")" -czf "$update" "$(basename "$app")"
+  echo "update payload: $update"
+fi

@@ -28,6 +28,14 @@ with [Tauri 2](https://tauri.app).
 - When a run finishes, the app shows a toast if its window is focused, or a system notification if it is in
   the background.
 - The window title names the open tab and the folder, e.g. `Compare — my-evals`.
+- The app updates itself. A few seconds after launch, then every four hours, it reads the latest release's
+  `latest.json` and, when there is a newer version, the page shows a prompt: **Update now** downloads the package,
+  checks its signature against the public key in `tauri.conf.json`, swaps it in, and asks to restart. **Later**
+  hides the prompt and leaves an **Update to X.Y.Z** action in the status bar; that version is not prompted for
+  again at launch. **Check for Updates…** (app menu on macOS, Help elsewhere) checks on demand. On Windows the
+  installer takes over at once and relaunches the app; on Linux the `.deb` or `.rpm` is installed through
+  `pkexec`. Debug builds never check; `ACTUARIA_UPDATE_DEMO=9.9.9 npm run dev` fakes an update to try the flow,
+  and `?desktop&update=9.9.9` does the same in the browser preview.
 
 ## Shortcuts
 
@@ -101,6 +109,24 @@ downloaded copy until the user allows it in System Settings. With the certificat
 notarized. A desktop failure does not hold back the hbench release.
 
 To package a local build the same way: `scripts/package-macos.sh <Actuaria.app> <out.dmg>`.
+
+### Updates
+
+Each release also carries what the in-app updater needs: `Actuaria-vX.Y.Z-<target>.app.tar.gz` (the signed macOS
+app, written by `package-macos.sh`), a `.sig` for it and for each Windows installer and Linux package, and
+`latest.json`, which lists them. The `desktop-updater` job makes the signatures and the manifest with
+`scripts/sign-updates.sh`, and is the only job that sees the updater key, two more secrets of the `release`
+environment:
+
+| Secret | What it is |
+| --- | --- |
+| `TAURI_SIGNING_PRIVATE_KEY` | The private key from `npx tauri signer generate` (the file's contents) |
+| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Its password |
+
+Its public key is `plugins.updater.pubkey` in `src-tauri/tauri.conf.json`. Each signature names the version it
+was made for and the app requires that, so an old package can't be passed off as a new one. Losing the private key
+means installed apps can't be updated any more: rotating it takes a release whose app carries the new public key,
+signed with the old one. Without the secrets the release ships without `latest.json` and the job warns.
 
 ## Platforms
 

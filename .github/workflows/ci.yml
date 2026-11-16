@@ -233,7 +233,12 @@ jobs:
         env:
           # Pull requests never see the Apple credentials; the release signs.
           PACKAGE_UNSIGNED: "1"
-        run: bash desktop/scripts/package-macos.sh "desktop/src-tauri/target/debug/bundle/macos/Actuaria.app" "$RUNNER_TEMP/Actuaria.dmg"
+        run: |
+          bash desktop/scripts/package-macos.sh "desktop/src-tauri/target/debug/bundle/macos/Actuaria.app" "$RUNNER_TEMP/Actuaria.dmg" \
+            "$RUNNER_TEMP/Actuaria.app.tar.gz"
+          # The updater unpacks this over the installed bundle: Actuaria.app at the root, nothing else.
+          test -z "$(tar -tzf "$RUNNER_TEMP/Actuaria.app.tar.gz" | grep -v '^Actuaria.app/')"
+          tar -tzf "$RUNNER_TEMP/Actuaria.app.tar.gz" | grep -qx 'Actuaria.app/Contents/MacOS/Actuaria'
       - name: Check the Windows installer
         if: runner.os == 'Windows'
         run: |

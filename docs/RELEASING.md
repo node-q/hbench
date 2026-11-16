@@ -26,6 +26,10 @@ after that, merge it and run Release again with the same version, which then jus
   run cannot open the Release pull request. The workflow itself never approves anything.
 - The `release` environment keeps its rule that only `v*` tags may deploy to it. Add required reviewers there only
   if you want a second approval before publishing; each job in that environment then waits for one.
+- The `release` environment holds the desktop app's signing secrets: the Apple ones (see
+  [desktop/README.md](../desktop/README.md#releases)) and the in-app updater's key, `TAURI_SIGNING_PRIVATE_KEY` and
+  `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. Without the updater key a release still ships, but with no `latest.json`, so
+  installed apps are not offered it.
 
 ### By hand
 
@@ -51,4 +55,4 @@ job, in the `release` environment, creates the GitHub release with the archives,
 `gh attestation verify install.sh -R node-q/hbench` checks the script and `sha256sum -c` checks any file against the
 sums. The install script checks the archive it downloads against `SHA256SUMS` before unpacking it. Tags
 with a suffix (`v0.2.0-rc.1`) are published as prereleases, which the install script skips unless `HBENCH_VERSION`
-names one.
+names one, and which the desktop app never offers as an update (it reads `releases/latest/download/latest.json`).

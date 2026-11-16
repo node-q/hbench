@@ -26,5 +26,17 @@
     "macOS": {
       "minimumSystemVersion": "13.0"
     }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEY0OTY1OEQ1QUUxMDI2OTkKUldTWkpoQ3UxVmlXOU9DV3l5ZU9MOWp3YWxrMXNzY0xzM0Erb3lhVHVmQ0F1bURIRkpsbW1md3cK",
+      "endpoints": [
+        "https://github.com/node-q/hbench/releases/latest/download/latest.json"
+      ],
+      "requireSignedVersion": true,
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }

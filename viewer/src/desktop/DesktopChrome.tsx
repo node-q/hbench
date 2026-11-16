@@ -8,6 +8,7 @@ import { useKey } from "../lib/state";
 import type { AppConfig, JobSummary, Page, TaskDefinitionSummary, TrialSummary } from "../lib/types";
 import { useToast } from "../ui/overlay";
 import { desktopInfo, isMac, native, onCommand } from "./bridge";
+import { UpdatePrompt, UpdateStatus, useUpdate } from "./Update";
 
 const SIDE_KEY = "hb:dk-side";
 const TABS_KEY = "hb:dk-tabs";
@@ -174,6 +175,7 @@ export function DesktopChrome({
   const nRunning = jobs.data?.items.filter(running).length ?? 0;
   useEffect(() => setLive(nRunning > 0), [nRunning]);
   useFinishNotices(jobs.data?.items);
+  const update = useUpdate();
 
   useEffect(() => {
     onCommand((cmd) => {
@@ -385,6 +387,7 @@ export function DesktopChrome({
           </span>
         )}
         <span className="dk-status__fill" />
+        <UpdateStatus u={update} nRunning={nRunning} />
         <button className="dk-status__item" onClick={openPalette}>
           {kbd("K")} Commands
         </button>
@@ -395,6 +398,7 @@ export function DesktopChrome({
           {desktopInfo ? `Actuaria v${desktopInfo.version}` : "Desktop preview"}
         </button>
       </footer>
+      <UpdatePrompt u={update} nRunning={nRunning} />
     </div>
   );
 }
