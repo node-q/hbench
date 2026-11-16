@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- The app icon: actuaria.io's mark on the desktop theme's violet (viewer/src/desktop/desktop.css).
+       Rendered to icon.png, which `npm run icons` turns into every size the bundles need. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#9d7bff" />
+      <stop offset="0.55" stop-color="#6a35c9" />
+      <stop offset="1" stop-color="#43208f" />
+    </linearGradient>
+    <radialGradient id="shine" cx="0.3" cy="0.2" r="0.8">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.18" />
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0" />
+    </radialGradient>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#bg)" />
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#shine)" />
+  <path transform="translate(281 281) scale(7.21875)" fill="#ffffff"
+    d="M13.13724 0l10.15269 10.15263 10.15341-10.15263 12.72841 0-22.88204 22.88029-22.88043-22.88029 12.72796 0z m-13.13724 24.26167l0-12.72793 23.32843 23.32844 34.86233-34.86218 5.80924 0 0 6.91869-16.06904 16.06897 16.06904 16.06903 0 12.72793-22.43301-22.43302-34.64855 34.6484-6.91844 0 0-5.80948 16.96446-16.96439-16.96446-16.96446z m32.11455 39.73833l-12.72792 0 22.0503-22.05029 22.05029 22.05029-12.72792 0-9.32237-9.32237-9.32238 9.32237z" />
+</svg>

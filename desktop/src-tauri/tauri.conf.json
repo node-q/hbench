@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Actuaria",
+  "productName": "Actuaria Studio Essentials",
   "mainBinaryName": "Actuaria",
   "version": "0.3.18",
   "identifier": "io.actuaria.studio",
@@ -25,6 +25,13 @@
     "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"],
     "macOS": {
       "minimumSystemVersion": "13.0"
+    },
+    "linux": {
+      "deb": { "conflicts": ["actuaria"], "replaces": ["actuaria"] },
+      "rpm": { "obsoletes": ["actuaria"] }
+    },
+    "windows": {
+      "nsis": { "installerHooks": "windows/hooks.nsh" }
     }
   },
   "plugins": {

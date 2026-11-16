@@ -10,7 +10,7 @@
 //! Debug builds never check. `ACTUARIA_UPDATE_DEMO=<version>` (debug builds only) fakes an update to that version,
 //! with a simulated download, to try the flow without a release.
 
-use crate::{AppState, DEV, main_window, save_settings};
+use crate::{APP_NAME, AppState, DEV, main_window, save_settings};
 use serde::Serialize;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -156,7 +156,7 @@ async fn check(app: &AppHandle, manual: bool) {
         Ok(None) => {
             set(app, |v| *v = View::default());
             if manual {
-                message(app, "Actuaria is up to date", &format!("Version {CURRENT} is the latest."), MessageDialogKind::Info);
+                message(app, &format!("{APP_NAME} is up to date"), &format!("Version {CURRENT} is the latest."), MessageDialogKind::Info);
             }
         }
         Err(e) => {

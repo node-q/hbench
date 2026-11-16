@@ -7,7 +7,7 @@ import { useApi, useBusy } from "../lib/api";
 import { useKey } from "../lib/state";
 import type { AppConfig, JobSummary, Page, TaskDefinitionSummary, TrialSummary } from "../lib/types";
 import { useToast } from "../ui/overlay";
-import { desktopInfo, isMac, native, onCommand } from "./bridge";
+import { APP_NAME, desktopInfo, isMac, native, onCommand } from "./bridge";
 import { UpdatePrompt, UpdateStatus, useUpdate } from "./Update";
 
 const SIDE_KEY = "hb:dk-side";
@@ -369,7 +369,7 @@ export function DesktopChrome({
 
       <footer className="dk-status" aria-label="Status bar">
         <span className="dk-status__brand">
-          <Mark size={12} /> Actuaria
+          <Mark size={12} /> {APP_NAME}
         </span>
         <button className="dk-status__item" title={`${folder}\nReveal in ${isMac ? "Finder" : "file manager"}`} onClick={() => native("reveal")}>
           <Icon.Folder size={12} />
@@ -395,7 +395,7 @@ export function DesktopChrome({
           {mode === "dark" ? "Dark" : "Light"}
         </button>
         <button className="dk-status__item" title="Server log" onClick={() => native("server-log")}>
-          {desktopInfo ? `Actuaria v${desktopInfo.version}` : "Desktop preview"}
+          {desktopInfo ? `v${desktopInfo.version}` : "Desktop preview"}
         </button>
       </footer>
       <UpdatePrompt u={update} nRunning={nRunning} />
