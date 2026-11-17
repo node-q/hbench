@@ -229,6 +229,70 @@ pub fn agent_names() -> Vec<&'static str> {
     v
 }
 
+/// Agents in the order lists offer them: the most used coding agents first, the rest after, and the two that
+/// run no model (oracle checks a task, nop scores an untouched environment) last. Edit to reorder; an agent
+/// missing here is listed after these, by name.
+const POPULARITY: &[&str] = &[
+    "claude-code",
+    "codex",
+    "gemini-cli",
+    "cursor-cli",
+    "copilot-cli",
+    "opencode",
+    "aider",
+    "openhands",
+    "cline-cli",
+    "goose",
+    "qwen-coder",
+    "kimi-cli",
+    "terminus-2",
+    "mini-swe-agent",
+    "swe-agent",
+    "devin",
+    "antigravity-cli",
+    "grok-build",
+    "junie",
+    "rovodev-cli",
+    "kimi-code",
+    "openhands-sdk",
+    "deepseek-harness",
+    "trae-agent",
+    "openclaw",
+    "hermes",
+    "code-puppy",
+    "vibe",
+    "muse-code",
+    "pi",
+    "antigravity-sdk",
+    "langgraph",
+    "deerflow",
+    "strands",
+    "dspy-rlm",
+    "computer-1",
+    "acp",
+    "nemo-agent",
+    "cortex-code",
+    "mimo",
+    "mcode",
+    "eve",
+    "fx",
+    "fx-dev",
+    "terminus-1",
+    "terminus",
+];
+
+/// [`agent_names`] most used first (see [`POPULARITY`]), then the rest by name, then oracle and nop.
+pub fn agent_names_by_popularity() -> Vec<&'static str> {
+    let rank = |n: &str| match n {
+        "oracle" => usize::MAX - 1,
+        "nop" => usize::MAX,
+        _ => POPULARITY.iter().position(|p| *p == n).unwrap_or(POPULARITY.len()),
+    };
+    let mut v = agent_names();
+    v.sort_by(|a, b| rank(a).cmp(&rank(b)).then(a.cmp(b)));
+    v
+}
+
 /// Reject kwargs outside the agent's options schema, and `config` unless the agent supports it natively.
 pub fn check_kwargs(name: &str, kwargs: &BTreeMap<String, Value>) -> Result<()> {
     let Some(options) = crate::schemas::options(name) else { return Ok(()) };
@@ -292,6 +356,19 @@ pub fn model_endpoint(cfg: &AgentConfig, task: &Task) -> Option<ModelEndpoint> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn popularity_names_known_agents_once_and_lists_every_agent() {
+        let known = super::agent_names();
+        for (i, p) in super::POPULARITY.iter().enumerate() {
+            assert!(known.contains(p), "{p} is not an agent");
+            assert!(!super::POPULARITY[..i].contains(p), "{p} is listed twice");
+        }
+        let ordered = super::agent_names_by_popularity();
+        assert_eq!(ordered.len(), known.len());
+        assert_eq!(ordered[0], "claude-code");
+        assert_eq!(&ordered[ordered.len() - 2..], ["oracle", "nop"]);
+    }
+
     use super::*;
 
     #[test]

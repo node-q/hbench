@@ -343,7 +343,7 @@ fn pick_agent(t: &ColorfulTheme) -> Result<(String, Option<&'static str>)> {
     Ok(match TOP_AGENTS.get(i) {
         Some((n, _, m)) => (n.to_string(), *m),
         None => {
-            let all = agents::agent_names();
+            let all = agents::agent_names_by_popularity();
             let n = all[Select::with_theme(t).with_prompt("Agent").items(&all).default(0).max_length(12).interact()?];
             (n.to_string(), None)
         }
