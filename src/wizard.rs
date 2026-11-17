@@ -482,14 +482,14 @@ async fn pick_model(t: &ColorfulTheme, agent: &str, suggested: Option<&str>) -> 
 }
 
 /// The server root of a model server URL as typed (`host:port`, with or without scheme or `/v1`).
-fn server_root(typed: &str) -> String {
+pub(crate) fn server_root(typed: &str) -> String {
     let u = typed.trim().trim_end_matches('/');
     let u = u.strip_suffix("/v1").unwrap_or(u);
     if u.contains("://") { u.to_string() } else { format!("http://{u}") }
 }
 
 /// `root` as the agent's container reaches it: this machine's loopback becomes `host.docker.internal`.
-fn from_container(root: &str) -> String {
+pub(crate) fn from_container(root: &str) -> String {
     let (scheme, rest) = root.split_once("://").unwrap_or(("http", root));
     let (authority, path) = rest.find('/').map_or((rest, ""), |i| rest.split_at(i));
     let host_end = if authority.starts_with('[') {
@@ -504,7 +504,7 @@ fn from_container(root: &str) -> String {
 
 /// The model ids `GET {root}/v1/models` lists, with the response's `Server` header; None when the server refuses
 /// `key` (or wants one).
-async fn server_models(root: &str, key: Option<&str>) -> Result<Option<(Vec<String>, Option<String>)>> {
+pub(crate) async fn server_models(root: &str, key: Option<&str>) -> Result<Option<(Vec<String>, Option<String>)>> {
     let _ = rustls::crypto::ring::default_provider().install_default();
     let client = reqwest::Client::builder().timeout(std::time::Duration::from_secs(5)).build()?;
     let mut req = client.get(format!("{root}/v1/models"));
@@ -528,7 +528,7 @@ fn served_by_ok(s: &str) -> bool {
 }
 
 /// A `--model-served-by` guess from a `Server` header (`llama.cpp`, `uvicorn`, `TensorFold/1.2` → `tensorfold`).
-fn served_by_guess(server: &str) -> Option<String> {
+pub(crate) fn served_by_guess(server: &str) -> Option<String> {
     let name = server.split(['/', ' ']).next()?.to_lowercase();
     served_by_ok(&name).then_some(name)
 }

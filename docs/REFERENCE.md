@@ -453,6 +453,15 @@ and the dataset names (globs) each one claims; a dataset none claims is filed un
 task and a dataset named by hand are under "Your own tasks". While a folder has no jobs, the Jobs page shows the
 domain tiles.
 
+An agent's model can come from a self-hosted, OpenAI-compatible server (llama.cpp, vLLM, LM Studio, TensorFold…)
+instead of a provider: "Use a self-hosted server" under Model takes the server's URL and, if it checks one, an API
+key (`${VAR}` reads it from `hbench view`'s environment). `POST /api/run/server-models` lists the models the server's
+`/v1/models` serves and guesses `model_served_by` from its `Server` header. The run then gets what the `hbench run`
+wizard's self-hosted choice gives: `openai/<model>` with `OPENAI_BASE_URL`/`OPENAI_API_KEY` (claude-code:
+`anthropic/<model>` with `ANTHROPIC_BASE_URL`/`ANTHROPIC_API_KEY`), the URL as the agent's container reaches it
+(this machine's loopback becomes `host.docker.internal`), and `model_served_by`. Loading such a run from Recent runs
+shows the server again.
+
 After changing the UI:
 
 ```bash
