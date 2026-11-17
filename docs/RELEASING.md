@@ -46,7 +46,7 @@ git tag -a vX.Y.Z -m "hbench vX.Y.Z" && git push origin vX.Y.Z
 
 `.github/workflows/release.yml` checks the tag against `Cargo.toml` and, on GitHub-hosted runners, builds static
 x86_64/aarch64 Linux (musl) and x86_64/arm64 macOS binaries, one per job. It publishes only once `ci.yml` has passed
-on the tagged commit (unit tests on Linux and macOS, E2E, lint, audit), waiting for that run if it is still going,
+on the tagged commit (unit tests on Linux and Windows, E2E, lint, audit), waiting for that run if it is still going,
 so a tag on a commit that is not on `master`, that CI never ran on, or that CI failed, publishes nothing. The CI run
 is the push to `master`'s, or one the Release workflow starts on the tag when it merged the pull request itself
 (a merge made with the workflow's token starts no push run). Each `.tar.gz` gets a build provenance

@@ -59,18 +59,20 @@ jobs:
           HBENCH_TEST_OCI_REGISTRY: localhost:5000
           HBENCH_TEST_OCI_AUTH_REGISTRY: localhost:5001
 
-  test-macos:
-    name: Build & Test (macOS)
-    runs-on: macos-15
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Set up Rust toolchain
-        uses: ./.github/actions/setup-rust
-      - name: Run unit tests
-        run: cargo test --locked
+  # Off for now: it waited long for a GitHub-hosted macOS runner and held up CI. Uncomment to run the unit tests
+  # on macOS again (the desktop job below still builds hbench there).
+  # test-macos:
+  #   name: Build & Test (macOS)
+  #   runs-on: macos-15
+  #   steps:
+  #     - name: Checkout repository
+  #       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+  #       with:
+  #         persist-credentials: false
+  #     - name: Set up Rust toolchain
+  #       uses: ./.github/actions/setup-rust
+  #     - name: Run unit tests
+  #       run: cargo test --locked
 
   test-windows:
     name: Build & Test (Windows)

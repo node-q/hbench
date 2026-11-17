@@ -490,7 +490,7 @@ npm run dev                                    # hot reload; proxies /api to `hb
   egress and secrets; or the rest of the CLI. Unset, it runs all three.
 - `scripts/install-matrix.sh`: installs every installed agent into a real container (`install_only`).
 
-CI (`.github/workflows/ci.yml`) runs on GitHub-hosted runners: build + `cargo test` on Linux and macOS, `cargo fmt
+CI (`.github/workflows/ci.yml`) runs on GitHub-hosted runners: build + `cargo test` on Linux and Windows, `cargo fmt
 --check` and clippy, `cargo audit`, a check that the committed `viewer/dist` matches `viewer/src`, `scripts/e2e.sh`
 against a real Docker daemon (its three parts in parallel jobs), and the example tasks through
 [node-q/hbench-action](https://github.com/node-q/hbench-action) with the latest release: every one must score 1 with
