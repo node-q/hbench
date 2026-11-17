@@ -124,13 +124,11 @@ export default function Job() {
 }
 
 function DeleteDialog({ job, open, onClose }: { job: string; open: boolean; onClose: () => void }) {
-  const [typed, setTyped] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<Error>();
   const navigate = useNavigate();
   const toast = useToast();
   const close = () => {
-    setTyped("");
     setError(undefined);
     onClose();
   };
@@ -152,24 +150,18 @@ function DeleteDialog({ job, open, onClose }: { job: string; open: boolean; onCl
       title="Delete this job?"
       footer={
         <>
-          <button className="btn" onClick={close}>
+          <button className="btn" onClick={close} autoFocus>
             Keep job
           </button>
-          <button className="btn btn--primary" disabled={typed !== job || busy} data-state={busy ? "loading" : undefined} onClick={run}>
+          <button className="btn btn--danger" disabled={busy} data-state={busy ? "loading" : undefined} onClick={run}>
             {busy && <span className="spinner" />} Delete job
           </button>
         </>
       }
     >
       <p>
-        This removes the job folder and every trial in it from disk. It can't be undone.
+        Delete <code className="ink">{job}</code> and every trial in it from disk? This can't be undone.
       </p>
-      <div className="field">
-        <label htmlFor="del-confirm">
-          Type <code className="ink">{job}</code> to confirm
-        </label>
-        <input id="del-confirm" className="input input--mono" value={typed} onChange={(e) => setTyped(e.target.value)} autoComplete="off" onKeyDown={(e) => e.key === "Enter" && typed === job && run()} />
-      </div>
       {error && <ErrorBox error={error} title="Delete failed" />}
     </Dialog>
   );
