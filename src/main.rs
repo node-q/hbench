@@ -1752,13 +1752,13 @@ async fn run() -> Result<ExitCode> {
             }
         }
         Cmd::Agents { cmd: None | Some(AgentsCmd::List { json: false }) } => {
-            for n in agents::agent_names() {
+            for n in agents::agent_names_by_popularity() {
                 println!("{n}");
             }
             Ok(ExitCode::SUCCESS)
         }
         Cmd::Agents { cmd: Some(AgentsCmd::List { json: true }) } => {
-            println!("{}", serde_json::to_string_pretty(&agents::agent_names())?);
+            println!("{}", serde_json::to_string_pretty(&agents::agent_names_by_popularity())?);
             Ok(ExitCode::SUCCESS)
         }
         Cmd::Agents { cmd: Some(AgentsCmd::Schema { name, json }) } => {

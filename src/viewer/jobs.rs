@@ -392,11 +392,7 @@ impl App {
                 compare(self, &jobs)
             }
             ["run", "options"] => {
-                let agents: Vec<&str> = {
-                    let mut a = crate::agents::agent_names();
-                    a.sort();
-                    a
-                };
+                let agents = crate::agents::agent_names_by_popularity();
                 let kwargs: Map<String, Value> = agents.iter().map(|a| (a.to_string(), Value::Array(agent_kwarg_specs(a)))).collect();
                 ok_json(json!({
                     "agents": agents, "agent_kwargs": kwargs, "environments": ENVIRONMENTS, "resource_modes": RESOURCE_MODES,
