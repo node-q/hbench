@@ -261,17 +261,12 @@ function Start() {
   );
 }
 
-/** Irreversible: the user types the job name (or the count, for several) to confirm. */
+/** Irreversible, so it asks first; Cancel has the focus. */
 function DeleteDialog({ names, onClose, onDone }: { names: string[] | null; onClose: () => void; onDone: (gone: string[]) => void }) {
-  const [typed, setTyped] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
-  useEffect(() => {
-    setTyped("");
-    setError(undefined);
-  }, [names]);
+  useEffect(() => setError(undefined), [names]);
   if (!names) return null;
-  const expect = names.length === 1 ? names[0] : `delete ${names.length} jobs`;
   const run = async () => {
     setBusy(true);
     const gone: string[] = [];
@@ -295,17 +290,24 @@ function DeleteDialog({ names, onClose, onDone }: { names: string[] | null; onCl
       title={names.length === 1 ? "Delete job" : `Delete ${names.length} jobs`}
       footer={
         <>
-          <button className="btn" onClick={onClose}>
+          <button className="btn" onClick={onClose} autoFocus>
             Cancel
           </button>
-          <button className="btn btn--danger" disabled={typed !== expect || busy} data-state={busy ? "loading" : undefined} onClick={run}>
-            {busy ? "Deleting…" : "Delete permanently"}
+          <button className="btn btn--danger" disabled={busy} data-state={busy ? "loading" : undefined} onClick={run}>
+            {busy ? "Deleting…" : "Delete"}
           </button>
         </>
       }
     >
       <p>
-        This removes the job directory{names.length > 1 ? "s" : ""} and every trial in {names.length > 1 ? "them" : "it"} from disk. It can't be undone.
+        {names.length === 1 ? (
+          <>
+            Delete <code className="ink">{names[0]}</code> and every trial in it from disk?
+          </>
+        ) : (
+          "Delete these jobs and every trial in them from disk?"
+        )}{" "}
+        This can't be undone.
       </p>
       {names.length > 1 && (
         <ul className="home-dellist mono">
@@ -314,13 +316,11 @@ function DeleteDialog({ names, onClose, onDone }: { names: string[] | null; onCl
           ))}
         </ul>
       )}
-      <div className="field">
-        <label htmlFor="del-confirm">
-          Type <code className="ink">{expect}</code> to confirm
-        </label>
-        <input id="del-confirm" className="input input--mono" value={typed} onChange={(e) => setTyped(e.target.value)} autoFocus autoComplete="off" aria-invalid={!!error} />
-        <span className={`field__help${error ? " is-error" : ""}`}>{error}</span>
-      </div>
+      {error && (
+        <p className="field__help is-error" role="alert">
+          {error}
+        </p>
+      )}
     </Dialog>
   );
 }
