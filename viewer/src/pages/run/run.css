@@ -85,6 +85,51 @@
   }
 }
 
+/* Self-hosted model server: the agent row loses its model input, the server's fields follow. */
+.run-modelsrc__line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2xs) var(--space-xs);
+  min-height: 32px;
+  color: var(--color-ink);
+}
+.run-linkbtn {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--color-accent);
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: transparent;
+  text-underline-offset: 3px;
+}
+.run-linkbtn:hover {
+  text-decoration-color: currentColor;
+}
+.run-server {
+  display: grid;
+  gap: var(--space-2xs);
+  padding: var(--space-sm) var(--space-md) var(--space-2xs);
+  border: 1px solid var(--color-rule);
+  border-radius: var(--radius-sm);
+  background: var(--color-paper-2);
+}
+.run-server__status {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2xs);
+  margin: calc(var(--space-xs) * -1) 0 var(--space-2xs);
+  font-size: var(--text-xs);
+}
+.run-server__status.is-ok {
+  color: var(--color-good);
+}
+.run-server__status.is-bad {
+  color: var(--color-bad);
+}
+
 .run-req {
   color: var(--color-bad);
 }

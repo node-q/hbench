@@ -7,9 +7,21 @@ export interface KV {
   v: string;
 }
 
+/** A self-hosted, OpenAI-compatible model server (llama.cpp, vLLM, TensorFold…) the agent talks to instead of a provider. */
+export interface ServerDraft {
+  /** As typed: `localhost:8080`, `http://gpu.lan:8000/v1`… */
+  url: string;
+  /** "" = the server checks none. A `${VAR}` reads it from the environment hbench view runs with. */
+  key: string;
+  /** `model_served_by`: what serves the model, recorded with each trial. */
+  served_by: string;
+}
+
 export interface AgentDraft {
   name: string;
+  /** A LiteLLM `provider/model`; with `server`, the model's id as that server names it. */
   model: string;
+  server: ServerDraft | null;
   /** Raw input per declared kwarg key ("" = unset → agent default). */
   kwargs: Record<string, string>;
   custom: KV[];
@@ -64,6 +76,7 @@ export const DEFAULT_EXCLUDE = [
 export const newAgent = (name = "oracle"): AgentDraft => ({
   name,
   model: "",
+  server: null,
   kwargs: {},
   custom: [],
   env: [],
@@ -74,6 +87,48 @@ export const newAgent = (name = "oracle"): AgentDraft => ({
   skills: "",
   extra_allowed_hosts: "",
 });
+
+// ---------------------------------------------------------------- self-hosted model servers
+// The same answers as the `hbench run` wizard's "self-hosted" provider (pick_self_hosted in src/wizard.rs).
+
+/** Agents a model server can't stand in for: no model at all, or only Gemini's API. */
+const NO_SERVER = new Set(["oracle", "nop", "gemini-cli"]);
+export const takesServer = (agent: string) => !NO_SERVER.has(agent);
+
+/** How `agent` is pointed at a server: Anthropic's API for claude-code, OpenAI's for every other agent. */
+export function serverApi(agent: string) {
+  return agent === "claude-code"
+    ? { provider: "anthropic", baseEnv: "ANTHROPIC_BASE_URL", keyEnv: "ANTHROPIC_API_KEY", v1: false }
+    : { provider: "openai", baseEnv: "OPENAI_BASE_URL", keyEnv: "OPENAI_API_KEY", v1: true };
+}
+
+/** The server root of a URL as typed (`host:port`, with or without scheme or `/v1`). */
+export function serverRoot(typed: string): string {
+  let u = typed.trim().replace(/\/+$/, "");
+  if (u.endsWith("/v1")) u = u.slice(0, -3);
+  return u.includes("://") ? u : `http://${u}`;
+}
+
+const LOOPBACK = new Set(["localhost", "127.0.0.1", "0.0.0.0", "[::1]"]);
+
+/** `root` as the agent's container reaches it: this machine's loopback becomes `host.docker.internal`. */
+export function fromContainer(root: string): string {
+  const m = /^([a-z][a-z0-9+.-]*):\/\/(\[[^\]]*\]|[^/:]*)(.*)$/i.exec(root);
+  if (!m) return root;
+  return `${m[1]}://${LOOPBACK.has(m[2].toLowerCase()) ? "host.docker.internal" : m[2]}${m[3]}`;
+}
+
+/** The env, model and label that point an agent at its server. */
+function serverConfig(a: AgentDraft, s: ServerDraft) {
+  const api = serverApi(a.name);
+  const root = fromContainer(serverRoot(s.url));
+  return {
+    model_name: `${api.provider}/${a.model.trim()}`,
+    // Agents want some key even when the server checks none.
+    env: { [api.baseEnv]: api.v1 ? `${root}/v1` : root, [api.keyEnv]: s.key.trim() || "no-key" },
+    model_served_by: str(s.served_by),
+  };
+}
 
 export const emptyDraft = (): Draft => ({
   source: "dataset",
@@ -177,6 +232,10 @@ export function draftErrors(d: Draft, specs: Record<string, KwargSpec[]>): strin
   ];
   for (const a of d.agents) {
     if (!a.name) errs.push("Pick an agent.");
+    if (a.server && takesServer(a.name)) {
+      if (!a.server.url.trim()) errs.push("Give the model server's URL.");
+      if (!a.model.trim()) errs.push("Pick the model the server serves.");
+    }
     for (const s of specs[a.name] ?? []) errs.push(kwargError(s, a.kwargs[s.key]));
     errs.push(numError(a.n_concurrent, { int: true, min: 1 }));
   }
@@ -272,9 +331,11 @@ export function toConfig(d: Draft, specs: Record<string, KwargSpec[]>): Obj {
         kwargs[k] = kwargValue(sp.find((s) => s.key === k), raw);
       }
       for (const { k, v } of a.custom) if (k.trim()) kwargs[k.trim()] = loose(v);
+      const server = a.server && takesServer(a.name) ? serverConfig(a, a.server) : null;
       return {
         name: a.name,
-        model_name: str(a.model),
+        model_name: server ? server.model_name : str(a.model),
+        ...(server?.model_served_by ? { model_served_by: server.model_served_by } : {}),
         n_concurrent: num(a.n_concurrent),
         override_timeout_sec: num(a.override_timeout_sec),
         override_setup_timeout_sec: num(a.override_setup_timeout_sec),
@@ -282,7 +343,7 @@ export function toConfig(d: Draft, specs: Record<string, KwargSpec[]>): Obj {
         skills: list(a.skills),
         extra_allowed_hosts: list(a.extra_allowed_hosts),
         kwargs,
-        env: kvObj(a.env),
+        env: { ...kvObj(a.env), ...server?.env },
       };
     }),
     datasets: [],
@@ -356,12 +417,14 @@ export function fromConfig(c: Obj, specs: Record<string, KwargSpec[]>): Draft {
         if (declared.has(k)) kw[k] = s(v);
         else custom.push({ k, v: s(v) });
       }
+      const { model, server, env } = serverFrom(a);
       return {
         ...newAgent(a.name ?? "oracle"),
-        model: s(a.model_name),
+        model,
+        server,
         kwargs: kw,
         custom,
-        env: kvFrom(a.env),
+        env,
         n_concurrent: s(a.n_concurrent),
         override_timeout_sec: s(a.override_timeout_sec),
         override_setup_timeout_sec: s(a.override_setup_timeout_sec),
@@ -412,6 +475,22 @@ export function fromConfig(c: Obj, specs: Record<string, KwargSpec[]>): Draft {
   const v = c.verifier ?? {};
   d.verifier = { disable: !!v.disable, override_timeout_sec: s(v.override_timeout_sec), max_timeout_sec: s(v.max_timeout_sec), kwargs: objText(v.kwargs), env: kvFrom(v.env) };
   return d;
+}
+
+/** A loaded agent that points at a model server through its env (the launcher's or the wizard's) shows as one again. */
+function serverFrom(a: Obj): { model: string; server: ServerDraft | null; env: KV[] } {
+  const env = kvFrom(a.env);
+  const model = s(a.model_name);
+  const api = serverApi(a.name);
+  const base = env.find((e) => e.k === api.baseEnv)?.v;
+  if (!takesServer(a.name) || !base || !model.startsWith(`${api.provider}/`)) return { model, server: null, env };
+  const key = env.find((e) => e.k === api.keyEnv)?.v ?? "";
+  return {
+    model: model.slice(api.provider.length + 1),
+    // Typed from this machine: its loopback again, not the container's name for it.
+    server: { url: serverRoot(base).replace("://host.docker.internal", "://localhost"), key: key === "no-key" ? "" : key, served_by: s(a.model_served_by) },
+    env: env.filter((e) => e.k !== api.baseEnv && e.k !== api.keyEnv),
+  };
 }
 
 /** One-line description of a config's task source (history list). */

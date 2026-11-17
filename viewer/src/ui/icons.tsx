@@ -125,6 +125,13 @@ export const Download = (p: P) => (
     <path d="M8 2.5v8M4.5 7 8 10.5 11.5 7M3 13.5h10" />
   </I>
 );
+export const Server = (p: P) => (
+  <I {...p}>
+    <rect x="2.5" y="2.5" width="11" height="4.5" rx="1" />
+    <rect x="2.5" y="9" width="11" height="4.5" rx="1" />
+    <path d="M5 4.75h.01M5 11.25h.01" />
+  </I>
+);
 export const Refresh = (p: P) => (
   <I {...p}>
     <path d="M13 3v3.5H9.5" />
