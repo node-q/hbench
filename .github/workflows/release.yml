@@ -269,7 +269,7 @@ jobs:
       fail-fast: false
       matrix:
         target: [aarch64-apple-darwin, x86_64-apple-darwin]
-    runs-on: macos-15
+    runs-on: [self-hosted, macos-15]
     permissions:
       contents: read
     env:
@@ -406,7 +406,7 @@ jobs:
       fail-fast: false
       matrix:
         target: [aarch64-apple-darwin, x86_64-apple-darwin]
-    runs-on: macos-15
+    runs-on: [self-hosted, macos-15]
     # Only v* tags can deploy to this environment, so no other ref can read the Apple credentials.
     environment: release
     permissions:
