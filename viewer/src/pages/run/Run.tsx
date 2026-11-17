@@ -340,7 +340,7 @@ function SourceSection({ draft, up, entry, changeTo, serverError }: { draft: Dra
             placeholder="/path/to/tasks or /path/to/one-task"
             mono
             error={err}
-            help={pickMsg ?? "A single task folder (with task.toml) or a folder of tasks."}
+            help={pickMsg ?? "A task folder (task.toml), a folder of tasks, or task sources (task.yaml) taskbuild builds first."}
           />
           <button type="button" className="btn run-browse" onClick={browse} disabled={picking} data-state={picking ? "loading" : undefined}>
             {picking ? <Spinner label="Waiting for the folder picker" /> : <Icon.Folder size={14} />} Browse…

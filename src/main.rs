@@ -26,6 +26,7 @@ mod regrade;
 mod schemas;
 mod sweeps;
 mod task;
+mod taskbuild;
 mod tools;
 mod traces;
 mod trial;
