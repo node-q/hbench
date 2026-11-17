@@ -162,6 +162,18 @@ fn write_routes_need_a_loopback_bind() {
 }
 
 #[test]
+fn stopping_a_job_leaves_the_runs_stop_request() {
+    let app = fixture();
+    let job = "2026-01-02__00-00-00";
+    let post = |url: &str| handle(&app, &Req { method: "POST", url, origin: None, host: Some("127.0.0.1:8080"), body: b"" });
+    // Not launched here: the request goes to the job dir, which every `hbench run` watches.
+    let r = post(&format!("/api/jobs/{job}/stop"));
+    assert_eq!(r.status, 200);
+    assert!(app.folder.join(job).join(crate::JOB_STOP_FILE).exists());
+    assert_eq!(post("/api/jobs/no-such-job/stop").status, 404);
+}
+
+#[test]
 fn loopback_hosts() {
     for h in ["127.0.0.1", "127.0.0.2", "::1", "[::1]", "localhost", "LOCALHOST"] {
         assert!(is_loopback_host(h), "{h}");

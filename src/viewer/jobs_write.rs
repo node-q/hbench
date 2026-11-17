@@ -19,6 +19,7 @@ impl App {
                 std::fs::remove_dir_all(&dir).map_err(|e| err(500, format!("Failed to delete job: {e}")))?;
                 ok_json(json!({"status": "ok", "message": format!("Job '{job}' deleted")}))
             }
+            ("POST", ["jobs", job, "stop"]) => self.stop(job),
             ("POST", ["jobs", job, "summarize"]) => {
                 let dir = self.existing_job(job)?;
                 let b = body()?;
@@ -58,17 +59,8 @@ impl App {
                 Err(e) => Err(err(501, e.to_string())),
             },
             ("DELETE", ["run", job]) => {
-                let mut runs = self.runs.lock().unwrap();
-                let run = runs.get_mut(*job).ok_or_else(|| err(404, "No running launch for this job."))?;
-                if run.child.try_wait().ok().flatten().is_some() {
+                if !self.stop_launched(job) {
                     return Err(err(404, "No running launch for this job."));
-                }
-                // hbench's graceful cancel (tears down containers): SIGINT, or on Windows, which cannot send
-                // one to another process, the run's stop file.
-                if cfg!(unix) {
-                    let _ = std::process::Command::new("kill").args(["-INT", &run.child.id().to_string()]).status();
-                } else {
-                    let _ = std::fs::write(&run.stop_file, b"");
                 }
                 ok_json(json!({"stopped": true}))
             }
@@ -139,6 +131,34 @@ impl App {
             .map_err(|e| err(500, e.to_string()))?;
         runs.insert(job_name.clone(), LaunchedRun { child, log_path, stop_file });
         ok_json(json!({"job_name": job_name}))
+    }
+}
+
+impl App {
+    /// Cancel a run this viewer launched as hbench's Ctrl-C does (trials stop, containers are torn down): SIGINT,
+    /// or on Windows, which cannot send one to another process, the run's stop file. `false` if none is running.
+    fn stop_launched(&self, job: &str) -> bool {
+        let mut runs = self.runs.lock().unwrap();
+        let Some(run) = runs.get_mut(job) else { return false };
+        if run.child.try_wait().ok().flatten().is_some() {
+            return false;
+        }
+        if cfg!(unix) {
+            let _ = std::process::Command::new("kill").args(["-INT", &run.child.id().to_string()]).status();
+        } else {
+            let _ = std::fs::write(&run.stop_file, b"");
+        }
+        true
+    }
+
+    /// `POST /api/jobs/<job>/stop`: cancel a running job, whoever started it. A run launched here gets its signal;
+    /// any other `hbench run` watches its job dir for [`crate::JOB_STOP_FILE`]. Asking again force-quits.
+    fn stop(&self, job: &str) -> Res {
+        let dir = self.existing_job(job)?;
+        if !self.stop_launched(job) {
+            std::fs::write(dir.join(crate::JOB_STOP_FILE), b"").map_err(|e| err(500, format!("Couldn't ask the run to stop: {e}")))?;
+        }
+        ok_json(json!({"stopping": true}))
     }
 }
 

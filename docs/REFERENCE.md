@@ -446,6 +446,11 @@ default; with `--host` set to any non-loopback address it is read-only, because 
 open to anyone who can reach it. The built bundle (`viewer/dist`) is committed and embedded at compile time, so
 `cargo build` doesn't need Node.
 
+A running job's page has a Stop button. It cancels the run as Ctrl-C does: trials in progress stop and their
+containers are torn down, finished trials keep their results; if the run is still tearing down 20 seconds later,
+the button offers a force stop, as a second Ctrl-C does. `POST /api/jobs/<job>/stop` signals a run the viewer
+launched, and for any other run leaves `stop-requested` in the job dir, which every `hbench run` watches.
+
 New run walks through three steps: a domain, a dataset from that domain's catalog, then the agent. The catalog is
 the default registry's dataset index (`$HBENCH_REGISTRY`, else `oci://ghcr.io/node-q/hbench-datasets`), listed by
 `GET /api/run/catalog` and kept for ten minutes. `assets/catalog/domains.json` names the domains, in tile order,

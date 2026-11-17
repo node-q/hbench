@@ -1102,11 +1102,23 @@ fn trial_names(job_dirs: &[PathBuf]) -> Vec<String> {
 /// launches: Windows has no way to send another process a Ctrl-C.
 pub const STOP_FILE_ENV: &str = "HBENCH_STOP_FILE";
 
+/// A file in a running job's dir whose appearance counts as a cancel signal, so a run started anywhere (the
+/// viewer, a terminal, before the app restarted) can be stopped from the viewer.
+pub const JOB_STOP_FILE: &str = "stop-requested";
+
 /// Cancel on SIGINT/SIGTERM/SIGHUP (Ctrl-C, Ctrl-Break or the console closing on Windows) or the stop file
 /// appearing: the first signal flips the returned flag (trials tear down); the second force-quits with 130
 /// after a quick `docker compose down` of the projects of `trials()` (trial names; compose projects are
 /// named after them).
 pub fn cancel_on_signal(trials: impl Fn() -> Vec<String> + Send + 'static) -> tokio::sync::watch::Receiver<bool> {
+    cancel_on_signal_or(trials, None)
+}
+
+/// [`cancel_on_signal`], also listening for `stop_file` (a job's [`JOB_STOP_FILE`]).
+pub fn cancel_on_signal_or(
+    trials: impl Fn() -> Vec<String> + Send + 'static,
+    stop_file: Option<PathBuf>,
+) -> tokio::sync::watch::Receiver<bool> {
     let (sig_tx, mut sigs) = tokio::sync::mpsc::unbounded_channel();
     #[cfg(unix)]
     {
@@ -1132,7 +1144,7 @@ pub fn cancel_on_signal(trials: impl Fn() -> Vec<String> + Send + 'static) -> to
         forward!(ctrl_break());
         forward!(ctrl_close());
     }
-    if let Some(stop) = std::env::var_os(STOP_FILE_ENV).map(PathBuf::from) {
+    for stop in std::env::var_os(STOP_FILE_ENV).map(PathBuf::from).into_iter().chain(stop_file) {
         let sig_tx = sig_tx.clone();
         tokio::spawn(async move {
             loop {
@@ -1206,7 +1218,10 @@ async fn run_with_ctrl_c(cfg: JobConfig, trials: Option<Vec<TrialConfig>>, filte
     env::preflight().await?;
     let job_dir = cfg.job_dir();
     let dir = job_dir.clone();
-    let rx = cancel_on_signal(move || trial_names(std::slice::from_ref(&dir)));
+    // A request left by a run that has ended must not stop this one.
+    let stop = job_dir.join(JOB_STOP_FILE);
+    let _ = std::fs::remove_file(&stop);
+    let rx = cancel_on_signal_or(move || trial_names(std::slice::from_ref(&dir)), Some(stop));
     let jr = job::run_job(cfg, trials, filter, rx.clone()).await?;
     job::print_summary(&jr, &job_dir);
     if *rx.borrow() {
