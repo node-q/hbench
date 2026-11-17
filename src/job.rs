@@ -149,7 +149,12 @@ pub async fn resolve_tasks(cfg: &JobConfig) -> Result<Vec<TaskRef>> {
         if t.is_local()
             && let Some(p) = &t.path
         {
-            t.path = Some(p.canonicalize().with_context(|| format!("task path {}", p.display()))?);
+            let p = p.canonicalize().with_context(|| format!("task path {}", p.display()))?;
+            // A task's sources: the task taskbuild builds from them.
+            t.path = Some(match crate::taskbuild::sources(&p) {
+                Some(s) => crate::taskbuild::built(&s).await?,
+                None => p,
+            });
         }
     }
     registry::download(&v).await?;

@@ -42,6 +42,17 @@ hbench datasets list --registry-url <registry-url>
 hbench run -d <name>@<version> --registry-url <registry-url> -a claude-code -m anthropic/claude-opus-5-5
 ```
 
+A local path (`-p`, or a folder in the viewer's New run) can also be task sources that a `taskbuild` repository
+(such as hbench-datasets-internal) builds into tasks: a dataset's `tasks/<dataset>` folder, or one task's
+`tasks/<dataset>/<task>` folder with its `task.yaml`. hbench runs `python -m taskbuild build datasets/<dataset>`
+in that repository first, into `~/.cache/hbench/taskbuild/<dataset>-<digest>`, and runs what it built: the
+dataset's current version, from the sources as they are now. The build runs on `$HBENCH_TASKBUILD_PYTHON` if set,
+else the repository's `.venv`, else `uv run` with its `requirements.txt` on Python 3.12, else `python3`.
+
+```bash
+hbench run -p ../hbench-datasets-internal/tasks/hb-int-treasury-auctions -a claude-code -m anthropic/claude-opus-5-5
+```
+
 ## Agents
 
 46 agents (`hbench agents list`): `oracle`, `nop`, `terminus-2` (also `terminus`, `terminus-1`), `claude-code`, `codex`,
