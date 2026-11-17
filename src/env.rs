@@ -1073,10 +1073,25 @@ impl DockerEnv {
         self.run_ok(vec!["cp".into(), src.display().to_string(), format!("main:{dst}")], Some(COPY_TIMEOUT)).await.map(|_| ())
     }
 
+    /// Copy the contents of `src` in `service` into `dst`, merging with what is there.
+    ///
+    /// `docker cp <src>/. <dst>` is documented to copy the contents, but docker CLI 29 copies the directory itself,
+    /// as `<dst>/<name>`, so the verifier's reward.txt landed in `verifier/verifier/`. Copying the directory into
+    /// an empty staging dir beside `dst` and moving its entries over gives the same result with every CLI.
     pub async fn download_dir(&self, service: &str, src: &str, dst: &Path) -> Result<()> {
         std::fs::create_dir_all(dst)?;
-        self.run_ok(vec!["cp".into(), format!("{service}:{}/.", src.trim_end_matches('/')), dst.display().to_string()], Some(COPY_TIMEOUT))
-            .await?;
+        let src = src.trim_end_matches('/');
+        let name = dst.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let stage = dst.with_file_name(format!(".{name}.hbench-cp-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&stage)?;
+        let res = async {
+            self.run_ok(vec!["cp".into(), format!("{service}:{src}"), stage.display().to_string()], Some(COPY_TIMEOUT)).await?;
+            let copied = Path::new(src).file_name().map(|n| stage.join(n)).filter(|p| p.is_dir()).unwrap_or_else(|| stage.clone());
+            merge_into(&copied, dst)
+        }
+        .await;
+        let _ = std::fs::remove_dir_all(&stage);
+        res?;
         self.strip_links(dst);
         Ok(())
     }
@@ -1338,6 +1353,27 @@ const PROC_LIST: &str = r#"for_each_proc() {
 /// ppid 0 inside the container; an orphan is reparented to PID 1. Everything picked is stopped first, and
 /// the scan repeats until it finds nothing new, so no child is orphaned (and so spared) mid-way.
 /// Remove every symlink and non-regular file at or under `root` (links are not followed). Returns the count.
+/// Move every entry of `from` into `to` as `cp -r from/. to` would: directories merge, anything else replaces.
+fn merge_into(from: &Path, to: &Path) -> Result<()> {
+    std::fs::create_dir_all(to)?;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let (src, dst) = (entry.path(), to.join(entry.file_name()));
+        let src_is_dir = entry.file_type()?.is_dir();
+        match std::fs::symlink_metadata(&dst) {
+            Ok(m) if m.is_dir() && src_is_dir => {
+                merge_into(&src, &dst)?;
+                continue;
+            }
+            Ok(m) if m.is_dir() => std::fs::remove_dir_all(&dst)?,
+            Ok(_) => std::fs::remove_file(&dst)?,
+            Err(_) => {}
+        }
+        std::fs::rename(&src, &dst)?;
+    }
+    Ok(())
+}
+
 fn strip_links(root: &Path) -> usize {
     let Ok(meta) = root.symlink_metadata() else { return 0 };
     let t = meta.file_type();
@@ -1450,6 +1486,23 @@ mod tests {
             assert!(d.join(gone).symlink_metadata().is_err(), "{gone} survived");
         }
         std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn merge_into_merges_dirs_and_replaces_files() {
+        let root = std::env::temp_dir().join(format!("hbench-merge-{}", uuid::Uuid::new_v4().simple()));
+        let (from, to) = (root.join("from"), root.join("to"));
+        std::fs::create_dir_all(from.join("sub")).unwrap();
+        std::fs::create_dir_all(to.join("sub")).unwrap();
+        std::fs::write(from.join("reward.txt"), "1").unwrap();
+        std::fs::write(from.join("sub/new.txt"), "n").unwrap();
+        std::fs::write(to.join("reward.txt"), "0").unwrap();
+        std::fs::write(to.join("sub/old.txt"), "o").unwrap();
+        merge_into(&from, &to).unwrap();
+        assert_eq!(std::fs::read_to_string(to.join("reward.txt")).unwrap(), "1");
+        assert!(to.join("sub/new.txt").is_file() && to.join("sub/old.txt").is_file());
+        assert!(!to.join("from").exists());
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     /// What `docker compose exec ... main bash -c EXEC_FROM_STDIN bash [deadline grace]` runs, with the same stdin.
