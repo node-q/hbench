@@ -197,3 +197,48 @@ fn task_config_dump_fills_defaults_and_migrates() {
     assert!(c["environment"].get("allow_internet").is_none() && c["agent"]["timeout_sec"].is_f64());
     assert_eq!(c["artifacts"], json!([]));
 }
+
+#[test]
+fn server_models_lists_a_self_hosted_servers_models() {
+    use std::io::{Read, Write};
+    let app = fixture();
+    let post = |body: &str| {
+        let r = handle(
+            &app,
+            &Req { method: "POST", url: "/api/run/server-models", origin: None, host: Some("127.0.0.1:8080"), body: body.as_bytes() },
+        );
+        (r.status, serde_json::from_slice::<Value>(&r.body).unwrap_or_default())
+    };
+    assert_eq!(post("{}").0, 422);
+    assert_eq!(post(r#"{"url":"localhost:1","key":"${HBENCH_TEST_UNSET_KEY}"}"#).0, 422);
+    // A one-shot server per request: 401 without the key, its models with it.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = std::thread::spawn(move || {
+        for _ in 0..2 {
+            let (mut s, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 4096];
+            let n = s.read(&mut buf).unwrap();
+            let req = String::from_utf8_lossy(&buf[..n]).to_lowercase();
+            let resp = if req.contains("authorization: bearer k") {
+                let body = r#"{"data":[{"id":"qwen3"}]}"#;
+                format!(
+                    "HTTP/1.1 200 OK\r\nServer: TensorFold/1.2\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+            } else {
+                "HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_string()
+            };
+            s.write_all(resp.as_bytes()).unwrap();
+        }
+    });
+    let (status, r) = post(&format!(r#"{{"url":"localhost:{port}/v1"}}"#));
+    assert_eq!(status, 200);
+    assert_eq!(r["needs_key"], true);
+    assert_eq!(r["container_root"], format!("http://host.docker.internal:{port}"));
+    let (status, r) = post(&format!(r#"{{"url":"localhost:{port}","key":"k"}}"#));
+    assert_eq!(status, 200);
+    assert_eq!(r["models"], serde_json::json!(["qwen3"]));
+    assert_eq!(r["served_by"], "tensorfold");
+    server.join().unwrap();
+}

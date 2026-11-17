@@ -15,7 +15,8 @@ import type { Catalog, CatalogDataset, KwargSpec, Obj, RunOptions, RunStatus } f
 import { useCommands, useTitle, type Command } from "../../shell";
 import { Area, Check, KvRows, KwargField, Num, Section, Select, ShowAllErrors, Text } from "./fields";
 import { CUSTOM, DatasetCatalog, DomainGrid, domainHref, useCatalog } from "./catalog";
-import { draftErrors, emptyDraft, fromConfig, hasSource, jsonError, newAgent, numError, sourceError, sourceLabel, toConfig, versionError, type AgentDraft, type Draft, type Source } from "./form";
+import { draftErrors, emptyDraft, fromConfig, hasSource, jsonError, newAgent, numError, sourceError, sourceLabel, takesServer, toConfig, versionError, type AgentDraft, type Draft, type Source } from "./form";
+import { NEW_SERVER, ServerPanel } from "./server";
 
 type History = { job_name: string; config: Obj }[];
 type Step = "domain" | "dataset" | "configure";
@@ -340,7 +341,7 @@ function SourceSection({ draft, up, entry, changeTo, serverError }: { draft: Dra
             placeholder="/path/to/tasks or /path/to/one-task"
             mono
             error={err}
-            help={pickMsg ?? "A single task folder (with task.toml) or a folder of tasks."}
+            help={pickMsg ?? "A task folder (task.toml), a folder of tasks, or task sources (task.yaml) taskbuild builds first."}
           />
           <button type="button" className="btn run-browse" onClick={browse} disabled={picking} data-state={picking ? "loading" : undefined}>
             {picking ? <Spinner label="Waiting for the folder picker" /> : <Icon.Folder size={14} />} Browse…
@@ -465,17 +466,55 @@ function AgentCard({ index, agent, agents, specs, removable, onChange, onRemove 
   const set = (patch: Partial<AgentDraft>) => onChange({ ...agent, ...patch });
   const nSet = Object.values(agent.kwargs).filter((v) => v.trim()).length;
   const advanced = [agent.n_concurrent && `${agent.n_concurrent} concurrent`, agent.custom.length && `${agent.custom.length} custom kwargs`, agent.env.length && `${agent.env.length} env vars`].filter(Boolean).join(" · ");
+  const offerServer = takesServer(agent.name);
+  const onServer = !!agent.server && offerServer;
+  // Switching where the model comes from starts its name over: a provider/model name means nothing to a server.
+  const useServer = (on: boolean) => set({ server: on ? (agent.server ?? NEW_SERVER) : null, model: "" });
   return (
     <div className="run-agent">
       <div className="run-row run-row--agent">
         <Select label={`Agent ${index + 1}`} value={agent.name} onChange={(name) => onChange({ ...agent, name, kwargs: {} })} options={agents} help={AGENT_NOTES[agent.name]} />
-        <Text label="Model" value={agent.model} onChange={(model) => set({ model })} list="run-models" placeholder="provider/model" mono autoComplete="off" help="Any LiteLLM name; suggestions as you type." />
+        {onServer ? (
+          <div className="field run-modelsrc">
+            <span className="field__label">Model</span>
+            <div className="run-modelsrc__line">
+              <Icon.Server size={13} /> Self-hosted server
+              <button type="button" className="run-linkbtn" onClick={() => useServer(false)}>
+                Use a provider model
+              </button>
+            </div>
+          </div>
+        ) : (
+          <Text
+            label="Model"
+            value={agent.model}
+            onChange={(model) => set({ model })}
+            list="run-models"
+            placeholder="provider/model"
+            mono
+            autoComplete="off"
+            help={
+              <>
+                Any LiteLLM name; suggestions as you type.
+                {offerServer && (
+                  <>
+                    {" "}
+                    <button type="button" className="run-linkbtn" onClick={() => useServer(true)}>
+                      Use a self-hosted server
+                    </button>
+                  </>
+                )}
+              </>
+            }
+          />
+        )}
         {removable && (
           <button type="button" className="btn btn--ghost btn--icon run-agent__remove" aria-label={`Remove agent ${index + 1}`} title="Remove agent" onClick={onRemove}>
             <Icon.Trash size={14} />
           </button>
         )}
       </div>
+      {onServer && <ServerPanel agent={agent} onChange={onChange} />}
       <Section title={`${agent.name} options`} summary={specs.length ? (nSet ? `${nSet} set` : `${specs.length} available`) : "none declared"} open={specs.some((s) => s.required)}>
         {specs.length ? (
           <div className="run-kwargs">

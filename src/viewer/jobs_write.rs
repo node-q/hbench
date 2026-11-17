@@ -53,6 +53,7 @@ impl App {
                 let text = serde_yaml_ng::to_string(&normalize_local_paths(b)).map_err(|e| err(500, e.to_string()))?;
                 Ok(Resp { status: 200, ctype: "application/x-yaml".into(), body: text.into_bytes(), headers: vec![] })
             }
+            ("POST", ["run", "server-models"]) => server_models(&body()?),
             ("POST", ["run", "pick-directory"]) => match native_pick_directory() {
                 Ok(p) => ok_json(json!({"path": p})),
                 Err(e) => Err(err(501, e.to_string())),
@@ -211,4 +212,38 @@ fn native_pick_directory() -> Result<Option<String>> {
         bail!("Install zenity or kdialog to use the folder picker.");
     }
     bail!("No native folder picker for platform {:?}.", std::env::consts::OS)
+}
+
+/// `POST /api/run/server-models` `{url, key?}`: what a self-hosted, OpenAI-compatible model server serves, for the
+/// launcher's "Self-hosted server" model choice (the `hbench run` wizard asks the same way, see `wizard.rs`). The
+/// key may be a `${VAR}` from this process's environment. `needs_key` when the server wants one (or refuses it).
+fn server_models(b: &Value) -> Res {
+    let url = b["url"].as_str().map(str::trim).filter(|u| !u.is_empty()).ok_or_else(|| err(422, "Give the server's URL."))?;
+    let key = match b["key"].as_str().map(str::trim).filter(|k| !k.is_empty()) {
+        Some(k) => match k.strip_prefix("${").and_then(|k| k.strip_suffix('}')) {
+            Some(var) => Some(std::env::var(var).map_err(|_| err(422, format!("{var} is not set where hbench view runs.")))?),
+            None => Some(k.to_string()),
+        },
+        None => None,
+    };
+    let root = crate::wizard::server_root(url);
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| err(500, e.to_string()))?;
+    let base = json!({"root": root, "container_root": crate::wizard::from_container(&root)});
+    match runtime.block_on(crate::wizard::server_models(&root, key.as_deref())) {
+        Ok(Some((models, server))) => {
+            let served_by = server.as_deref().and_then(crate::wizard::served_by_guess);
+            let mut r = base;
+            r["models"] = json!(models);
+            r["server"] = json!(server);
+            r["served_by"] = json!(served_by);
+            ok_json(r)
+        }
+        Ok(None) => {
+            let mut r = base;
+            r["needs_key"] = json!(true);
+            r["key_refused"] = json!(key.is_some());
+            ok_json(r)
+        }
+        Err(e) => Err(err(502, format!("Couldn't list the models at {root}/v1/models: {e:#}"))),
+    }
 }

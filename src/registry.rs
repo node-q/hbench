@@ -118,11 +118,21 @@ fn check_runnable(task_dir: &Path, disable_verification: bool) -> Result<()> {
 
 /// Resolve a dataset config into task refs (local dirs, git refs from a registry.json, or layers of an OCI
 /// dataset). A local dataset's tasks are its subdirectories with a task.toml; a selected task that fails to
-/// load is an error.
+/// load is an error. Task sources (see [`crate::taskbuild`]) are built first and their build is what runs.
 pub async fn dataset_tasks(d: &DatasetConfig, disable_verification: bool) -> Result<Vec<TaskRef>> {
     if let Some(p) = &d.path {
-        let p = p.canonicalize().with_context(|| format!("dataset path {}", p.display()))?;
-        let source = p.file_name().map(|n| n.to_string_lossy().into_owned());
+        let mut p = p.canonicalize().with_context(|| format!("dataset path {}", p.display()))?;
+        let mut source = p.file_name().map(|n| n.to_string_lossy().into_owned());
+        if let Some(s) = crate::taskbuild::sources(&p) {
+            let built = crate::taskbuild::built(&s).await?;
+            source = Some(s.dataset.clone());
+            if s.task.is_some() {
+                // One task's sources: that task.
+                check_runnable(&built, disable_verification).with_context(|| format!("task built from {}", p.display()))?;
+                return Ok(vec![TaskRef { path: Some(built), source, ..Default::default() }]);
+            }
+            p = built;
+        }
         let mut dirs: Vec<PathBuf> =
             std::fs::read_dir(&p)?.filter_map(|e| e.ok().map(|e| e.path())).filter(|t| Task::is_task_dir(t)).collect();
         dirs.sort();
