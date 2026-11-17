@@ -442,7 +442,35 @@ fn on_menu(app: &AppHandle, id: &str) {
     }
 }
 
+/// The app was named Actuaria before, and an update swaps the new bundle in where the old one was, so an updated
+/// app is still `Actuaria.app` on disk, the name Finder, the Dock and the menu bar show. Give the bundle the app's
+/// name and relaunch it from there; `true` if that happened and this process should exit. Anything unexpected (a
+/// bundle the user renamed, the target taken, a read-only or translocated location) leaves it where it is.
+#[cfg(target_os = "macos")]
+fn rename_old_bundle() -> bool {
+    let Ok(exe) = std::env::current_exe() else { return false };
+    // <bundle>.app/Contents/MacOS/<executable>
+    let Some(bundle) = exe.ancestors().nth(3) else { return false };
+    if bundle.file_name().and_then(|n| n.to_str()) != Some("Actuaria.app") {
+        return false;
+    }
+    let target = bundle.with_file_name(format!("{APP_NAME}.app"));
+    if target.exists() || std::fs::rename(bundle, &target).is_err() {
+        return false;
+    }
+    if std::process::Command::new("/usr/bin/open").arg("-n").arg(&target).spawn().is_err() {
+        // Can't relaunch: put it back and carry on.
+        let _ = std::fs::rename(&target, bundle);
+        return false;
+    }
+    true
+}
+
 fn main() {
+    #[cfg(target_os = "macos")]
+    if !DEV && rename_old_bundle() {
+        return;
+    }
     let mut builder = tauri::Builder::default();
     if !DEV {
         // A second launch focuses the running app.
