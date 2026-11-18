@@ -126,6 +126,8 @@ mod tests {
                 tasks: vec![],
             },
             layers: (0..tasks).map(layer).collect(),
+            listing: None,
+            cover: None,
         }
     }
 

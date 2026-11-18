@@ -1,5 +1,7 @@
 //! `hbench.lock`, in the directory hbench runs in: the manifest digest each OCI dataset (`name@version`)
 //! resolved to. A mirror serving the same dataset has the same digest, so the registry is not part of the key.
+//! A market version is keyed by its canonical name, `<publisher>/<listing>:<tag>`, never by its organisation's
+//! repository, so one lock file serves every organisation entitled to it.
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
@@ -8,7 +10,8 @@ use std::path::Path;
 
 pub const FILE: &str = "hbench.lock";
 const FORMAT_VERSION: u32 = 1;
-const HEADER: &str = "# Written by hbench (--lock-write): the manifest digest of each OCI dataset, by name@version.\n";
+const HEADER: &str =
+    "# Written by hbench (--lock-write): the manifest digest of each OCI dataset, by name@version or <publisher>/<listing>:<tag>.\n";
 
 /// How `hbench.lock` is used when a dataset's tag is resolved.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
