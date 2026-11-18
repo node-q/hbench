@@ -410,6 +410,9 @@ pub struct DatasetConfig {
     /// The manifest digest an OCI dataset runs at, recorded when its tag is resolved.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub digest: Option<String>,
+    /// The organisation whose repositories a market dataset is pulled from (`--org`); see [`crate::oci::market`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub org: Option<String>,
     pub repo: Option<String>,
     pub overwrite: bool,
     pub download_dir: Option<PathBuf>,

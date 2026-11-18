@@ -28,10 +28,15 @@ pub const DATASET_INDEX_TAG: &str = "latest";
 pub const DATASET_INDEX_ARTIFACT_TYPE: &str = "application/vnd.hbench.dataset-index.v1";
 pub const DATASET_INDEX_MEDIA_TYPE: &str = "application/vnd.hbench.dataset-index.v1+json";
 
+/// A market version's own description (market-platform.md D112): its `listing.json`, carried as one layer of this
+/// media type so the manifest digest covers it. A dataset has at most one, beside its task layers.
+pub const LISTING_MEDIA_TYPE: &str = "application/vnd.actuaria.listing.v1+json";
+
 const MIB: u64 = 1024 * 1024;
 pub const MAX_MANIFEST_BYTES: u64 = 4 * MIB;
 pub const MAX_CONFIG_BYTES: u64 = 4 * MIB;
 pub const MAX_DATASET_INDEX_BYTES: u64 = 4 * MIB;
+pub const MAX_LISTING_BYTES: u64 = MIB;
 
 /// The config blob, as `assets/schemas/dataset-config.v1.json` defines it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -96,6 +101,12 @@ pub struct Layer {
 pub struct Dataset {
     pub config: ConfigBlob,
     pub layers: Vec<Layer>,
+    /// The `listing.json` layer, when the version carries its own listing: (digest, size).
+    pub listing: Option<(String, u64)>,
+}
+
+fn is_listing(layer: &Descriptor) -> bool {
+    layer.media_type().to_string() == LISTING_MEDIA_TYPE
 }
 
 /// The JSON layer of a dataset index, as `assets/schemas/dataset-index.v1.json` defines it.
@@ -195,11 +206,19 @@ pub fn parse_manifest(bytes: &[u8]) -> Result<ImageManifest> {
     if m.config().size() > MAX_CONFIG_BYTES {
         bail!("config blob is {} bytes, over the {MAX_CONFIG_BYTES}-byte limit", m.config().size());
     }
-    if m.layers().is_empty() {
+    let listings: Vec<&Descriptor> = m.layers().iter().filter(|l| is_listing(l)).collect();
+    match listings.as_slice() {
+        [] => {}
+        [l] if !is_sha256_digest(l.digest().as_ref()) => bail!("the listing layer's digest {} is not sha256", l.digest()),
+        [l] if l.size() > MAX_LISTING_BYTES => bail!("the listing layer is {} bytes, over the {MAX_LISTING_BYTES}-byte limit", l.size()),
+        [_] => {}
+        _ => bail!("a dataset manifest has at most one {LISTING_MEDIA_TYPE} layer"),
+    }
+    if m.layers().len() == listings.len() {
         bail!("a dataset manifest needs at least one task layer");
     }
     let mut names = BTreeSet::new();
-    for (i, layer) in m.layers().iter().enumerate() {
+    for (i, layer) in m.layers().iter().enumerate().filter(|(_, l)| !is_listing(l)) {
         let title = annotation(layer, TITLE).with_context(|| format!("layer {i} has no {TITLE} annotation"))?;
         if !is_task_name(title) {
             bail!("layer {i}: {title:?} is not a valid task name");
@@ -231,8 +250,9 @@ impl Dataset {
             bail!("config blob does not match the dataset config schema:\n  {}", problems.join("\n  "));
         }
         let config: ConfigBlob = serde_json::from_value(value).context("config blob")?;
-        if config.tasks.len() != manifest.layers().len() {
-            bail!("config lists {} task(s), the manifest {} layer(s)", config.tasks.len(), manifest.layers().len());
+        let task_layers: Vec<&Descriptor> = manifest.layers().iter().filter(|l| !is_listing(l)).collect();
+        if config.tasks.len() != task_layers.len() {
+            bail!("config lists {} task(s), the manifest {} layer(s)", config.tasks.len(), task_layers.len());
         }
         if let Some(v) = manifest.annotations().as_ref().and_then(|a| a.get(VERSION))
             && *v != config.version
@@ -240,7 +260,7 @@ impl Dataset {
             bail!("manifest {VERSION} is {v}, config version {}", config.version);
         }
         let mut layers = vec![];
-        for (layer, task) in manifest.layers().iter().zip(&config.tasks) {
+        for (layer, task) in task_layers.into_iter().zip(&config.tasks) {
             let layer = Layer {
                 name: annotation(layer, TITLE).unwrap_or_default().to_string(),
                 digest: layer.digest().to_string(),
@@ -262,6 +282,7 @@ impl Dataset {
             }
             layers.push(layer);
         }
-        Ok(Dataset { config, layers })
+        let listing = manifest.layers().iter().find(|l| is_listing(l)).map(|l| (l.digest().to_string(), l.size()));
+        Ok(Dataset { config, layers, listing })
     }
 }

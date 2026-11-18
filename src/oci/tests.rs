@@ -7,6 +7,7 @@ use serde_json::Value;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
+mod market;
 mod publish;
 
 /// A temp dir, removed when it goes out of scope.

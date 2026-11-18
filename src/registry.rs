@@ -20,10 +20,20 @@ pub fn default_registry() -> String {
     std::env::var(DEFAULT_REGISTRY_ENV).ok().filter(|r| !r.trim().is_empty()).unwrap_or_else(|| DEFAULT_REGISTRY.into())
 }
 
-/// Point a named dataset that names no registry at [`default_registry`].
+/// Point a named dataset that names no registry at `$HBENCH_REGISTRY`, else, when an organisation is named (`--org`
+/// or `$HBENCH_ORG`), at the market's registry, else at [`DEFAULT_REGISTRY`].
 pub fn use_default_registry(d: &mut DatasetConfig) {
     if d.name.is_some() && d.path.is_none() && d.registry.is_none() && d.registry_url.is_none() && d.registry_path.is_none() {
-        d.registry = Some(default_registry());
+        let set = |var: &str| std::env::var(var).ok().filter(|v| !v.trim().is_empty());
+        d.registry = Some(registry_for(set(DEFAULT_REGISTRY_ENV), d.org.clone().or_else(|| set(crate::oci::market::ORG_ENV)).is_some()));
+    }
+}
+
+fn registry_for(env_registry: Option<String>, org_named: bool) -> String {
+    match (env_registry, org_named) {
+        (Some(r), _) => r,
+        (None, true) => format!("{}{}", crate::oci::REGISTRY_SCHEME, crate::oci::market::MARKET_REGISTRY),
+        (None, false) => DEFAULT_REGISTRY.into(),
     }
 }
 
@@ -346,6 +356,19 @@ mod tests {
         let without_broken = DatasetConfig { exclude_task_names: Some(vec!["no-tests".into()]), ..all };
         assert_eq!(names(&without_broken, false).await.unwrap(), ["good"]);
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn naming_an_organisation_makes_the_market_the_default_registry() {
+        assert_eq!(super::registry_for(None, false), super::DEFAULT_REGISTRY);
+        assert_eq!(super::registry_for(None, true), "oci://registry.actuaria.io");
+        assert_eq!(super::registry_for(Some("oci://localhost:5000/ns".into()), true), "oci://localhost:5000/ns", "HBENCH_REGISTRY wins");
+        let mut d =
+            DatasetConfig { name: Some("starter".into()), version: Some("0.2".into()), org: Some("acme".into()), ..Default::default() };
+        if std::env::var("HBENCH_REGISTRY").is_err() {
+            super::use_default_registry(&mut d);
+            assert_eq!(d.registry.as_deref(), Some("oci://registry.actuaria.io"));
+        }
     }
 
     #[test]

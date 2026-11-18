@@ -49,6 +49,9 @@ use std::process::ExitCode;
 struct Cli {
     #[command(subcommand)]
     cmd: Cmd,
+    /// Unpack pulled datasets without checking their signatures. Every version unpacked this way is logged.
+    #[arg(long, global = true)]
+    skip_signature_check: bool,
 }
 
 #[derive(Subcommand)]
@@ -446,7 +449,7 @@ enum DatasetsCmd {
     /// Download a registry dataset's tasks into the cache (or --output-dir), from the default OCI registry unless
     /// --registry, --registry-url or --registry-path names another.
     Download {
-        /// Dataset, name[@version].
+        /// Dataset, name[@version]; with --org or $HBENCH_ORG, a market version, [<publisher>/]<listing>@<tag>.
         dataset: String,
         #[command(flatten)]
         registry: RegistryArgs,
@@ -656,6 +659,10 @@ struct RegistryArgs {
     /// Default: $HBENCH_REGISTRY, else oci://ghcr.io/node-q/hbench-datasets.
     #[arg(long, conflicts_with_all = ["registry_url", "registry_path"])]
     registry: Option<String>,
+    /// The organisation whose repositories in the market's registry a dataset is pulled from, -d
+    /// [<publisher>/]<listing>@<tag>. Default: $HBENCH_ORG. Naming one makes the market the default registry.
+    #[arg(long, conflicts_with_all = ["registry_url", "registry_path"])]
+    org: Option<String>,
 }
 
 #[derive(Args)]
@@ -687,7 +694,8 @@ struct RunArgs {
     #[arg(short = 'p', long = "path", help_heading = "Selection")]
     path: Option<PathBuf>,
     /// Registry dataset, name[@version], from --registry, --registry-url or --registry-path, else from
-    /// $HBENCH_REGISTRY, else from oci://ghcr.io/node-q/hbench-datasets.
+    /// $HBENCH_REGISTRY, else from oci://ghcr.io/node-q/hbench-datasets. With --org or $HBENCH_ORG, a market
+    /// version, [<publisher>/]<listing>@<tag>.
     #[arg(short = 'd', long = "dataset", help_heading = "Selection")]
     dataset: Option<String>,
     #[command(flatten, next_help_heading = "Selection")]
@@ -941,6 +949,7 @@ fn build_job_config(a: &RunArgs) -> Result<JobConfig> {
             registry_url: a.registry.registry_url.clone(),
             registry_path: a.registry.registry_path.clone(),
             registry: a.registry.registry.clone(),
+            org: a.registry.org.clone(),
             ..Default::default()
         });
     }
@@ -1304,6 +1313,9 @@ async fn run() -> Result<ExitCode> {
     let logo = clap::builder::styling::AnsiColor::Cyan.on_default().bold();
     let matches = Cli::command().before_help(format!("{logo}{}{logo:#}", wizard::LOGO)).get_matches();
     let cli = Cli::from_arg_matches(&matches).unwrap_or_else(|e| e.exit());
+    if cli.skip_signature_check {
+        oci::verify::skip();
+    }
     if !matches!(cli.cmd, Cmd::Completions { .. } | Cmd::Update) {
         update::notify();
     }
@@ -1495,6 +1507,9 @@ async fn run() -> Result<ExitCode> {
             Ok(if r.exception_info.is_some() { ExitCode::FAILURE } else { ExitCode::SUCCESS })
         }
         Cmd::Datasets { cmd: DatasetsCmd::List(r) } => {
+            if r.org.is_some() {
+                bail!("the market's registry can't be listed; pull a version from it with -d [<publisher>/]<listing>@<tag>");
+            }
             let rows: Vec<DatasetRow> = if r.registry_url.is_none() && r.registry_path.is_none() {
                 let spec = r.registry.unwrap_or_else(registry::default_registry);
                 oci::list(&spec)
@@ -1582,6 +1597,7 @@ async fn run() -> Result<ExitCode> {
                 registry_url: r.registry_url,
                 registry_path: r.registry_path,
                 registry: r.registry,
+                org: r.org,
                 download_dir: output_dir,
                 ..Default::default()
             };
