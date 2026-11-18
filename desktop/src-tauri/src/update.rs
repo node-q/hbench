@@ -139,6 +139,12 @@ async fn check(app: &AppHandle, manual: bool) {
                         eprintln!("update check: the latest release has no latest.json");
                         Ok(None)
                     }
+                    // The manifest lists no package for this platform: that build failed or was left out of the
+                    // release. Nothing to offer here; the next release that has one will be.
+                    Err(tauri_plugin_updater::Error::TargetNotFound(_) | tauri_plugin_updater::Error::TargetsNotFound(_)) => {
+                        eprintln!("update check: the latest release has no package for this platform");
+                        Ok(None)
+                    }
                     Err(e) => Err(e),
                 },
                 Err(e) => Err(e),
