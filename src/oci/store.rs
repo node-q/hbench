@@ -47,6 +47,8 @@ impl Store {
         let Some(market) = super::market::endpoint_for(registry) else {
             return Store::open(registry, cache_root);
         };
+        // Connect to the market under its one name, whichever spelling of it was asked for.
+        let registry = &market.registry;
         let auth = super::market::registry_auth(&market, repository, super::market::credentials(registry)?).await?;
         Store::open_with_auth(registry, cache_root, auth)
     }
@@ -67,9 +69,19 @@ impl Store {
     }
 
     /// [`Store::open`], authenticating to a registry with `auth`.
+    ///
+    /// The market's registry is opened only with a registry token, the one [`Store::open_for`] gets from the pinned
+    /// token endpoint. A user name and password would be sent to whatever realm the registry's challenge names
+    /// (registry threat model R-6), and an anonymous client would ask that realm too, so both are refused here,
+    /// before any request, for every command that opens a registry: export, push and convert.
     pub fn open_with_auth(registry: &str, cache_root: &Path, auth: RegistryAuth) -> Result<Store> {
         if let Some(dir) = registry.strip_prefix(LAYOUT_SCHEME) {
             return Ok(Store::Layout { root: PathBuf::from(dir) });
+        }
+        if super::market::is_market(registry) && !matches!(auth, RegistryAuth::Bearer(_)) {
+            bail!(
+                "{registry} is the market's registry: its credentials go only to its pinned token endpoint, so hbench does not open it with a user name and password, or anonymously. Pull a version from it with -d [<publisher>/]<listing>@<tag>; nothing was sent"
+            );
         }
         let _ = rustls::crypto::ring::default_provider().install_default();
         let plain_http = if is_loopback(registry) { vec![registry.to_string()] } else { vec![] };

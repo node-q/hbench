@@ -45,13 +45,26 @@ thread_local! {
     pub(crate) static TEST_MARKET: std::cell::RefCell<Option<(Endpoint, RegistryAuth)>> = const { std::cell::RefCell::new(None) };
 }
 
-/// The pinned endpoint of `registry`, when it is the market's registry.
+/// `registry` as the market's registry is known, [`MARKET_REGISTRY`], when it is another spelling of that host:
+/// in another case, with the root's trailing dot, or with the default port (`REGISTRY.ACTUARIA.IO`,
+/// `registry.actuaria.io.`, `registry.actuaria.io:443`). Any other registry is returned as it is. Every spelling
+/// reaches the same host, so every one of them gets the market's checks.
+pub fn canonical_registry(registry: &str) -> String {
+    let host = registry.to_ascii_lowercase();
+    let host = host.strip_suffix(":443").unwrap_or(&host);
+    let host = host.strip_suffix('.').unwrap_or(host);
+    if host == MARKET_REGISTRY { MARKET_REGISTRY.to_string() } else { registry.to_string() }
+}
+
+/// The pinned endpoint of `registry`, when it is the market's registry under any spelling
+/// ([`canonical_registry`]). The endpoint's `registry` is the one to connect to.
 pub fn endpoint_for(registry: &str) -> Option<Endpoint> {
     #[cfg(test)]
     if let Some((e, _)) = TEST_MARKET.with(|m| m.borrow().clone()).filter(|(e, _)| e.registry == registry) {
         return Some(e);
     }
-    (registry == MARKET_REGISTRY).then(|| Endpoint { registry: MARKET_REGISTRY.into(), token_url: MARKET_TOKEN_URL.into() })
+    (canonical_registry(registry) == MARKET_REGISTRY)
+        .then(|| Endpoint { registry: MARKET_REGISTRY.into(), token_url: MARKET_TOKEN_URL.into() })
 }
 
 pub fn is_market(registry: &str) -> bool {
@@ -95,8 +108,10 @@ impl CanonicalName {
                 );
             }
         }
-        if !super::is_tag(tag) {
-            bail!("{name}@{tag}: the version is not an OCI tag");
+        if !is_version(tag) {
+            bail!(
+                "{name}@{tag}: a market version is MAJOR.MINOR or MAJOR.MINOR.PATCH (for example 0.2 or 0.2.1); a tag that can move, like latest, is not pulled"
+            );
         }
         Ok(CanonicalName { publisher, listing, tag: tag.to_string() })
     }
@@ -105,6 +120,12 @@ impl CanonicalName {
     pub fn repository(&self, org: &str) -> String {
         format!("{org}/{}/{}", self.publisher, self.listing)
     }
+}
+
+/// A market version's tag: `MAJOR.MINOR[.PATCH]` (market-platform.md §4), so never a floating tag like `latest`.
+pub fn is_version(tag: &str) -> bool {
+    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    RE.get_or_init(|| regex::Regex::new(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(\.(0|[1-9][0-9]*))?$").unwrap()).is_match(tag)
 }
 
 /// The publisher of `listing` when the request names none.
@@ -219,7 +240,7 @@ pub async fn registry_auth(endpoint: &Endpoint, repository: &str, credentials: R
     if let Some(service) = &service {
         url.query_pairs_mut().append_pair("service", service);
     }
-    let response = client
+    let mut response = client
         .get(url)
         .basic_auth(user, Some(password))
         .send()
@@ -229,9 +250,17 @@ pub async fn registry_auth(endpoint: &Endpoint, repository: &str, credentials: R
     if !status.is_success() {
         bail!("{}: the token service refused a pull token for {registry}/{repository} ({status})", endpoint.token_url);
     }
-    let body = response.bytes().await.with_context(|| format!("reading the token from {}", endpoint.token_url))?;
-    if body.len() > MAX_TOKEN_RESPONSE_BYTES {
-        bail!("{}: the token response is over {MAX_TOKEN_RESPONSE_BYTES} bytes", endpoint.token_url);
+    // The cap holds while the response is read: a body of any length is dropped once it passes it.
+    let too_long = || anyhow::anyhow!("{}: the token response is over {MAX_TOKEN_RESPONSE_BYTES} bytes", endpoint.token_url);
+    if response.content_length().is_some_and(|n| n > MAX_TOKEN_RESPONSE_BYTES as u64) {
+        return Err(too_long());
+    }
+    let mut body: Vec<u8> = vec![];
+    while let Some(chunk) = response.chunk().await.with_context(|| format!("reading the token from {}", endpoint.token_url))? {
+        if body.len() + chunk.len() > MAX_TOKEN_RESPONSE_BYTES {
+            return Err(too_long());
+        }
+        body.extend_from_slice(&chunk);
     }
     #[derive(Deserialize)]
     struct TokenResponse {
@@ -313,6 +342,19 @@ mod tests {
     }
 
     #[test]
+    fn every_spelling_of_the_market_host_is_the_market() {
+        for alias in ["registry.actuaria.io:443", "REGISTRY.ACTUARIA.IO", "registry.actuaria.io.", "Registry.Actuaria.io.:443"] {
+            assert_eq!(canonical_registry(alias), MARKET_REGISTRY, "{alias}");
+            assert_eq!(endpoint_for(alias), Some(market()), "{alias}");
+        }
+        // Another port is another server, and other hosts keep their spelling.
+        for other in ["registry.actuaria.io:5000", "registry.actuaria.io..", "GHCR.io", "localhost:443"] {
+            assert_eq!(canonical_registry(other), other);
+            assert!(!is_market(other), "{other}");
+        }
+    }
+
+    #[test]
     fn a_requested_version_resolves_to_its_canonical_name_and_its_organisations_repository() {
         let c = CanonicalName::requested("underwriting-starter", "0.2").unwrap();
         assert_eq!(c.to_string(), "actuaria/underwriting-starter:0.2");
@@ -324,6 +366,13 @@ mod tests {
             assert!(CanonicalName::requested(bad, "0.2").is_err(), "{bad}");
         }
         assert!(CanonicalName::requested("listing", "not a tag").is_err());
+        for good in ["0.2", "0.2.1", "1.0", "10.20.30"] {
+            assert!(CanonicalName::requested("listing", good).is_ok(), "{good}");
+        }
+        for floating in ["latest", "stable", "main", "1", "v0.2", "0.2-rc1", "0.2.1.0", "01.2", "0.2.", "0.x"] {
+            let err = CanonicalName::requested("listing", floating).unwrap_err().to_string();
+            assert!(err.contains("MAJOR.MINOR"), "{floating}: {err}");
+        }
     }
 
     #[test]

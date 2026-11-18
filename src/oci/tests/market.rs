@@ -7,9 +7,12 @@ use super::super::verify::{Subject, Verifier};
 use super::super::{download_with, lockfile};
 use super::{Scratch, example, info, rewrite, scratch, write_layout};
 use crate::config::{DatasetConfig, TaskRef};
-use crate::oci::format::{LISTING_MEDIA_TYPE, MANIFEST_MEDIA_TYPE, REF_NAME, TITLE};
+use crate::oci::format::{COVER_MEDIA_TYPE, LISTING_MEDIA_TYPE, MANIFEST_MEDIA_TYPE, REF_NAME, TITLE};
 use crate::oci::lockfile::LockMode;
-use crate::oci::{dataset_tasks, pin_datasets_at, sha256_digest};
+use crate::oci::publish::{self, Target};
+use crate::oci::store::Store;
+use crate::oci::verify::{Pending, Skipped};
+use crate::oci::{Location, dataset_tasks, pin_datasets_at, sha256_digest};
 use base64::Engine;
 use oci_client::secrets::RegistryAuth;
 use serde_json::{Value, json};
@@ -127,13 +130,18 @@ fn respond(layouts: &Path, realm: &str, s: &Seen) -> Reply {
 /// Add a `listing.json` layer holding `listing` to the manifest tagged `version` in the layout `layout`; the new
 /// manifest digest.
 fn add_listing(layout: &Path, version: &str, listing: Value) -> String {
-    let bytes = serde_json::to_vec(&listing).unwrap();
-    let digest = sha256_digest(&bytes);
-    std::fs::write(layout.join("blobs/sha256").join(digest.trim_start_matches("sha256:")), &bytes).unwrap();
+    add_layer(layout, version, LISTING_MEDIA_TYPE, "listing.json", &serde_json::to_vec(&listing).unwrap())
+}
+
+/// Add a layer of `media_type` holding `bytes`, titled `title`, to the manifest tagged `version` in the layout
+/// `layout`; the new manifest digest.
+fn add_layer(layout: &Path, version: &str, media_type: &str, title: &str, bytes: &[u8]) -> String {
+    let digest = sha256_digest(bytes);
+    std::fs::write(layout.join("blobs/sha256").join(digest.trim_start_matches("sha256:")), bytes).unwrap();
     rewrite(layout, version, |manifest, _| {
         manifest["layers"].as_array_mut().unwrap().push(json!({
-            "mediaType": LISTING_MEDIA_TYPE, "digest": digest, "size": bytes.len(),
-            "annotations": {TITLE: "listing.json"},
+            "mediaType": media_type, "digest": digest, "size": bytes.len(),
+            "annotations": {TITLE: title},
         }));
     })
 }
@@ -297,13 +305,209 @@ async fn a_refused_signature_check_unpacks_nothing() {
     let task_dir = crate::registry::local_path(&tasks[0]);
     let refusing = Recording { task_dir: task_dir.clone(), refuse: true, calls: Mutex::new(vec![]) };
     let err = format!("{:#}", download_with(&tasks.iter().collect::<Vec<&TaskRef>>(), &refusing).await.unwrap_err());
-    assert!(err.contains("signatures do not check out") && err.contains("no valid signature"), "{err}");
+    assert!(err.contains("did not pass the signature check") && err.contains("no valid signature"), "{err}");
     assert!(!task_dir.exists(), "a task was unpacked");
     assert!(!cache.join("tasks").exists());
 
     // The check that ships until the signing format is decided accepts the version and unpacks it.
-    download_with(&tasks.iter().collect::<Vec<&TaskRef>>(), &crate::oci::verify::Pending).await.unwrap();
+    download_with(&tasks.iter().collect::<Vec<&TaskRef>>(), &Pending).await.unwrap();
     assert!(task_dir.join("task.toml").is_file());
+}
+
+/// threat-model-signing.md §6 and V-1: the bypass is refused for the market's registry.
+#[tokio::test]
+async fn the_signature_bypass_is_refused_for_a_market_version_and_unpacks_nothing() {
+    let (_layouts, market, digest) = market_with(good_listing());
+    let cache = scratch("cache");
+    let tasks = dataset_tasks(&market_dataset(&market, "hello", "0.2", "acme", &cache)).await.unwrap();
+    let task_dir = crate::registry::local_path(&tasks[0]);
+    let err = format!("{:#}", download_with(&tasks.iter().collect::<Vec<&TaskRef>>(), &Skipped).await.unwrap_err());
+    assert!(err.starts_with(&format!("refused {}/acme/actuaria/hello@{digest}", market.host)), "{err}");
+    assert!(err.contains("--insecure-skip-signature does not apply to the market's registry"), "{err}");
+    assert!(!task_dir.exists() && !cache.join("tasks").exists(), "a market task was unpacked unchecked");
+}
+
+/// The check is asked about the name that was requested, never the one the artifact gives itself.
+#[tokio::test]
+async fn the_signature_check_is_asked_about_the_requested_name_not_the_artifacts_own() {
+    let (_layouts, market, _) = market_with(good_listing());
+    let cache = scratch("cache");
+    let mut tasks = dataset_tasks(&market_dataset(&market, "hello", "0.2", "acme", &cache)).await.unwrap();
+    assert_eq!(tasks[0].oci.as_ref().unwrap().canonical_name.as_deref(), Some("actuaria/hello:0.2"));
+    let task_dir = crate::registry::local_path(&tasks[0]);
+    let asked = |tasks: Vec<TaskRef>| {
+        let task_dir = task_dir.clone();
+        async move {
+            let recording = Recording { task_dir, refuse: true, calls: Mutex::new(vec![]) };
+            let err = download_with(&tasks.iter().collect::<Vec<&TaskRef>>(), &recording).await.unwrap_err();
+            (recording.calls.into_inner().unwrap(), format!("{err:#}"))
+        }
+    };
+
+    // The artifact's listing.json says actuaria/hello:0.2; a task that was resolved for another name is checked
+    // under that other name, whatever the artifact says.
+    tasks[0].oci.as_mut().unwrap().canonical_name = Some("actuaria/requested:9.9".into());
+    let (calls, _) = asked(tasks.clone()).await;
+    assert_eq!(calls.iter().map(|(s, _)| s.canonical_name.as_str()).collect::<Vec<_>>(), ["actuaria/requested:9.9"]);
+
+    // A market task that records no requested name is refused before the check, and nothing falls back to the artifact.
+    tasks[0].oci.as_mut().unwrap().canonical_name = None;
+    let (calls, err) = asked(tasks).await;
+    assert!(calls.is_empty(), "{calls:?}");
+    assert!(err.contains("does not record which market version was asked for"), "{err}");
+    assert!(!task_dir.exists());
+}
+
+/// The lock file is written only once the version passed the name check: a refused pull leaves it as it was.
+#[tokio::test]
+async fn a_refused_pull_leaves_the_lock_file_untouched() {
+    let (_layouts, market, _) = market_with(json!({"publisher": "actuaria", "name": "goodbye", "version": "0.2"}));
+    let (cache, locks) = (scratch("cache"), scratch("lock"));
+    let lock = locks.join(lockfile::FILE);
+    let d = market_dataset(&market, "hello", "0.2", "acme", &cache);
+
+    let err = pin(&lock, &d, LockMode::Write).await.unwrap_err().to_string();
+    assert!(err.contains("it is another listing") && err.contains("actuaria/hello:0.2 was asked for"), "{err}");
+    assert!(!lock.exists(), "a refused version was locked: {}", std::fs::read_to_string(&lock).unwrap_or_default());
+
+    // An existing lock keeps its bytes too, also when another dataset in the same run passed its check first.
+    let earlier = format!("version = 1\n\n[datasets]\n\"actuaria/hello:0.2\" = \"{}\"\n", sha256_digest(b"an earlier version"));
+    std::fs::write(&lock, &earlier).unwrap();
+    let good = scratch("good");
+    write_layout(&good, &info("examples", "1.0"), &[example("hello-world")]).unwrap();
+    let passing = super::layout_dataset(&good, &cache, "examples", "1.0");
+    let mut both = vec![passing.clone(), d];
+    let err = pin_datasets_at(&lock, &mut both, LockMode::Write).await.unwrap_err().to_string();
+    assert!(err.contains("it is another listing"), "{err}");
+    assert_eq!(std::fs::read_to_string(&lock).unwrap(), earlier);
+
+    // The passing dataset alone is recorded.
+    pin(&lock, &passing, LockMode::Write).await.unwrap();
+    assert!(std::fs::read_to_string(&lock).unwrap().contains("\"examples@1.0\""));
+}
+
+/// Registry threat model R-6, for every command that opens a registry with the docker config's credentials: the
+/// stand-in's challenge names /evil/token, which would take a user name and password and mint a token.
+#[tokio::test]
+async fn export_and_push_never_send_the_markets_credentials_to_a_realm_its_challenge_names() {
+    let layouts = scratch("market");
+    write_layout(&layouts, &info("hello", "0.2"), &[example("hello-world")]).unwrap();
+    add_listing(&layouts.join("hello"), "0.2", good_listing());
+    let market = FakeMarket::start(&layouts, "/evil/token");
+    let basic = || RegistryAuth::Basic(USER.into(), PASSWORD.into());
+    market.install(basic());
+    let offline = scratch("offline");
+    let nothing_was_sent = |what: &str| {
+        let seen = market.seen();
+        assert!(seen.iter().all(|s| s.authorization.as_deref().is_none_or(|a| !a.starts_with("Basic "))), "{what} sent Basic: {seen:?}");
+        assert!(seen.iter().all(|s| !s.url.contains("/evil")), "{what} reached /evil: {seen:?}");
+        assert!(seen.is_empty(), "{what} asked the registry something: {seen:?}");
+    };
+
+    // `hbench datasets export`, as main.rs runs it, with the docker config's credentials, and anonymously.
+    for (dataset, registry) in [
+        ("hello@0.2", format!("oci://{}", market.host)),
+        ("hello@0.2", format!("oci://{}/acme/actuaria", market.host)),
+        ("actuaria/hello@0.2", format!("oci://{}/acme", market.host)),
+    ] {
+        for auth in [basic(), RegistryAuth::Anonymous] {
+            let err = format!("{:#}", publish::export(dataset, &registry, &offline, auth).await.unwrap_err());
+            assert!(err.contains("datasets export does not read the market's registry") && err.contains("nothing was sent"), "{err}");
+            nothing_was_sent("export");
+        }
+    }
+    assert!(!offline.join("hello").exists(), "something was exported");
+
+    // The choke point itself: the market is never opened with a user name and password, or anonymously.
+    for auth in [basic(), RegistryAuth::Anonymous] {
+        let err = Store::open_with_auth(&market.host, &offline, auth).err().unwrap().to_string();
+        assert!(err.contains("credentials go only to its pinned token endpoint"), "{err}");
+    }
+    assert!(Store::open_with_auth(&market.host, &offline, RegistryAuth::Bearer(TOKEN.into())).is_ok());
+
+    // `datasets push` (and convert, which pushes the same way) to the market fails closed through it.
+    let target = Target { registry: market.host.clone(), repository: "acme/actuaria/hello".into(), tag: None };
+    let err = format!("{:#}", publish::push(&layouts, "hello", "0.2", &target, basic(), false).await.unwrap_err());
+    assert!(err.contains("credentials go only to its pinned token endpoint"), "{err}");
+    nothing_was_sent("push");
+}
+
+#[tokio::test]
+async fn every_spelling_of_the_market_host_takes_the_markets_path() {
+    let (cache, locks) = (scratch("cache"), scratch("lock"));
+    for alias in ["registry.actuaria.io:443", "REGISTRY.ACTUARIA.IO", "registry.actuaria.io.", "Registry.Actuaria.IO.:443"] {
+        assert_eq!(Location::parse(&format!("oci://{alias}")).unwrap().registry, "registry.actuaria.io", "{alias}");
+        assert_eq!(Target::parse(&format!("oci://{alias}/acme/actuaria/hello:0.2")).unwrap().registry, "registry.actuaria.io");
+
+        // A pull goes through the market's own resolution: it wants an organisation, and takes no namespace.
+        let d = |registry: String, org: Option<&str>| DatasetConfig {
+            name: Some("hello".into()),
+            version: Some("0.2".into()),
+            registry: Some(registry),
+            org: org.map(String::from),
+            download_dir: Some(cache.to_path_buf()),
+            ..Default::default()
+        };
+        let lock = locks.join(lockfile::FILE);
+        let err = pin(&lock, &d(format!("oci://{alias}/acme/actuaria"), None), LockMode::Read).await.unwrap_err().to_string();
+        assert!(err.contains("the market's registry takes no namespace"), "{alias}: {err}");
+        let err = pin(&lock, &d(format!("oci://{alias}"), Some("unlisted")), LockMode::Read).await.unwrap_err().to_string();
+        assert!(err.contains("reserved"), "{alias}: {err}");
+
+        // No other way in either: not with the docker config's credentials, not for a listing or an export.
+        for auth in [RegistryAuth::Basic(USER.into(), PASSWORD.into()), RegistryAuth::Anonymous] {
+            assert!(Store::open_with_auth(alias, &cache, auth).is_err(), "{alias}");
+        }
+        assert!(Store::open_with_config(alias, &cache, None).is_err(), "{alias}");
+        let err = publish::export("hello@0.2", &format!("oci://{alias}/acme/actuaria"), &cache, RegistryAuth::Anonymous).await.unwrap_err();
+        assert!(err.to_string().contains("does not read the market's registry"), "{alias}: {err}");
+    }
+}
+
+#[tokio::test]
+async fn a_floating_market_tag_is_refused_before_anything_is_asked() {
+    let (_layouts, market, _) = market_with(good_listing());
+    let (cache, locks) = (scratch("cache"), scratch("lock"));
+    market.clear();
+    for tag in ["latest", "stable", "1", "v0.2", "0.2-rc1"] {
+        let d = market_dataset(&market, "hello", tag, "acme", &cache);
+        let err = pin(&locks.join(lockfile::FILE), &d, LockMode::Write).await.unwrap_err().to_string();
+        assert!(err.contains("a market version is MAJOR.MINOR or MAJOR.MINOR.PATCH"), "{tag}: {err}");
+    }
+    assert!(market.seen().is_empty(), "{:?}", market.seen());
+    assert!(!locks.join(lockfile::FILE).exists());
+}
+
+/// The 64 KiB cap on the token response holds while it is read: this token endpoint never stops sending, so a
+/// client that read the whole body first would only end at its timeout.
+#[tokio::test]
+async fn an_endless_token_response_is_dropped_at_the_cap() {
+    let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+    let host = format!("127.0.0.1:{}", server.server_addr().to_ip().unwrap().port());
+    let endpoint = Endpoint { registry: host.clone(), token_url: format!("http://{host}/token") };
+    let challenge = format!(r#"Bearer realm="{}",service="fake-market""#, endpoint.token_url);
+    let stop = Arc::new(AtomicBool::new(false));
+    let stop2 = stop.clone();
+    let thread = std::thread::spawn(move || {
+        while !stop2.load(Ordering::SeqCst) {
+            let Ok(Some(req)) = server.recv_timeout(std::time::Duration::from_millis(50)) else { continue };
+            if req.url().starts_with("/token") {
+                // No length, so the body is chunked, and it has no end.
+                let _ = req.respond(tiny_http::Response::new(200.into(), vec![], std::io::repeat(b'a'), None, None));
+            } else {
+                let header = tiny_http::Header::from_bytes("WWW-Authenticate".as_bytes(), challenge.as_bytes()).unwrap();
+                let _ = req.respond(tiny_http::Response::from_data(vec![]).with_status_code(401).with_header(header));
+            }
+        }
+    });
+    let started = std::time::Instant::now();
+    let auth = RegistryAuth::Basic(USER.into(), PASSWORD.into());
+    let err = format!("{:#}", crate::oci::market::registry_auth(&endpoint, "acme/actuaria/hello", auth).await.unwrap_err());
+    assert!(err.contains("the token response is over 65536 bytes"), "{err}");
+    assert!(started.elapsed() < std::time::Duration::from_secs(20), "the response was read to the timeout");
+    stop.store(true, Ordering::SeqCst);
+    // The server stops sending once the client's connection is gone, which this runtime has to get to close.
+    tokio::task::spawn_blocking(move || thread.join().unwrap()).await.unwrap();
 }
 
 #[tokio::test]
@@ -361,4 +565,46 @@ fn a_listing_layer_is_not_a_task() {
     only["layers"].as_array_mut().unwrap().remove(0);
     let err = crate::oci::format::parse_manifest(&serde_json::to_vec(&only).unwrap()).unwrap_err().to_string();
     assert!(err.contains("at least one task layer"), "{err}");
+}
+
+/// market-platform.md §6.1 item 9: `COVER.md` is one layer of its own media type, never a task, and never twice.
+#[tokio::test]
+async fn a_cover_layer_is_not_a_task_and_a_second_one_is_refused() {
+    let layouts = scratch("market");
+    write_layout(&layouts, &info("hello", "0.2"), &[example("hello-world")]).unwrap();
+    let layout = layouts.join("hello");
+    add_listing(&layout, "0.2", good_listing());
+    let cover = b"# Hello\n\nA starter listing.\n";
+    let digest = add_layer(&layout, "0.2", COVER_MEDIA_TYPE, "COVER.md", cover);
+    let read = |d: &str| std::fs::read(layout.join("blobs/sha256").join(d.trim_start_matches("sha256:"))).unwrap();
+    let manifest_bytes = read(&digest);
+    let manifest = crate::oci::format::parse_manifest(&manifest_bytes).unwrap();
+    let dataset = crate::oci::format::Dataset::new(&manifest, &read(manifest.config().digest().as_ref())).unwrap();
+    assert_eq!(dataset.layers.iter().map(|l| l.name.as_str()).collect::<Vec<_>>(), ["hello-world"]);
+    assert_eq!(dataset.cover, Some((sha256_digest(cover), cover.len() as u64)));
+    assert!(dataset.listing.is_some());
+
+    // A version with a cover pulls from the market like any other, with one task.
+    let market = FakeMarket::start(&layouts, "/token");
+    market.install(RegistryAuth::Basic(USER.into(), PASSWORD.into()));
+    let cache = scratch("cache");
+    let tasks = dataset_tasks(&market_dataset(&market, "hello", "0.2", "acme", &cache)).await.unwrap();
+    assert_eq!(tasks.iter().map(TaskRef::display_name).collect::<Vec<_>>(), ["hello-world"]);
+    assert_eq!(tasks[0].oci.as_ref().unwrap().manifest_digest, digest);
+    download_with(&tasks.iter().collect::<Vec<&TaskRef>>(), &Pending).await.unwrap();
+    assert!(crate::registry::local_path(&tasks[0]).join("task.toml").is_file());
+
+    // A second cover, like a second listing, is refused; so is the version that carries it.
+    let manifest: Value = serde_json::from_slice(&manifest_bytes).unwrap();
+    for (media_type, index) in [(COVER_MEDIA_TYPE, 2), (LISTING_MEDIA_TYPE, 1)] {
+        let mut twice = manifest.clone();
+        assert_eq!(twice["layers"][index]["mediaType"], media_type);
+        let again = twice["layers"][index].clone();
+        twice["layers"].as_array_mut().unwrap().push(again);
+        let err = crate::oci::format::parse_manifest(&serde_json::to_vec(&twice).unwrap()).unwrap_err().to_string();
+        assert_eq!(err, format!("a dataset manifest has at most one {media_type} layer"));
+    }
+    add_layer(&layout, "0.2", COVER_MEDIA_TYPE, "COVER-2.md", b"# Another cover\n");
+    let err = format!("{:#}", dataset_tasks(&market_dataset(&market, "hello", "0.2", "acme", &scratch("cache"))).await.unwrap_err());
+    assert!(err.contains(&format!("at most one {COVER_MEDIA_TYPE} layer")), "{err}");
 }

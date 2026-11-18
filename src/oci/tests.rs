@@ -391,6 +391,7 @@ fn lock_json_records_oci_tasks() {
         repository: "ns/hello".into(),
         manifest_digest: sha256_digest(b"m"),
         layer_digest: sha256_digest(b"l"),
+        canonical_name: None,
     };
     let t = TaskRef { path: Some("hello-world".into()), source: Some("hello".into()), oci: Some(oci.clone()), ..Default::default() };
     t.validate().unwrap();

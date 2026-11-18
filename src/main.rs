@@ -49,9 +49,10 @@ use std::process::ExitCode;
 struct Cli {
     #[command(subcommand)]
     cmd: Cmd,
-    /// Unpack pulled datasets without checking their signatures. Every version unpacked this way is logged.
+    /// Unpack pulled datasets without checking their signatures, for this run only. Every version unpacked this way
+    /// is logged. Refused for the market's registry.
     #[arg(long, global = true)]
-    skip_signature_check: bool,
+    insecure_skip_signature: bool,
 }
 
 #[derive(Subcommand)]
@@ -1313,7 +1314,7 @@ async fn run() -> Result<ExitCode> {
     let logo = clap::builder::styling::AnsiColor::Cyan.on_default().bold();
     let matches = Cli::command().before_help(format!("{logo}{}{logo:#}", wizard::LOGO)).get_matches();
     let cli = Cli::from_arg_matches(&matches).unwrap_or_else(|e| e.exit());
-    if cli.skip_signature_check {
+    if cli.insecure_skip_signature {
         oci::verify::skip();
     }
     if !matches!(cli.cmd, Cmd::Completions { .. } | Cmd::Update) {

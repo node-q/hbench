@@ -127,6 +127,7 @@ mod tests {
             },
             layers: (0..tasks).map(layer).collect(),
             listing: None,
+            cover: None,
         }
     }
 

@@ -76,6 +76,8 @@ impl Location {
             );
         };
         let (registry, namespace) = rest.trim_end_matches('/').split_once('/').unwrap_or((rest.trim_end_matches('/'), ""));
+        // Every spelling of the market's host is the market, so none of them gets around its checks.
+        let registry = market::canonical_registry(registry);
         let valid_host = !registry.is_empty() && registry.chars().all(|c| c.is_ascii_alphanumeric() || ".-:[]".contains(c));
         if !valid_host {
             bail!("{spec}: {registry:?} is not a registry host");
@@ -83,7 +85,7 @@ impl Location {
         if !namespace.is_empty() && !is_repository(namespace) {
             bail!("{spec}: {namespace:?} is not a repository namespace (lowercase letters and digits, separated by . _ - or /)");
         }
-        Ok(Location { registry: registry.to_string(), namespace: namespace.to_string() })
+        Ok(Location { registry, namespace: namespace.to_string() })
     }
 
     /// The `--registry` form, with a layout dir made absolute.
@@ -242,6 +244,33 @@ impl Source {
     fn cache(&self, d: &DatasetConfig) -> PathBuf {
         cache_root(d.download_dir.as_deref())
     }
+
+    /// The store this dataset is pulled from, caching where `d` says.
+    async fn store(&self, d: &DatasetConfig) -> Result<Store> {
+        Store::open_for(&self.location.registry, &self.repository, &self.cache(d)).await
+    }
+
+    /// The dataset at `digest` in `store`, refused unless it is the one asked for: a market version must carry a
+    /// `listing.json` that names it, any other dataset that carries one must be named by it too, and the config
+    /// must state the same name and version.
+    async fn open(&self, store: &Store, digest: &str) -> Result<Dataset> {
+        let (name, version, repository) = (&self.name, &self.version, &self.repository);
+        let dataset = open(store, repository, digest).await?;
+        let reference = store.reference(repository, digest);
+        let publisher = self.market.as_ref().map(|c| c.publisher.as_str());
+        match read_listing(store, repository, &dataset).await.with_context(|| reference.clone())? {
+            Some(listing) => market::check_listing(&listing, name, version, publisher, &reference)?,
+            None if self.market.is_some() => bail!(
+                "refused {reference}: it carries no listing.json, so it can't be checked against the {} that was asked for. Nothing was unpacked.",
+                self.key
+            ),
+            None => {}
+        }
+        if (dataset.config.name.as_str(), dataset.config.version.as_str()) != (name.as_str(), version.as_str()) {
+            bail!("{reference} is dataset {}@{}, not {name}@{version}", dataset.config.name, dataset.config.version);
+        }
+        Ok(dataset)
+    }
 }
 
 /// Set each OCI dataset's `digest` to the manifest its tag resolves to, through `./hbench.lock` as `mode` says.
@@ -268,14 +297,15 @@ async fn pin_datasets_at(path: &Path, datasets: &mut [DatasetConfig], mode: Lock
         let key = source.key.clone();
         let in_lock = locked.get(&key).cloned();
         d.registry = Some(source.location.spec());
+        let mut store = None;
         let digest = match (d.digest.clone(), mode, &in_lock, &source.market) {
             (Some(digest), ..) => digest,
             // Digests pin, tags name: a locked market version is pulled by its digest alone.
             (None, LockMode::Locked, Some(pinned), Some(_)) => pinned.clone(),
             (None, LockMode::Locked, None, Some(_)) => bail!("--locked: {key} is not in {}", lockfile::FILE),
             (None, ..) => {
-                let store = Store::open_for(&source.location.registry, &source.repository, &source.cache(d)).await?;
-                let resolved = store.resolve_tag(&source.repository, &source.version).await;
+                let opened = store.insert(source.store(d).await?);
+                let resolved = opened.resolve_tag(&source.repository, &source.version).await;
                 match (resolved, &in_lock, mode) {
                     (Ok(digest), _, _) => digest,
                     (Err(e), Some(pinned), LockMode::Read) => {
@@ -292,6 +322,13 @@ async fn pin_datasets_at(path: &Path, datasets: &mut [DatasetConfig], mode: Lock
                 bail!("--locked: {key} resolves to {digest}, but {} locks it at {pinned}", lockfile::FILE)
             }
             (LockMode::Write, pinned) if pinned.as_ref() != Some(&digest) => {
+                // Only a version that is what was asked for is recorded: a refused one leaves the lock file as
+                // it was, so the lock never pins a digest the name check turned down.
+                let store = match store {
+                    Some(store) => store,
+                    None => source.store(d).await?,
+                };
+                source.open(&store, &digest).await?;
                 eprintln!("{}: {key} -> {digest}", lockfile::FILE);
                 locked.insert(key, digest.clone());
                 changed = true;
@@ -340,28 +377,10 @@ pub async fn dataset_tasks(d: &DatasetConfig) -> Result<Vec<TaskRef>> {
     let mut d = d.clone();
     pin_datasets(std::slice::from_mut(&mut d), LockMode::Read).await?;
     let source = Source::of(&d)?;
-    let (name, version, location, repository) = (&source.name, &source.version, &source.location, &source.repository);
+    let (name, location, repository) = (&source.name, &source.location, &source.repository);
     let digest = d.digest.clone().context("an OCI dataset without a digest")?;
-    let store = Store::open_for(&location.registry, repository, &source.cache(&d)).await?;
-    let dataset = open(&store, repository, &digest).await?;
-    let reference = store.reference(repository, &digest);
-    let publisher = source.market.as_ref().map(|c| c.publisher.as_str());
-    match read_listing(&store, repository, &dataset).await.with_context(|| reference.clone())? {
-        Some(listing) => market::check_listing(&listing, name, version, publisher, &reference)?,
-        None if source.market.is_some() => bail!(
-            "refused {reference}: it carries no listing.json, so it can't be checked against the {} that was asked for. Nothing was unpacked.",
-            source.key
-        ),
-        None => {}
-    }
-    if (dataset.config.name.as_str(), dataset.config.version.as_str()) != (name.as_str(), version.as_str()) {
-        bail!(
-            "{} is dataset {}@{}, not {name}@{version}",
-            store.reference(repository, &digest),
-            dataset.config.name,
-            dataset.config.version
-        );
-    }
+    let dataset = source.open(&source.store(&d).await?, &digest).await?;
+    let canonical_name = source.market.as_ref().map(ToString::to_string);
     Ok(dataset
         .layers
         .into_iter()
@@ -375,6 +394,7 @@ pub async fn dataset_tasks(d: &DatasetConfig) -> Result<Vec<TaskRef>> {
                 repository: repository.clone(),
                 manifest_digest: digest.clone(),
                 layer_digest: l.digest,
+                canonical_name: canonical_name.clone(),
             }),
             ..Default::default()
         })
@@ -388,19 +408,24 @@ pub async fn download(tasks: &[&TaskRef]) -> Result<()> {
 }
 
 async fn download_with(tasks: &[&TaskRef], verifier: &dyn verify::Verifier) -> Result<()> {
-    let mut groups: BTreeMap<(String, String, String, Option<PathBuf>), Vec<&TaskRef>> = BTreeMap::new();
+    type Version = (String, String, String, Option<String>, Option<PathBuf>);
+    let mut groups: BTreeMap<Version, Vec<&TaskRef>> = BTreeMap::new();
     for t in tasks {
         let Some(o) = &t.oci else { continue };
-        let key = (o.registry.clone(), o.repository.clone(), o.manifest_digest.clone(), t.download_dir.clone());
+        let key = (o.registry.clone(), o.repository.clone(), o.manifest_digest.clone(), o.canonical_name.clone(), t.download_dir.clone());
         groups.entry(key).or_default().push(t);
     }
-    for ((registry, repository, digest, download_dir), ts) in groups {
+    for ((registry, repository, digest, requested, download_dir), ts) in groups {
         let store = Store::open_for(&registry, &repository, &cache_root(download_dir.as_deref())).await?;
         let dataset = open(&store, &repository, &digest).await?;
         let reference = store.reference(&repository, &digest);
-        let listing = read_listing(&store, &repository, &dataset).await.with_context(|| reference.clone())?;
-        let canonical_name = match &listing {
-            Some(l) => format!("{}{}:{}", l.publisher.as_deref().map(|p| format!("{p}/")).unwrap_or_default(), l.name, l.version),
+        // The check is asked about the name that was requested, never one the artifact states about itself: a
+        // version signed under another name must not pass by naming itself.
+        let canonical_name = match requested {
+            Some(requested) => requested,
+            None if market::is_market(&registry) => bail!(
+                "refused {reference}: this task does not record which market version was asked for, so its signatures can't be checked against a name. Resolve the dataset again with -d [<publisher>/]<listing>@<tag>. Nothing was unpacked."
+            ),
             None => format!("{}:{}", dataset.config.name, dataset.config.version),
         };
         let subject = verify::Subject {
@@ -410,7 +435,10 @@ async fn download_with(tasks: &[&TaskRef], verifier: &dyn verify::Verifier) -> R
             manifest_digest: digest.clone(),
             canonical_name,
         };
-        verifier.verify(&store, &subject).await.with_context(|| format!("refused {reference}: its signatures do not check out"))?;
+        verifier
+            .verify(&store, &subject)
+            .await
+            .with_context(|| format!("refused {reference}: it did not pass the signature check, and nothing was unpacked"))?;
         let mut needed: Vec<(Layer, PathBuf)> = vec![];
         for t in ts {
             let o = t.oci.as_ref().unwrap();

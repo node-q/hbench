@@ -144,6 +144,8 @@ async fn copy(source: &Store, from: &str, digest: &str, dest: &Store, to: &str, 
     let dataset = super::open(source, from, digest).await?;
     let config = super::format::parse_manifest(&manifest)?.config().clone();
     let blobs: Vec<(String, u64)> = std::iter::once((config.digest().to_string(), config.size()))
+        .chain(dataset.listing.clone())
+        .chain(dataset.cover.clone())
         .chain(dataset.layers.iter().map(|l| (l.digest.clone(), l.size)))
         .collect();
     let transfers: Vec<Result<Option<u64>>> = futures_util::stream::iter(blobs.iter().map(|(digest, size)| async move {
@@ -229,9 +231,19 @@ pub async fn pack_and_push(
 
 /// Copy dataset `name@version` from `registry` (`oci://<registry>/<namespace>` or `oci-layout:<dir>`) into the OCI
 /// image layout `<layout_root>/<name>`, tagged with the version, for `oci-layout:<layout_root>` to read offline.
+///
+/// The market's registry is not exported from: an export there would need the organisation's repository, the
+/// pinned token endpoint and the listing check a pull gets, and it has none of them yet, so it is refused before
+/// anything is asked of the registry.
 pub async fn export(dataset: &str, registry: &str, layout_root: &Path, auth: RegistryAuth) -> Result<Copied> {
     let (name, version) = name_and_version(dataset)?;
     let location = Location::parse(registry)?;
+    if super::market::is_market(&location.registry) {
+        bail!(
+            "{}: datasets export does not read the market's registry, so {dataset} was not exported and nothing was sent. Pull a market version with -d [<publisher>/]<listing>@<tag> --org <org>",
+            location.spec()
+        );
+    }
     let repository = location.repository(&name)?;
     let layout_root = std::path::absolute(layout_root)?;
     let source = Store::open_with_auth(&location.registry, &layout_root.join(&name), auth)?;
