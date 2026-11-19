@@ -607,6 +607,12 @@ curl -fs "$url/api/config" | check '"mode":"jobs"'
 curl -fs "$url/api/jobs?q=fixtures" | check '"fixtures"'
 curl -fs "$url/api/jobs/fixtures" | check n_completed_trials
 curl -fs "$url/" | check "<html"
+# I-20: another Host is refused; a write without the launch key is refused; the printed address carries the key.
+[ "$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: evil.example' "$url/api/jobs")" = 403 ]
+[ "$(curl -s -o /dev/null -w '%{http_code}' -H 'Origin: http://evil.example' "$url/api/jobs")" = 403 ]
+[ "$(curl -s -o /dev/null -w '%{http_code}' -X DELETE "$url/api/jobs/fixtures")" = 403 ]
+[ -d "$JOBS/fixtures" ]
+check '#k=' < "$CLI/view-jobs.log"
 url=$(view "$CLI/view-tasks.log" -p examples/tasks --tasks --port 18090-18099)
 curl -fs "$url/api/config" | check '"mode":"tasks"'
 curl -fs "$url/api/task-definitions" | check hello-world
