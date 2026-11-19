@@ -40,6 +40,8 @@ pub struct Req<'a> {
     pub host: Option<&'a str>,
     /// `X-Viewer-Key`: the secret the viewer made at launch, which only its own page holds.
     pub key: Option<&'a str>,
+    /// `Sec-Fetch-Site`, which browsers set themselves: `cross-site` on the API is another site's page.
+    pub fetch_site: Option<&'a str>,
     pub body: &'a [u8],
 }
 
@@ -130,18 +132,26 @@ fn host_ok(port: u16, host: Option<&str>) -> bool {
 /// the viewer checks `Host` on every request, refuses an `Origin` other than its own on the API, and asks
 /// for the launch key on every route that changes something or uses the market sign-in. A viewer bound to a
 /// non-loopback address answers neither kind (it is read-only).
-pub(super) fn guard(app: &App, req: &Req, path: &str) -> std::result::Result<(), Err> {
+///
+/// `api` is the route's percent-decoded segments after `/api/` (None for the page and its files): what is
+/// sensitive is decided on the same segments `route` matches, so `/api/%61ccount` is `/api/account` here too.
+pub(super) fn guard(app: &App, req: &Req, api: Option<&[&str]>) -> std::result::Result<(), Err> {
     if app.bound_to_loopback && !host_ok(app.port, req.host) {
         return Err(err(403, "Unknown host."));
     }
-    let api = path.starts_with("/api/");
-    if api && let Some(origin) = req.origin {
-        let own = req.host.is_some_and(|h| origin.eq_ignore_ascii_case(&format!("http://{h}")));
-        if !own {
-            return Err(err(403, "Cross-origin request rejected."));
+    if api.is_some() {
+        if let Some(origin) = req.origin {
+            let own = req.host.is_some_and(|h| origin.eq_ignore_ascii_case(&format!("http://{h}")));
+            if !own {
+                return Err(err(403, "Cross-origin request rejected."));
+            }
+        }
+        // Browsers set it and pages cannot: it catches a cross-site request that carries no `Origin`.
+        if req.fetch_site.is_some_and(|s| s.trim().eq_ignore_ascii_case("cross-site")) {
+            return Err(err(403, "Cross-site request rejected."));
         }
     }
-    let sensitive = !matches!(req.method, "GET" | "HEAD" | "OPTIONS") || path == "/api/account";
+    let sensitive = !matches!(req.method, "GET" | "HEAD" | "OPTIONS") || api.is_some_and(uses_signin);
     if sensitive {
         if !app.bound_to_loopback {
             return Err(err(403, READ_ONLY));
@@ -152,6 +162,11 @@ pub(super) fn guard(app: &App, req: &Req, path: &str) -> std::result::Result<(),
         }
     }
     Ok(())
+}
+
+/// The read routes that use the market sign-in, on decoded segments.
+fn uses_signin(segs: &[&str]) -> bool {
+    matches!(segs, ["account", ..])
 }
 
 pub fn handle(app: &App, req: &Req) -> Resp {
@@ -167,6 +182,8 @@ pub fn handle(app: &App, req: &Req) -> Resp {
     if api || r.ctype.starts_with("application/json") {
         r.headers.push(("Content-Security-Policy", API_CSP.into()));
         r.headers.push(("Cache-Control", "no-store".into()));
+        // No other origin may embed an answer (an <img>, <script> or <video> pointed at the API).
+        r.headers.push(("Cross-Origin-Resource-Policy", "same-origin".into()));
     }
     r
 }
@@ -174,8 +191,10 @@ pub fn handle(app: &App, req: &Req) -> Resp {
 fn route(app: &App, req: &Req) -> Res {
     let (path, query) = req.url.split_once('?').unwrap_or((req.url, ""));
     let q = Query::parse(query);
-    guard(app, req, path)?;
-    let Some(api) = path.strip_prefix("/api/") else {
+    let decoded: Option<Vec<String>> = path.strip_prefix("/api/").map(|api| api.split('/').map(|x| pct_decode(x, false)).collect());
+    let segs: Option<Vec<&str>> = decoded.as_ref().map(|d| d.iter().map(String::as_str).collect());
+    guard(app, req, segs.as_deref())?;
+    let Some(segs) = segs else {
         if req.method != "GET" {
             return Err(err(405, "Method Not Allowed"));
         }
@@ -185,8 +204,6 @@ fn route(app: &App, req: &Req) -> Res {
         return static_file(if path == "/favicon.ico" || path == "/favicon.svg" { path } else { "/index.html" })
             .ok_or_else(|| err(404, "Not Found"));
     };
-    let decoded: Vec<String> = api.split('/').map(|x| pct_decode(x, false)).collect();
-    let segs: Vec<&str> = decoded.iter().map(String::as_str).collect();
     match (req.method, segs.as_slice()) {
         ("GET", ["health"]) => ok_json(json!({"status": "ok"})),
         // The page asks the viewer, and the viewer asks the market with hbench's sign-in: no token reaches it.
@@ -274,6 +291,7 @@ pub fn serve(folder: &Path, mode: Option<Mode>, host: &str, ports: (u16, u16)) -
             println!("  Key: from {KEY_ENV}");
         } else {
             println!("  Open: http://{host}:{port}/#k={key}");
+            println!("  The key in this address is this viewer's alone: it ends when the viewer stops.");
         }
     }
     let app = Arc::new(App::new(folder, mode, bound_to_loopback, port, key));
@@ -289,7 +307,8 @@ pub fn serve(folder: &Path, mode: Option<Mode>, host: &str, ports: (u16, u16)) -
                             .find(|h| h.field.as_str().as_str().eq_ignore_ascii_case(name))
                             .map(|h| h.value.as_str().to_string())
                     };
-                    let (origin, host, key) = (header("origin"), header("host"), header("x-viewer-key"));
+                    let (origin, host, key, fetch_site) =
+                        (header("origin"), header("host"), header("x-viewer-key"), header("sec-fetch-site"));
                     let method = rq.method().as_str().to_uppercase();
                     let url = rq.url().to_string();
                     let mut body = vec![];
@@ -302,6 +321,7 @@ pub fn serve(folder: &Path, mode: Option<Mode>, host: &str, ports: (u16, u16)) -
                             origin: origin.as_deref(),
                             host: host.as_deref(),
                             key: key.as_deref(),
+                            fetch_site: fetch_site.as_deref(),
                             body: &body,
                         },
                     );

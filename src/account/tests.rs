@@ -401,6 +401,87 @@ fn a_refresh_that_fails_at_the_server_is_never_resent() {
     assert_eq!(idp.seen.lock().unwrap().refreshes, ["refresh-1"]);
 }
 
+/// A keychain whose writes fail (locked, full, or denied), and whose deletes may fail too.
+struct BrokenWrites {
+    inner: Memory,
+    deletes_fail: bool,
+}
+
+impl Store for BrokenWrites {
+    fn get(&self, key: &str) -> Result<Option<String>> {
+        self.inner.get(key)
+    }
+    fn set(&self, _: &str, _: &str) -> Result<()> {
+        bail!("the keychain refused the write")
+    }
+    fn delete(&self, key: &str) -> Result<()> {
+        if self.deletes_fail { bail!("the keychain refused the delete") } else { self.inner.delete(key) }
+    }
+}
+
+/// The rotation consumed the old token: when the new one cannot be saved, the old one is not kept to be replayed.
+#[test]
+fn a_rotated_token_that_cannot_be_saved_is_not_replayed() {
+    let idp = FakeIdp::start(Redirect::Good);
+    let (ep, memory) = (idp.endpoints(), Memory::default());
+    let (open, _seen) = browser(|_| {});
+    let rt = rt();
+    rt.block_on(login_browser_with(&ep, &memory, open, Duration::from_secs(20))).unwrap();
+    forget(&ep);
+    let store = BrokenWrites { inner: memory, deletes_fail: false };
+    let err = rt.block_on(access_token(&ep, &store)).unwrap_err();
+    assert!(format!("{err:#}").contains("signed out"), "{err:#}");
+    assert!(store.get(&ep.store_key()).unwrap().is_none());
+    assert!(rt.block_on(access_token(&ep, &store)).unwrap_err().is::<NotSignedIn>());
+    assert_eq!(idp.seen.lock().unwrap().refreshes, ["refresh-1"]);
+}
+
+/// When neither the new token can be saved nor the old one deleted, the in-flight marker stays, and the next
+/// refresh signs out instead of sending the old token again.
+#[test]
+fn a_token_left_in_the_keychain_after_use_is_never_resent() {
+    let idp = FakeIdp::start(Redirect::Good);
+    let (ep, memory) = (idp.endpoints(), Memory::default());
+    let (open, _seen) = browser(|_| {});
+    let rt = rt();
+    rt.block_on(login_browser_with(&ep, &memory, open, Duration::from_secs(20))).unwrap();
+    forget(&ep);
+    let store = BrokenWrites { inner: memory, deletes_fail: true };
+    assert!(rt.block_on(access_token(&ep, &store)).is_err());
+    assert_eq!(store.get(&ep.store_key()).unwrap().as_deref(), Some("refresh-1"), "the keychain kept it");
+    // The keychain works again: the marked token is deleted, not sent.
+    let store = store.inner;
+    let err = rt.block_on(access_token(&ep, &store)).unwrap_err();
+    assert!(format!("{err:#}").contains("interrupted"), "{err:#}");
+    assert!(store.get(&ep.store_key()).unwrap().is_none());
+    assert_eq!(idp.seen.lock().unwrap().refreshes, ["refresh-1"]);
+}
+
+/// A process killed between sending a refresh and keeping its answer leaves the marker: the next process signs
+/// out instead of resending. A new sign-in clears it.
+#[test]
+fn a_refresh_killed_in_flight_is_never_resent() {
+    let idp = FakeIdp::start(Redirect::Good);
+    let (ep, store) = (idp.endpoints(), Memory::default());
+    let (open, _seen) = browser(|_| {});
+    let rt = rt();
+    rt.block_on(login_browser_with(&ep, &store, open, Duration::from_secs(20))).unwrap();
+    forget(&ep);
+    // What a process killed after the request was sent leaves behind.
+    refresh_lock(&ep).unwrap().mark("refresh-1").unwrap();
+    let err = rt.block_on(access_token(&ep, &store)).unwrap_err();
+    assert!(format!("{err:#}").contains("interrupted"), "{err:#}");
+    assert!(store.get(&ep.store_key()).unwrap().is_none());
+    assert!(idp.seen.lock().unwrap().refreshes.is_empty(), "nothing was sent");
+    // A marker for another token (a stale one) does not stop a refresh.
+    let (open, _seen) = browser(|_| {});
+    rt.block_on(login_browser_with(&ep, &store, open, Duration::from_secs(20))).unwrap();
+    refresh_lock(&ep).unwrap().mark("some-older-token").unwrap();
+    forget(&ep);
+    rt.block_on(access_token(&ep, &store)).unwrap();
+    assert_eq!(idp.seen.lock().unwrap().refreshes.len(), 1);
+}
+
 #[test]
 fn refresh_is_serialised_across_callers() {
     let idp = FakeIdp::start(Redirect::Good);

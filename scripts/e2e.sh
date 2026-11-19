@@ -612,6 +612,12 @@ curl -fs "$url/" | check "<html"
 [ "$(curl -s -o /dev/null -w '%{http_code}' -H 'Origin: http://evil.example' "$url/api/jobs")" = 403 ]
 [ "$(curl -s -o /dev/null -w '%{http_code}' -X DELETE "$url/api/jobs/fixtures")" = 403 ]
 [ -d "$JOBS/fixtures" ]
+# The guard reads the decoded path, as the router does: an encoded spelling is gated the same.
+[ "$(curl -s -o /dev/null -w '%{http_code}' "$url/api/%61ccount")" = 403 ]
+[ "$(curl -s -o /dev/null -w '%{http_code}' -X DELETE "$url/api/%6Aobs/fixtures")" = 403 ]
+[ -d "$JOBS/fixtures" ]
+[ "$(curl -s -o /dev/null -w '%{http_code}' -H 'Sec-Fetch-Site: cross-site' "$url/api/jobs")" = 403 ]
+curl -fs -D - -o /dev/null "$url/api/health" | tr -d '\r' | check 'Cross-Origin-Resource-Policy: same-origin'
 check '#k=' < "$CLI/view-jobs.log"
 url=$(view "$CLI/view-tasks.log" -p examples/tasks --tasks --port 18090-18099)
 curl -fs "$url/api/config" | check '"mode":"tasks"'

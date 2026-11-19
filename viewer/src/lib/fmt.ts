@@ -123,10 +123,32 @@ export function filterLabel(v: string): string {
   return v.startsWith("\\") ? v.slice(1) : v;
 }
 
+/** Whether a URL reaches the desktop app's page actions (`/__actuaria/<action>`: open a folder, open a link in
+ *  the browser, sign in or out, install an update). Only the viewer's own code may navigate there, never a
+ *  link from dataset or agent content. Decided on the path as the webview resolves it (dot segments,
+ *  backslashes), and on its percent-decoded form too, any scheme or host. */
+export function isAppAction(u: string): boolean {
+  let path: string;
+  try {
+    path = new URL(u.trim(), "http://viewer.invalid/").pathname;
+  } catch {
+    return false;
+  }
+  let decoded = path;
+  try {
+    decoded = decodeURIComponent(path);
+  } catch {
+    // A malformed escape: the raw path is still checked.
+  }
+  return [path, decoded].some((p) => /^\/+__actuaria(\/|$)/i.test(p));
+}
+
 /** A URL from dataset or agent content, if it is safe as a link or image: http(s), a same-origin path, or a
- *  `data:` image. Anything else (`javascript:`, `data:text/html`, …) is dropped. */
+ *  `data:` image. Anything else (`javascript:`, `data:text/html`, the app's `/__actuaria/` actions, …) is
+ *  dropped. */
 export function safeUrl(u: unknown): string | undefined {
   if (typeof u !== "string" || !u) return undefined;
+  if (isAppAction(u)) return undefined;
   if (/^data:image\/(png|jpe?g|gif|webp|bmp);/i.test(u)) return u;
   if (u.startsWith("/") && !u.startsWith("//")) return u;
   try {

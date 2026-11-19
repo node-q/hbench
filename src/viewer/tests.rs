@@ -6,7 +6,8 @@ use std::path::Path;
 const KEY: &str = "test-launch-key-0123456789abcdefghijkl";
 
 fn get(app: &App, url: &str) -> (u16, Value) {
-    let r = handle(app, &Req { method: "GET", url, origin: None, host: Some("127.0.0.1:8080"), key: Some(KEY), body: b"" });
+    let r =
+        handle(app, &Req { method: "GET", url, origin: None, host: Some("127.0.0.1:8080"), key: Some(KEY), fetch_site: None, body: b"" });
     (r.status, serde_json::from_slice(&r.body).unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&r.body).into_owned())))
 }
 
@@ -133,13 +134,16 @@ fn path_guards_and_spa() {
             origin: Some("http://evil.example"),
             host: Some("127.0.0.1:8080"),
             key: Some(KEY),
+            fetch_site: None,
             body: b"",
         },
     );
     assert_eq!(r.status, 403);
     assert!(app.folder.join(job).exists());
-    let page =
-        handle(&app, &Req { method: "GET", url: "/jobs/x/trials/y", origin: None, host: Some("localhost:8080"), key: None, body: b"" });
+    let page = handle(
+        &app,
+        &Req { method: "GET", url: "/jobs/x/trials/y", origin: None, host: Some("localhost:8080"), key: None, fetch_site: None, body: b"" },
+    );
     assert!(String::from_utf8(page.body).unwrap().contains(r#"<div id="root">"#));
 }
 
@@ -150,15 +154,17 @@ fn write_routes_need_a_loopback_bind() {
     let job = "2026-01-02__00-00-00";
     let delete = |app: &App, origin: Option<&str>, host: &str| {
         let url = format!("/api/jobs/{job}");
-        handle(app, &Req { method: "DELETE", url: &url, origin, host: Some(host), key: Some(KEY), body: b"" })
+        handle(app, &Req { method: "DELETE", url: &url, origin, host: Some(host), key: Some(KEY), fetch_site: None, body: b"" })
     };
     for (origin, host) in [(None, "10.0.0.5:8080"), (Some("http://10.0.0.5:8080"), "10.0.0.5:8080"), (None, "127.0.0.1:8080")] {
         let r = delete(&exposed, origin, host);
         assert_eq!(r.status, 403, "{origin:?} {host}");
         assert!(String::from_utf8_lossy(&r.body).contains("read-only"));
     }
-    let r =
-        handle(&exposed, &Req { method: "POST", url: "/api/run", origin: None, host: Some("10.0.0.5:8080"), key: Some(KEY), body: b"{}" });
+    let r = handle(
+        &exposed,
+        &Req { method: "POST", url: "/api/run", origin: None, host: Some("10.0.0.5:8080"), key: Some(KEY), fetch_site: None, body: b"{}" },
+    );
     assert_eq!(r.status, 403);
     assert!(exposed.folder.join(job).exists());
     assert_eq!(get(&exposed, &format!("/api/jobs/{job}")).0, 200);
@@ -170,8 +176,9 @@ fn write_routes_need_a_loopback_bind() {
 fn stopping_a_job_leaves_the_runs_stop_request() {
     let app = fixture();
     let job = "2026-01-02__00-00-00";
-    let post =
-        |url: &str| handle(&app, &Req { method: "POST", url, origin: None, host: Some("127.0.0.1:8080"), key: Some(KEY), body: b"" });
+    let post = |url: &str| {
+        handle(&app, &Req { method: "POST", url, origin: None, host: Some("127.0.0.1:8080"), key: Some(KEY), fetch_site: None, body: b"" })
+    };
     // Not launched here: the request goes to the job dir, which every `hbench run` watches.
     let r = post(&format!("/api/jobs/{job}/stop"));
     assert_eq!(r.status, 200);
@@ -217,6 +224,7 @@ fn server_models_lists_a_self_hosted_servers_models() {
                 origin: None,
                 host: Some("127.0.0.1:8080"),
                 key: Some(KEY),
+                fetch_site: None,
                 body: body.as_bytes(),
             },
         );
@@ -262,7 +270,7 @@ fn host_origin_and_launch_key_are_checked() {
     let app = fixture();
     let job = "2026-01-02__00-00-00";
     let call = |method: &str, url: &str, host: Option<&str>, origin: Option<&str>, key: Option<&str>| {
-        handle(&app, &Req { method, url, origin, host, key, body: b"" }).status
+        handle(&app, &Req { method, url, origin, host, key, fetch_site: None, body: b"" }).status
     };
     let own = Some("http://127.0.0.1:8080");
     // Host: only the viewer's loopback names on its own port, on every route (DNS rebinding).
@@ -292,12 +300,60 @@ fn host_origin_and_launch_key_are_checked() {
     assert!(!app.folder.join(job).exists());
 }
 
+/// The guard decides on the same percent-decoded segments the router matches: an encoded spelling of a gated
+/// route is gated too.
+#[test]
+fn encoded_paths_are_gated_like_plain_ones() {
+    let app = fixture();
+    let job = "2026-01-02__00-00-00";
+    let call = |method: &str, url: &str, key: Option<&str>| {
+        handle(&app, &Req { method, url, origin: None, host: Some("127.0.0.1:8080"), key, fetch_site: None, body: b"" }).status
+    };
+    for url in ["/api/%61ccount", "/api/%61%63%63%6F%75%6E%74", "/api/acc%6Funt?x=1"] {
+        assert_eq!(call("GET", url, None), 403, "{url}");
+        assert_eq!(call("GET", url, Some("wrong")), 403, "{url}");
+    }
+    let encoded = [format!("/api/%6Aobs/{job}/%73top"), format!("/api/jobs/{}/stop", job.replace('2', "%32"))];
+    for url in &encoded {
+        assert_eq!(call("POST", url, None), 403, "{url}");
+    }
+    assert!(!app.folder.join(job).join(crate::JOB_STOP_FILE).exists());
+    let delete = format!("/api/%6Aobs/{}", job.replace('-', "%2D"));
+    assert_eq!(call("DELETE", &delete, None), 403);
+    assert!(app.folder.join(job).exists());
+    // With the key, the encoded spelling reaches the same route.
+    assert_eq!(call("POST", &encoded[0], Some(KEY)), 200);
+    assert!(app.folder.join(job).join(crate::JOB_STOP_FILE).exists());
+}
+
+/// Another site's page reaches the API neither by a request the browser marks `cross-site` nor by embedding an
+/// answer.
+#[test]
+fn cross_site_fetches_and_embeds_are_refused() {
+    let app = fixture();
+    let call = |url: &str, fetch_site: Option<&str>| {
+        handle(&app, &Req { method: "GET", url, origin: None, host: Some("127.0.0.1:8080"), key: Some(KEY), fetch_site, body: b"" })
+    };
+    for site in ["cross-site", "Cross-Site"] {
+        assert_eq!(call("/api/jobs", Some(site)).status, 403, "{site}");
+    }
+    for site in [None, Some("same-origin"), Some("none")] {
+        assert_eq!(call("/api/jobs", site).status, 200, "{site:?}");
+    }
+    let corp =
+        |r: &http::Resp| r.headers.iter().find(|(k, _)| k.eq_ignore_ascii_case("Cross-Origin-Resource-Policy")).map(|(_, v)| v.clone());
+    assert_eq!(corp(&call("/api/jobs", None)).as_deref(), Some("same-origin"));
+    assert_eq!(corp(&call("/api/jobs/nope", None)).as_deref(), Some("same-origin"), "errors too");
+}
+
 #[test]
 fn account_route_is_refused_when_exposed() {
     let local = fixture();
     let exposed = App::new(local.folder.clone(), Mode::Jobs, false, 8080, KEY.into());
-    let r =
-        handle(&exposed, &Req { method: "GET", url: "/api/account", origin: None, host: Some("10.0.0.5:8080"), key: Some(KEY), body: b"" });
+    let r = handle(
+        &exposed,
+        &Req { method: "GET", url: "/api/account", origin: None, host: Some("10.0.0.5:8080"), key: Some(KEY), fetch_site: None, body: b"" },
+    );
     assert_eq!(r.status, 403);
 }
 
@@ -307,7 +363,10 @@ fn account_route_is_refused_when_exposed() {
 fn content_security_policy() {
     let app = fixture();
     let hdr = |r: &http::Resp, name: &str| r.headers.iter().find(|(k, _)| k.eq_ignore_ascii_case(name)).map(|(_, v)| v.clone());
-    let page = handle(&app, &Req { method: "GET", url: "/jobs/x", origin: None, host: Some("127.0.0.1:8080"), key: None, body: b"" });
+    let page = handle(
+        &app,
+        &Req { method: "GET", url: "/jobs/x", origin: None, host: Some("127.0.0.1:8080"), key: None, fetch_site: None, body: b"" },
+    );
     let csp = hdr(&page, "Content-Security-Policy").expect("the page has a CSP");
     assert!(csp.contains("script-src 'self' 'sha256-"), "{csp}");
     let script_src = csp.split(';').map(str::trim).find(|d| d.starts_with("script-src")).unwrap();
@@ -329,6 +388,7 @@ fn content_security_policy() {
             origin: None,
             host: Some("127.0.0.1:8080"),
             key: None,
+            fetch_site: None,
             body: b"",
         },
     );

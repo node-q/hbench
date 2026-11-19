@@ -208,14 +208,50 @@ fn check_id_token(v: &Value, ep: &Endpoints, nonce: &str) -> Result<()> {
 
 /// The cross-process refresh lock (one per user): two processes never hold, and so never send, the same
 /// refresh token (market-idp.md section 3, I-5).
-struct RefreshLock(#[allow(dead_code)] std::fs::File);
+///
+/// The lock file also holds the in-flight marker: the fingerprint of the refresh token being sent, written
+/// before the request and cleared once the store holds the outcome. A process killed in between leaves it,
+/// and the next one, finding the stored token marked, signs out instead of sending it again.
+struct RefreshLock(std::fs::File);
+
+impl RefreshLock {
+    fn marker(token: &str) -> String {
+        URL_SAFE_NO_PAD.encode(fingerprint(token))
+    }
+
+    /// Whether `token` was sent by a refresh that never recorded its outcome.
+    fn in_flight(&mut self, token: &str) -> Result<bool> {
+        use std::io::{Read, Seek};
+        let mut s = String::new();
+        self.0.rewind()?;
+        self.0.read_to_string(&mut s)?;
+        Ok(s.trim() == Self::marker(token))
+    }
+
+    fn mark(&mut self, token: &str) -> Result<()> {
+        self.write(&Self::marker(token)).context("recording the refresh in flight")
+    }
+
+    fn clear(&mut self) -> Result<()> {
+        self.write("")
+    }
+
+    fn write(&mut self, s: &str) -> Result<()> {
+        use std::io::{Seek, Write};
+        self.0.set_len(0)?;
+        self.0.rewind()?;
+        self.0.write_all(s.as_bytes())?;
+        self.0.sync_all()?;
+        Ok(())
+    }
+}
 
 fn refresh_lock(ep: &Endpoints) -> Result<RefreshLock> {
     // Tests lock in a scratch directory, not the person's cache.
     let dir = if cfg!(test) { std::env::temp_dir().join("hbench-test-signin-locks") } else { crate::env::cache_root() };
     std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
     let name = format!("signin-{}.lock", &URL_SAFE_NO_PAD.encode(Sha256::digest(ep.store_key().as_bytes()))[..16]);
-    let f = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(dir.join(name))?;
+    let f = std::fs::OpenOptions::new().create(true).truncate(false).read(true).write(true).open(dir.join(name))?;
     f.lock().context("waiting for the sign-in lock")?;
     Ok(RefreshLock(f))
 }
@@ -277,42 +313,88 @@ pub async fn access_token(ep: &Endpoints, store: &dyn Store) -> Result<String> {
     {
         return Ok(c.access.clone());
     }
-    let _lock = refresh_lock(ep)?;
+    let mut lock = refresh_lock(ep)?;
     // Read again under the lock: another process may have refreshed (and rotated) it meanwhile.
     let Some(refresh) = store.get(&key)? else {
         forget(ep);
         return Err(NotSignedIn.into());
     };
-    let body = form(&[("grant_type", "refresh_token"), ("refresh_token", &refresh), ("client_id", &ep.client_id)]);
+    if lock.in_flight(&refresh)? {
+        // A process sent it and stopped before it kept the answer: the server may have rotated it already.
+        store.delete(&key)?;
+        lock.clear()?;
+        forget(ep);
+        bail!(
+            "signed out: an earlier sign-in refresh was interrupted, and hbench never sends a refresh token twice. Run `hbench login --browser` to sign in again"
+        );
+    }
+    lock.mark(&refresh)?;
+    let r = refresh_with(ep, store, &key, &refresh).await;
+    // Left in place only when the store could not be brought up to date (see `refresh_with`).
+    if !matches!(&r, Err(e) if e.is::<StoreStale>()) {
+        lock.clear()?;
+    }
+    r
+}
+
+/// The keychain still holds a refresh token that was sent: the in-flight marker stays so it is never sent again.
+#[derive(Debug)]
+struct StoreStale;
+
+impl std::fmt::Display for StoreStale {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("the used sign-in could not be removed from the OS keychain")
+    }
+}
+
+impl std::error::Error for StoreStale {}
+
+/// Delete a sent refresh token from the store; on failure the error says so, which keeps the in-flight marker.
+fn drop_sent(store: &dyn Store, key: &str) -> Result<()> {
+    store.delete(key).map_err(|e| anyhow::Error::new(StoreStale).context(format!("{e:#}")))
+}
+
+/// One refresh request under the lock, with the in-flight marker written. Every path that may have used the
+/// token leaves the store without it.
+async fn refresh_with(ep: &Endpoints, store: &dyn Store, key: &str, refresh: &str) -> Result<String> {
+    let key = key.to_string();
+    let body = form(&[("grant_type", "refresh_token"), ("refresh_token", refresh), ("client_id", &ep.client_id)]);
     match post_form(&ep.endpoint("token"), body).await? {
         Sent::Answered(200, v) => {
             // Keycloak rotates the refresh token on use: an answer we can't read may still have consumed it.
             let t = match tokens_of(&v) {
                 Ok(t) => t,
                 Err(e) => {
-                    store.delete(&key)?;
                     forget(ep);
+                    drop_sent(store, &key)?;
                     return Err(e.context("signed out: the refresh answer could not be used, and hbench never sends a refresh token twice"));
                 }
             };
-            let next = t.refresh.clone().unwrap_or(refresh);
-            if next != current {
-                store.set(&key, &next)?;
+            let next = t.refresh.clone().unwrap_or_else(|| refresh.to_string());
+            if next != refresh
+                && let Err(e) = store.set(&key, &next)
+            {
+                // The old token was consumed by the rotation: keeping it would replay it on the next refresh.
+                forget(ep);
+                drop_sent(store, &key)?;
+                return Err(
+                    e.context("signed out: the renewed sign-in could not be saved to the OS keychain; run `hbench login --browser`")
+                );
             }
             remember(ep, &next, &t);
             Ok(t.access)
         }
         Sent::Answered(400 | 401, v) if oauth_error(&v) == Some("invalid_grant") => {
-            store.delete(&key)?;
             forget(ep);
+            drop_sent(store, &key)?;
             bail!(
                 "signed out: Actuaria refused the stored sign-in (it ended, or was used elsewhere). Run `hbench login --browser` to sign in again"
             )
         }
         Sent::Answered(status @ 500.., _) => {
             // The server may have used the token before it failed: never send it again.
-            store.delete(&key)?;
             forget(ep);
+            drop_sent(store, &key)?;
             bail!(
                 "signed out: Actuaria's sign-in service failed while refreshing (HTTP {status}); run `hbench login --browser` to sign in again"
             )
@@ -323,8 +405,8 @@ pub async fn access_token(ep: &Endpoints, store: &dyn Store) -> Result<String> {
         Sent::Unsent(e) => bail!("couldn't reach Actuaria's sign-in service: {e}"),
         Sent::Lost(e) => {
             // It may have been used: sending it again would look like a stolen token being replayed.
-            store.delete(&key)?;
             forget(ep);
+            drop_sent(store, &key)?;
             bail!(
                 "the sign-in refresh was interrupted ({e}); hbench never sends a refresh token twice, so sign in again with `hbench login --browser`"
             )
@@ -351,8 +433,9 @@ pub async fn redeem(ep: &Endpoints, store: &dyn Store, attempt: &Attempt, code: 
     let t = tokens_of(&v)?;
     check_id_token(&v, ep, &attempt.nonce)?;
     let refresh = t.refresh.as_deref().context("Actuaria returned no refresh token (the offline_access scope was not granted)")?;
-    let _lock = refresh_lock(ep)?;
+    let mut lock = refresh_lock(ep)?;
     store.set(&ep.store_key(), refresh)?;
+    lock.clear()?;
     remember(ep, refresh, &t);
     Ok(())
 }

@@ -473,14 +473,21 @@ Any page in your browser can send requests to a loopback port, so the viewer gua
 sign-in-products.md, I-20):
 
 - It answers only to its own names in `Host` (`127.0.0.1`, `localhost` or `[::1]` on its port), which stops DNS
-  rebinding, and refuses an `Origin` other than its own on the API.
+  rebinding. On the API it refuses an `Origin` other than its own and a request the browser marks
+  `Sec-Fetch-Site: cross-site`, and its answers carry `Cross-Origin-Resource-Policy: same-origin`, so another
+  site can't embed them either.
 - It makes a new key at each launch and prints its address with it, `http://127.0.0.1:8080/#k=<key>`. Starting
   runs, deleting jobs and the account route (`GET /api/account`, who is signed in to Actuaria) need the key in
   `X-Viewer-Key`. The page keeps it for the tab and drops it from the address bar. The desktop app makes the key
-  itself and passes it in `HBENCH_VIEW_KEY`.
+  itself and passes it in `HBENCH_VIEW_KEY`. The key belongs to that one `hbench view` process: it lives only in
+  its memory, is never written to disk, and dies with it. Restart the viewer and the old address (and any tab
+  still holding the old key) can no longer start runs, delete jobs or ask who is signed in; open the new
+  address it prints. Which routes need the key is decided on the decoded path, so `/api/%61ccount` is the
+  account route too.
 - The page's Content-Security-Policy lets script run only from the viewer's own bundle, and API answers (a
   dataset's file opened in a tab) are sandboxed, so markup in dataset or agent content can't run script in the
-  viewer's origin. Links taken from that content are kept only when they are http(s) or a `data:` image.
+  viewer's origin. Links taken from that content are kept only when they are http(s) or a `data:` image, and
+  never when they lead to the desktop app's `/__actuaria/` actions (Markdown links included).
 
 A running job's page has a Stop button. It cancels the run as Ctrl-C does: trials in progress stop and their
 containers are torn down, finished trials keep their results; if the run is still tearing down 20 seconds later,
