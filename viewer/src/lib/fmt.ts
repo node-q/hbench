@@ -122,3 +122,17 @@ export function filterLabel(v: string): string {
   if (v === "__missing__") return "(none)";
   return v.startsWith("\\") ? v.slice(1) : v;
 }
+
+/** A URL from dataset or agent content, if it is safe as a link or image: http(s), a same-origin path, or a
+ *  `data:` image. Anything else (`javascript:`, `data:text/html`, …) is dropped. */
+export function safeUrl(u: unknown): string | undefined {
+  if (typeof u !== "string" || !u) return undefined;
+  if (/^data:image\/(png|jpe?g|gif|webp|bmp);/i.test(u)) return u;
+  if (u.startsWith("/") && !u.startsWith("//")) return u;
+  try {
+    const p = new URL(u);
+    return p.protocol === "http:" || p.protocol === "https:" ? p.href : undefined;
+  } catch {
+    return undefined;
+  }
+}

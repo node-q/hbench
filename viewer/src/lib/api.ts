@@ -38,8 +38,27 @@ export function p(...segs: string[]): string {
   return "/api/" + segs.map(enc).join("/");
 }
 
+// The viewer's launch key. `hbench view` prints its address with `#k=<key>`, and the desktop app opens its window
+// there; the page keeps the key for this tab and drops it from the address bar. Writes and the account route
+// need it (the viewer checks it with Host and Origin, I-20), so other pages in the browser can't use them.
+const KEY_STORE = "hb:viewer-key";
+const viewerKey: string | null = (() => {
+  const m = /(?:^#|&)k=([A-Za-z0-9_-]{32,})/.exec(location.hash);
+  try {
+    if (m) {
+      sessionStorage.setItem(KEY_STORE, m[1]);
+      history.replaceState(history.state, "", location.pathname + location.search);
+    }
+    return m?.[1] ?? sessionStorage.getItem(KEY_STORE);
+  } catch {
+    return m?.[1] ?? null;
+  }
+})();
+
 async function request(path: string, init?: RequestInit): Promise<Response> {
-  const r = await fetch(path, init);
+  const headers = new Headers(init?.headers);
+  if (viewerKey) headers.set("X-Viewer-Key", viewerKey);
+  const r = await fetch(path, { ...init, headers });
   if (!r.ok) {
     let body: any = null;
     try {

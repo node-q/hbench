@@ -9,7 +9,7 @@ import { CodeView } from "../../ui/content";
 import { Empty, ErrorBox, Loading, PageHead, Spinner } from "../../ui/kit";
 import { useToast } from "../../ui/overlay";
 import { ApiError, enc, send, useApi } from "../../lib/api";
-import { ago } from "../../lib/fmt";
+import { ago, safeUrl } from "../../lib/fmt";
 import { useDebounced, useStored } from "../../lib/state";
 import type { Catalog, CatalogDataset, KwargSpec, Obj, RunOptions, RunStatus } from "../../lib/types";
 import { useCommands, useTitle, type Command } from "../../shell";
@@ -391,8 +391,8 @@ function DatasetSummary({ entry, version, onVersion }: { entry: CatalogDataset; 
       {entry.description && <p className="run-ds__desc">{entry.description}</p>}
       <p className="run-ds__meta">
         {[entry.creator, entry.license].filter(Boolean).join(" · ")}
-        {entry.upstream_url && (
-          <a className="link" href={entry.upstream_url} target="_blank" rel="noreferrer">
+        {safeUrl(entry.upstream_url) && (
+          <a className="link" href={safeUrl(entry.upstream_url)} target="_blank" rel="noreferrer">
             Source <Icon.External size={11} />
           </a>
         )}

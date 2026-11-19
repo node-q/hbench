@@ -19,6 +19,16 @@ with [Tauri 2](https://tauri.app).
 - There is no IPC. Native menus call `window.__actuaria.command(..)`. The page asks for native actions (open
   folder, reveal, theme, external links) by navigating to `/__actuaria/<action>`, which the app intercepts and
   never loads. Links to other sites open in the default browser.
+- **Signing in to Actuaria.** The page asks with `/__actuaria/login`, `/__actuaria/logout` and
+  `/__actuaria/account`; the app runs the bundled `hbench login --browser` or `hbench logout`, or opens
+  `https://account.actuaria.io` in the default browser. Sign-in happens in the system browser, never in the app's
+  window. The page gets only progress (`window.__ACTUARIA_SIGNIN__` and an `actuaria:signin` event, with the
+  sign-in address only when no browser opened) and asks the viewer's `/api/account` who is signed in: **tokens
+  never enter the window**. No Tauri command is added and the capabilities stay empty. The app takes
+  `/__actuaria/` actions only from its own pages (the start screen and the viewer it runs).
+- The viewer's launch key: the app makes a new one for each `hbench view` it starts, passes it in
+  `HBENCH_VIEW_KEY`, and opens the window at `http://127.0.0.1:<port>/#k=<key>`. Writes and the account route
+  need it (docs/REFERENCE.md, Viewer).
 - Apps started from Finder don't get your shell profile. The app reads the login shell's environment once at
   startup, the way VS Code does, so hbench finds `docker` and the model API keys you export in `~/.zshrc`.
 - On Unix, hbench runs under a small `sh` watchdog tied to a pipe the app holds. If the app quits, crashes or is

@@ -97,9 +97,13 @@ pub fn start(folder: &Path, env: &HashMap<String, String>, log: &Path) -> Result
     if !has_subdirs {
         cmd.arg("--jobs");
     }
+    // The viewer's launch key (I-20): writes and the account route need it, and only this window gets it, in
+    // the address's fragment (never sent to the server, never in the log). Passed by environment, not argv.
+    let key = launch_key()?;
     cmd.envs(env)
         // The app updates as a whole; hbench's own update notice would only land in the log.
         .env("HBENCH_NO_UPDATE_CHECK", "1")
+        .env("HBENCH_VIEW_KEY", &key)
         .current_dir(folder)
         .stdin(if cfg!(unix) { Stdio::piped() } else { Stdio::null() })
         .stdout(out)
@@ -123,5 +127,38 @@ pub fn start(folder: &Path, env: &HashMap<String, String>, log: &Path) -> Result
         }
         std::thread::sleep(Duration::from_millis(100));
     }
-    Ok(Server { child, lifeline, url: format!("http://127.0.0.1:{port}/"), folder: folder.to_path_buf() })
+    Ok(Server { child, lifeline, url: format!("http://127.0.0.1:{port}/#k={key}"), folder: folder.to_path_buf() })
+}
+
+/// 32 random bytes, base64url: a new key at each launch of the viewer.
+fn launch_key() -> Result<String, String> {
+    let mut b = [0u8; 32];
+    getrandom::fill(&mut b).map_err(|e| format!("making the viewer's key: {e}"))?;
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    // 6 bits per character from each byte pair's bits: plain base64url without padding.
+    let mut out = String::with_capacity(43);
+    let (mut acc, mut bits) = (0u32, 0);
+    for byte in b {
+        acc = (acc << 8) | byte as u32;
+        bits += 8;
+        while bits >= 6 {
+            bits -= 6;
+            out.push(ALPHABET[((acc >> bits) & 63) as usize] as char);
+        }
+    }
+    if bits > 0 {
+        out.push(ALPHABET[((acc << (6 - bits)) & 63) as usize] as char);
+    }
+    Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn launch_keys_are_long_url_safe_and_new() {
+        let (a, b) = (super::launch_key().unwrap(), super::launch_key().unwrap());
+        assert_eq!(a.len(), 43);
+        assert!(a.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_'));
+        assert_ne!(a, b);
+    }
 }

@@ -6,6 +6,7 @@
 
 mod server;
 mod shell_env;
+mod signin;
 mod update;
 
 use serde::{Deserialize, Serialize};
@@ -203,6 +204,8 @@ fn page_action(app: AppHandle, url: Url) {
                 let _ = app.opener().open_path(log_path(&app).to_string_lossy(), None::<&str>);
             }
             "update" => update::action(&app, param("do").as_deref().unwrap_or_default()),
+            // Sign-in (sign-in-products.md 7.2): the page passes no parameter, and gets no token back.
+            "login" | "logout" | "account" => signin::action(&app, &action),
             "open-external" => {
                 if let Some(u) = param("url").and_then(|u| Url::parse(&u).ok())
                     && matches!(u.scheme(), "http" | "https" | "mailto")
@@ -218,22 +221,21 @@ fn page_action(app: AppHandle, url: Url) {
 /// Whether the webview may load `url`: the start screen and the running viewer. Anything else is either a
 /// page action or a link that belongs in the browser.
 fn allow_navigation(app: &AppHandle, url: &Url) -> bool {
+    let local_app = matches!(url.scheme(), "tauri" | "asset") || url.host_str() == Some("tauri.localhost");
+    let server = app.state::<AppState>().server.lock().unwrap().as_ref().map(|s| s.url.clone());
+    let viewer = server.and_then(|s| Url::parse(&s).ok()).is_some_and(|origin| url.origin() == origin.origin());
     if url.path().starts_with("/__actuaria/") {
-        page_action(app.clone(), url.clone());
-        // The page sends its actions one at a time; tell it this one arrived.
-        if let Some(w) = main_window(app) {
-            let _ = w.eval("window.__actuaria && window.__actuaria.ack && window.__actuaria.ack()");
+        // Actions come from the app's own pages only: the start screen and the viewer it runs.
+        if local_app || viewer {
+            page_action(app.clone(), url.clone());
+            // The page sends its actions one at a time; tell it this one arrived.
+            if let Some(w) = main_window(app) {
+                let _ = w.eval("window.__actuaria && window.__actuaria.ack && window.__actuaria.ack()");
+            }
         }
         return false;
     }
-    let local_app = matches!(url.scheme(), "tauri" | "asset") || url.host_str() == Some("tauri.localhost");
-    if local_app || url.scheme() == "about" {
-        return true;
-    }
-    let server = app.state::<AppState>().server.lock().unwrap().as_ref().map(|s| s.url.clone());
-    if let Some(origin) = server.and_then(|s| Url::parse(&s).ok())
-        && url.origin() == origin.origin()
-    {
+    if local_app || url.scheme() == "about" || viewer {
         return true;
     }
     if matches!(url.scheme(), "http" | "https" | "mailto") {
@@ -470,6 +472,7 @@ fn main() {
                 recent_menu: Mutex::new(None),
             });
             app.manage(update::Updates::default());
+            app.manage(signin::Signin::default());
             let (menu, recent) = build_menu(&handle)?;
             app.set_menu(menu)?;
             *app.state::<AppState>().recent_menu.lock().unwrap() = Some(recent);
@@ -489,6 +492,7 @@ fn main() {
                 .on_page_load(|w, p| {
                     if matches!(p.event(), PageLoadEvent::Finished) {
                         update::push(w.app_handle());
+                        signin::push(w.app_handle());
                     }
                 })
                 // The title bar names the open tab, then the folder: "Jobs — my-evals".
@@ -530,8 +534,9 @@ fn main() {
         .expect("building the Actuaria app")
         .run(|app, event| {
             if let tauri::RunEvent::Exit = event {
-                // Stop hbench view with the app.
+                // Stop hbench view, and a sign-in still waiting for the browser, with the app.
                 app.state::<AppState>().server.lock().unwrap().take();
+                signin::stop_login(app);
             }
         });
 }

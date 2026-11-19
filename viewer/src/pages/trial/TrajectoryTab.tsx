@@ -272,7 +272,9 @@ function MdOrLong({ text }: { text: string }) {
 }
 
 function ImagePart({ src, t }: { src: any; t: TrialRef }) {
-  const url = src?.data ? `data:${src.media_type ?? "image/png"};base64,${src.data}` : src?.path ? (/^(https?:|data:)/.test(src.path) ? src.path : fileUrl(t, src.path.startsWith("agent/") ? src.path : `agent/${src.path}`)) : src?.url;
+  const raw = src?.data ? `data:${src.media_type ?? "image/png"};base64,${src.data}` : src?.path ? (/^(https?:|data:)/.test(src.path) ? src.path : fileUrl(t, src.path.startsWith("agent/") ? src.path : `agent/${src.path}`)) : src?.url;
+  // The trajectory is the agent's output: only an image or web address becomes a link.
+  const url = fmt.safeUrl(raw);
   if (!url) return <span className="muted">Image unavailable</span>;
   return (
     <a href={url} target="_blank" rel="noreferrer" className="timg">

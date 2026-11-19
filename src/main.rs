@@ -1,3 +1,4 @@
+mod account;
 mod agents;
 mod analyze;
 mod artifacts;
@@ -151,6 +152,16 @@ enum Cmd {
         /// Target shell.
         shell: clap_complete::Shell,
     },
+    /// Sign in to Actuaria (the market). `--browser` signs in through the system browser.
+    Login {
+        /// Sign in through the system browser (authorization code with PKCE and a loopback redirect).
+        #[arg(long)]
+        browser: bool,
+    },
+    /// Sign out of Actuaria: revoke the sign-in and remove it from the OS keychain.
+    Logout,
+    /// Who you are signed in to Actuaria as.
+    Whoami,
     /// Install the latest release (runs `curl -fsSL https://github.com/node-q/hbench/releases/latest/download/install.sh | sh`).
     Update,
 }
@@ -1310,6 +1321,12 @@ async fn run() -> Result<ExitCode> {
     match cli.cmd {
         Cmd::Exec(a) => ok(exec::run(*a).await),
         Cmd::Update => update::run(),
+        Cmd::Login { browser: true } => ok(account::login_browser().await),
+        Cmd::Login { browser: false } => {
+            bail!("signing in from a terminal without a browser (the device flow) is not built yet; run `hbench login --browser`")
+        }
+        Cmd::Logout => ok(account::logout().await),
+        Cmd::Whoami => ok(account::whoami_cmd().await),
         Cmd::Completions { shell } => {
             clap_complete::generate(shell, &mut Cli::command(), "hbench", &mut std::io::stdout());
             Ok(ExitCode::SUCCESS)

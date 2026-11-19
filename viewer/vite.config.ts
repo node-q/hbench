@@ -11,5 +11,15 @@ export default defineConfig({
     chunkSizeWarningLimit: 1500,
     rollupOptions: { output: { entryFileNames: "assets/index.js", assetFileNames: "assets/[name][extname]" } },
   },
-  server: { proxy: { "/api": process.env.HBENCH_API ?? "http://127.0.0.1:8091" } },
+  // The viewer accepts only its own Host and Origin: the proxy presents the target's, and drops the dev
+  // server's Origin. Open the dev server with the `#k=<key>` that `hbench view` printed.
+  server: {
+    proxy: {
+      "/api": {
+        target: process.env.HBENCH_API ?? "http://127.0.0.1:8091",
+        changeOrigin: true,
+        configure: (proxy) => proxy.on("proxyReq", (req) => req.removeHeader("origin")),
+      },
+    },
+  },
 });

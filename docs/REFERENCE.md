@@ -418,6 +418,29 @@ export UPLOAD_TOKEN=…
 hbench jobs upload -p jobs/<job> --url https://example.com/api/uploads --token-env UPLOAD_TOKEN -H 'run-token: …'
 ```
 
+## Signing in to Actuaria
+
+```bash
+hbench login --browser   # sign in through the system browser
+hbench whoami            # who you are signed in as, from the market API
+hbench logout            # revoke the sign-in at Actuaria and remove it from the keychain
+```
+
+`hbench login --browser` is the authorization code flow with PKCE (S256) and a loopback redirect (RFC 8252) for the
+client `essentials-desktop` at `https://auth.actuaria.io/realms/market` (hbench-studio
+docs/design/sign-in-products.md section 7). hbench listens on `127.0.0.1` on a port the system picks, opens your
+browser, and accepts exactly one answer on `/callback` with its `state` and the issuer in `iss`, then stops
+listening; it gives up after 5 minutes. If no browser opens, it prints the address to open. The refresh token is
+kept in the OS keychain (macOS Keychain, Windows Credential Manager, the Secret Service on Linux) and nowhere
+else. Refreshing it is serialised across hbench processes by a lock in `~/.cache/hbench`, and a refresh token is
+never sent twice: when a refresh's answer is lost, hbench forgets the token and asks you to sign in again.
+`hbench logout` does not end your browser's own session at Actuaria.
+
+The issuer, the client id and the redirect URI are pinned. Debug builds only (`cargo build`, `npm run dev`) read
+`HBENCH_DEV_MARKET_ISSUER` and `HBENCH_DEV_MARKET_API` to point at a local Keycloak and market API;
+`tests/signin-keycloak/run.sh` runs the flow end to end that way. Signing in without a browser (the device flow,
+client `hbench-cli`) is not built yet.
+
 ## Troubleshooting
 
 - **Watching a run**: `-o`/`--observe` (on `run` and `jobs resume`) prints every trial's `trial.log` lines and
@@ -446,6 +469,19 @@ default; with `--host` set to any non-loopback address it is read-only, because 
 open to anyone who can reach it. The built bundle (`viewer/dist`) is committed and embedded at compile time, so
 `cargo build` doesn't need Node.
 
+Any page in your browser can send requests to a loopback port, so the viewer guards itself (hbench-studio
+sign-in-products.md, I-20):
+
+- It answers only to its own names in `Host` (`127.0.0.1`, `localhost` or `[::1]` on its port), which stops DNS
+  rebinding, and refuses an `Origin` other than its own on the API.
+- It makes a new key at each launch and prints its address with it, `http://127.0.0.1:8080/#k=<key>`. Starting
+  runs, deleting jobs and the account route (`GET /api/account`, who is signed in to Actuaria) need the key in
+  `X-Viewer-Key`. The page keeps it for the tab and drops it from the address bar. The desktop app makes the key
+  itself and passes it in `HBENCH_VIEW_KEY`.
+- The page's Content-Security-Policy lets script run only from the viewer's own bundle, and API answers (a
+  dataset's file opened in a tab) are sandboxed, so markup in dataset or agent content can't run script in the
+  viewer's origin. Links taken from that content are kept only when they are http(s) or a `data:` image.
+
 A running job's page has a Stop button. It cancels the run as Ctrl-C does: trials in progress stop and their
 containers are torn down, finished trials keep their results; if the run is still tearing down 20 seconds later,
 the button offers a force stop, as a second Ctrl-C does. `POST /api/jobs/<job>/stop` signals a run the viewer
@@ -473,6 +509,8 @@ After changing the UI:
 cd viewer && npm install && npm run build      # type-check + rebuild viewer/dist
 npm run dev                                    # hot reload; proxies /api to `hbench view <folder> --port 8091`
 ```
+
+With `npm run dev`, open the dev server's address with the `#k=<key>` that `hbench view` printed.
 
 ### Verification
 
