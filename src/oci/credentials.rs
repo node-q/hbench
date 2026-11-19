@@ -1,7 +1,9 @@
 //! Registry credentials from the docker config file, which `docker login` and `oras login` write:
 //! `$DOCKER_CONFIG/config.json`, else `~/.docker/config.json`. A registry's credential helper (`credHelpers`, else
 //! `credsStore`) is asked first, then its `auths` entry (`auth`, `username` and `password`, or `registrytoken`).
-//! A registry with no credentials is used anonymously.
+//! A registry with no credentials is used anonymously, and so is one whose credential helper isn't installed: a
+//! `credsStore` left behind by Docker Desktop, or a helper off the PATH of an app started from the Finder, must not
+//! stop hbench reading a public registry.
 
 use anyhow::{Context, Result, bail};
 use base64::Engine;
@@ -113,8 +115,36 @@ fn auth_from(config: &DockerConfig, registry: &str, run_helper: &HelperRunner) -
     Ok(RegistryAuth::Anonymous)
 }
 
+/// Where Docker installs its credential helpers, for when they are not on the PATH.
+fn helper_dirs() -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = crate::fsutil::home_dir().map(|h| h.join(".docker").join("bin")).into_iter().collect();
+    if cfg!(target_os = "macos") {
+        dirs.extend(["/Applications/Docker.app/Contents/Resources/bin", "/usr/local/bin", "/opt/homebrew/bin"].map(PathBuf::from));
+    } else if cfg!(unix) {
+        dirs.extend(["/usr/local/bin", "/usr/bin"].map(PathBuf::from));
+    }
+    dirs
+}
+
 fn run_credential_helper(helper: &str, server: &str) -> Result<Option<HelperCredentials>> {
-    credential_helper_get(Path::new(&format!("docker-credential-{helper}")), server)
+    let name = format!("docker-credential-{helper}");
+    let program = find_helper(&name, &helper_dirs());
+    match credential_helper_get(&program, server) {
+        Err(e) if e.downcast_ref::<std::io::Error>().is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound) => {
+            eprintln!("warning: {name} (the docker config's credential helper) isn't installed; going on without it");
+            Ok(None)
+        }
+        r => r,
+    }
+}
+
+/// `name` on the PATH, else in the first of `dirs` that has it, else `name` (whose spawn then fails as not found).
+fn find_helper(name: &str, dirs: &[PathBuf]) -> PathBuf {
+    let on_path = std::env::var_os("PATH").is_some_and(|p| std::env::split_paths(&p).any(|d| d.join(name).is_file()));
+    if on_path {
+        return PathBuf::from(name);
+    }
+    dirs.iter().map(|d| d.join(name)).find(|p| p.is_file()).unwrap_or_else(|| PathBuf::from(name))
 }
 
 /// `<program> get` for `server`: its credentials, or None when it has none for that server.
@@ -125,6 +155,7 @@ fn credential_helper_get(program: &Path, server: &str) -> Result<Option<HelperCr
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
+        .map_err(anyhow::Error::from)
         .with_context(|| format!("running {}", program.display()))?;
     child.stdin.take().context("credential helper stdin")?.write_all(server.as_bytes())?;
     let out = child.wait_with_output()?;
@@ -228,6 +259,32 @@ esac
         assert!(ask("quay.io").is_none());
         assert!(credential_helper_get(&dir.join("missing"), "ghcr.io").is_err());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_missing_credential_helper_is_no_credentials() {
+        let r = run_credential_helper("hbench-test-no-such-helper", "ghcr.io");
+        assert!(matches!(r, Ok(None)), "{:?}", r.err());
+        // Its auths entry, if any, still counts.
+        let c = config(serde_json::json!({
+            "credsStore": "hbench-test-no-such-helper",
+            "auths": {"ghcr.io": {"username": "u", "password": "p"}}
+        }));
+        assert_eq!(auth_from(&c, "ghcr.io", &run_credential_helper).unwrap(), basic("u", "p"));
+    }
+
+    #[test]
+    fn a_helper_off_the_path_is_found_where_docker_installs_it() {
+        let dir = std::env::temp_dir().join(format!("hbench-helpers-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let name = "docker-credential-hbench-test-elsewhere";
+        std::fs::write(dir.join(name), "").unwrap();
+        assert_eq!(find_helper(name, std::slice::from_ref(&dir)), dir.join(name));
+        assert_eq!(
+            find_helper("docker-credential-hbench-test-nowhere", std::slice::from_ref(&dir)),
+            PathBuf::from("docker-credential-hbench-test-nowhere")
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
