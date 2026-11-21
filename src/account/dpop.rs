@@ -13,6 +13,7 @@ use p256::ecdsa::{Signature, SigningKey};
 use p256::pkcs8::{DecodePrivateKey, EncodePrivateKey, LineEnding};
 use serde_json::json;
 use sha2::{Digest, Sha256};
+use zeroize::Zeroizing;
 
 /// The sign-in's proof-of-possession key. Its `Debug` shows the thumbprint only.
 pub struct Key(SigningKey);
@@ -32,10 +33,11 @@ impl Key {
     /// A new key from the OS random source.
     pub fn generate() -> Key {
         loop {
-            let mut b = [0u8; 32];
-            getrandom::fill(&mut b).expect("the OS random source failed");
+            // The seed is wiped when it drops, on every path (a refused value, a panic, or a key made from it).
+            let mut b = Zeroizing::new([0u8; 32]);
+            getrandom::fill(&mut b[..]).expect("the OS random source failed");
             // Zero or a value past the group order is refused; the chance is about 2^-32.
-            if let Ok(k) = SigningKey::from_slice(&b) {
+            if let Ok(k) = SigningKey::from_slice(&b[..]) {
                 return Key(k);
             }
         }
@@ -44,11 +46,11 @@ impl Key {
     /// The key stored for `refresh_key`; `None` when it is missing or is not a P-256 PKCS#8 key (a damaged key
     /// is as unusable as a missing one). A keychain that can't be read is an error.
     pub fn load(store: &dyn Store, refresh_key: &str) -> Result<Option<Key>> {
-        let Some(pem) = store.get(&store_key(refresh_key))? else { return Ok(None) };
+        let Some(pem) = store.get(&store_key(refresh_key))?.map(Zeroizing::new) else { return Ok(None) };
         Ok(SigningKey::from_pkcs8_pem(&pem).ok().map(Key))
     }
 
-    /// Keep the key (PKCS#8, PEM) in the store.
+    /// Keep the key (PKCS#8, PEM) in the store. The PEM is a `Zeroizing` string, wiped when it drops.
     pub fn save(&self, store: &dyn Store, refresh_key: &str) -> Result<()> {
         let Ok(pem) = self.0.to_pkcs8_pem(LineEnding::LF) else { bail!("encoding the sign-in key failed") };
         store.set(&store_key(refresh_key), &pem)

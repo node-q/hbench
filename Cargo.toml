@@ -43,6 +43,7 @@ tiny_http = "0.12.0"
 tokio = { version = "1.53.2", features = ["macros", "rt-multi-thread", "process", "signal", "sync", "time", "io-util"] }
 toml = { version = "1.1.8", features = ["preserve_order"] }
 uuid = { version = "1.28.0", features = ["v4", "serde"] }
+zeroize = "1.9.1"
 
 [profile.release]
 strip = true

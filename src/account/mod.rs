@@ -338,7 +338,7 @@ pub async fn access_token(ep: &Endpoints, store: &dyn Store) -> Result<String> {
     };
     if lock.in_flight(&refresh)? {
         // A process sent it and stopped before it kept the answer: the server may have rotated it already.
-        store.delete(&key)?;
+        drop_signin(store, &key)?;
         lock.clear()?;
         forget(ep);
         bail!(
@@ -366,9 +366,20 @@ impl std::fmt::Display for StoreStale {
 
 impl std::error::Error for StoreStale {}
 
-/// Delete a sent refresh token from the store; on failure the error says so, which keeps the in-flight marker.
+/// Delete a sent refresh token, and its DPoP key, from the store; when the token can't be deleted the error says
+/// so, which keeps the in-flight marker. The key is deleted either way: without it the token is useless.
 fn drop_sent(store: &dyn Store, key: &str) -> Result<()> {
-    store.delete(key).map_err(|e| anyhow::Error::new(StoreStale).context(format!("{e:#}")))
+    let token = store.delete(key);
+    let dpop_key = store.delete(&dpop::store_key(key));
+    token.map_err(|e| anyhow::Error::new(StoreStale).context(format!("{e:#}")))?;
+    dpop_key
+}
+
+/// Delete a refresh token that was not sent, and its DPoP key, from the store: a forced sign-out.
+fn drop_signin(store: &dyn Store, key: &str) -> Result<()> {
+    let token = store.delete(key);
+    let dpop_key = store.delete(&dpop::store_key(key));
+    token.and(dpop_key)
 }
 
 /// One refresh request under the lock, with the in-flight marker written. Every path that may have used the
@@ -376,9 +387,10 @@ fn drop_sent(store: &dyn Store, key: &str) -> Result<()> {
 async fn refresh_with(ep: &Endpoints, store: &dyn Store, key: &str, refresh: &str) -> Result<String> {
     let key = key.to_string();
     let Some(dpop_key) = dpop::Key::load(store, &key)? else {
-        // The refresh token is bound to a key that is gone: it can't be used, so sign out (it was never sent).
+        // The refresh token is bound to a key that is gone: it can't be used, so sign out (it was never sent). A
+        // damaged key goes with it.
         forget(ep);
-        store.delete(&key)?;
+        drop_signin(store, &key)?;
         bail!(
             "signed out: the sign-in's key is missing from the OS keychain, so the stored sign-in can't be used. Run `hbench login --browser` to sign in again"
         );

@@ -459,6 +459,12 @@ fn pkce_verifier_and_challenge() {
 }
 
 /// Sign in, then refresh: the token rotates, a stale one is never sent, and `invalid_grant` signs out.
+/// Neither the refresh token nor its DPoP key is left in the store: what every sign-out, forced or not, leaves.
+fn assert_signed_out(store: &dyn Store, ep: &Endpoints) {
+    assert!(store.get(&ep.store_key()).unwrap().is_none(), "the refresh token is left");
+    assert!(store.get(&dpop::store_key(&ep.store_key())).unwrap().is_none(), "the DPoP key is left");
+}
+
 #[test]
 fn refresh_rotates_and_invalid_grant_signs_out() {
     let idp = FakeIdp::start(Redirect::Good);
@@ -482,7 +488,7 @@ fn refresh_rotates_and_invalid_grant_signs_out() {
     forget(&ep);
     let err = rt.block_on(access_token(&ep, &store)).unwrap_err();
     assert!(format!("{err:#}").contains("signed out"), "{err:#}");
-    assert!(store.get(&ep.store_key()).unwrap().is_none());
+    assert_signed_out(&store, &ep);
 }
 
 #[test]
@@ -496,7 +502,7 @@ fn a_refresh_whose_answer_is_lost_is_never_resent() {
     idp.drop_refreshes.store(1, Ordering::SeqCst);
     let err = rt.block_on(access_token(&ep, &store)).unwrap_err();
     assert!(format!("{err:#}").contains("never sends a refresh token twice"), "{err:#}");
-    assert!(store.get(&ep.store_key()).unwrap().is_none());
+    assert_signed_out(&store, &ep);
     // Asking again sends nothing: there is no token left to send.
     assert!(rt.block_on(access_token(&ep, &store)).unwrap_err().is::<NotSignedIn>());
     assert_eq!(idp.seen.lock().unwrap().refreshes, ["refresh-1"]);
@@ -513,7 +519,7 @@ fn a_refresh_that_fails_at_the_server_is_never_resent() {
     idp.fail_refreshes.store(1, Ordering::SeqCst);
     let err = rt.block_on(access_token(&ep, &store)).unwrap_err();
     assert!(format!("{err:#}").contains("HTTP 502"), "{err:#}");
-    assert!(store.get(&ep.store_key()).unwrap().is_none());
+    assert_signed_out(&store, &ep);
     assert!(rt.block_on(access_token(&ep, &store)).unwrap_err().is::<NotSignedIn>());
     assert_eq!(idp.seen.lock().unwrap().refreshes, ["refresh-1"]);
 }
@@ -548,7 +554,7 @@ fn a_rotated_token_that_cannot_be_saved_is_not_replayed() {
     let store = BrokenWrites { inner: memory, deletes_fail: false };
     let err = rt.block_on(access_token(&ep, &store)).unwrap_err();
     assert!(format!("{err:#}").contains("signed out"), "{err:#}");
-    assert!(store.get(&ep.store_key()).unwrap().is_none());
+    assert_signed_out(&store, &ep);
     assert!(rt.block_on(access_token(&ep, &store)).unwrap_err().is::<NotSignedIn>());
     assert_eq!(idp.seen.lock().unwrap().refreshes, ["refresh-1"]);
 }
@@ -570,7 +576,7 @@ fn a_token_left_in_the_keychain_after_use_is_never_resent() {
     let store = store.inner;
     let err = rt.block_on(access_token(&ep, &store)).unwrap_err();
     assert!(format!("{err:#}").contains("interrupted"), "{err:#}");
-    assert!(store.get(&ep.store_key()).unwrap().is_none());
+    assert_signed_out(&store, &ep);
     assert_eq!(idp.seen.lock().unwrap().refreshes, ["refresh-1"]);
 }
 
@@ -588,7 +594,7 @@ fn a_refresh_killed_in_flight_is_never_resent() {
     refresh_lock(&ep).unwrap().mark("refresh-1").unwrap();
     let err = rt.block_on(access_token(&ep, &store)).unwrap_err();
     assert!(format!("{err:#}").contains("interrupted"), "{err:#}");
-    assert!(store.get(&ep.store_key()).unwrap().is_none());
+    assert_signed_out(&store, &ep);
     assert!(idp.seen.lock().unwrap().refreshes.is_empty(), "nothing was sent");
     // A marker for another token (a stale one) does not stop a refresh.
     let (open, _seen) = browser(|_| {});
@@ -712,7 +718,7 @@ fn a_missing_key_signs_out_without_sending_the_token() {
         forget(&ep);
         let err = rt.block_on(access_token(&ep, &store)).unwrap_err();
         assert!(format!("{err:#}").contains("signed out: the sign-in's key is missing"), "{err:#}");
-        assert!(store.get(&ep.store_key()).unwrap().is_none());
+        assert_signed_out(&store, &ep);
         assert!(rt.block_on(access_token(&ep, &store)).unwrap_err().is::<NotSignedIn>());
     }
     assert!(idp.seen.lock().unwrap().refreshes.is_empty(), "nothing was sent");
