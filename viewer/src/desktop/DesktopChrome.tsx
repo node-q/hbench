@@ -9,6 +9,7 @@ import type { AppConfig, JobSummary, Page, TaskDefinitionSummary, TrialSummary }
 import { useToast } from "../ui/overlay";
 import { APP_NAME, desktopInfo, isMac, native, onCommand } from "./bridge";
 import { UpdatePrompt, UpdateStatus, useUpdate } from "./Update";
+import { AccountStatus } from "./Account";
 
 const SIDE_KEY = "hb:dk-side";
 const TABS_KEY = "hb:dk-tabs";
@@ -387,6 +388,7 @@ export function DesktopChrome({
           </span>
         )}
         <span className="dk-status__fill" />
+        <AccountStatus />
         <UpdateStatus u={update} nRunning={nRunning} />
         <button className="dk-status__item" onClick={openPalette}>
           {kbd("K")} Commands

@@ -99,6 +99,11 @@ hbench view                                               # web viewer
 hbench jobs summary -p jobs/<job>
 hbench jobs resume -p jobs/<job>
 
+# Actuaria
+hbench login --browser                                    # sign in through the system browser
+hbench whoami                                             # who you are signed in as
+hbench logout
+
 # Tasks and datasets
 hbench init <org/name>                                    # a new task
 hbench tasks check -p <tasks>                             # validate tasks: config, files, tests

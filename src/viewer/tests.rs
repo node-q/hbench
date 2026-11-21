@@ -3,8 +3,11 @@ use super::*;
 use serde_json::{Value, json};
 use std::path::Path;
 
+const KEY: &str = "test-launch-key-0123456789abcdefghijkl";
+
 fn get(app: &App, url: &str) -> (u16, Value) {
-    let r = handle(app, &Req { method: "GET", url, origin: None, host: Some("127.0.0.1:8080"), body: b"" });
+    let r =
+        handle(app, &Req { method: "GET", url, origin: None, host: Some("127.0.0.1:8080"), key: Some(KEY), fetch_site: None, body: b"" });
     (r.status, serde_json::from_slice(&r.body).unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&r.body).into_owned())))
 }
 
@@ -44,7 +47,7 @@ fn fixture() -> App {
     write(&new.join("a__1/agent/x.txt"), "a\r\nb");
     write(&root.join("2025-01-01__00-00-00/config.json"), "{}");
     write(&root.join("secret.txt"), "top secret");
-    App::new(root.canonicalize().unwrap(), Mode::Jobs, true)
+    App::new(root.canonicalize().unwrap(), Mode::Jobs, true, 8080, KEY.into())
 }
 
 #[test]
@@ -130,30 +133,38 @@ fn path_guards_and_spa() {
             url: &format!("/api/jobs/{job}"),
             origin: Some("http://evil.example"),
             host: Some("127.0.0.1:8080"),
+            key: Some(KEY),
+            fetch_site: None,
             body: b"",
         },
     );
     assert_eq!(r.status, 403);
     assert!(app.folder.join(job).exists());
-    let page = handle(&app, &Req { method: "GET", url: "/jobs/x/trials/y", origin: None, host: None, body: b"" });
+    let page = handle(
+        &app,
+        &Req { method: "GET", url: "/jobs/x/trials/y", origin: None, host: Some("localhost:8080"), key: None, fetch_site: None, body: b"" },
+    );
     assert!(String::from_utf8(page.body).unwrap().contains(r#"<div id="root">"#));
 }
 
 #[test]
 fn write_routes_need_a_loopback_bind() {
     let local = fixture();
-    let exposed = App::new(local.folder.clone(), Mode::Jobs, false);
+    let exposed = App::new(local.folder.clone(), Mode::Jobs, false, 8080, KEY.into());
     let job = "2026-01-02__00-00-00";
     let delete = |app: &App, origin: Option<&str>, host: &str| {
         let url = format!("/api/jobs/{job}");
-        handle(app, &Req { method: "DELETE", url: &url, origin, host: Some(host), body: b"" })
+        handle(app, &Req { method: "DELETE", url: &url, origin, host: Some(host), key: Some(KEY), fetch_site: None, body: b"" })
     };
     for (origin, host) in [(None, "10.0.0.5:8080"), (Some("http://10.0.0.5:8080"), "10.0.0.5:8080"), (None, "127.0.0.1:8080")] {
         let r = delete(&exposed, origin, host);
         assert_eq!(r.status, 403, "{origin:?} {host}");
         assert!(String::from_utf8_lossy(&r.body).contains("read-only"));
     }
-    let r = handle(&exposed, &Req { method: "POST", url: "/api/run", origin: None, host: Some("10.0.0.5:8080"), body: b"{}" });
+    let r = handle(
+        &exposed,
+        &Req { method: "POST", url: "/api/run", origin: None, host: Some("10.0.0.5:8080"), key: Some(KEY), fetch_site: None, body: b"{}" },
+    );
     assert_eq!(r.status, 403);
     assert!(exposed.folder.join(job).exists());
     assert_eq!(get(&exposed, &format!("/api/jobs/{job}")).0, 200);
@@ -165,7 +176,9 @@ fn write_routes_need_a_loopback_bind() {
 fn stopping_a_job_leaves_the_runs_stop_request() {
     let app = fixture();
     let job = "2026-01-02__00-00-00";
-    let post = |url: &str| handle(&app, &Req { method: "POST", url, origin: None, host: Some("127.0.0.1:8080"), body: b"" });
+    let post = |url: &str| {
+        handle(&app, &Req { method: "POST", url, origin: None, host: Some("127.0.0.1:8080"), key: Some(KEY), fetch_site: None, body: b"" })
+    };
     // Not launched here: the request goes to the job dir, which every `hbench run` watches.
     let r = post(&format!("/api/jobs/{job}/stop"));
     assert_eq!(r.status, 200);
@@ -205,7 +218,15 @@ fn server_models_lists_a_self_hosted_servers_models() {
     let post = |body: &str| {
         let r = handle(
             &app,
-            &Req { method: "POST", url: "/api/run/server-models", origin: None, host: Some("127.0.0.1:8080"), body: body.as_bytes() },
+            &Req {
+                method: "POST",
+                url: "/api/run/server-models",
+                origin: None,
+                host: Some("127.0.0.1:8080"),
+                key: Some(KEY),
+                fetch_site: None,
+                body: body.as_bytes(),
+            },
         );
         (r.status, serde_json::from_slice::<Value>(&r.body).unwrap_or_default())
     };
@@ -241,4 +262,146 @@ fn server_models_lists_a_self_hosted_servers_models() {
     assert_eq!(r["models"], serde_json::json!(["qwen3"]));
     assert_eq!(r["served_by"], "tensorfold");
     server.join().unwrap();
+}
+
+/// I-20: the viewer is a deputy of the person's sign-in, reachable from any page in their browser.
+#[test]
+fn host_origin_and_launch_key_are_checked() {
+    let app = fixture();
+    let job = "2026-01-02__00-00-00";
+    let call = |method: &str, url: &str, host: Option<&str>, origin: Option<&str>, key: Option<&str>| {
+        handle(&app, &Req { method, url, origin, host, key, fetch_site: None, body: b"" }).status
+    };
+    let own = Some("http://127.0.0.1:8080");
+    // Host: only the viewer's loopback names on its own port, on every route (DNS rebinding).
+    for host in [None, Some("evil.example:8080"), Some("127.0.0.1:9999"), Some("127.0.0.2:8080"), Some("evil.example")] {
+        assert_eq!(call("GET", "/api/jobs", host, None, Some(KEY)), 403, "{host:?}");
+        assert_eq!(call("GET", "/", host, None, None), 403, "{host:?}");
+    }
+    for host in ["127.0.0.1:8080", "localhost:8080", "[::1]:8080", "LOCALHOST:8080"] {
+        assert_eq!(call("GET", "/api/jobs", Some(host), None, None), 200, "{host}");
+    }
+    // Origin: none (a top-level navigation, a non-browser client) or the viewer's own; any other is refused,
+    // reads included.
+    assert_eq!(call("GET", "/api/jobs", Some("127.0.0.1:8080"), own, None), 200);
+    for origin in ["http://evil.example", "null", "http://127.0.0.1:9999", "https://127.0.0.1:8080", "http://localhost:8080"] {
+        assert_eq!(call("GET", "/api/jobs", Some("127.0.0.1:8080"), Some(origin), Some(KEY)), 403, "{origin}");
+        assert_eq!(call("POST", &format!("/api/jobs/{job}/stop"), Some("127.0.0.1:8080"), Some(origin), Some(KEY)), 403, "{origin}");
+    }
+    // The launch key: every write and the account route need it, compared whole.
+    let delete = format!("/api/jobs/{job}");
+    for key in [None, Some(""), Some("wrong"), Some(&KEY[..KEY.len() - 1])] {
+        assert_eq!(call("DELETE", &delete, Some("127.0.0.1:8080"), own, key), 403, "{key:?}");
+        assert_eq!(call("GET", "/api/account", Some("127.0.0.1:8080"), own, key), 403, "{key:?}");
+        assert_eq!(call("POST", "/api/run", Some("127.0.0.1:8080"), own, key), 403, "{key:?}");
+    }
+    assert!(app.folder.join(job).exists());
+    assert_eq!(call("DELETE", &delete, Some("127.0.0.1:8080"), own, Some(KEY)), 200);
+    assert!(!app.folder.join(job).exists());
+}
+
+/// The guard decides on the same percent-decoded segments the router matches: an encoded spelling of a gated
+/// route is gated too.
+#[test]
+fn encoded_paths_are_gated_like_plain_ones() {
+    let app = fixture();
+    let job = "2026-01-02__00-00-00";
+    let call = |method: &str, url: &str, key: Option<&str>| {
+        handle(&app, &Req { method, url, origin: None, host: Some("127.0.0.1:8080"), key, fetch_site: None, body: b"" }).status
+    };
+    for url in ["/api/%61ccount", "/api/%61%63%63%6F%75%6E%74", "/api/acc%6Funt?x=1"] {
+        assert_eq!(call("GET", url, None), 403, "{url}");
+        assert_eq!(call("GET", url, Some("wrong")), 403, "{url}");
+    }
+    let encoded = [format!("/api/%6Aobs/{job}/%73top"), format!("/api/jobs/{}/stop", job.replace('2', "%32"))];
+    for url in &encoded {
+        assert_eq!(call("POST", url, None), 403, "{url}");
+    }
+    assert!(!app.folder.join(job).join(crate::JOB_STOP_FILE).exists());
+    let delete = format!("/api/%6Aobs/{}", job.replace('-', "%2D"));
+    assert_eq!(call("DELETE", &delete, None), 403);
+    assert!(app.folder.join(job).exists());
+    // With the key, the encoded spelling reaches the same route.
+    assert_eq!(call("POST", &encoded[0], Some(KEY)), 200);
+    assert!(app.folder.join(job).join(crate::JOB_STOP_FILE).exists());
+}
+
+/// Another site's page reaches the API neither by a request the browser marks `cross-site` nor by embedding an
+/// answer.
+#[test]
+fn cross_site_fetches_and_embeds_are_refused() {
+    let app = fixture();
+    let call = |url: &str, fetch_site: Option<&str>| {
+        handle(&app, &Req { method: "GET", url, origin: None, host: Some("127.0.0.1:8080"), key: Some(KEY), fetch_site, body: b"" })
+    };
+    for site in ["cross-site", "Cross-Site"] {
+        assert_eq!(call("/api/jobs", Some(site)).status, 403, "{site}");
+    }
+    for site in [None, Some("same-origin"), Some("none")] {
+        assert_eq!(call("/api/jobs", site).status, 200, "{site:?}");
+    }
+    let corp =
+        |r: &http::Resp| r.headers.iter().find(|(k, _)| k.eq_ignore_ascii_case("Cross-Origin-Resource-Policy")).map(|(_, v)| v.clone());
+    assert_eq!(corp(&call("/api/jobs", None)).as_deref(), Some("same-origin"));
+    assert_eq!(corp(&call("/api/jobs/nope", None)).as_deref(), Some("same-origin"), "errors too");
+}
+
+#[test]
+fn account_route_is_refused_when_exposed() {
+    let local = fixture();
+    let exposed = App::new(local.folder.clone(), Mode::Jobs, false, 8080, KEY.into());
+    let r = handle(
+        &exposed,
+        &Req { method: "GET", url: "/api/account", origin: None, host: Some("10.0.0.5:8080"), key: Some(KEY), fetch_site: None, body: b"" },
+    );
+    assert_eq!(r.status, 403);
+}
+
+/// Script from dataset content must not run in the viewer's origin: the page allows its own bundle and its
+/// one inline script by hash, and API answers (dataset files opened in a tab) are sandboxed data.
+#[test]
+fn content_security_policy() {
+    let app = fixture();
+    let hdr = |r: &http::Resp, name: &str| r.headers.iter().find(|(k, _)| k.eq_ignore_ascii_case(name)).map(|(_, v)| v.clone());
+    let page = handle(
+        &app,
+        &Req { method: "GET", url: "/jobs/x", origin: None, host: Some("127.0.0.1:8080"), key: None, fetch_site: None, body: b"" },
+    );
+    let csp = hdr(&page, "Content-Security-Policy").expect("the page has a CSP");
+    assert!(csp.contains("script-src 'self' 'sha256-"), "{csp}");
+    let script_src = csp.split(';').map(str::trim).find(|d| d.starts_with("script-src")).unwrap();
+    assert!(!script_src.contains("unsafe") && !script_src.contains("data:") && !script_src.contains('*'), "{script_src}");
+    assert!(csp.contains("object-src 'none'") && csp.contains("frame-ancestors 'none'") && csp.contains("base-uri 'none'"), "{csp}");
+    // The hash is the inline theme script's.
+    let html = String::from_utf8(page.body.clone()).unwrap();
+    for h in http::inline_script_hashes(&html) {
+        assert!(csp.contains(&format!("'sha256-{h}'")), "{h} not in {csp}");
+    }
+    assert_eq!(hdr(&page, "X-Content-Type-Options").as_deref(), Some("nosniff"));
+    let svg = "2026-01-02__00-00-00/a__1/agent/x.svg";
+    write(&app.folder.join(svg), r#"<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>"#);
+    let file = handle(
+        &app,
+        &Req {
+            method: "GET",
+            url: "/api/jobs/2026-01-02__00-00-00/trials/a__1/files/agent/x.svg",
+            origin: None,
+            host: Some("127.0.0.1:8080"),
+            key: None,
+            fetch_site: None,
+            body: b"",
+        },
+    );
+    assert_eq!(file.status, 200);
+    let api_csp = hdr(&file, "Content-Security-Policy").expect("API answers have a CSP");
+    assert!(api_csp.contains("sandbox") && api_csp.starts_with("default-src 'none'"), "{api_csp}");
+    assert_eq!(hdr(&file, "X-Content-Type-Options").as_deref(), Some("nosniff"));
+}
+
+#[test]
+fn inline_script_hashes_skip_external_scripts() {
+    let html = r#"<head><script>a()</script><script type="module" src="/x.js"></script><script>
+b()
+</script></head>"#;
+    assert_eq!(http::inline_script_hashes(html).len(), 2);
 }

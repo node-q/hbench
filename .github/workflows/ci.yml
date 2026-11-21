@@ -173,6 +173,8 @@ jobs:
         run: npm ci
       - name: Type-check and build bundle
         run: npm run build
+      - name: Unit tests
+        run: npm test
       - name: Verify committed bundle is up to date
         run: |
           git status --porcelain -- dist

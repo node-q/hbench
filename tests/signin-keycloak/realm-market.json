@@ -1,0 +1,76 @@
+{
+  "realm": "market",
+  "enabled": true,
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "accessTokenLifespan": 300,
+  "ssoSessionIdleTimeout": 604800,
+  "offlineSessionIdleTimeout": 604800,
+  "offlineSessionMaxLifespanEnabled": true,
+  "offlineSessionMaxLifespan": 2592000,
+  "revokeRefreshToken": true,
+  "refreshTokenMaxReuse": 0,
+  "clients": [
+    {
+      "clientId": "essentials-desktop",
+      "name": "Actuaria Studio Essentials",
+      "enabled": true,
+      "publicClient": true,
+      "protocol": "openid-connect",
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "consentRequired": true,
+      "redirectUris": ["http://127.0.0.1/callback"],
+      "webOrigins": [],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "oauth2.device.authorization.grant.enabled": "false",
+        "post.logout.redirect.uris": ""
+      },
+      "defaultClientScopes": ["web-origins", "acr", "profile", "roles", "basic", "email"],
+      "optionalClientScopes": ["offline_access"]
+    }
+  ],
+  "clientProfiles": {
+    "profiles": [
+      {
+        "name": "dpop-refresh-only",
+        "description": "Public clients: the refresh token is DPoP-bound, the access token stays Bearer",
+        "executors": [
+          {
+            "executor": "dpop-bind-enforcer",
+            "configuration": {
+              "auto-configure": "false",
+              "enforce-authorization-code-binding-to-dpop": "false",
+              "allow-only-refresh-token-binding": "true"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "clientPolicies": {
+    "policies": [
+      {
+        "name": "dpop-public-clients",
+        "enabled": true,
+        "conditions": [{ "condition": "client-access-type", "configuration": { "type": ["public"] } }],
+        "profiles": ["dpop-refresh-only"]
+      }
+    ]
+  },
+  "users": [
+    {
+      "username": "pat",
+      "enabled": true,
+      "email": "pat@example.com",
+      "emailVerified": true,
+      "firstName": "Pat",
+      "lastName": "Example",
+      "realmRoles": ["default-roles-market", "offline_access"],
+      "credentials": [{ "type": "password", "value": "pat-password-e2e", "temporary": false }]
+    }
+  ]
+}

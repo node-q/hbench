@@ -62,10 +62,14 @@ pub struct App {
     runs: Mutex<HashMap<String, LaunchedRun>>,
     /// The dataset catalog as last listed.
     catalog_cache: Mutex<Option<catalog::Listed>>,
+    /// The port it listens on: a request must name it in `Host` (see [`http::guard`]).
+    port: u16,
+    /// The secret made at each launch. Write routes and routes that use the sign-in need it in `X-Viewer-Key`.
+    key: String,
 }
 
 impl App {
-    pub fn new(folder: PathBuf, mode: Mode, bound_to_loopback: bool) -> App {
-        App { folder, mode, bound_to_loopback, runs: Mutex::new(HashMap::new()), catalog_cache: Mutex::new(None) }
+    pub fn new(folder: PathBuf, mode: Mode, bound_to_loopback: bool, port: u16, key: String) -> App {
+        App { folder, mode, bound_to_loopback, runs: Mutex::new(HashMap::new()), catalog_cache: Mutex::new(None), port, key }
     }
 }

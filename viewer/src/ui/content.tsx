@@ -17,6 +17,7 @@ import diff from "highlight.js/lib/languages/diff";
 import xml from "highlight.js/lib/languages/xml";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
+import { isAppAction } from "../lib/fmt";
 import { CopyButton } from "./kit";
 import * as Icon from "./icons";
 
@@ -81,7 +82,18 @@ function splitLines(html: string): string[] {
   return out;
 }
 
-/** Markdown from agent/task files: sanitized (it is untrusted text), links open in a new tab. */
+// Markdown is the only content DOMPurify cleans here: drop any URL attribute that reaches the desktop app's
+// `/__actuaria/` actions, which only the viewer's own code may use.
+const URL_ATTRS = ["href", "xlink:href", "src", "action", "formaction"];
+DOMPurify.addHook("afterSanitizeAttributes", (node) => {
+  for (const attr of URL_ATTRS) {
+    const v = node.getAttribute?.(attr);
+    if (v != null && isAppAction(v)) node.removeAttribute(attr);
+  }
+});
+
+/** Markdown from agent/task files: sanitized (it is untrusted text), links open in a new tab, and none leads to
+ *  the desktop app's actions. */
 export function Markdown({ text, className = "" }: { text: string; className?: string }) {
   const html = useMemo(() => {
     const raw = marked.parse(text, { async: false, gfm: true, breaks: false }) as string;

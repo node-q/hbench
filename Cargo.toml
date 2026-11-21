@@ -20,11 +20,15 @@ clap = { version = "4.6.7", features = ["derive"] }
 clap_complete = "4.6.11"
 dialoguer = { version = "0.12", default-features = false, features = ["password"] }
 flate2 = { version = "1.1.10", default-features = false, features = ["rust_backend"] }
+form_urlencoded = "1.2.2"
 futures-util = { version = "0.3.34", default-features = false }
+getrandom = "0.4.3"
 http = "1.5.0"
+keyring = { version = "3.6.3", default-features = false, features = ["apple-native", "windows-native", "async-secret-service", "async-io", "crypto-rust"] }
 minijinja = "3.0.0"
 oci-client = { version = "0.18.0", default-features = false, features = ["rustls-tls-no-provider"] }
 oci-spec = { version = "0.10.0", default-features = false, features = ["image"] }
+p256 = { version = "0.14.0", default-features = false, features = ["ecdsa", "pkcs8", "pem", "std"] }
 regex = "1.13.1"
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls-no-provider"] }
 rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
@@ -39,6 +43,7 @@ tiny_http = "0.12.0"
 tokio = { version = "1.53.2", features = ["macros", "rt-multi-thread", "process", "signal", "sync", "time", "io-util"] }
 toml = { version = "1.1.8", features = ["preserve_order"] }
 uuid = { version = "1.28.0", features = ["v4", "serde"] }
+zeroize = "1.9.1"
 
 [profile.release]
 strip = true

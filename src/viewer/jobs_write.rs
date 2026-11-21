@@ -72,6 +72,7 @@ impl App {
     fn run_analyze(&self, path: &Path, args: Vec<String>) -> std::result::Result<Option<Value>, Err> {
         let exe = std::env::current_exe().map_err(|e| err(500, e.to_string()))?;
         let out = std::process::Command::new(exe)
+            .env_remove(super::http::KEY_ENV)
             .arg("analyze")
             .arg(path)
             .args(args)
@@ -120,6 +121,7 @@ impl App {
         let exe = std::env::current_exe().map_err(|e| err(500, e.to_string()))?;
         let stop_file = work.join("stop");
         let child = std::process::Command::new(exe)
+            .env_remove(super::http::KEY_ENV)
             .args(["run", "-c"])
             .arg(&config_path)
             .args(["-y", "--quiet"])
