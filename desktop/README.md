@@ -24,7 +24,8 @@ with [Tauri 2](https://tauri.app).
   `https://account.actuaria.io` in the default browser. Sign-in happens in the system browser, never in the app's
   window. The page gets only progress (`window.__ACTUARIA_SIGNIN__` and an `actuaria:signin` event, with the
   sign-in address only when no browser opened) and asks the viewer's `/api/account` who is signed in: **tokens
-  never enter the window**. No Tauri command is added and the capabilities stay empty. The app takes
+  never enter the window**. The refresh token is DPoP-bound to a key `hbench` keeps in the OS keychain next to it
+  (docs/REFERENCE.md, "Signing in to Actuaria"); the app never sees the key. No Tauri command is added and the capabilities stay empty. The app takes
   `/__actuaria/` actions only from its own pages (the start screen and the viewer it runs).
 - The viewer's launch key: the app makes a new one for each `hbench view` it starts, passes it in
   `HBENCH_VIEW_KEY`, and opens the window at `http://127.0.0.1:<port>/#k=<key>`. Writes and the account route

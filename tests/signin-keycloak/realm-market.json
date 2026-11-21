@@ -33,6 +33,34 @@
       "optionalClientScopes": ["offline_access"]
     }
   ],
+  "clientProfiles": {
+    "profiles": [
+      {
+        "name": "dpop-refresh-only",
+        "description": "Public clients: the refresh token is DPoP-bound, the access token stays Bearer",
+        "executors": [
+          {
+            "executor": "dpop-bind-enforcer",
+            "configuration": {
+              "auto-configure": "false",
+              "enforce-authorization-code-binding-to-dpop": "false",
+              "allow-only-refresh-token-binding": "true"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "clientPolicies": {
+    "policies": [
+      {
+        "name": "dpop-public-clients",
+        "enabled": true,
+        "conditions": [{ "condition": "client-access-type", "configuration": { "type": ["public"] } }],
+        "profiles": ["dpop-refresh-only"]
+      }
+    ]
+  },
   "users": [
     {
       "username": "pat",

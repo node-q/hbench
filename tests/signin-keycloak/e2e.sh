@@ -19,6 +19,7 @@ export PATH=/tmp/bin:$PATH
 python3 "$HERE/market_api.py" 8181 &
 
 lookup() { secret-tool lookup service io.actuaria.hbench.signin username "essentials-desktop@$KC" 2>/dev/null || true; }
+lookup_key() { secret-tool lookup service io.actuaria.hbench.signin username "dpop:essentials-desktop@$KC" 2>/dev/null || true; }
 refresh() { curl -s -o /dev/null -w '%{http_code}' -d grant_type=refresh_token -d client_id=essentials-desktop --data-urlencode "refresh_token=$1" "$KC/protocol/openid-connect/token"; }
 
 # Section 12, check 1: any loopback port matches the one registered redirect URI. Three sign-ins, three ports.
@@ -45,6 +46,8 @@ rt1=$(lookup)
 [ -n "$rt1" ] || fail "no refresh token in the keychain"
 ! grep -rqF "$rt1" "$HOME/.cache/hbench" 2>/dev/null || fail "the refresh token is in a file"
 pass "the refresh token is in the OS keychain only"
+lookup_key | grep -q "BEGIN PRIVATE KEY" || fail "no DPoP key (PKCS#8) in the keychain"
+pass "the DPoP key is in the OS keychain next to it"
 
 # A new process refreshes (rotating the token); the replaced token is refused by Keycloak afterwards.
 "$HBENCH" whoami >/tmp/whoami.out 2>&1 || { cat /tmp/whoami.out; fail "whoami"; }
@@ -52,6 +55,9 @@ rt2=$(lookup)
 [ -n "$rt2" ] && [ "$rt2" != "$rt1" ] || fail "the refresh token did not rotate"
 [ "$(refresh "$rt1")" = 400 ] || fail "the rotated-out token still works"
 pass "refresh rotates the token, and the old one is refused"
+# The refresh token is DPoP-bound: without a proof of the key, Keycloak refuses it (before using it).
+[ "$(refresh "$rt2")" = 400 ] || fail "the refresh token works without its DPoP proof"
+pass "the refresh token is refused without a DPoP proof"
 # That replay was refused, and Keycloak's reuse rule then ends the session: hbench says it is signed out.
 if "$HBENCH" whoami >/tmp/whoami2.out 2>&1; then
   echo "note: the session survived a replay of its old token"
@@ -66,6 +72,7 @@ fi
 rt=$(lookup)
 "$HBENCH" logout >/tmp/logout.out 2>&1 || { cat /tmp/logout.out; fail "logout"; }
 [ -z "$(lookup)" ] || fail "the keychain still holds the token"
+[ -z "$(lookup_key)" ] || fail "the keychain still holds the DPoP key"
 [ "$(refresh "$rt")" = 400 ] || fail "the token works after logout"
 "$HBENCH" whoami >/tmp/whoami.out 2>&1 && fail "whoami after logout"
 grep -q "not signed in" /tmp/whoami.out || { cat /tmp/whoami.out; fail "whoami after logout says"; }

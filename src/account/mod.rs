@@ -3,12 +3,14 @@
 //! The browser flow is the authorization code grant with PKCE (S256) and a loopback redirect, as RFC 8252
 //! says, for the public client `essentials-desktop` (hbench-studio docs/design/sign-in-products.md section 7,
 //! D133). The refresh token lives in the OS keychain and nowhere else (D120); refresh is serialised across
-//! processes and a refresh token is never sent twice (market-idp.md I-5).
+//! processes and a refresh token is never sent twice (market-idp.md I-5). The refresh token is DPoP-bound (RFC
+//! 9449) to a P-256 key kept in the keychain with it ([`dpop`]); access tokens stay Bearer.
 //!
 //! The issuer, the client id and the redirect URI are pinned in released builds. A debug build (a developer's
 //! or a test's) reads `HBENCH_DEV_MARKET_ISSUER` and `HBENCH_DEV_MARKET_API`; a release build has no way to
 //! change them at run time.
 
+pub mod dpop;
 pub mod loopback;
 pub mod store;
 #[cfg(test)]
@@ -141,19 +143,34 @@ enum Sent {
     Lost(String),
 }
 
-async fn post_form(url: &str, body: String) -> Result<Sent> {
-    let r = http()?.post(url).header("Content-Type", "application/x-www-form-urlencoded").body(body).send().await;
-    Ok(match r {
-        Ok(resp) => {
-            let status = resp.status().as_u16();
-            match resp.bytes().await {
-                Ok(b) => Sent::Answered(status, serde_json::from_slice(&b).unwrap_or(Value::Null)),
-                Err(e) => Sent::Lost(e.to_string()),
-            }
+/// POST a form, with a DPoP proof when `key` is given. A `use_dpop_nonce` answer carrying a `DPoP-Nonce` is
+/// retried once with that nonce: the server refuses such a request before it looks at the grant, so the code or
+/// refresh token in it was not used (RFC 9449 section 8).
+async fn post_form(url: &str, body: String, key: Option<&dpop::Key>) -> Result<Sent> {
+    let mut nonce: Option<String> = None;
+    loop {
+        let mut rq = http()?.post(url).header("Content-Type", "application/x-www-form-urlencoded").body(body.clone());
+        if let Some(k) = key {
+            rq = rq.header("DPoP", k.proof("POST", url, nonce.as_deref()));
         }
-        Err(e) if e.is_connect() => Sent::Unsent(e.to_string()),
-        Err(e) => Sent::Lost(e.to_string()),
-    })
+        let resp = match rq.send().await {
+            Ok(resp) => resp,
+            Err(e) if e.is_connect() => return Ok(Sent::Unsent(e.to_string())),
+            Err(e) => return Ok(Sent::Lost(e.to_string())),
+        };
+        let status = resp.status().as_u16();
+        let offered = resp.headers().get("DPoP-Nonce").and_then(|h| h.to_str().ok()).map(String::from);
+        let v = match resp.bytes().await {
+            Ok(b) => serde_json::from_slice(&b).unwrap_or(Value::Null),
+            Err(e) => return Ok(Sent::Lost(e.to_string())),
+        };
+        if key.is_some() && nonce.is_none() && matches!(status, 400 | 401) && oauth_error(&v) == Some("use_dpop_nonce") && offered.is_some()
+        {
+            nonce = offered;
+            continue;
+        }
+        return Ok(Sent::Answered(status, v));
+    }
 }
 
 /// The `error` of an OAuth error body, when it is a plain code.
@@ -358,8 +375,16 @@ fn drop_sent(store: &dyn Store, key: &str) -> Result<()> {
 /// token leaves the store without it.
 async fn refresh_with(ep: &Endpoints, store: &dyn Store, key: &str, refresh: &str) -> Result<String> {
     let key = key.to_string();
+    let Some(dpop_key) = dpop::Key::load(store, &key)? else {
+        // The refresh token is bound to a key that is gone: it can't be used, so sign out (it was never sent).
+        forget(ep);
+        store.delete(&key)?;
+        bail!(
+            "signed out: the sign-in's key is missing from the OS keychain, so the stored sign-in can't be used. Run `hbench login --browser` to sign in again"
+        );
+    };
     let body = form(&[("grant_type", "refresh_token"), ("refresh_token", refresh), ("client_id", &ep.client_id)]);
-    match post_form(&ep.endpoint("token"), body).await? {
+    match post_form(&ep.endpoint("token"), body, Some(&dpop_key)).await? {
         Sent::Answered(200, v) => {
             // Keycloak rotates the refresh token on use: an answer we can't read may still have consumed it.
             let t = match tokens_of(&v) {
@@ -389,6 +414,12 @@ async fn refresh_with(ep: &Endpoints, store: &dyn Store, key: &str, refresh: &st
             drop_sent(store, &key)?;
             bail!(
                 "signed out: Actuaria refused the stored sign-in (it ended, or was used elsewhere). Run `hbench login --browser` to sign in again"
+            )
+        }
+        Sent::Answered(400 | 401, v) if oauth_error(&v) == Some("invalid_dpop_proof") => {
+            // The proof is checked before the grant: the refresh token was not used, so it is kept.
+            bail!(
+                "Actuaria refused this computer's proof of the sign-in (invalid_dpop_proof); the sign-in is kept. Check the computer's clock and try again"
             )
         }
         Sent::Answered(status @ 500.., _) => {
@@ -423,7 +454,9 @@ pub async fn redeem(ep: &Endpoints, store: &dyn Store, attempt: &Attempt, code: 
         ("client_id", &ep.client_id),
         ("code_verifier", &attempt.verifier),
     ]);
-    let v = match post_form(&ep.endpoint("token"), body).await? {
+    // A new key for each sign-in: the refresh token Actuaria returns is bound to it.
+    let dpop_key = dpop::Key::generate();
+    let v = match post_form(&ep.endpoint("token"), body, Some(&dpop_key)).await? {
         Sent::Answered(200, v) => v,
         Sent::Answered(status, v) => {
             bail!("Actuaria refused the sign-in code: HTTP {status}{}", oauth_error(&v).map(|e| format!(" ({e})")).unwrap_or_default())
@@ -434,7 +467,13 @@ pub async fn redeem(ep: &Endpoints, store: &dyn Store, attempt: &Attempt, code: 
     check_id_token(&v, ep, &attempt.nonce)?;
     let refresh = t.refresh.as_deref().context("Actuaria returned no refresh token (the offline_access scope was not granted)")?;
     let mut lock = refresh_lock(ep)?;
-    store.set(&ep.store_key(), refresh)?;
+    let key = ep.store_key();
+    // The key first: a refresh token stored without its key could never be used.
+    dpop_key.save(store, &key)?;
+    if let Err(e) = store.set(&key, refresh) {
+        let _ = store.delete(&dpop::store_key(&key));
+        return Err(e);
+    }
     lock.clear()?;
     remember(ep, refresh, &t);
     Ok(())
@@ -524,13 +563,17 @@ pub async fn logout_with(ep: &Endpoints, store: &dyn Store) -> Result<bool> {
     let key = ep.store_key();
     let _lock = refresh_lock(ep)?;
     let Some(refresh) = store.get(&key)? else {
+        store.delete(&dpop::store_key(&key))?;
         forget(ep);
         return Ok(false);
     };
+    // Revoking a DPoP-bound refresh token takes a proof. Without the key it is sent bare, and likely refused.
+    let dpop_key = dpop::Key::load(store, &key).ok().flatten();
     let body = form(&[("token", &refresh), ("token_type_hint", "refresh_token"), ("client_id", &ep.client_id)]);
-    let revoked = post_form(&ep.endpoint("revoke"), body).await;
-    // Forget it whatever the answer: a sign-out must not leave a usable token behind on this machine.
+    let revoked = post_form(&ep.endpoint("revoke"), body, dpop_key.as_ref()).await;
+    // Forget it whatever the answer: a sign-out must not leave a usable token or its key behind on this machine.
     store.delete(&key)?;
+    store.delete(&dpop::store_key(&key))?;
     forget(ep);
     match revoked? {
         Sent::Answered(200, _) => Ok(true),

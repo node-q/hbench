@@ -1,6 +1,7 @@
 //! The browser sign-in against a fake authorization server: PKCE, the loopback listener's refusals (wrong
 //! `state`, wrong `iss`, a second request, the timeout), refresh that is serialised and never resent, and
-//! sign-out.
+//! sign-out. Every token and revocation request must carry a DPoP proof that the fake checks (signature against
+//! its JWK, `htm`, `htu`, a fresh `jti`), and a refresh must prove the key its token was bound to.
 
 use super::loopback::{Verdict, judge};
 use super::store::{Memory, Store};
@@ -34,6 +35,47 @@ struct Seen {
     /// Refresh tokens in the order they were presented.
     refreshes: Vec<String>,
     revoked: Vec<String>,
+    /// The key thumbprint of each accepted request, with its grant (or `revoke`).
+    proofs: Vec<(String, String)>,
+    /// Refresh tokens and the key thumbprint each is bound to.
+    bound: HashMap<String, String>,
+    jtis: Vec<String>,
+    /// Proofs that carried the fake's nonce.
+    nonced: usize,
+}
+
+/// Check a DPoP proof as Keycloak does: `typ`, `alg`, an EC P-256 `jwk`, the ES256 signature against that JWK,
+/// `htm`, `htu`, `iat` within a minute, and a `jti`. Its claims and the JWK thumbprint (RFC 7638).
+fn check_proof(proof: &str, htm: &str, htu: &str) -> std::result::Result<(Value, String), String> {
+    use p256::ecdsa::signature::Verifier;
+    let parts: Vec<&str> = proof.split('.').collect();
+    let [h, c, sig] = parts[..] else { return Err("not a JWS".into()) };
+    let decode = |x: &str| -> std::result::Result<Value, String> {
+        serde_json::from_slice(&URL_SAFE_NO_PAD.decode(x).map_err(|e| e.to_string())?).map_err(|e| e.to_string())
+    };
+    let (header, claims) = (decode(h)?, decode(c)?);
+    if header["typ"] != "dpop+jwt" || header["alg"] != "ES256" {
+        return Err(format!("header {header}"));
+    }
+    let jwk = &header["jwk"];
+    if jwk["kty"] != "EC" || jwk["crv"] != "P-256" || jwk.get("d").is_some() {
+        return Err(format!("jwk {jwk}"));
+    }
+    let coord = |n: &str| URL_SAFE_NO_PAD.decode(jwk[n].as_str().unwrap_or_default()).unwrap_or_default();
+    let point = [vec![4u8], coord("x"), coord("y")].concat();
+    let vk = p256::ecdsa::VerifyingKey::from_sec1_bytes(&point).map_err(|_| "a bad public key")?;
+    let sig =
+        p256::ecdsa::Signature::from_slice(&URL_SAFE_NO_PAD.decode(sig).map_err(|e| e.to_string())?).map_err(|_| "a bad signature")?;
+    vk.verify(format!("{h}.{c}").as_bytes(), &sig).map_err(|_| "the signature does not verify")?;
+    if claims["htm"] != htm || claims["htu"] != htu {
+        return Err(format!("htm/htu {} {}, wanted {htm} {htu}", claims["htm"], claims["htu"]));
+    }
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+    if claims["iat"].as_u64().is_none_or(|iat| iat.abs_diff(now) > 60) || claims["jti"].as_str().is_none_or(|j| j.len() < 16) {
+        return Err(format!("claims {claims}"));
+    }
+    let canonical = format!(r#"{{"crv":"P-256","kty":"EC","x":"{}","y":"{}"}}"#, jwk["x"].as_str().unwrap(), jwk["y"].as_str().unwrap());
+    Ok((claims, URL_SAFE_NO_PAD.encode(Sha256::digest(canonical.as_bytes()))))
 }
 
 struct FakeIdp {
@@ -43,7 +85,13 @@ struct FakeIdp {
     drop_refreshes: Arc<AtomicUsize>,
     /// Refresh requests answered with a server error (the token may have been used).
     fail_refreshes: Arc<AtomicUsize>,
+    /// Token requests refused with `invalid_dpop_proof`, before the grant is looked at.
+    refuse_proofs: Arc<AtomicUsize>,
+    /// Token requests without the fake's nonce answered `use_dpop_nonce`.
+    want_nonce: Arc<AtomicUsize>,
 }
+
+const NONCE: &str = "fake-dpop-nonce";
 
 fn jwt(claims: Value) -> String {
     format!("{}.{}.sig", URL_SAFE_NO_PAD.encode(br#"{"alg":"none"}"#), URL_SAFE_NO_PAD.encode(claims.to_string()))
@@ -60,7 +108,9 @@ impl FakeIdp {
         let issuer = format!("http://127.0.0.1:{port}/realms/market");
         let seen = Arc::new(Mutex::new(Seen::default()));
         let (drop_refreshes, fail_refreshes) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+        let (refuse_proofs, want_nonce) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
         let (iss, s, drops, fails) = (issuer.clone(), seen.clone(), drop_refreshes.clone(), fail_refreshes.clone());
+        let (refuses, nonces) = (refuse_proofs.clone(), want_nonce.clone());
         std::thread::spawn(move || {
             let mut serial = 0;
             for mut rq in server.incoming_requests() {
@@ -70,6 +120,52 @@ impl FakeIdp {
                 let form: HashMap<String, String> = form_urlencoded::parse(body.as_bytes()).into_owned().collect();
                 let reply = |status: u16, v: Value| tiny_http::Response::from_string(v.to_string()).with_status_code(status);
                 let path = url.split('?').next().unwrap().to_string();
+                // The DPoP proof of a token or revocation request: checked, and its key's thumbprint kept.
+                let mut jkt = String::new();
+                if path.ends_with("/token") || path.ends_with("/revoke") {
+                    let dpop: Vec<String> =
+                        rq.headers().iter().filter(|h| h.field.equiv("DPoP")).map(|h| h.value.as_str().to_string()).collect();
+                    let checked = match &dpop[..] {
+                        [one] => check_proof(one, "POST", &format!("http://127.0.0.1:{port}{path}")),
+                        _ => Err(format!("{} DPoP headers", dpop.len())),
+                    };
+                    let refused = |why: String| {
+                        tiny_http::Response::from_string(json!({"error": "invalid_dpop_proof", "error_description": why}).to_string())
+                            .with_status_code(400)
+                    };
+                    let (claims, thumbprint) = match checked {
+                        Ok(x) => x,
+                        Err(why) => {
+                            let _ = rq.respond(refused(why));
+                            continue;
+                        }
+                    };
+                    let jti = claims["jti"].as_str().unwrap().to_string();
+                    let mut st = s.lock().unwrap();
+                    if st.jtis.contains(&jti) {
+                        drop(st);
+                        let _ = rq.respond(refused("a jti used before".into()));
+                        continue;
+                    }
+                    st.jtis.push(jti);
+                    let nonced = claims["nonce"] == NONCE;
+                    st.nonced += usize::from(nonced);
+                    drop(st);
+                    if !nonced && nonces.load(Ordering::SeqCst) > 0 {
+                        nonces.fetch_sub(1, Ordering::SeqCst);
+                        let resp = tiny_http::Response::from_string(json!({"error": "use_dpop_nonce"}).to_string())
+                            .with_status_code(400)
+                            .with_header(tiny_http::Header::from_bytes(&b"DPoP-Nonce"[..], NONCE.as_bytes()).unwrap());
+                        let _ = rq.respond(resp);
+                        continue;
+                    }
+                    if refuses.load(Ordering::SeqCst) > 0 {
+                        refuses.fetch_sub(1, Ordering::SeqCst);
+                        let _ = rq.respond(refused("refused by the test".into()));
+                        continue;
+                    }
+                    jkt = thumbprint;
+                }
                 if path.ends_with("/protocol/openid-connect/auth") {
                     let q = query(&url);
                     assert_eq!(q["client_id"], BROWSER_CLIENT);
@@ -109,7 +205,9 @@ impl FakeIdp {
                     };
                     match form.get("grant_type").map(String::as_str) {
                         Some("authorization_code") => {
-                            let s = s.lock().unwrap();
+                            let mut s = s.lock().unwrap();
+                            s.proofs.push(("authorization_code".into(), jkt.clone()));
+                            s.bound.insert(format!("refresh-{serial}"), jkt.clone());
                             let pkce = URL_SAFE_NO_PAD.encode(Sha256::digest(form["code_verifier"].as_bytes()));
                             let ok = form["code"] == s.code
                                 && pkce == s.challenge
@@ -125,8 +223,18 @@ impl FakeIdp {
                             let rt = form["refresh_token"].clone();
                             let mut st = s.lock().unwrap();
                             let reused = st.refreshes.contains(&rt) || st.revoked.contains(&rt);
+                            st.proofs.push(("refresh_token".into(), jkt.clone()));
+                            // A refresh token bound to a key is refused with any other key's proof.
+                            let other_key = st.bound.get(&rt).is_some_and(|b| *b != jkt);
                             st.refreshes.push(rt);
+                            if !reused && !other_key {
+                                st.bound.insert(format!("refresh-{serial}"), jkt.clone());
+                            }
                             drop(st);
+                            if other_key {
+                                let _ = rq.respond(reply(400, json!({"error": "invalid_dpop_proof"})));
+                                continue;
+                            }
                             if drops.load(Ordering::SeqCst) > 0 {
                                 drops.fetch_sub(1, Ordering::SeqCst);
                                 drop(rq.into_writer()); // read, then close without an answer
@@ -146,14 +254,17 @@ impl FakeIdp {
                         _ => drop(rq.respond(reply(400, json!({"error": "unsupported_grant_type"})))),
                     }
                 } else if path.ends_with("/protocol/openid-connect/revoke") {
-                    s.lock().unwrap().revoked.push(form["token"].clone());
+                    let mut st = s.lock().unwrap();
+                    st.revoked.push(form["token"].clone());
+                    st.proofs.push(("revoke".into(), jkt.clone()));
+                    drop(st);
                     let _ = rq.respond(tiny_http::Response::empty(200));
                 } else {
                     let _ = rq.respond(tiny_http::Response::empty(404));
                 }
             }
         });
-        FakeIdp { issuer, seen, drop_refreshes, fail_refreshes }
+        FakeIdp { issuer, seen, drop_refreshes, fail_refreshes, refuse_proofs, want_nonce }
     }
 
     fn endpoints(&self) -> Endpoints {
@@ -218,7 +329,13 @@ fn signs_in_with_pkce_and_keeps_only_the_refresh_token() {
     assert!(!page.contains(&code) && !page.contains("access-") && !page.contains("refresh-"), "{page}");
     assert!(page.contains("signed in"));
     assert_eq!(store.get(&ep.store_key()).unwrap().as_deref(), Some("refresh-1"));
-    assert_eq!(store.0.lock().unwrap().len(), 1, "only the refresh token is stored");
+    let stored: Vec<String> = store.0.lock().unwrap().keys().cloned().collect();
+    assert_eq!(stored.len(), 2, "only the refresh token and its DPoP key are stored: {stored:?}");
+    let pem = store.get(&dpop::store_key(&ep.store_key())).unwrap().unwrap();
+    assert!(pem.starts_with("-----BEGIN PRIVATE KEY-----"), "PKCS#8");
+    // The code was redeemed with a proof of that key.
+    let key = dpop::Key::load(&store, &ep.store_key()).unwrap().unwrap();
+    assert_eq!(idp.seen.lock().unwrap().proofs, [("authorization_code".to_string(), key.thumbprint())]);
     // The verifier matched the S256 challenge (the fake refuses the code otherwise), and the redirect is exact.
     assert!(idp.seen.lock().unwrap().redirect_uri.starts_with("http://127.0.0.1:"));
 }
@@ -517,9 +634,12 @@ fn logout_revokes_and_clears() {
     let (open, _seen) = browser(|_| {});
     let rt = rt();
     rt.block_on(login_browser_with(&ep, &store, open, Duration::from_secs(20))).unwrap();
+    let jkt = dpop::Key::load(&store, &ep.store_key()).unwrap().unwrap().thumbprint();
     assert!(rt.block_on(logout_with(&ep, &store)).unwrap());
     assert_eq!(idp.seen.lock().unwrap().revoked, ["refresh-1"]);
-    assert!(store.get(&ep.store_key()).unwrap().is_none());
+    // The revocation carried a proof of the sign-in's key, and the key is gone with the token.
+    assert_eq!(idp.seen.lock().unwrap().proofs.last().unwrap(), &("revoke".to_string(), jkt));
+    assert!(store.0.lock().unwrap().is_empty(), "the refresh token and the DPoP key are deleted");
     assert!(rt.block_on(access_token(&ep, &store)).unwrap_err().is::<NotSignedIn>());
     // Signing out twice is fine.
     assert!(!rt.block_on(logout_with(&ep, &store)).unwrap());
@@ -532,4 +652,120 @@ fn release_builds_pin_the_issuer() {
     assert_eq!(BROWSER_CLIENT, "essentials-desktop");
     let e = Endpoints { issuer: ISSUER.into(), whoami: WHOAMI_URL.into(), client_id: BROWSER_CLIENT.into() };
     assert_eq!(e.endpoint("token"), "https://auth.actuaria.io/realms/market/protocol/openid-connect/token");
+}
+
+/// The refresh proves the key the code was redeemed with, and the rotated token stays bound to it.
+#[test]
+fn refreshes_prove_the_sign_in_key() {
+    let idp = FakeIdp::start(Redirect::Good);
+    let (ep, store) = (idp.endpoints(), Memory::default());
+    let (open, _seen) = browser(|_| {});
+    let rt = rt();
+    rt.block_on(login_browser_with(&ep, &store, open, Duration::from_secs(20))).unwrap();
+    let jkt = dpop::Key::load(&store, &ep.store_key()).unwrap().unwrap().thumbprint();
+    for want in ["access-2", "access-3"] {
+        forget(&ep);
+        assert_eq!(rt.block_on(access_token(&ep, &store)).unwrap(), want);
+    }
+    let seen = idp.seen.lock().unwrap();
+    assert_eq!(seen.proofs.len(), 3);
+    assert!(seen.proofs.iter().all(|(_, k)| *k == jkt), "{:?}", seen.proofs);
+    assert_eq!(seen.bound["refresh-3"], jkt);
+}
+
+/// A second sign-in makes a new key; a refresh token proved with another key is refused by the server.
+#[test]
+fn each_sign_in_has_its_own_key() {
+    let idp = FakeIdp::start(Redirect::Good);
+    let (ep, store) = (idp.endpoints(), Memory::default());
+    let rt = rt();
+    let mut keys = vec![];
+    for _ in 0..2 {
+        let (open, _seen) = browser(|_| {});
+        rt.block_on(login_browser_with(&ep, &store, open, Duration::from_secs(20))).unwrap();
+        keys.push(dpop::Key::load(&store, &ep.store_key()).unwrap().unwrap().thumbprint());
+    }
+    assert_ne!(keys[0], keys[1]);
+    // The first sign-in's token with the second sign-in's key: refused as a bad proof, and kept.
+    store.set(&ep.store_key(), "refresh-1").unwrap();
+    forget(&ep);
+    let err = rt.block_on(access_token(&ep, &store)).unwrap_err();
+    assert!(format!("{err:#}").contains("invalid_dpop_proof"), "{err:#}");
+}
+
+/// Without its key the stored refresh token can't be used: hbench signs out cleanly and sends nothing.
+#[test]
+fn a_missing_key_signs_out_without_sending_the_token() {
+    let idp = FakeIdp::start(Redirect::Good);
+    let (ep, store) = (idp.endpoints(), Memory::default());
+    let (open, _seen) = browser(|_| {});
+    let rt = rt();
+    rt.block_on(login_browser_with(&ep, &store, open, Duration::from_secs(20))).unwrap();
+    for damage in [None, Some("not a key")] {
+        match damage {
+            None => store.delete(&dpop::store_key(&ep.store_key())).unwrap(),
+            Some(junk) => {
+                store.set(&ep.store_key(), "refresh-1").unwrap();
+                store.set(&dpop::store_key(&ep.store_key()), junk).unwrap();
+            }
+        }
+        forget(&ep);
+        let err = rt.block_on(access_token(&ep, &store)).unwrap_err();
+        assert!(format!("{err:#}").contains("signed out: the sign-in's key is missing"), "{err:#}");
+        assert!(store.get(&ep.store_key()).unwrap().is_none());
+        assert!(rt.block_on(access_token(&ep, &store)).unwrap_err().is::<NotSignedIn>());
+    }
+    assert!(idp.seen.lock().unwrap().refreshes.is_empty(), "nothing was sent");
+    // Signing out still works, and takes the damaged key away.
+    assert!(!rt.block_on(logout_with(&ep, &store)).unwrap());
+    assert!(store.0.lock().unwrap().is_empty());
+}
+
+/// A refused proof (`invalid_dpop_proof`) is checked before the grant: the token was not used, so it is kept,
+/// and the error says so. The next refresh works.
+#[test]
+fn a_refused_proof_keeps_the_sign_in() {
+    let idp = FakeIdp::start(Redirect::Good);
+    let (ep, store) = (idp.endpoints(), Memory::default());
+    let (open, _seen) = browser(|_| {});
+    let rt = rt();
+    rt.block_on(login_browser_with(&ep, &store, open, Duration::from_secs(20))).unwrap();
+    forget(&ep);
+    idp.refuse_proofs.store(1, Ordering::SeqCst);
+    let err = rt.block_on(access_token(&ep, &store)).unwrap_err();
+    assert!(format!("{err:#}").contains("invalid_dpop_proof") && format!("{err:#}").contains("kept"), "{err:#}");
+    assert_eq!(store.get(&ep.store_key()).unwrap().as_deref(), Some("refresh-1"));
+    assert!(dpop::Key::load(&store, &ep.store_key()).unwrap().is_some());
+    assert_eq!(rt.block_on(access_token(&ep, &store)).unwrap(), "access-2");
+}
+
+/// A `use_dpop_nonce` answer is retried once with the server's `DPoP-Nonce`, for the code and for a refresh.
+#[test]
+fn the_servers_nonce_is_honoured() {
+    let idp = FakeIdp::start(Redirect::Good);
+    let (ep, store) = (idp.endpoints(), Memory::default());
+    let (open, _seen) = browser(|_| {});
+    let rt = rt();
+    idp.want_nonce.store(1, Ordering::SeqCst);
+    rt.block_on(login_browser_with(&ep, &store, open, Duration::from_secs(20))).unwrap();
+    forget(&ep);
+    idp.want_nonce.store(1, Ordering::SeqCst);
+    assert_eq!(rt.block_on(access_token(&ep, &store)).unwrap(), "access-2");
+    assert_eq!(idp.seen.lock().unwrap().nonced, 2);
+    // The refused first attempt used nothing: one refresh token presented, once.
+    assert_eq!(idp.seen.lock().unwrap().refreshes, ["refresh-1"]);
+}
+
+#[test]
+fn a_proof_is_an_es256_jwt_for_one_request() {
+    let key = dpop::Key::generate();
+    let p = key.proof("POST", "https://auth.example/realms/market/protocol/openid-connect/token?x=1#f", Some("n"));
+    let (claims, jkt) = check_proof(&p, "POST", "https://auth.example/realms/market/protocol/openid-connect/token").unwrap();
+    assert_eq!((claims["nonce"].as_str(), jkt), (Some("n"), key.thumbprint()));
+    assert!(claims.get("ath").is_none());
+    assert_ne!(key.proof("POST", "https://a.example/t", None), key.proof("POST", "https://a.example/t", None), "a fresh jti");
+    // The private key shows in neither the proof's header nor `Debug`.
+    let header: Value = serde_json::from_slice(&URL_SAFE_NO_PAD.decode(p.split('.').next().unwrap()).unwrap()).unwrap();
+    assert!(header["jwk"].get("d").is_none());
+    assert_eq!(format!("{key:?}"), format!("dpop::Key({})", key.thumbprint()));
 }

@@ -434,7 +434,13 @@ listening; it gives up after 5 minutes. If no browser opens, it prints the addre
 kept in the OS keychain (macOS Keychain, Windows Credential Manager, the Secret Service on Linux) and nowhere
 else. Refreshing it is serialised across hbench processes by a lock in `~/.cache/hbench`, and a refresh token is
 never sent twice: when a refresh's answer is lost, hbench forgets the token and asks you to sign in again.
-`hbench logout` does not end your browser's own session at Actuaria.
+The refresh token is DPoP-bound (RFC 9449): each sign-in makes a P-256 key, kept as PKCS#8 in the keychain next to
+the token, and the code redemption, every refresh and the revocation carry an ES256 proof of it (`DPoP` header,
+retried once with the server's `DPoP-Nonce` when asked). Access tokens stay Bearer. A copied refresh token is
+useless without the key; if the key is missing, hbench signs you out; if Actuaria refuses a proof
+(`invalid_dpop_proof`), the sign-in is kept and the error shown (check the computer's clock). Neither the key nor
+a proof is logged. `hbench logout` deletes the key with the token, and does not end your browser's own session
+at Actuaria.
 
 The issuer, the client id and the redirect URI are pinned. Debug builds only (`cargo build`, `npm run dev`) read
 `HBENCH_DEV_MARKET_ISSUER` and `HBENCH_DEV_MARKET_API` to point at a local Keycloak and market API;
