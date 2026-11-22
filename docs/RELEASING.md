@@ -99,8 +99,13 @@ gh variable set MACOS_DESKTOP_RUNNER -R node-q/hbench --body '["self-hosted", "m
 gh variable delete MACOS_DESKTOP_RUNNER -R node-q/hbench   # back to GitHub's
 ```
 
-Then re-run all of the release's jobs: a run that is waiting keeps the runner it asked for. Only tags cut after this
-section was written read the variable.
+A run that is waiting keeps the runner it asked for: cancel it, set the variable, then re-run all of its jobs. That
+works only while the tag has no release: publish goes ahead without a macOS app whose job failed or was cancelled, and
+then only the next version can add it. So cancel the whole run, not a job. Only tags cut after this section was written
+read the variable.
+
+Before using that Mac on this public repository, require approval for every outside contributor's workflow runs
+(Settings → Actions → General), since a fork's pull request could otherwise ask for it by its labels.
 
 ## What the release build does
 
