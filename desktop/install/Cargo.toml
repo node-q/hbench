@@ -1,0 +1,22 @@
+[package]
+name = "actuaria-install"
+version = "0.1.0"
+description = "The install link's checks for Actuaria Studio Essentials: parsing, catalogue, download, unzip, host hand-off"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+
+# Its own workspace, like desktop/src-tauri: it builds and tests without the webview's system libraries.
+[workspace]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+url = "2"
+sha2 = "0.10"
+zip = { version = "9", default-features = false, features = ["deflate"] }
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+
+[dev-dependencies]
+proptest = "1"
