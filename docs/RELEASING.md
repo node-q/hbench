@@ -88,6 +88,20 @@ Unfinished work stays behind a flag so that master can always ship.
   installs the beta feed's version (which can be behind stable, see above); any other `HBENCH_CHANNEL` than
   `stable` or `beta` is refused. `HBENCH_VERSION` still pins an exact release.
 
+## Which Mac builds the app
+
+The app's macOS build and signing jobs run on GitHub's `macos-15` runners, so a release needs no machine of ours to be
+online. When GitHub is short of Macs, the repository variable `MACOS_DESKTOP_RUNNER` sends them to the repository's own
+Mac instead, without a change to the workflow (the Mac must be online, and it gets the Apple signing credentials):
+
+```sh
+gh variable set MACOS_DESKTOP_RUNNER -R node-q/hbench --body '["self-hosted", "macos-15"]'
+gh variable delete MACOS_DESKTOP_RUNNER -R node-q/hbench   # back to GitHub's
+```
+
+Then re-run all of the release's jobs: a run that is waiting keeps the runner it asked for. Only tags cut after this
+section was written read the variable.
+
 ## What the release build does
 
 `.github/workflows/release.yml` checks the tag against `Cargo.toml` and, on GitHub-hosted runners, builds static

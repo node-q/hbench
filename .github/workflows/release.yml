@@ -271,7 +271,9 @@ jobs:
       fail-fast: false
       matrix:
         target: [aarch64-apple-darwin, x86_64-apple-darwin]
-    runs-on: [self-hosted, macos-15]
+    # GitHub's macOS runner, or the one the MACOS_DESKTOP_RUNNER variable names, as JSON (docs/RELEASING.md).
+    runs-on: ${{ fromJSON(vars.MACOS_DESKTOP_RUNNER || '"macos-15"') }}
+    timeout-minutes: 45
     permissions:
       contents: read
     env:
@@ -408,7 +410,9 @@ jobs:
       fail-fast: false
       matrix:
         target: [aarch64-apple-darwin, x86_64-apple-darwin]
-    runs-on: [self-hosted, macos-15]
+    # GitHub's macOS runner, or the one the MACOS_DESKTOP_RUNNER variable names, as JSON (docs/RELEASING.md).
+    runs-on: ${{ fromJSON(vars.MACOS_DESKTOP_RUNNER || '"macos-15"') }}
+    timeout-minutes: 45  # notarization once hung for 6 hours
     # Only v* tags can deploy to this environment, so no other ref can read the Apple credentials.
     environment: release
     permissions:
