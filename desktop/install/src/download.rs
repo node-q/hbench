@@ -71,11 +71,21 @@ pub fn keep_plugin(data_dir: &Path, id: &str, unpacked: &Path) -> std::io::Resul
     let base = data_dir.join(PLUGINS_DIR_NAME);
     private_dir(&base, true)?;
     let dir = base.join(format!("plugin-{id}"));
-    match fs::remove_dir_all(&dir) {
-        Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e),
-        _ => {}
+    // The one there is put aside first, and back if the new one can't take its place. (One already aside, with none
+    // in place, is what a crash between the two left.)
+    let aside = base.join(format!("plugin-{id}.old"));
+    if fs::symlink_metadata(&dir).is_ok() {
+        match fs::remove_dir_all(&aside) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e),
+            _ => {}
+        }
+        fs::rename(&dir, &aside)?;
     }
-    fs::rename(unpacked, &dir)?;
+    if let Err(e) = fs::rename(unpacked, &dir) {
+        let _ = fs::rename(&aside, &dir);
+        return Err(e);
+    }
+    let _ = fs::remove_dir_all(&aside);
     Ok(dir)
 }
 
@@ -138,6 +148,17 @@ mod tests {
             let names: Vec<_> = fs::read_dir(&kept).unwrap().map(|e| e.unwrap().file_name()).collect();
             assert_eq!(names, [std::ffi::OsString::from(format!("v{v}"))]);
         }
+        // The new one can't take its place: the old one is back, and nothing is left aside.
+        let base = data.join(PLUGINS_DIR_NAME);
+        let names = |p: &Path| fs::read_dir(p).unwrap().map(|e| e.unwrap().file_name()).collect::<Vec<_>>();
+        assert!(keep_plugin(&data, "con", &data.join("missing")).is_err());
+        assert_eq!(names(&base), ["plugin-con"]);
+        assert_eq!(names(&base.join("plugin-con")), ["v2"]);
+        // Likewise after a crash left only the one aside.
+        fs::rename(base.join("plugin-con"), base.join("plugin-con.old")).unwrap();
+        assert!(keep_plugin(&data, "con", &data.join("missing")).is_err());
+        assert_eq!(names(&base), ["plugin-con"]);
+        assert_eq!(names(&base.join("plugin-con")), ["v2"]);
         for id in ["..", "a/b", "", "A"] {
             assert!(keep_plugin(&data, id, &data.join("x")).is_err(), "{id}");
         }

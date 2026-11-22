@@ -4,23 +4,25 @@
 //! from `window.__ACTUARIA_INSTALL__` (an `actuaria:install` event), and the user's choice comes back as
 //! `/__actuaria/install?do=..`. The page can't start an install: it can only confirm the one a link opened.
 
+use crate::confirm;
 use actuaria_install::catalogue::{self, Offer};
-use actuaria_install::{Target, download, hosts, link, net, rate::Gate, unzip};
+use actuaria_install::{Target, download, hosts, link, net, rate, rate::Gate, unzip};
 use serde::Serialize;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager};
-use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 use tauri_plugin_opener::OpenerExt;
 
 /// How long a handed-over `.mcpb` stays on disk for Claude Desktop to read it.
 const CLAUDE_GRACE: Duration = Duration::from_secs(10 * 60);
 
+const EXPIRED: &str = "This was open for over 5 minutes, so the catalogue may have changed. Open the link again. Nothing was installed.";
+
 #[derive(Serialize, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 struct View {
-    /// none | loading | confirm | working | done | error
+    /// none | loading | confirm | working | approval | done | error
     state: &'static str,
     nonce: String,
     bot: Option<BotView>,
@@ -45,7 +47,8 @@ struct BotView {
 struct Inner {
     gate: Gate,
     view: View,
-    offer: Option<Offer>,
+    /// The offer, and when the catalogue was read for it.
+    offer: Option<(Offer, Instant)>,
     seq: u64,
 }
 
@@ -123,22 +126,14 @@ pub fn on_link(app: &AppHandle, raw: &str) {
     std::thread::spawn(move || prepare(&app, seq, parsed));
 }
 
-/// Look the bot up, check it against bots.lock, and show the confirm screen with the hosts present.
+/// Look the bot up, check its entry, and show the confirm screen with the hosts present.
 fn prepare(app: &AppHandle, seq: u64, l: link::Link) {
+    let read_at = Instant::now();
     let index = match net::get(catalogue::INDEX_URL, catalogue::MAX_INDEX_BYTES as u64) {
         Ok(b) => b,
         Err(e) => return error(app, seq, format!("Couldn't reach the catalogue: {e}"), None),
     };
-    let lock = net::get(catalogue::LOCK_URL, catalogue::MAX_LOCK_BYTES as u64)
-        .ok()
-        .and_then(|b| String::from_utf8(b).ok())
-        .map(|t| catalogue::Lock::parse(&t));
-    let lock = match lock {
-        Some(Ok(l)) => Some(l),
-        Some(Err(e)) => return error(app, seq, format!("Can't install: {e}."), None),
-        None => None,
-    };
-    let offer = match catalogue::lookup(&index, lock.as_ref(), &l.bot) {
+    let offer = match catalogue::lookup(&index, &l.bot) {
         Ok(o) => o,
         Err(e) => return error(app, seq, format!("Can't install actuaria/{}: {e}.", l.bot), None),
     };
@@ -168,7 +163,7 @@ fn prepare(app: &AppHandle, seq: u64, l: link::Link) {
         source: catalogue::DOWNLOAD_HOST,
     });
     i.view.targets = targets;
-    i.offer = Some(offer);
+    i.offer = Some((offer, read_at));
     drop(i);
     push(app);
 }
@@ -199,7 +194,13 @@ pub fn action(app: &AppHandle, what: &str, nonce: Option<String>, target: Option
             if !i.view.targets.contains(&t) {
                 return;
             }
-            let Some(offer) = i.offer.take() else { return };
+            let Some((offer, read_at)) = i.offer.take() else { return };
+            if rate::offer_expired(read_at, Instant::now()) {
+                i.view.state = "error";
+                i.view.message = Some(EXPIRED.into());
+                drop(i);
+                return push(app);
+            }
             i.view.state = "working";
             i.view.message = Some(format!("Confirm in the dialog to install {} {}…", offer.name, offer.version));
             drop(i);
@@ -207,19 +208,15 @@ pub fn action(app: &AppHandle, what: &str, nonce: Option<String>, target: Option
             let app = app.clone();
             std::thread::spawn(move || {
                 // A native dialog the page's script can't answer: only its "Install" goes on.
-                let yes = app
-                    .dialog()
-                    .message(format!(
-                        "Install {} {} (actuaria/{}) into {}?\n\nDownloaded from {} and checked against the catalogue.",
-                        offer.name,
-                        offer.version,
-                        offer.id,
-                        t.host_name(),
-                        catalogue::DOWNLOAD_HOST
-                    ))
-                    .title("Install a bot")
-                    .buttons(MessageDialogButtons::OkCancelCustom("Install".into(), "Cancel".into()))
-                    .blocking_show();
+                let text = format!(
+                    "Install {} {} (actuaria/{}) into {}?\n\nDownloaded from {} and checked against the catalogue.",
+                    offer.name,
+                    offer.version,
+                    offer.id,
+                    t.host_name(),
+                    catalogue::DOWNLOAD_HOST
+                );
+                let yes = confirm::ask(&app, "Install a bot".into(), text);
                 if !yes {
                     let st = app.state::<Installs>();
                     let mut i = st.0.lock().unwrap();
@@ -229,11 +226,18 @@ pub fn action(app: &AppHandle, what: &str, nonce: Option<String>, target: Option
                     push(&app);
                     return;
                 }
+                // The native dialog may have been left open.
+                if rate::offer_expired(read_at, Instant::now()) {
+                    return set_view(&app, |v| {
+                        v.state = "error";
+                        v.message = Some(EXPIRED.into());
+                    });
+                }
                 set_view(&app, |v| v.message = Some(format!("Downloading and checking {} {}…", offer.name, offer.version)));
                 let r = run(&app, &offer, t);
                 set_view(&app, |v| match r {
-                    Ok((message, output)) => {
-                        v.state = "done";
+                    Ok((state, message, output)) => {
+                        v.state = state;
                         v.message = Some(message);
                         v.output = output;
                     }
@@ -257,7 +261,8 @@ pub fn action(app: &AppHandle, what: &str, nonce: Option<String>, target: Option
 /// The Claude hand-off's marker for "Claude Desktop couldn't be opened": the screen links claude.ai/download.
 const NO_HANDLER: &str = "no-handler";
 
-type Outcome = Result<(String, Option<String>), (String, Option<String>)>;
+/// The page's state, message and output.
+type Outcome = Result<(&'static str, String, Option<String>), (String, Option<String>)>;
 
 /// Download, verify and hand over to the host's installer.
 fn run(app: &AppHandle, offer: &Offer, t: Target) -> Outcome {
@@ -277,7 +282,7 @@ fn run(app: &AppHandle, offer: &Offer, t: Target) -> Outcome {
             // Open it with Claude explicitly; nothing else gets to claim the `.mcpb`.
             let home = app.path().home_dir().ok();
             let opened = match hosts::find_claude(home.as_deref()) {
-                Some(c) => app.opener().open_path(path.to_string_lossy(), Some(c.to_string_lossy())).map_err(|e| e.to_string()),
+                Some(c) => open_with_claude(app, &c, &path),
                 None => Err("it wasn't found on this computer".into()),
             };
             if let Err(e) = opened {
@@ -293,7 +298,8 @@ fn run(app: &AppHandle, offer: &Offer, t: Target) -> Outcome {
                 let _ = std::fs::remove_dir_all(dir);
             });
             Ok((
-                format!("Opened {} in Claude Desktop. Claude shows its own install dialog: review and approve it there.", offer.name),
+                "done",
+                format!("Started Claude Desktop with {}. Claude shows its own install dialog: review and approve it there.", offer.name),
                 None,
             ))
         }
@@ -312,8 +318,9 @@ fn run(app: &AppHandle, offer: &Offer, t: Target) -> Outcome {
             let root = unzip::plugin_root(&kept).ok_or_else(no_root)?;
             let (r, out) = hosts::run_orca_install(&orca, &root).map_err(|e| (e, None))?;
             match r {
-                hosts::OrcaResult::Installed => Ok((format!("Orca installed {}.", offer.name), Some(out))),
+                hosts::OrcaResult::Installed => Ok(("done", format!("Orca installed {}.", offer.name), Some(out))),
                 hosts::OrcaResult::NeedsApproval => Ok((
+                    "approval",
                     "Orca hasn't installed it yet: it needs your approval. Review the access it asks for below, and if you agree, run the command Orca shows.".into(),
                     Some(out),
                 )),
@@ -321,6 +328,18 @@ fn run(app: &AppHandle, offer: &Offer, t: Target) -> Outcome {
             }
         }
     }
+}
+
+/// Open a `.mcpb` with Claude Desktop itself.
+#[cfg(target_os = "macos")]
+fn open_with_claude(app: &AppHandle, claude: &Path, mcpb: &Path) -> Result<(), String> {
+    // `open -a <Claude.app> -- <file>`, whose exit status is checked.
+    app.opener().open_path(mcpb.to_string_lossy(), Some(claude.to_string_lossy())).map_err(|e| e.to_string())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn open_with_claude(_app: &AppHandle, claude: &Path, mcpb: &Path) -> Result<(), String> {
+    hosts::claude_command(claude, mcpb).spawn().map(|_| ()).map_err(|e| e.to_string())
 }
 
 /// Register the `actuaria:` handler as `<app> -- <link>` on Windows and Linux (macOS uses the bundle's

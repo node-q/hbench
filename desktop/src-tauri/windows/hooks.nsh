@@ -27,3 +27,25 @@
   Pop $R1
   Pop $R0
 !macroend
+
+; The app registers its actuaria: link handler itself, at run time and for the current user, so the uninstaller must
+; remove it: only when the app is going for good (an update also runs the uninstaller) and only if the command still
+; starts this install ("$INSTDIR\...).
+
+!macro NSIS_HOOK_POSTUNINSTALL
+  ${If} $UpdateMode <> 1
+    Push $R0
+    Push $R1
+    Push $R2
+    ReadRegStr $R0 HKCU "Software\Classes\actuaria\shell\open\command" ""
+    StrCpy $R1 '"$INSTDIR\'
+    StrLen $R2 $R1
+    StrCpy $R0 $R0 $R2
+    ${If} $R0 == $R1
+      DeleteRegKey HKCU "Software\Classes\actuaria"
+    ${EndIf}
+    Pop $R2
+    Pop $R1
+    Pop $R0
+  ${EndIf}
+!macroend
