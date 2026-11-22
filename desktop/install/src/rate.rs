@@ -7,6 +7,13 @@ use std::time::{Duration, Instant};
 pub const PER_MINUTE: usize = 5;
 const WINDOW: Duration = Duration::from_secs(60);
 
+/// How long a bot's offer (its version, URL and SHA-256, as the catalogue gave them) can be accepted.
+pub const OFFER_TTL: Duration = Duration::from_secs(5 * 60);
+
+pub fn offer_expired(read_at: Instant, now: Instant) -> bool {
+    now.saturating_duration_since(read_at) >= OFFER_TTL
+}
+
 pub struct Gate {
     open: bool,
     opened: VecDeque<Instant>,
@@ -52,6 +59,14 @@ impl Gate {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn offers_expire() {
+        let t = Instant::now();
+        assert!(!offer_expired(t, t));
+        assert!(!offer_expired(t, t + OFFER_TTL - Duration::from_millis(1)));
+        assert!(offer_expired(t, t + OFFER_TTL));
+    }
 
     #[test]
     fn one_at_a_time_and_n_per_minute() {

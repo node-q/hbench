@@ -464,12 +464,13 @@ most 5 open in a minute.
    `actuaria/<id> <version> <target> sha256:<hex>`). Only artefacts listed in both are offered. If `bots.lock`
    can't be fetched or read, nothing is installed.
 3. On Install, it asks again in a native dialog (bot, version, host app), which the page's script can't answer.
-   Once that is accepted, it downloads the artefact to a private folder (0700) in its data folder, capped at the
+   Once that is accepted (Cancel is the default; 5 minutes after the catalogue was read, it refuses), it downloads the artefact to a private folder (0700) in its data folder, capped at the
    listed size, and refuses it unless the size and SHA-256 match. An Orca `.zip` is unpacked safely: at most 200
    entries and 20 MB, and no absolute paths, `..`, symlinks, or names Windows reserves (`CON`, `COM1`, …) or that
    end in a dot or space.
 4. It hands the artefact to the host's own installer and approves nothing: the `.mcpb` is opened with Claude
-   Desktop itself, which shows its install dialog; for Orca it runs `orca plugin install <folder>` (no shell) and
+   Desktop itself, which shows its install dialog; for Orca it runs `orca plugin install <folder> --environment local` (no shell;
+   `orca-ide` on Linux, where `orca` is GNOME's screen reader) and
    shows its output. A plugin that asks for access isn't installed until the user runs the approval command in that
    output, so its folder is kept, one per bot, in Essentials' data folder (`orca-plugins/`); Orca copies it when it
    installs. Other downloaded files are removed afterwards.

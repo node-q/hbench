@@ -4,6 +4,7 @@
 //! intercepted here and never loaded.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod confirm;
 mod install;
 mod server;
 mod shell_env;

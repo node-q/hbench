@@ -31,6 +31,13 @@ url = "2"
 tauri-plugin-updater = "2"
 tokio = { version = "1", features = ["time"] }
 
+# The install confirmation (src/confirm.rs); the same versions Tauri uses.
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk = "0.18"
+
+[target.'cfg(any(windows, target_os = "macos"))'.dependencies]
+rfd = { version = "0.17", default-features = false, features = ["common-controls-v6"] }
+
 [profile.release]
 lto = true
 codegen-units = 1

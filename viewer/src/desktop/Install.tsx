@@ -10,7 +10,7 @@ import { APP_NAME, desktopInfo, native } from "./bridge";
 type Target = "claude" | "orca";
 
 export interface InstallView {
-  state: "none" | "loading" | "confirm" | "working" | "done" | "error";
+  state: "none" | "loading" | "confirm" | "working" | "approval" | "done" | "error";
   nonce: string;
   bot?: { id: string; name: string; version: string; description: string; source: string } | null;
   targets: Target[];
@@ -128,7 +128,7 @@ export function InstallDialog() {
       </p>
     );
   } else {
-    title = v.state === "done" ? "Handed over" : "Couldn't install";
+    title = v.state === "approval" ? "Needs your approval" : v.state === "done" ? "Handed over" : "Couldn't install";
     body = (
       <>
         <p>{cap(v.message, 500)}</p>

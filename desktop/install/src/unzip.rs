@@ -26,16 +26,18 @@ fn safe_rel(name: &str) -> Option<PathBuf> {
     (!out.as_os_str().is_empty()).then_some(out)
 }
 
-/// A path part Windows reserves or silently alters: `CON`, `PRN`, `AUX`, `NUL`, `COM1`-`COM9`, `LPT1`-`LPT9`
-/// (any case, with or without an extension), or anything ending in a dot or a space.
+/// A path part Windows reserves or silently alters: `CON`, `PRN`, `AUX`, `NUL`, `CONIN$`, `CONOUT$`, `COM1`-`COM9`,
+/// `LPT1`-`LPT9` and the superscript `COM¹`-`COM³`, `LPT¹`-`LPT³` (any case, with or without an extension), or anything ending in a dot or a space.
 fn windows_unsafe(part: &str) -> bool {
     if part.ends_with(['.', ' ']) {
         return true;
     }
     let stem = part.split('.').next().unwrap_or(part).trim_end_matches(' ').to_ascii_uppercase();
     match stem.as_bytes() {
-        b"CON" | b"PRN" | b"AUX" | b"NUL" => true,
-        [b'C', b'O', b'M', d] | [b'L', b'P', b'T', d] => (b'1'..=b'9').contains(d),
+        b"CON" | b"PRN" | b"AUX" | b"NUL" | b"CONIN$" | b"CONOUT$" => true,
+        [b'C', b'O', b'M', d @ ..] | [b'L', b'P', b'T', d @ ..] => {
+            matches!(std::str::from_utf8(d), Ok("1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³"))
+        }
         _ => false,
     }
 }
@@ -154,6 +156,12 @@ mod tests {
             "NUL.tar.gz",
             "com1",
             "COM9.js",
+            "conin$",
+            "CONOUT$.txt",
+            "com¹",
+            "COM².js",
+            "Lpt³",
+            "lpt¹.x",
             "lpt1",
             "LPT9.md",
             "a/con/b.txt",
@@ -169,7 +177,7 @@ mod tests {
             assert!(extract(&build(&[(name, b"x")], None), &d).is_err(), "{name}");
             fs::remove_dir_all(&d).unwrap();
         }
-        for name in ["console.txt", "com0", "com10", "lpt", "auxiliary/x", "a.con", "nul-x", ".hidden"] {
+        for name in ["console.txt", "com⁴", "conin", "conin$x", "com0", "com10", "lpt", "auxiliary/x", "a.con", "nul-x", ".hidden"] {
             assert!(safe_rel(name).is_some(), "{name}");
         }
     }
