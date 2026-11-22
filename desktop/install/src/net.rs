@@ -1,15 +1,15 @@
-//! HTTPS fetches with a size cap: HTTPS only, no redirects at all, and only the hosts the install link uses.
+//! HTTPS fetches with a size cap: HTTPS only, no redirects at all, and only from market.actuaria.io.
 
 use std::io::Read;
 use std::time::Duration;
 use url::Url;
 
-const ALLOWED_HOSTS: [&str; 2] = ["market.actuaria.io", "raw.githubusercontent.com"];
+const ALLOWED_HOST: &str = "market.actuaria.io";
 
 /// Fetch `url` and return its body if it is a 200 of at most `cap` bytes.
 pub fn get(url: &str, cap: u64) -> Result<Vec<u8>, String> {
     let u = Url::parse(url).map_err(|e| e.to_string())?;
-    if u.scheme() != "https" || !u.host_str().is_some_and(|h| ALLOWED_HOSTS.contains(&h)) || u.port().is_some() {
+    if u.scheme() != "https" || u.host_str() != Some(ALLOWED_HOST) || u.port().is_some() {
         return Err(format!("refusing to fetch {url}"));
     }
     // TLS through rustls with ring (no aws-lc build); a no-op if the app already installed a provider.
@@ -54,7 +54,13 @@ mod tests {
 
     #[test]
     fn refuses_other_urls_before_fetching() {
-        for u in ["http://market.actuaria.io/x", "https://evil.com/x", "https://market.actuaria.io:444/x", "file:///etc/passwd"] {
+        for u in [
+            "http://market.actuaria.io/x",
+            "https://evil.com/x",
+            "https://raw.githubusercontent.com/x",
+            "https://market.actuaria.io:444/x",
+            "file:///etc/passwd",
+        ] {
             assert!(get(u, 10).unwrap_err().starts_with("refusing"), "{u}");
         }
     }

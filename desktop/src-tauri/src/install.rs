@@ -126,23 +126,14 @@ pub fn on_link(app: &AppHandle, raw: &str) {
     std::thread::spawn(move || prepare(&app, seq, parsed));
 }
 
-/// Look the bot up, check it against bots.lock, and show the confirm screen with the hosts present.
+/// Look the bot up, check its entry, and show the confirm screen with the hosts present.
 fn prepare(app: &AppHandle, seq: u64, l: link::Link) {
     let read_at = Instant::now();
     let index = match net::get(catalogue::INDEX_URL, catalogue::MAX_INDEX_BYTES as u64) {
         Ok(b) => b,
         Err(e) => return error(app, seq, format!("Couldn't reach the catalogue: {e}"), None),
     };
-    let lock = net::get(catalogue::LOCK_URL, catalogue::MAX_LOCK_BYTES as u64)
-        .ok()
-        .and_then(|b| String::from_utf8(b).ok())
-        .map(|t| catalogue::Lock::parse(&t));
-    let lock = match lock {
-        Some(Ok(l)) => Some(l),
-        Some(Err(e)) => return error(app, seq, format!("Can't install: {e}."), None),
-        None => None,
-    };
-    let offer = match catalogue::lookup(&index, lock.as_ref(), &l.bot) {
+    let offer = match catalogue::lookup(&index, &l.bot) {
         Ok(o) => o,
         Err(e) => return error(app, seq, format!("Can't install actuaria/{}: {e}.", l.bot), None),
     };

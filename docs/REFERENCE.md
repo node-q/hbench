@@ -460,20 +460,22 @@ most 5 open in a minute.
    `{"bots": [{"id", "name", "version", "description", "targets": {"claude": {"url", "sha256", "size"}, "orca": {…}}}]}`.
    Each artefact URL must be `https://market.actuaria.io/downloads/…` (`.mcpb` for `claude`, `.zip` for `orca`),
    its size at most 5 MB.
-2. It fetches [`bots.lock`](../bots.lock) from this repository's `master` (one line per artefact,
-   `actuaria/<id> <version> <target> sha256:<hex>`). Only artefacts listed in both are offered. If `bots.lock`
-   can't be fetched or read, nothing is installed.
-3. On Install, it asks again in a native dialog (bot, version, host app), which the page's script can't answer.
-   Once that is accepted (Cancel is the default; 5 minutes after the catalogue was read, it refuses), it downloads the artefact to a private folder (0700) in its data folder, capped at the
-   listed size, and refuses it unless the size and SHA-256 match. An Orca `.zip` is unpacked safely: at most 200
-   entries and 20 MB, and no absolute paths, `..`, symlinks, or names Windows reserves (`CON`, `COM1`, …) or that
-   end in a dot or space.
+2. On Install, it asks again in a native dialog (bot, version, host app; Cancel is the default), which the page's
+   script can't answer. 5 minutes after the catalogue was read, the offer expires and the link must be opened again.
+3. Once that is accepted, it downloads the artefact to a private folder (0700) in its data folder, capped at the
+   listed size, and refuses it unless the size and SHA-256 match the catalogue's. An Orca `.zip` is unpacked safely:
+   at most 200 entries and 20 MB, and no absolute paths, `..`, symlinks, or names Windows reserves (`CON`, `COM1`, …)
+   or that end in a dot or space.
 4. It hands the artefact to the host's own installer and approves nothing: the `.mcpb` is opened with Claude
-   Desktop itself, which shows its install dialog; for Orca it runs `orca plugin install <folder> --environment local` (no shell;
-   `orca-ide` on Linux, where `orca` is GNOME's screen reader) and
-   shows its output. A plugin that asks for access isn't installed until the user runs the approval command in that
-   output, so its folder is kept, one per bot, in Essentials' data folder (`orca-plugins/`); Orca copies it when it
-   installs. Other downloaded files are removed afterwards.
+   Desktop itself, which shows its install dialog; for Orca it runs `orca plugin install <folder> --environment local`
+   (no shell; `orca-ide` on Linux, where `orca` is GNOME's screen reader) and shows its output. A plugin that asks
+   for access isn't installed until the user runs the approval command in that output, so its folder is kept, one per
+   bot, in Essentials' data folder (`orca-plugins/`); Orca copies it when it installs. Other downloaded files are
+   removed afterwards.
+
+**What is trusted.** The catalogue on market.actuaria.io is the only source of trust. The SHA-256 check catches a
+damaged or swapped download, but the hash comes from the same server: whoever controls market.actuaria.io can change
+which file is installed and its hash. The founder accepted this in chat on 2026-11-22, for first-party bots.
 
 **What the user sees.** A confirm screen with the bot's name, what it does, its version, the source
 (market.actuaria.io), "First-party preview", and the host to install into (only hosts found on the computer; a

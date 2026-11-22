@@ -1,5 +1,5 @@
 // The one-click install link's confirm screen. The desktop app parses `actuaria://install/actuaria/<bot>`, looks
-// the bot up (catalogue + bots.lock) and sends the state here as `window.__ACTUARIA_INSTALL__` with an
+// the bot up (in the catalogue) and sends the state here as `window.__ACTUARIA_INSTALL__` with an
 // `actuaria:install` event (desktop/src-tauri/src/install.rs). Choices go back as `/__actuaria/install?do=..`.
 // Everything from the catalogue is shown as plain text (React escapes it), capped again here.
 // In the browser preview, `?desktop&install=1` shows a sample so the screen can be tried without the app.
@@ -76,7 +76,7 @@ export function InstallDialog() {
   if (v.state === "loading") {
     body = (
       <p className="dk-install__muted">
-        <span className="dk-spin" aria-hidden="true" /> Checking the catalogue and bots.lock…
+        <span className="dk-spin" aria-hidden="true" /> Checking the catalogue…
       </p>
     );
     actions = <button className="btn btn--sm btn--ghost" onClick={close}>Cancel</button>;
@@ -163,7 +163,7 @@ export function InstallDialog() {
         </header>
         <div className="dk-install__body">{body}</div>
         {actions && <div className="dk-update__actions">{actions}</div>}
-        <p className="dk-install__foot">{APP_NAME} checks the download's SHA-256 against the catalogue and bots.lock before handing it over.</p>
+        <p className="dk-install__foot">{APP_NAME} checks the download's SHA-256 against the catalogue before handing it over.</p>
       </section>
     </div>
   );
