@@ -150,6 +150,7 @@ jobs:
           tar -C dist -czf "dist/$name.tar.gz" "$name"
       - name: Attest build provenance
         id: attest
+        timeout-minutes: 5  # a hung Sigstore call fails, and is retried
         # Sigstore's log fails now and then, so it gets one retry, which is the one that can fail the job. If the first
         # try did store its attestation, the file has two: both are valid and `gh attestation verify` takes either.
         continue-on-error: true
@@ -591,9 +592,12 @@ jobs:
           [ -f latest.json ] || echo "::warning::latest.json is missing: installed apps will not be offered this release"
           # *.tar.gz would list the macOS update payloads twice.
           archives=(hbench-*.tar.gz)
+          # The 2 Linux and 2 macOS targets install.sh serves: never release without one (an expired artifact, say).
+          [ "${#archives[@]}" -eq 4 ] || { echo "::error::expected 4 hbench archives, found ${#archives[@]} (${archives[*]})"; exit 1; }
           sha256sum -- "${archives[@]}" "${zips[@]}" "${apps[@]}" "${updates[@]}" install.sh | tee SHA256SUMS
       - name: Attest install.sh and SHA256SUMS
         id: attest
+        timeout-minutes: 5  # a hung Sigstore call fails, and is retried
         # One retry, as in the build job.
         continue-on-error: true
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2

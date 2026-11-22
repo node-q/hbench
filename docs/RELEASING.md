@@ -59,7 +59,10 @@ one that is still waiting, say for a macOS runner.
   depends on the jobs that failed. If that second run fails, publish goes ahead anyway and the release ships the old
   `latest.json`, which offers the update to Windows only; publish warns only when there is none.
 - Artifacts last 7 days. After that a failed-jobs re-run no longer has the archives of the builds that passed, and
-  publish doesn't count archives: it would release without them.
+  publish refuses to release without all four.
+
+A re-run uses the workflow file of its tag. Tags cut before this section was written (v0.4.1 and earlier) have no retry
+and no `report` job.
 
 The re-run builds the files again, so they differ from the first attempt's. That is fine, as nothing was published; the
 first attempt's attestations stay, for files nobody has.
