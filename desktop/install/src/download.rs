@@ -2,6 +2,7 @@
 //! size (at most 5 MB), and are written only once their SHA-256 matches the catalogue's.
 
 use crate::catalogue::{Artefact, MAX_ARTEFACT_BYTES};
+use crate::link::valid_bot_id;
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::Write;
@@ -10,6 +11,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const TEMP_DIR_NAME: &str = "install-tmp";
+pub const PLUGINS_DIR_NAME: &str = "orca-plugins";
 
 /// A private temp folder, removed (with what is in it) when dropped.
 pub struct TempDir(PathBuf);
@@ -58,6 +60,25 @@ pub fn temp_dir(data_dir: &Path) -> std::io::Result<TempDir> {
     Ok(TempDir(dir))
 }
 
+/// Move an unpacked plugin to its bot's lasting folder, `<data_dir>/orca-plugins/plugin-<id>`, replacing the one
+/// there. Orca copies a plugin when it installs it, but for one that asks for access that is only once the user
+/// runs its approval command, on this folder, after `orca plugin install` has returned. (The prefix keeps an id
+/// such as `con` from being a name Windows reserves.)
+pub fn keep_plugin(data_dir: &Path, id: &str, unpacked: &Path) -> std::io::Result<PathBuf> {
+    if !valid_bot_id(id) {
+        return Err(std::io::Error::other("bad bot id"));
+    }
+    let base = data_dir.join(PLUGINS_DIR_NAME);
+    private_dir(&base, true)?;
+    let dir = base.join(format!("plugin-{id}"));
+    match fs::remove_dir_all(&dir) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e),
+        _ => {}
+    }
+    fs::rename(unpacked, &dir)?;
+    Ok(dir)
+}
+
 /// Remove what earlier runs left in `<data_dir>/install-tmp`.
 pub fn sweep(data_dir: &Path) {
     let _ = fs::remove_dir_all(data_dir.join(TEMP_DIR_NAME));
@@ -100,6 +121,27 @@ mod tests {
 
     fn artefact(bytes: &[u8]) -> Artefact {
         Artefact { url: String::new(), sha256: sha256_hex(bytes), size: bytes.len() as u64 }
+    }
+
+    #[test]
+    fn keeps_a_plugin_past_the_temp_folder() {
+        let data = std::env::temp_dir().join(format!("ai-keep-{}", std::process::id()));
+        for v in ["1", "2"] {
+            let t = temp_dir(&data).unwrap();
+            let up = t.path().join("plugin");
+            fs::create_dir(&up).unwrap();
+            fs::write(up.join(format!("v{v}")), v).unwrap();
+            let kept = keep_plugin(&data, "con", &up).unwrap();
+            drop(t);
+            sweep(&data);
+            assert_eq!(kept, data.join(PLUGINS_DIR_NAME).join("plugin-con"));
+            let names: Vec<_> = fs::read_dir(&kept).unwrap().map(|e| e.unwrap().file_name()).collect();
+            assert_eq!(names, [std::ffi::OsString::from(format!("v{v}"))]);
+        }
+        for id in ["..", "a/b", "", "A"] {
+            assert!(keep_plugin(&data, id, &data.join("x")).is_err(), "{id}");
+        }
+        fs::remove_dir_all(&data).unwrap();
     }
 
     #[test]

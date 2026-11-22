@@ -11,6 +11,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager};
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 use tauri_plugin_opener::OpenerExt;
 
 /// How long a handed-over `.mcpb` stays on disk for Claude Desktop to read it.
@@ -200,9 +201,35 @@ pub fn action(app: &AppHandle, what: &str, nonce: Option<String>, target: Option
             }
             let Some(offer) = i.offer.take() else { return };
             i.view.state = "working";
-            i.view.message = Some(format!("Downloading and checking {} {}…", offer.name, offer.version));
+            i.view.message = Some(format!("Confirm in the dialog to install {} {}…", offer.name, offer.version));
+            drop(i);
+            push(app);
             let app = app.clone();
             std::thread::spawn(move || {
+                // A native dialog the page's script can't answer: only its "Install" goes on.
+                let yes = app
+                    .dialog()
+                    .message(format!(
+                        "Install {} {} (actuaria/{}) into {}?\n\nDownloaded from {} and checked against the catalogue.",
+                        offer.name,
+                        offer.version,
+                        offer.id,
+                        t.host_name(),
+                        catalogue::DOWNLOAD_HOST
+                    ))
+                    .title("Install a bot")
+                    .buttons(MessageDialogButtons::OkCancelCustom("Install".into(), "Cancel".into()))
+                    .blocking_show();
+                if !yes {
+                    let st = app.state::<Installs>();
+                    let mut i = st.0.lock().unwrap();
+                    i.gate.close();
+                    i.view = View { state: "none", ..View::default() };
+                    drop(i);
+                    push(&app);
+                    return;
+                }
+                set_view(&app, |v| v.message = Some(format!("Downloading and checking {} {}…", offer.name, offer.version)));
                 let r = run(&app, &offer, t);
                 set_view(&app, |v| match r {
                     Ok((message, output)) => {
@@ -219,6 +246,7 @@ pub fn action(app: &AppHandle, what: &str, nonce: Option<String>, target: Option
                     }
                 });
             });
+            return;
         }
         _ => return,
     }
@@ -226,7 +254,7 @@ pub fn action(app: &AppHandle, what: &str, nonce: Option<String>, target: Option
     push(app);
 }
 
-/// The Claude hand-off's marker for "nothing opens .mcpb files": the screen links claude.ai/download.
+/// The Claude hand-off's marker for "Claude Desktop couldn't be opened": the screen links claude.ai/download.
 const NO_HANDLER: &str = "no-handler";
 
 type Outcome = Result<(String, Option<String>), (String, Option<String>)>;
@@ -246,9 +274,15 @@ fn run(app: &AppHandle, offer: &Offer, t: Target) -> Outcome {
         download::verify_and_write(&bytes, a, tmp.path(), &file).map_err(|e| (format!("Refused: {e}. Nothing was installed."), None))?;
     match t {
         Target::Claude => {
-            if app.opener().open_path(path.to_string_lossy(), None::<&str>).is_err() {
+            // Open it with Claude explicitly; nothing else gets to claim the `.mcpb`.
+            let home = app.path().home_dir().ok();
+            let opened = match hosts::find_claude(home.as_deref()) {
+                Some(c) => app.opener().open_path(path.to_string_lossy(), Some(c.to_string_lossy())).map_err(|e| e.to_string()),
+                None => Err("it wasn't found on this computer".into()),
+            };
+            if let Err(e) = opened {
                 return Err((
-                    "Nothing on this computer opens .mcpb files. Install Claude Desktop, then try again.".into(),
+                    format!("Couldn't open the bot in Claude Desktop: {e}. Install or update Claude Desktop, then try again."),
                     Some(NO_HANDLER.into()),
                 ));
             }
@@ -264,19 +298,26 @@ fn run(app: &AppHandle, offer: &Offer, t: Target) -> Outcome {
             ))
         }
         Target::Orca => {
-            let dest = tmp.path().join("plugin");
-            std::fs::create_dir(&dest).map_err(|e| (e.to_string(), None))?;
-            unzip::extract(&bytes, &dest).map_err(|e| (format!("Refused: {e}. Nothing was installed."), None))?;
-            let root = unzip::plugin_root(&dest).ok_or_else(|| ("Refused: the archive has no orca-plugin.json.".to_string(), None))?;
+            let unpacked = tmp.path().join("plugin");
+            std::fs::create_dir(&unpacked).map_err(|e| (e.to_string(), None))?;
+            unzip::extract(&bytes, &unpacked).map_err(|e| (format!("Refused: {e}. Nothing was installed."), None))?;
+            let no_root = || ("Refused: the archive has no orca-plugin.json.".to_string(), None);
+            unzip::plugin_root(&unpacked).ok_or_else(no_root)?;
             let home = app.path().home_dir().ok();
             let orca =
                 hosts::find_orca(std::env::var_os("PATH"), home.as_deref()).ok_or_else(|| ("Orca isn't installed.".to_string(), None))?;
-            let (ok, out) = hosts::run_orca_install(&orca, &root).map_err(|e| (e, None))?;
-            // `tmp` drops here: the downloaded and unpacked files are removed.
-            if ok {
-                Ok(("Handed to Orca. Orca asks you to approve the plugin's access: review it there.".into(), Some(out)))
-            } else {
-                Err(("Orca couldn't install the plugin.".into(), Some(out)))
+            // Kept after this returns: the command Orca gives the user to approve the plugin reads it again.
+            let kept = download::keep_plugin(&data_dir, &offer.id, &unpacked)
+                .map_err(|e| (format!("Couldn't keep the plugin's folder: {e}"), None))?;
+            let root = unzip::plugin_root(&kept).ok_or_else(no_root)?;
+            let (r, out) = hosts::run_orca_install(&orca, &root).map_err(|e| (e, None))?;
+            match r {
+                hosts::OrcaResult::Installed => Ok((format!("Orca installed {}.", offer.name), Some(out))),
+                hosts::OrcaResult::NeedsApproval => Ok((
+                    "Orca hasn't installed it yet: it needs your approval. Review the access it asks for below, and if you agree, run the command Orca shows.".into(),
+                    Some(out),
+                )),
+                hosts::OrcaResult::Failed => Err(("Orca couldn't install the plugin.".into(), Some(out))),
             }
         }
     }

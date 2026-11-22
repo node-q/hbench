@@ -448,10 +448,10 @@ actuaria://install/actuaria/<bot-id>?target=orca
 ```
 
 **The link.** `<bot-id>` matches `^[a-z][a-z0-9-]{0,62}$`, and the publisher is always `actuaria`. The link is
-accepted only in exactly this form: at most 256 bytes of printable ASCII, no other host or path, no user info,
+accepted only in exactly this form: at most 105 bytes of printable ASCII, no other host or path, no user info,
 port, fragment or percent-encoding, and no parameter but one `target`. Anything else shows "This link is not
 valid". The link never carries a host, URL or digest. The OS hands it over as `<app> -- <link>` (Windows and Linux
-register that form at each start; macOS uses an Apple event), and a second launch passes it to the running app,
+register that form at each start, and their installers register nothing; macOS uses an Apple event), and a second launch passes it to the running app,
 which parses it. One install dialog is open at a time (a link that arrives while one is open is dropped), and at
 most 5 open in a minute.
 
@@ -463,12 +463,16 @@ most 5 open in a minute.
 2. It fetches [`bots.lock`](../bots.lock) from this repository's `master` (one line per artefact,
    `actuaria/<id> <version> <target> sha256:<hex>`). Only artefacts listed in both are offered. If `bots.lock`
    can't be fetched or read, nothing is installed.
-3. On Install, it downloads the artefact to a private folder (0700) in its data folder, capped at the listed size,
-   and refuses it unless the size and SHA-256 match. An Orca `.zip` is unpacked safely: at most 200 entries and
-   20 MB, and no absolute paths, `..`, or symlinks.
-4. It hands the artefact to the host's own installer and approves nothing: Claude Desktop opens the `.mcpb` and
-   shows its install dialog; for Orca it runs `orca plugin install <folder>` (no shell), shows its output, and
-   Orca asks the user to approve the plugin's access. The downloaded files are removed afterwards.
+3. On Install, it asks again in a native dialog (bot, version, host app), which the page's script can't answer.
+   Once that is accepted, it downloads the artefact to a private folder (0700) in its data folder, capped at the
+   listed size, and refuses it unless the size and SHA-256 match. An Orca `.zip` is unpacked safely: at most 200
+   entries and 20 MB, and no absolute paths, `..`, symlinks, or names Windows reserves (`CON`, `COM1`, …) or that
+   end in a dot or space.
+4. It hands the artefact to the host's own installer and approves nothing: the `.mcpb` is opened with Claude
+   Desktop itself, which shows its install dialog; for Orca it runs `orca plugin install <folder>` (no shell) and
+   shows its output. A plugin that asks for access isn't installed until the user runs the approval command in that
+   output, so its folder is kept, one per bot, in Essentials' data folder (`orca-plugins/`); Orca copies it when it
+   installs. Other downloaded files are removed afterwards.
 
 **What the user sees.** A confirm screen with the bot's name, what it does, its version, the source
 (market.actuaria.io), "First-party preview", and the host to install into (only hosts found on the computer; a

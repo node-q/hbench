@@ -2,13 +2,13 @@
 //!
 //! Parsed byte by byte rather than through a URL parser, so nothing is normalised first: the accepted form is
 //! exact, and anything else (another host or path, userinfo, a port, percent-encoding, a fragment, extra or
-//! repeated parameters, over 256 bytes) is refused.
+//! repeated parameters, over 105 bytes) is refused.
 
 use serde::Serialize;
 use std::fmt;
 
 pub const SCHEME: &str = "actuaria";
-pub const MAX_LINK_BYTES: usize = 256;
+pub const MAX_LINK_BYTES: usize = 105;
 const PREFIX: &str = "actuaria://install/actuaria/";
 
 /// The host an artefact installs into.
@@ -196,6 +196,17 @@ mod tests {
             assert!(parse(raw).is_err(), "accepted {raw:?}");
         }
         assert_eq!(parse(&too_long), Err(LinkError::TooLong));
+    }
+
+    #[test]
+    fn length_cap_is_105_bytes() {
+        // The longest valid link: a 63-byte id and `?target=claude`.
+        let at_cap = format!("{PREFIX}a{}?target=claude", "b".repeat(62));
+        assert_eq!(at_cap.len(), 105);
+        assert_eq!(parse(&at_cap), Ok(Link { bot: format!("a{}", "b".repeat(62)), target: Some(Target::Claude) }));
+        let over = format!("{at_cap}x");
+        assert_eq!(over.len(), 106);
+        assert_eq!(parse(&over), Err(LinkError::TooLong));
     }
 
     #[test]

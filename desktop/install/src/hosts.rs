@@ -24,20 +24,19 @@ pub fn find_orca(path_var: Option<OsString>, home: Option<&Path>) -> Option<Path
     dirs.into_iter().map(|d| d.join(ORCA_EXE)).find(|p| p.is_file())
 }
 
-/// Whether Claude Desktop looks installed. Linux has no Claude Desktop build.
-pub fn claude_present(home: Option<&Path>) -> bool {
-    let mut c: Vec<PathBuf> = Vec::new();
+/// Claude Desktop itself: the app on macOS, the exe its installer puts in `%LOCALAPPDATA%` on Windows. Also what a
+/// `.mcpb` is opened with, so it goes to Claude and not to whatever else claims the extension. Linux has none.
+pub fn find_claude(home: Option<&Path>) -> Option<PathBuf> {
     if cfg!(target_os = "macos") {
-        c.push("/Applications/Claude.app".into());
-        if let Some(h) = home {
-            c.push(h.join("Applications/Claude.app"));
-        }
-    } else if cfg!(windows)
-        && let Some(l) = std::env::var_os("LOCALAPPDATA")
-    {
-        c.push(Path::new(&l).join("AnthropicClaude"));
+        let mut c = vec![PathBuf::from("/Applications/Claude.app")];
+        c.extend(home.map(|h| h.join("Applications/Claude.app")));
+        return c.into_iter().find(|p| p.is_dir());
     }
-    c.iter().any(|p| p.exists())
+    if cfg!(windows) {
+        let exe = Path::new(&std::env::var_os("LOCALAPPDATA")?).join("AnthropicClaude").join("claude.exe");
+        return (exe.is_absolute() && exe.is_file()).then_some(exe);
+    }
+    None
 }
 
 /// The hosts present, of `wanted`.
@@ -45,7 +44,7 @@ pub fn present(wanted: impl IntoIterator<Item = Target>, home: Option<&Path>) ->
     wanted
         .into_iter()
         .filter(|t| match t {
-            Target::Claude => claude_present(home),
+            Target::Claude => find_claude(home).is_some(),
             Target::Orca => find_orca(std::env::var_os("PATH"), home).is_some(),
         })
         .collect()
@@ -60,13 +59,33 @@ pub fn orca_install_argv(orca: &Path, dir: &Path) -> Result<(PathBuf, Vec<OsStri
     Ok((orca.to_path_buf(), vec!["plugin".into(), "install".into(), dir.as_os_str().to_owned()]))
 }
 
-/// Run `orca plugin install <dir>`; its output (stdout then stderr, capped), and whether it succeeded.
-pub fn run_orca_install(orca: &Path, dir: &Path) -> Result<(bool, String), String> {
+/// How `orca plugin install` ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OrcaResult {
+    Installed,
+    /// Exit 3: the plugin asks for access, so Orca wrote nothing; its output has the command that approves it,
+    /// which the user runs (on the same folder).
+    NeedsApproval,
+    Failed,
+}
+
+impl OrcaResult {
+    fn from_code(code: Option<i32>) -> Self {
+        match code {
+            Some(0) => OrcaResult::Installed,
+            Some(3) => OrcaResult::NeedsApproval,
+            _ => OrcaResult::Failed,
+        }
+    }
+}
+
+/// Run `orca plugin install <dir>`; how it ended, and its output (stdout then stderr, capped).
+pub fn run_orca_install(orca: &Path, dir: &Path) -> Result<(OrcaResult, String), String> {
     let (prog, args) = orca_install_argv(orca, dir)?;
     let out = Command::new(prog).args(args).stdin(Stdio::null()).output().map_err(|e| format!("couldn't run orca: {e}"))?;
     let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
     let text: String = text.chars().filter(|c| *c == '\n' || !c.is_control()).take(MAX_OUTPUT_CHARS).collect();
-    Ok((out.status.success(), text))
+    Ok((OrcaResult::from_code(out.status.code()), text))
 }
 
 #[cfg(test)]
@@ -84,6 +103,15 @@ mod tests {
         assert!(orca_install_argv(orca, Path::new("--evil")).is_err());
     }
 
+    #[test]
+    fn orca_exit_codes() {
+        assert_eq!(OrcaResult::from_code(Some(0)), OrcaResult::Installed);
+        assert_eq!(OrcaResult::from_code(Some(3)), OrcaResult::NeedsApproval);
+        for c in [Some(1), Some(2), None] {
+            assert_eq!(OrcaResult::from_code(c), OrcaResult::Failed);
+        }
+    }
+
     #[cfg(unix)]
     #[test]
     fn runs_without_a_shell() {
@@ -95,8 +123,8 @@ mod tests {
         std::fs::write(&orca, "#!/bin/sh\nfor a in \"$@\"; do echo \"[$a]\"; done\n").unwrap();
         std::fs::set_permissions(&orca, std::fs::Permissions::from_mode(0o755)).unwrap();
         let plugin = d.join("p $(touch pwned); x");
-        let (ok, out) = run_orca_install(&orca, &plugin).unwrap();
-        assert!(ok);
+        let (r, out) = run_orca_install(&orca, &plugin).unwrap();
+        assert_eq!(r, OrcaResult::Installed);
         assert_eq!(out, format!("[plugin]\n[install]\n[{}]\n", plugin.display()));
         assert!(!Path::new("pwned").exists() && !d.join("pwned").exists());
         assert_eq!(find_orca(Some(d.clone().into_os_string()), None), Some(orca.clone()));

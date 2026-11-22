@@ -1,5 +1,6 @@
 //! A safe unzip for Orca plugin archives: at most 200 entries and 20 MB in all (counted as written, not as the
-//! archive claims), and no absolute paths, drive letters, backslashes, `..`, symlinks or other special files.
+//! archive claims), and no absolute paths, drive letters, backslashes, `..`, symlinks or other special files,
+//! nor names Windows can't hold (reserved device names, or a trailing dot or space).
 
 use std::fs;
 use std::io::{Cursor, Read, Write};
@@ -17,12 +18,26 @@ fn safe_rel(name: &str) -> Option<PathBuf> {
     let mut out = PathBuf::new();
     for c in p.components() {
         match c {
-            Component::Normal(s) if s != "." && s != ".." => out.push(s),
+            Component::Normal(s) if s != "." && s != ".." && !windows_unsafe(&s.to_string_lossy()) => out.push(s),
             Component::CurDir => {}
             _ => return None,
         }
     }
     (!out.as_os_str().is_empty()).then_some(out)
+}
+
+/// A path part Windows reserves or silently alters: `CON`, `PRN`, `AUX`, `NUL`, `COM1`-`COM9`, `LPT1`-`LPT9`
+/// (any case, with or without an extension), or anything ending in a dot or a space.
+fn windows_unsafe(part: &str) -> bool {
+    if part.ends_with(['.', ' ']) {
+        return true;
+    }
+    let stem = part.split('.').next().unwrap_or(part).trim_end_matches(' ').to_ascii_uppercase();
+    match stem.as_bytes() {
+        b"CON" | b"PRN" | b"AUX" | b"NUL" => true,
+        [b'C', b'O', b'M', d] | [b'L', b'P', b'T', d] => (b'1'..=b'9').contains(d),
+        _ => false,
+    }
 }
 
 /// Extract `zip` into `dest` (an existing, empty folder).
@@ -127,6 +142,36 @@ mod tests {
         let d = dir("link");
         assert!(extract(&build(&[], Some(("l", "/etc/passwd"))), &d).unwrap_err().contains("plain file"));
         fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn refuses_windows_reserved_and_trailing_dot_or_space() {
+        let bad = [
+            "CON",
+            "con",
+            "Prn",
+            "aux.txt",
+            "NUL.tar.gz",
+            "com1",
+            "COM9.js",
+            "lpt1",
+            "LPT9.md",
+            "a/con/b.txt",
+            "nul /x",
+            "end.",
+            "end ",
+            "dir./x",
+            "dir /x",
+            "con .txt",
+        ];
+        for name in bad {
+            let d = dir("win");
+            assert!(extract(&build(&[(name, b"x")], None), &d).is_err(), "{name}");
+            fs::remove_dir_all(&d).unwrap();
+        }
+        for name in ["console.txt", "com0", "com10", "lpt", "auxiliary/x", "a.con", "nul-x", ".hidden"] {
+            assert!(safe_rel(name).is_some(), "{name}");
+        }
     }
 
     #[test]
