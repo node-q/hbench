@@ -59,7 +59,7 @@ export default function Run() {
       setSubmitted(false);
       setSubmitError(null);
       navigate(CONFIGURE);
-      toast({ text: `Loaded the settings of ${name}.` });
+      toast({ text: `Filled in the settings of ${name}.` });
     },
     [setDraft, specs, toast, navigate],
   );
@@ -101,13 +101,13 @@ export default function Run() {
 
   const commands: Command[] = useMemo(() => {
     const last = history.data?.[0];
-    return last ? [{ id: "run:last", label: `Load last run (${last.job_name})`, group: "This page", run: () => load(last.config, last.job_name) }] : [];
+    return last ? [{ id: "run:last", label: `Use the last run's settings again (${last.job_name})`, group: "This page", run: () => load(last.config, last.job_name) }] : [];
   }, [history.data, load]);
   useCommands(commands);
 
   const config = useMemo(() => toConfig(draft, specs), [draft, specs]);
   const errors = draftErrors(draft, specs);
-  if (draft.env.type !== "docker") errors.push("hbench runs docker environments only.");
+  if (draft.env.type !== "docker") errors.push("hbench runs in Docker only.");
 
   const start = async () => {
     setSubmitted(true);
@@ -127,19 +127,19 @@ export default function Run() {
 
   // Server errors that belong to one field are shown there too.
   const serverMsg = submitError?.message ?? "";
-  const jobNameServerError = /already exists/.test(serverMsg) ? serverMsg : undefined;
+  const jobNameServerError = /already exists/.test(serverMsg) ? "There is already a run with this name." : undefined;
   const sourceServerError = /dataset, a task, or a local path/.test(serverMsg) ? serverMsg : undefined;
 
   const opts = options.data;
   const head = (
     <>
       <PageHead
-        crumbs={[{ to: "/", label: "Jobs" }]}
+        crumbs={[{ to: "/", label: "Runs" }]}
         title="New run"
         meta={
           opts && (
             <span>
-              Writes to <span className="mono">{opts.jobs_dir}</span>
+              Saved in <span className="mono">{opts.jobs_dir}</span>
             </span>
           )
         }
@@ -155,8 +155,8 @@ export default function Run() {
         {head}
         <div className="run-pick">
           <div className="run-pick__intro">
-            <h2>What do you want to benchmark?</h2>
-            <p className="muted">Pick a domain to see its datasets, then choose the agent to run them.</p>
+            <h2>What do you want to test an AI on?</h2>
+            <p className="muted">Pick a field of work to see its test sets. You choose the agent and model after that.</p>
           </div>
           <DomainGrid catalog={catalog} />
         </div>
@@ -178,7 +178,7 @@ export default function Run() {
       </div>
     );
   }
-  if (options.error) return <div className="page">{head}<ErrorBox error={options.error} title="Couldn't load the run options" onRetry={options.reload} /></div>;
+  if (options.error) return <div className="page">{head}<ErrorBox error={options.error} title="Couldn't load the agents and environments" onRetry={options.reload} /></div>;
   if (!opts) return <div className="page">{head}<Loading label="Loading agents and environments…" /></div>;
 
   return (
@@ -186,7 +186,7 @@ export default function Run() {
       {head}
       {submitError && (
         <div style={{ marginBottom: "var(--space-md)" }}>
-          <ErrorBox error={submitError} title="The run didn't start" />
+          <ErrorBox error={jobNameServerError ?? submitError} title="The run didn't start" />
         </div>
       )}
       {submitted && errors.length > 0 && (
@@ -212,7 +212,7 @@ export default function Run() {
             <SourceSection draft={draft} up={up} entry={entry} changeTo={draftDomain ? domainHref(draftDomain) : "/run?step=domain"} serverError={sourceServerError} />
             <section className="run-block" aria-labelledby="run-agents">
               <div className="run-block__head">
-                <h2 id="run-agents">Agent</h2>
+                <h2 id="run-agents">Agent and model</h2>
                 <span className="muted run-block__note">Each agent runs every task.</span>
               </div>
               <datalist id="run-models">
@@ -293,11 +293,11 @@ function SourceSection({ draft, up, entry, changeTo, serverError }: { draft: Dra
   };
   const err = serverError ?? sourceError(draft);
   const filters = [ds.task_names.trim() && `only ${ds.task_names.trim()}`, ds.exclude_task_names.trim() && `not ${ds.exclude_task_names.trim()}`, ds.n_tasks.trim() && `first ${ds.n_tasks.trim()}`].filter(Boolean).join(" · ");
-  const download = [ds.registry_url, ds.registry_path, ds.download_dir, ds.overwrite && "re-download"].filter(Boolean).join(" · ");
+  const download = [ds.registry_url, ds.registry_path, ds.download_dir, ds.overwrite && "download again"].filter(Boolean).join(" · ");
   return (
     <section className="run-block" aria-labelledby="run-source">
       <div className="run-block__head">
-        <h2 id="run-source">{draft.source === "dataset" ? "Dataset" : draft.source === "path" ? "Local folder" : "Git task"}</h2>
+        <h2 id="run-source">{draft.source === "dataset" ? "Test set" : draft.source === "path" ? "Folder" : "Git repository"}</h2>
         <Link to={changeTo} className="btn btn--sm">
           Change
         </Link>
@@ -308,26 +308,26 @@ function SourceSection({ draft, up, entry, changeTo, serverError }: { draft: Dra
             <DatasetSummary entry={entry} version={ds.version} onVersion={(v) => up((d) => void (d.dataset.version = v))} />
           ) : (
             <div className="run-row run-row--name">
-              <Text label="Dataset" required value={ds.name} onChange={(v) => up((d) => void (d.dataset.name = v))} placeholder="terminal-bench" mono error={err} help="Its name in the registry." />
+              <Text label="Test set" required value={ds.name} onChange={(v) => up((d) => void (d.dataset.name = v))} placeholder="terminal-bench" mono error={err} help="Its name in the registry." />
               <Text label="Version" value={ds.version} onChange={(v) => up((d) => void (d.dataset.version = v))} placeholder="2.0" mono error={versionError(draft)} help="The default registry needs one." />
             </div>
           )}
           <Section title="Tasks to run" summary={filters || (entry && ds.version === entry.version ? `all ${entry.n_tasks}` : "all")}>
             <div className="run-row">
-              <Text label="Include tasks" value={ds.task_names} onChange={(v) => up((d) => void (d.dataset.task_names = v))} placeholder="*api*, test_*" mono help="Comma-separated names or globs." />
-              <Text label="Exclude tasks" value={ds.exclude_task_names} onChange={(v) => up((d) => void (d.dataset.exclude_task_names = v))} placeholder="slow_*" mono help="Applied after include." />
-              <Num label="Max tasks" value={ds.n_tasks} onChange={(v) => up((d) => void (d.dataset.n_tasks = v))} placeholder="all" error={numError(ds.n_tasks, { int: true, min: 1 })} help="Blank = every task." />
+              <Text label="Only these tasks" value={ds.task_names} onChange={(v) => up((d) => void (d.dataset.task_names = v))} placeholder="*api*, test_*" mono help="Task names, with commas between them. * stands for any text." />
+              <Text label="Not these tasks" value={ds.exclude_task_names} onChange={(v) => up((d) => void (d.dataset.exclude_task_names = v))} placeholder="slow_*" mono help="Left out of the ones above." />
+              <Num label="At most" value={ds.n_tasks} onChange={(v) => up((d) => void (d.dataset.n_tasks = v))} placeholder="all" error={numError(ds.n_tasks, { int: true, min: 1 })} help="Leave blank for every task." />
             </div>
           </Section>
-          <Section title={entry ? "Download" : "Registry & download"} summary={download || (entry ? "default cache" : "default registry")}>
+          <Section title={entry ? "Download" : "Registry and download"} summary={download || (entry ? "usual folder" : "default registry")}>
             {!entry && (
               <div className="run-row">
                 <Text label="Registry URL" value={ds.registry_url} onChange={(v) => up((d) => void (d.dataset.registry_url = v))} placeholder="https://…/registry.json" mono help="A registry.json to use instead of the default registry." />
                 <Text label="Registry path" value={ds.registry_path} onChange={(v) => up((d) => void (d.dataset.registry_path = v))} placeholder="./registry.json" mono help="A local registry.json instead of a URL." />
               </div>
             )}
-            <Text label="Download dir" value={ds.download_dir} onChange={(v) => up((d) => void (d.dataset.download_dir = v))} placeholder="~/.cache/…" mono help="Blank = the default cache." />
-            <Check label="Re-download the dataset even if it's cached" checked={ds.overwrite} onChange={(v) => up((d) => void (d.dataset.overwrite = v))} />
+            <Text label="Download folder" value={ds.download_dir} onChange={(v) => up((d) => void (d.dataset.download_dir = v))} placeholder="~/.cache/…" mono help="Leave blank for the usual folder." />
+            <Check label="Download the test set again even if it's already here" checked={ds.overwrite} onChange={(v) => up((d) => void (d.dataset.overwrite = v))} />
           </Section>
         </>
       )}
@@ -341,7 +341,7 @@ function SourceSection({ draft, up, entry, changeTo, serverError }: { draft: Dra
             placeholder="/path/to/tasks or /path/to/one-task"
             mono
             error={err}
-            help={pickMsg ?? "A task folder (task.toml), a folder of tasks, or task sources (task.yaml) taskbuild builds first."}
+            help={pickMsg ?? "A task (task.toml), a folder of tasks, or task sources (task.yaml), which taskbuild builds first."}
           />
           <button type="button" className="btn run-browse" onClick={browse} disabled={picking} data-state={picking ? "loading" : undefined}>
             {picking ? <Spinner label="Waiting for the folder picker" /> : <Icon.Folder size={14} />} Browse…
@@ -353,7 +353,7 @@ function SourceSection({ draft, up, entry, changeTo, serverError }: { draft: Dra
           <Text label="Repository URL" required value={draft.git.git_url} onChange={(v) => up((d) => void (d.git.git_url = v))} placeholder="https://github.com/org/tasks.git" mono error={err} />
           <div className="run-row">
             <Text label="Task path in the repo" required value={draft.git.path} onChange={(v) => up((d) => void (d.git.path = v))} placeholder="tasks/hello-world" mono />
-            <Text label="Commit" value={draft.git.git_commit_id} onChange={(v) => up((d) => void (d.git.git_commit_id = v))} placeholder="a1b2c3d" mono help="Blank = default branch head." />
+            <Text label="Commit" value={draft.git.git_commit_id} onChange={(v) => up((d) => void (d.git.git_commit_id = v))} placeholder="a1b2c3d" mono help="Leave blank for the latest." />
           </div>
         </>
       )}
@@ -404,9 +404,9 @@ function DatasetSummary({ entry, version, onVersion }: { entry: CatalogDataset; 
 /** Where the launcher is: domain, dataset, agent. Steps already reachable are links. */
 function Steps({ step, domainId, ready }: { step: Step; domainId?: string; ready: boolean }) {
   const items: { id: Step; label: string; to?: string }[] = [
-    { id: "domain", label: "Domain", to: "/run?step=domain" },
-    { id: "dataset", label: "Dataset", to: domainId ? domainHref(domainId) : undefined },
-    { id: "configure", label: "Agent", to: ready ? CONFIGURE : undefined },
+    { id: "domain", label: "Field of work", to: "/run?step=domain" },
+    { id: "dataset", label: "Test set", to: domainId ? domainHref(domainId) : undefined },
+    { id: "configure", label: "Agent and model", to: ready ? CONFIGURE : undefined },
   ];
   const at = items.findIndex((i) => i.id === step);
   return (
@@ -449,7 +449,7 @@ function RunSize({ draft, entry }: { draft: Draft; entry?: CatalogDataset }) {
   return (
     <span className="run-submit__size num" title={`${tasks} tasks × ${draft.agents.length} agent${draft.agents.length === 1 ? "" : "s"} × ${whole(draft.job.n_attempts, 1)} attempt${whole(draft.job.n_attempts, 1) === 1 ? "" : "s"}`}>
       {filtered && "up to "}
-      {trials.toLocaleString()} trial{trials === 1 ? "" : "s"}
+      {trials.toLocaleString()} attempt{trials === 1 ? "" : "s"}
     </span>
   );
 }
@@ -458,14 +458,14 @@ function RunSize({ draft, entry }: { draft: Draft; entry?: CatalogDataset }) {
 
 /** What the agents that are not a product do. */
 const AGENT_NOTES: Record<string, string> = {
-  oracle: "Runs each task's reference solution: checks the setup, needs no model.",
-  nop: "Does nothing: the score of an untouched environment.",
+  oracle: "Runs each task's own solution, to check the setup. Needs no model.",
+  nop: "Does nothing. Shows what an untouched task scores.",
 };
 
 function AgentCard({ index, agent, agents, specs, removable, onChange, onRemove }: { index: number; agent: AgentDraft; agents: string[]; specs: KwargSpec[]; removable: boolean; onChange: (a: AgentDraft) => void; onRemove: () => void }) {
   const set = (patch: Partial<AgentDraft>) => onChange({ ...agent, ...patch });
   const nSet = Object.values(agent.kwargs).filter((v) => v.trim()).length;
-  const advanced = [agent.n_concurrent && `${agent.n_concurrent} concurrent`, agent.custom.length && `${agent.custom.length} custom kwargs`, agent.env.length && `${agent.env.length} env vars`].filter(Boolean).join(" · ");
+  const advanced = [agent.n_concurrent && `${agent.n_concurrent} at once`, agent.custom.length && `${agent.custom.length} custom kwargs`, agent.env.length && `${agent.env.length} env vars`].filter(Boolean).join(" · ");
   const offerServer = takesServer(agent.name);
   const onServer = !!agent.server && offerServer;
   // Switching where the model comes from starts its name over: a provider/model name means nothing to a server.
@@ -495,7 +495,7 @@ function AgentCard({ index, agent, agents, specs, removable, onChange, onRemove 
             autoComplete="off"
             help={
               <>
-                Any LiteLLM name; suggestions as you type.
+                A LiteLLM name. Suggestions appear as you type.
                 {offerServer && (
                   <>
                     {" "}
@@ -515,7 +515,7 @@ function AgentCard({ index, agent, agents, specs, removable, onChange, onRemove 
         )}
       </div>
       {onServer && <ServerPanel agent={agent} onChange={onChange} />}
-      <Section title={`${agent.name} options`} summary={specs.length ? (nSet ? `${nSet} set` : `${specs.length} available`) : "none declared"} open={specs.some((s) => s.required)}>
+      <Section title={`${agent.name} options`} summary={specs.length ? (nSet ? `${nSet} set` : `${specs.length} available`) : "none"} open={specs.some((s) => s.required)}>
         {specs.length ? (
           <div className="run-kwargs">
             {specs.map((s) => (
@@ -523,19 +523,19 @@ function AgentCard({ index, agent, agents, specs, removable, onChange, onRemove 
             ))}
           </div>
         ) : (
-          <p className="muted run-note">No configurable options are declared for this agent.</p>
+          <p className="muted run-note">This agent has no options.</p>
         )}
       </Section>
       <Section title="Advanced agent options" summary={advanced || undefined}>
         <div className="run-row">
-          <Num label="Max concurrent (this agent)" value={agent.n_concurrent} onChange={(v) => set({ n_concurrent: v })} placeholder="job limit" error={numError(agent.n_concurrent, { int: true, min: 1 })} />
-          <Num label="Override timeout (s)" value={agent.override_timeout_sec} onChange={(v) => set({ override_timeout_sec: v })} placeholder="task value" error={numError(agent.override_timeout_sec, { min: 0 })} />
+          <Num label="Attempts at once (this agent)" value={agent.n_concurrent} onChange={(v) => set({ n_concurrent: v })} placeholder="run limit" error={numError(agent.n_concurrent, { int: true, min: 1 })} />
+          <Num label="Time limit (s)" value={agent.override_timeout_sec} onChange={(v) => set({ override_timeout_sec: v })} placeholder="from the task" error={numError(agent.override_timeout_sec, { min: 0 })} />
         </div>
         <div className="run-row">
-          <Num label="Override setup timeout (s)" value={agent.override_setup_timeout_sec} onChange={(v) => set({ override_setup_timeout_sec: v })} placeholder="default" error={numError(agent.override_setup_timeout_sec, { min: 0 })} />
-          <Num label="Max timeout (s)" value={agent.max_timeout_sec} onChange={(v) => set({ max_timeout_sec: v })} placeholder="none" error={numError(agent.max_timeout_sec, { min: 0 })} help="Caps the task's timeout." />
+          <Num label="Setup time limit (s)" value={agent.override_setup_timeout_sec} onChange={(v) => set({ override_setup_timeout_sec: v })} placeholder="default" error={numError(agent.override_setup_timeout_sec, { min: 0 })} />
+          <Num label="Time limit, at most (s)" value={agent.max_timeout_sec} onChange={(v) => set({ max_timeout_sec: v })} placeholder="none" error={numError(agent.max_timeout_sec, { min: 0 })} help="Caps the task's time limit." />
         </div>
-        <Text label="Skills" value={agent.skills} onChange={(v) => set({ skills: v })} placeholder="./skills/foo, ./skills/bar" mono help="Comma-separated skill directories." />
+        <Text label="Skills" value={agent.skills} onChange={(v) => set({ skills: v })} placeholder="./skills/foo, ./skills/bar" mono help="Skill folders, with commas between them." />
         <Text label="Extra allowed hosts" value={agent.extra_allowed_hosts} onChange={(v) => set({ extra_allowed_hosts: v })} placeholder="api.example.com, *.pypi.org" mono />
         <KvRows label="Custom kwargs" rows={agent.custom} onChange={(custom) => set({ custom })} keyPlaceholder="key" valuePlaceholder='value or JSON, e.g. 3 or {"a":1}' />
         <KvRows label="Environment variables" rows={agent.env} onChange={(env) => set({ env })} valuePlaceholder="value or ${HOST_VAR}" help="Secrets are written to config.json as ${KEY} templates or redacted." />
@@ -549,14 +549,14 @@ function AgentCard({ index, agent, agents, specs, removable, onChange, onRemove 
 function EnvSection({ draft, up, opts }: { draft: Draft; up: Up; opts: RunOptions }) {
   const e = draft.env;
   const overrides = [e.override_cpus && `${e.override_cpus} CPU`, e.override_memory_mb && `${e.override_memory_mb} MB`, e.override_gpus && `${e.override_gpus} GPU`].filter(Boolean);
-  const summary = [e.type, e.force_build && "rebuild", !e.delete && "keep env", ...overrides].filter(Boolean).join(" · ");
+  const summary = [e.type, e.force_build && "rebuild", !e.delete && "keep containers", ...overrides].filter(Boolean).join(" · ");
   const policies = opts.resource_modes.length ? opts.resource_modes : ["auto"];
   return (
-    <Section title="Environment & resources" summary={summary}>
-      <Select label="Environment" value={e.type} onChange={(v) => up((d) => void (d.env.type = v))} options={e.type === "docker" ? ["docker"] : ["docker", e.type]} help={e.type === "docker" ? "Sandbox each trial in a Docker container." : <span className="run-warn">hbench runs docker only; this type fails validation.</span>} />
+    <Section title="Container and resources" summary={summary}>
+      <Select label="Environment" value={e.type} onChange={(v) => up((d) => void (d.env.type = v))} options={e.type === "docker" ? ["docker"] : ["docker", e.type]} help={e.type === "docker" ? "Each attempt runs in its own Docker sandbox." : <span className="run-warn">hbench runs in Docker only. This type won't start.</span>} />
       <div className="run-checks">
-        <Check label="Force rebuild the image" checked={e.force_build} onChange={(v) => up((d) => void (d.env.force_build = v))} />
-        <Check label="Delete the environment after each trial" checked={e.delete} onChange={(v) => up((d) => void (d.env.delete = v))} />
+        <Check label="Build the image again" checked={e.force_build} onChange={(v) => up((d) => void (d.env.force_build = v))} />
+        <Check label="Delete the containers after each attempt" checked={e.delete} onChange={(v) => up((d) => void (d.env.delete = v))} />
       </div>
       <div className="run-row run-row--4">
         <Num label="CPUs" value={e.override_cpus} onChange={(v) => up((d) => void (d.env.override_cpus = v))} placeholder="task" error={numError(e.override_cpus, { int: true, min: 1 })} />
@@ -568,61 +568,61 @@ function EnvSection({ draft, up, opts }: { draft: Draft; up: Up; opts: RunOption
         <Select label="CPU policy" value={e.cpu_policy} onChange={(v) => up((d) => void (d.env.cpu_policy = v))} options={policies} />
         <Select label="Memory policy" value={e.memory_policy} onChange={(v) => up((d) => void (d.env.memory_policy = v))} options={policies} />
       </div>
-      <Text label="Extra allowed hosts" value={e.extra_allowed_hosts} onChange={(v) => up((d) => void (d.env.extra_allowed_hosts = v))} placeholder="registry.npmjs.org, *.github.com" mono help="Comma-separated; applies to every trial." />
+      <Text label="Extra allowed hosts" value={e.extra_allowed_hosts} onChange={(v) => up((d) => void (d.env.extra_allowed_hosts = v))} placeholder="registry.npmjs.org, *.github.com" mono help="With commas between them. For every attempt." />
       <Area label="Environment kwargs (JSON)" value={e.kwargs} onChange={(v) => up((d) => void (d.env.kwargs = v))} placeholder='{"keep_containers": true}' error={jsonError(e.kwargs, true)} />
       <KvRows label="Environment variables" rows={e.env} onChange={(env) => up((d) => void (d.env.env = env))} />
     </Section>
   );
 }
 
-// ---------------------------------------------------------------- job, retries, verifier
+// ---------------------------------------------------------------- run, retries, checks
 
 function JobSection({ draft, up, jobNameServerError }: { draft: Draft; up: Up; jobNameServerError?: string }) {
   const j = draft.job;
   const r = draft.retry;
   const v = draft.verifier;
-  const jobSummary = [j.job_name || "auto name", `${j.n_attempts || 1}× attempts`, `${j.n_concurrent_trials || 4} concurrent`, j.debug && "debug", j.install_only && "install only"].filter(Boolean).join(" · ");
+  const jobSummary = [j.job_name || "auto name", `${j.n_attempts || 1} attempt${Number(j.n_attempts || 1) === 1 ? "" : "s"} per task`, `${j.n_concurrent_trials || 4} at once`, j.debug && "debug", j.install_only && "install only"].filter(Boolean).join(" · ");
   return (
     <>
-      <Section title="Job settings" summary={jobSummary} open={!!jobNameServerError}>
-        <Text label="Job name" value={j.job_name} onChange={(x) => up((d) => void (d.job.job_name = x))} placeholder="auto (timestamp)" mono error={jobNameServerError} help="Folder name under the jobs dir." />
+      <Section title="Run settings" summary={jobSummary} open={!!jobNameServerError}>
+        <Text label="Run name" value={j.job_name} onChange={(x) => up((d) => void (d.job.job_name = x))} placeholder="auto (timestamp)" mono error={jobNameServerError} help="Also the name of its folder." />
         <div className="run-row">
-          <Num label="Attempts per trial" value={j.n_attempts} onChange={(x) => up((d) => void (d.job.n_attempts = x))} error={numError(j.n_attempts, { int: true, min: 1 })} />
-          <Num label="Concurrent trials" value={j.n_concurrent_trials} onChange={(x) => up((d) => void (d.job.n_concurrent_trials = x))} error={numError(j.n_concurrent_trials, { int: true, min: 1 })} />
-          <Num label="Timeout multiplier" value={j.timeout_multiplier} onChange={(x) => up((d) => void (d.job.timeout_multiplier = x))} step="any" error={numError(j.timeout_multiplier, { min: 0 })} help="Scales every timeout." />
+          <Num label="Attempts per task" value={j.n_attempts} onChange={(x) => up((d) => void (d.job.n_attempts = x))} error={numError(j.n_attempts, { int: true, min: 1 })} />
+          <Num label="Attempts at once" value={j.n_concurrent_trials} onChange={(x) => up((d) => void (d.job.n_concurrent_trials = x))} error={numError(j.n_concurrent_trials, { int: true, min: 1 })} />
+          <Num label="Time limit ×" value={j.timeout_multiplier} onChange={(x) => up((d) => void (d.job.timeout_multiplier = x))} step="any" error={numError(j.timeout_multiplier, { min: 0 })} help="Multiplies every time limit." />
         </div>
         <div className="run-row run-row--4">
           <Num label="Agent ×" value={j.agent_timeout_multiplier} onChange={(x) => up((d) => void (d.job.agent_timeout_multiplier = x))} placeholder="1" step="any" error={numError(j.agent_timeout_multiplier, { min: 0 })} />
-          <Num label="Verifier ×" value={j.verifier_timeout_multiplier} onChange={(x) => up((d) => void (d.job.verifier_timeout_multiplier = x))} placeholder="1" step="any" error={numError(j.verifier_timeout_multiplier, { min: 0 })} />
+          <Num label="Checks ×" value={j.verifier_timeout_multiplier} onChange={(x) => up((d) => void (d.job.verifier_timeout_multiplier = x))} placeholder="1" step="any" error={numError(j.verifier_timeout_multiplier, { min: 0 })} />
           <Num label="Agent setup ×" value={j.agent_setup_timeout_multiplier} onChange={(x) => up((d) => void (d.job.agent_setup_timeout_multiplier = x))} placeholder="1" step="any" error={numError(j.agent_setup_timeout_multiplier, { min: 0 })} />
-          <Num label="Env build ×" value={j.environment_build_timeout_multiplier} onChange={(x) => up((d) => void (d.job.environment_build_timeout_multiplier = x))} placeholder="1" step="any" error={numError(j.environment_build_timeout_multiplier, { min: 0 })} />
+          <Num label="Container build ×" value={j.environment_build_timeout_multiplier} onChange={(x) => up((d) => void (d.job.environment_build_timeout_multiplier = x))} placeholder="1" step="any" error={numError(j.environment_build_timeout_multiplier, { min: 0 })} />
         </div>
         <div className="run-checks">
           <Check label="Debug logging" checked={j.debug} onChange={(x) => up((d) => void (d.job.debug = x))} />
-          <Check label="Install only (skip the agent run and verifier)" checked={j.install_only} onChange={(x) => up((d) => void (d.job.install_only = x))} />
+          <Check label="Install only (skip the agent and the checks)" checked={j.install_only} onChange={(x) => up((d) => void (d.job.install_only = x))} />
         </div>
-        <Area label="Extra instructions" value={j.extra_instructions} onChange={(x) => up((d) => void (d.job.extra_instructions = x))} placeholder="One per line; appended to every task instruction." />
+        <Area label="Extra instructions" value={j.extra_instructions} onChange={(x) => up((d) => void (d.job.extra_instructions = x))} placeholder="One per line. Added to every task's instruction." />
         <Area label="Extra instruction files" value={j.extra_instruction_paths} onChange={(x) => up((d) => void (d.job.extra_instruction_paths = x))} placeholder="./notes/style.md" rows={2} />
       </Section>
       <Section title="Retries" summary={Number(r.max_retries) > 0 ? `up to ${r.max_retries}` : "off"}>
         <div className="run-row">
-          <Num label="Max retries" value={r.max_retries} onChange={(x) => up((d) => void (d.retry.max_retries = x))} error={numError(r.max_retries, { int: true, min: 0 })} help="Per trial, on errors not excluded below." />
-          <Num label="Wait multiplier" value={r.wait_multiplier} onChange={(x) => up((d) => void (d.retry.wait_multiplier = x))} step="any" error={numError(r.wait_multiplier, { min: 0 })} />
+          <Num label="Retries at most" value={r.max_retries} onChange={(x) => up((d) => void (d.retry.max_retries = x))} error={numError(r.max_retries, { int: true, min: 0 })} help="Per attempt, on errors not ruled out below." />
+          <Num label="Wait ×" value={r.wait_multiplier} onChange={(x) => up((d) => void (d.retry.wait_multiplier = x))} step="any" error={numError(r.wait_multiplier, { min: 0 })} />
         </div>
         <div className="run-row">
-          <Num label="Min wait (s)" value={r.min_wait_sec} onChange={(x) => up((d) => void (d.retry.min_wait_sec = x))} step="any" error={numError(r.min_wait_sec, { min: 0 })} />
-          <Num label="Max wait (s)" value={r.max_wait_sec} onChange={(x) => up((d) => void (d.retry.max_wait_sec = x))} step="any" error={numError(r.max_wait_sec, { min: 0 })} />
+          <Num label="Shortest wait (s)" value={r.min_wait_sec} onChange={(x) => up((d) => void (d.retry.min_wait_sec = x))} step="any" error={numError(r.min_wait_sec, { min: 0 })} />
+          <Num label="Longest wait (s)" value={r.max_wait_sec} onChange={(x) => up((d) => void (d.retry.max_wait_sec = x))} step="any" error={numError(r.max_wait_sec, { min: 0 })} />
         </div>
-        <Text label="Retry only these errors" value={r.include_exceptions} onChange={(x) => up((d) => void (d.retry.include_exceptions = x))} placeholder="EnvironmentStartTimeoutError" mono help="Comma-separated; blank = any error not excluded." />
+        <Text label="Retry only these errors" value={r.include_exceptions} onChange={(x) => up((d) => void (d.retry.include_exceptions = x))} placeholder="EnvironmentStartTimeoutError" mono help="With commas between them. Leave blank for any error not ruled out." />
         <Area label="Never retry these errors" value={r.exclude_exceptions} onChange={(x) => up((d) => void (d.retry.exclude_exceptions = x))} rows={3} />
       </Section>
-      <Section title="Verifier" summary={v.disable ? "disabled" : [v.override_timeout_sec && `${v.override_timeout_sec}s`, "on"].filter(Boolean).join(" · ")}>
-        <Check label="Disable verification (skip running tests)" checked={v.disable} onChange={(x) => up((d) => void (d.verifier.disable = x))} />
+      <Section title="Checks" summary={v.disable ? "skipped" : [v.override_timeout_sec && `${v.override_timeout_sec}s`, "on"].filter(Boolean).join(" · ")}>
+        <Check label="Skip the checks" checked={v.disable} onChange={(x) => up((d) => void (d.verifier.disable = x))} />
         <div className="run-row">
-          <Num label="Override timeout (s)" value={v.override_timeout_sec} onChange={(x) => up((d) => void (d.verifier.override_timeout_sec = x))} placeholder="task value" error={numError(v.override_timeout_sec, { min: 0 })} />
-          <Num label="Max timeout (s)" value={v.max_timeout_sec} onChange={(x) => up((d) => void (d.verifier.max_timeout_sec = x))} placeholder="none" error={numError(v.max_timeout_sec, { min: 0 })} />
+          <Num label="Time limit (s)" value={v.override_timeout_sec} onChange={(x) => up((d) => void (d.verifier.override_timeout_sec = x))} placeholder="from the task" error={numError(v.override_timeout_sec, { min: 0 })} />
+          <Num label="Time limit, at most (s)" value={v.max_timeout_sec} onChange={(x) => up((d) => void (d.verifier.max_timeout_sec = x))} placeholder="none" error={numError(v.max_timeout_sec, { min: 0 })} />
         </div>
-        <Area label="Verifier kwargs (JSON)" value={v.kwargs} onChange={(x) => up((d) => void (d.verifier.kwargs = x))} placeholder='{"key": "value"}' error={jsonError(v.kwargs, true)} />
+        <Area label="Checks kwargs (JSON)" value={v.kwargs} onChange={(x) => up((d) => void (d.verifier.kwargs = x))} placeholder='{"key": "value"}' error={jsonError(v.kwargs, true)} />
         <KvRows label="Environment variables" rows={v.env} onChange={(env) => up((d) => void (d.verifier.env = env))} />
       </Section>
     </>
@@ -677,7 +677,7 @@ function HistoryList({ history, error, onLoad }: { history?: History; error?: Er
         <span className="label">Recent runs</span>
         {history?.[0] && (
           <button type="button" className="btn btn--sm" onClick={() => onLoad(history[0].config, history[0].job_name)}>
-            Load last run
+            Use the last one again
           </button>
         )}
       </div>
@@ -691,7 +691,7 @@ function HistoryList({ history, error, onLoad }: { history?: History; error?: Er
         </div>
       ) : history.length === 0 ? (
         <div className="panel__body">
-          <Empty title="No runs yet">Started runs show up here so you can reuse their settings.</Empty>
+          <Empty title="No runs yet">Runs you start show up here, so you can use their settings again.</Empty>
         </div>
       ) : (
         <ul className="run-history">
@@ -707,8 +707,8 @@ function HistoryList({ history, error, onLoad }: { history?: History; error?: Er
                     {sourceLabel(h.config)} · {agents || "—"}
                   </span>
                 </div>
-                <button type="button" className="btn btn--sm" onClick={() => onLoad(h.config, h.job_name)} aria-label={`Load settings of ${h.job_name}`}>
-                  Load
+                <button type="button" className="btn btn--sm" onClick={() => onLoad(h.config, h.job_name)} aria-label={`Use again: the settings of ${h.job_name}`}>
+                  Use again
                 </button>
               </li>
             );
@@ -746,13 +746,13 @@ function LaunchPanel({ job, onDismiss }: { job: string; onDismiss: () => void })
       <div className="panel__head">
         <span className="run-launch__state">
           {failed ? <Icon.Alert size={14} /> : s?.running !== false ? <span className="dot dot--live" /> : <Icon.Check size={14} />}
-          <strong className="ink">{failed ? `Run exited with code ${s!.returncode}` : s?.running === false ? "Run finished" : "Preparing run"}</strong>
+          <strong className="ink">{failed ? `The run stopped with an error (code ${s!.returncode})` : s?.running === false ? "Run finished" : "Getting the run ready"}</strong>
           <span className="mono muted trunc">{job}</span>
           <span className="faint">started {ago(startedAt)}</span>
         </span>
         <span className="toolbar" style={{ margin: 0 }}>
           <Link to={`/jobs/${enc(job)}`} className="btn btn--sm">
-            Open job <Icon.ArrowRight size={12} />
+            Open the run <Icon.ArrowRight size={12} />
           </Link>
           {s?.running && (
             <button type="button" className="btn btn--sm btn--danger" onClick={stop} disabled={stopping}>
@@ -772,8 +772,8 @@ function LaunchPanel({ job, onDismiss }: { job: string; onDismiss: () => void })
           <ErrorBox error={status.error} />
         ) : (
           <>
-            {!failed && <p className="muted run-note">The job page opens as soon as the run writes its first results.</p>}
-            {s?.log_tail ? <CodeView code={s.log_tail} lang="bash" lines={false} wrap maxHeight="18rem" /> : <p className="faint mono run-note">waiting for output…</p>}
+            {!failed && <p className="muted run-note">The run opens here when its first results are in.</p>}
+            {s?.log_tail ? <CodeView code={s.log_tail} lang="bash" lines={false} wrap maxHeight="18rem" /> : <p className="faint mono run-note">Nothing to show yet…</p>}
           </>
         )}
       </div>

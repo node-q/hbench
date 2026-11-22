@@ -100,6 +100,7 @@
   max-width: 22rem;
 }
 .cmp-row .num {
+  flex: none;
   font-size: var(--text-xs);
 }
 .cmp-rowgroup {

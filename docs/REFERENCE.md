@@ -486,7 +486,7 @@ shortened. If no host is installed, the screen says so and, for Claude, links ht
 
 ### Viewer
 
-`hbench view` serves its own web UI (`viewer/`, React + Vite) for browsing jobs and tasks. A trial's Map tab draws its trajectory as groups of similar work in lanes, and flags steps that fetched the benchmark's own sources: a keyword match on the command or URL, so check the steps it points to. It listens on 127.0.0.1 by
+`hbench view` serves its own web UI (`viewer/`, React + Vite) for browsing jobs and tasks. The viewer calls a job a run, a trial an attempt, a dataset a test set and the verifier's results checks; commands, files and the API keep their names. An attempt's Map tab draws its trajectory as groups of similar work in lanes, and flags steps that fetched the benchmark's own sources: a keyword match on the command or URL, so check the steps it points to. It listens on 127.0.0.1 by
 default; with `--host` set to any non-loopback address it is read-only, because starting runs and deleting jobs would be
 open to anyone who can reach it. The built bundle (`viewer/dist`) is committed and embedded at compile time, so
 `cargo build` doesn't need Node.
@@ -496,11 +496,11 @@ containers are torn down, finished trials keep their results; if the run is stil
 the button offers a force stop, as a second Ctrl-C does. `POST /api/jobs/<job>/stop` signals a run the viewer
 launched, and for any other run leaves `stop-requested` in the job dir, which every `hbench run` watches.
 
-New run walks through three steps: a domain, a dataset from that domain's catalog, then the agent. The catalog is
+New run walks through three steps: a field of work (a domain), a test set from that domain's catalog, then the agent and model. The catalog is
 the default registry's dataset index (`$HBENCH_REGISTRY`, else `oci://ghcr.io/node-q/hbench-datasets`), listed by
 `GET /api/run/catalog` and kept for ten minutes. `assets/catalog/domains.json` names the domains, in tile order,
 and the dataset names (globs) each one claims; a dataset none claims is filed under Other. A local folder, a git
-task and a dataset named by hand are under "Your own tasks". While a folder has no jobs, the Jobs page shows the
+task and a dataset named by hand are under "Your own tasks". While a folder has no jobs, the Runs page shows the
 domain tiles.
 
 An agent's model can come from a self-hosted, OpenAI-compatible server (llama.cpp, vLLM, LM Studio, TensorFold…)

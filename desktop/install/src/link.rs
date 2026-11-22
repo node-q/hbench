@@ -68,7 +68,7 @@ impl fmt::Display for LinkError {
             LinkError::TooLong => "the link is too long",
             LinkError::BadCharacter => "the link has a character that isn't allowed",
             LinkError::NotAnInstallLink => "it isn't an Actuaria install link",
-            LinkError::BadBotId => "the bot name isn't valid",
+            LinkError::BadBotId => "the name in it isn't valid",
             LinkError::BadQuery => "the link has parameters that aren't allowed",
         })
     }

@@ -8,6 +8,7 @@ import { useApi } from "./lib/api";
 import { useKey } from "./lib/state";
 import type { AppConfig, JobSummary, Page, TaskDefinitionSummary } from "./lib/types";
 import { ToastProvider } from "./ui/overlay";
+import { lower } from "./lib/fmt";
 import { APP_NAME, isDesktop } from "./desktop/bridge";
 import { DesktopChrome } from "./desktop/DesktopChrome";
 
@@ -83,7 +84,7 @@ export function Shell() {
   const links = tasksMode
     ? [{ to: "/task-definitions", label: "Tasks" }]
     : [
-        { to: "/", label: "Jobs", end: true },
+        { to: "/", label: "Runs", end: true },
         { to: "/compare", label: "Compare" },
         { to: "/run", label: "New run" },
       ];
@@ -130,7 +131,7 @@ export function Shell() {
             </nav>
             <button className="bar__search" onClick={() => setPaletteOpen(true)} aria-label="Search and commands (⌘K)">
               <Icon.Search size={14} />
-              <span className="bar__search-text">{tasksMode ? "Jump to a task…" : "Jump to a job, trial or page…"}</span>
+              <span className="bar__search-text">{tasksMode ? "Find a task…" : "Find a run, an attempt or a page…"}</span>
               <span className="bar__search-kbd">
                 <kbd>⌘</kbd>
                 <kbd>K</kbd>
@@ -142,7 +143,7 @@ export function Shell() {
                   {config.data.folder.split(/[\\/]/).slice(-2).join("/")}
                 </span>
               )}
-              <button className="btn btn--ghost btn--icon" onClick={toggleMode} aria-label={mode === "dark" ? "Switch to light mode" : "Switch to dark mode"} title="Toggle theme">
+              <button className="btn btn--ghost btn--icon" onClick={toggleMode} aria-label={mode === "dark" ? "Switch to light mode" : "Switch to dark mode"} title={mode === "dark" ? "Switch to light mode" : "Switch to dark mode"}>
                 {mode === "dark" ? <Icon.Sun /> : <Icon.Moon />}
               </button>
             </div>
@@ -186,15 +187,15 @@ function Palette({ open, onClose, tasksMode, pageCmds, toggleMode }: { open: boo
     const base: Command[] = tasksMode
       ? [{ id: "p:tasks", label: "Tasks", group: "Pages", run: go("/task-definitions") }]
       : [
-          { id: "p:jobs", label: "Jobs", group: "Pages", run: go("/") },
-          { id: "p:compare", label: "Compare jobs", group: "Pages", run: go("/compare") },
+          { id: "p:jobs", label: "Runs", group: "Pages", run: go("/") },
+          { id: "p:compare", label: "Compare runs", group: "Pages", run: go("/compare") },
           { id: "p:run", label: "Start a new run", group: "Pages", run: go("/run") },
         ];
-    base.push({ id: "a:theme", label: "Toggle light / dark", group: "Actions", run: toggleMode });
+    base.push({ id: "a:theme", label: "Switch between light and dark", group: "Actions", run: toggleMode });
     const page = Object.values(pageCmds).flat();
     const jumps: Command[] = tasksMode
       ? (tasks.data?.items ?? []).map((t) => ({ id: `t:${t.name}`, label: t.name, group: "Tasks", hint: (t.metadata?.category as string) ?? undefined, run: go(`/task-definitions/${encodeURIComponent(t.name)}`) }))
-      : (jobs.data?.items ?? []).map((j) => ({ id: `j:${j.name}`, label: j.name, group: "Jobs", hint: [j.agents.join(", "), j.models.join(", ")].filter(Boolean).join(" · "), run: go(`/jobs/${encodeURIComponent(j.name)}`) }));
+      : (jobs.data?.items ?? []).map((j) => ({ id: `j:${j.name}`, label: j.name, group: "Runs", hint: [j.agents.join(", "), j.models.join(", ")].filter(Boolean).join(" · "), run: go(`/jobs/${encodeURIComponent(j.name)}`) }));
     return [...page, ...base, ...jumps];
   }, [tasksMode, pageCmds, jobs.data, tasks.data, navigate, toggleMode]);
 
@@ -219,7 +220,7 @@ function Palette({ open, onClose, tasksMode, pageCmds, toggleMode }: { open: boo
       onClick={(e) => {
         if (e.target === ref.current) onClose();
       }}
-      aria-label="Command palette"
+      aria-label="Search and commands"
     >
       {open && (
         <>
@@ -229,7 +230,7 @@ function Palette({ open, onClose, tasksMode, pageCmds, toggleMode }: { open: boo
               autoFocus
               value={q}
               onChange={(e) => setQ(e.target.value)}
-              placeholder={tasksMode ? "Search tasks and commands" : "Search jobs, trials and commands"}
+              placeholder={tasksMode ? "Search tasks and commands" : "Search runs, attempts and commands"}
               aria-controls="palette-list"
               aria-activedescendant={shown[active] ? `pal-${active}` : undefined}
               onKeyDown={(e) => {
@@ -298,9 +299,10 @@ export function NotFound({ what = "Page" }: { what?: string }): ReactNode {
   return (
     <div className="page">
       <div className="empty">
-        <span className="empty__title">{what} not found</span>
+        <span className="empty__title">We can't find that {lower(what)}.</span>
+        <span>It may have been deleted or renamed.</span>
         <NavLink to="/" className="link">
-          Back to jobs
+          Back to the start
         </NavLink>
       </div>
     </div>

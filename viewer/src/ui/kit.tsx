@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router";
 import * as Icon from "./icons";
-import { score } from "../lib/fmt";
+import { passed, score, upper, verdict } from "../lib/fmt";
 
 export function Spinner({ label = "Loading" }: { label?: string }) {
   return <span className="spinner" role="status" aria-label={label} />;
@@ -44,7 +44,7 @@ export function ErrorBox({ error, title = "Couldn't load this", onRetry }: { err
       {onRetry && (
         <div>
           <button className="btn btn--sm" onClick={onRetry}>
-            <Icon.Refresh size={13} /> Retry
+            <Icon.Refresh size={13} /> Try again
           </button>
         </div>
       )}
@@ -74,6 +74,32 @@ export function Reward({ value, digits = 3 }: { value: number | null | undefined
           <i style={{ width: `${value * 100}%` }} />
         </span>
       )}
+    </span>
+  );
+}
+
+/** One graded answer: "Passed" or "Failed", or the score itself when it is neither. The exact score is in the tooltip. */
+export function Result({ value }: { value: number | null | undefined }) {
+  const v = verdict(value);
+  if (!v) return <Reward value={value} />;
+  return (
+    <span className={`verdict verdict--${v}`} title={`score ${score(value)}`}>
+      {v === "passed" ? <Icon.Check size={13} /> : <Icon.Close size={13} />}
+      {upper(v)}
+    </span>
+  );
+}
+
+/** Several graded answers: "14 of 16 passed", or the average score when some are neither passed nor failed. */
+export function Passed({ n, of, average }: { n: number | null | undefined; of: number; average: number | null | undefined }) {
+  if (n == null || !of) return <Reward value={average} />;
+  if (of === 1) return <Result value={n} />;
+  return (
+    <span className="reward reward--passed" title={average == null ? undefined : `average score ${score(average)}`}>
+      {passed(n, of)}
+      <span className="reward__bar" aria-hidden="true">
+        <i style={{ width: `${(n / of) * 100}%` }} />
+      </span>
     </span>
   );
 }

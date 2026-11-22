@@ -119,7 +119,7 @@ pub fn on_link(app: &AppHandle, raw: &str) {
     }
     let parsed = match link::parse(raw) {
         Ok(l) => l,
-        Err(e) => return error(app, seq, format!("This link is not valid: {e}."), None),
+        Err(e) => return error(app, seq, format!("This link isn't valid: {e}."), None),
     };
     push(app);
     let app = app.clone();
@@ -140,7 +140,7 @@ fn prepare(app: &AppHandle, seq: u64, l: link::Link) {
     let home = app.path().home_dir().ok();
     let offered: Vec<Target> = offer.artefacts.keys().copied().filter(|t| l.target.is_none_or(|w| w == *t)).collect();
     if offered.is_empty() {
-        let t = l.target.map(|t| t.host_name()).unwrap_or("this host");
+        let t = l.target.map(|t| t.host_name()).unwrap_or("this app");
         return error(app, seq, format!("{} isn't available for {t}.", offer.name), None);
     }
     let targets = hosts::present(offered.clone(), home.as_deref());
@@ -209,14 +209,14 @@ pub fn action(app: &AppHandle, what: &str, nonce: Option<String>, target: Option
             std::thread::spawn(move || {
                 // A native dialog the page's script can't answer: only its "Install" goes on.
                 let text = format!(
-                    "Install {} {} (actuaria/{}) into {}?\n\nDownloaded from {} and checked against the catalogue.",
+                    "Install {} {} (actuaria/{}) into {}?\n\nIt will be downloaded from {} and checked against the catalogue first.",
                     offer.name,
                     offer.version,
                     offer.id,
                     t.host_name(),
                     catalogue::DOWNLOAD_HOST
                 );
-                let yes = confirm::ask(&app, "Install a bot".into(), text);
+                let yes = confirm::ask(&app, "Install from the Market Place".into(), text);
                 if !yes {
                     let st = app.state::<Installs>();
                     let mut i = st.0.lock().unwrap();
@@ -267,8 +267,8 @@ type Outcome = Result<(&'static str, String, Option<String>), (String, Option<St
 /// Download, verify and hand over to the host's installer.
 fn run(app: &AppHandle, offer: &Offer, t: Target) -> Outcome {
     let fail = |m: String| Err((m, None));
-    let Some(a) = offer.artefacts.get(&t) else { return fail("Nothing to install for that host.".into()) };
-    let Ok(data_dir) = app.path().app_data_dir() else { return fail("No app data folder.".into()) };
+    let Some(a) = offer.artefacts.get(&t) else { return fail("There is nothing to install for that app.".into()) };
+    let Ok(data_dir) = app.path().app_data_dir() else { return fail("Couldn't find the app's data folder.".into()) };
     let tmp = download::temp_dir(&data_dir).map_err(|e| (format!("Couldn't make a private folder: {e}"), None))?;
     let bytes = net::get(&a.url, download::cap(a)).map_err(|e| (format!("The download failed: {e}"), None))?;
     let file = match t {
@@ -287,7 +287,7 @@ fn run(app: &AppHandle, offer: &Offer, t: Target) -> Outcome {
             };
             if let Err(e) = opened {
                 return Err((
-                    format!("Couldn't open the bot in Claude Desktop: {e}. Install or update Claude Desktop, then try again."),
+                    format!("Couldn't open it in Claude Desktop: {e}. Install or update Claude Desktop, then try again."),
                     Some(NO_HANDLER.into()),
                 ));
             }
@@ -321,7 +321,7 @@ fn run(app: &AppHandle, offer: &Offer, t: Target) -> Outcome {
                 hosts::OrcaResult::Installed => Ok(("done", format!("Orca installed {}.", offer.name), Some(out))),
                 hosts::OrcaResult::NeedsApproval => Ok((
                     "approval",
-                    "Orca hasn't installed it yet: it needs your approval. Review the access it asks for below, and if you agree, run the command Orca shows.".into(),
+                    "Orca hasn't installed it yet. It needs your approval. Review the access it asks for below. If you agree, run the command Orca shows.".into(),
                     Some(out),
                 )),
                 hosts::OrcaResult::Failed => Err(("Orca couldn't install the plugin.".into(), Some(out))),

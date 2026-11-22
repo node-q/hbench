@@ -610,6 +610,24 @@ kbd,
   font-variant-numeric: tabular-nums;
   color: var(--color-ink);
 }
+.reward--passed {
+  font-family: var(--font-body);
+  white-space: nowrap;
+}
+.verdict {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--text-sm);
+  font-weight: 500;
+  white-space: nowrap;
+}
+.verdict--passed {
+  color: var(--color-good);
+}
+.verdict--failed {
+  color: var(--color-bad);
+}
 .reward__bar {
   position: relative;
   width: 36px;

@@ -69,14 +69,14 @@ export function InstallDialog() {
   const closable = v.state !== "working";
   const close = () => closable && choose(v.state === "confirm" || v.state === "loading" ? "cancel" : "close");
   const bot = v.bot;
-  let title = "Install a bot";
+  let title = "Install from the Market Place";
   let body: React.ReactNode = null;
   let actions: React.ReactNode = null;
 
   if (v.state === "loading") {
     body = (
       <p className="dk-install__muted">
-        <span className="dk-spin" aria-hidden="true" /> Checking the catalogue…
+        <span className="dk-spin" aria-hidden="true" /> Looking it up in the catalogue…
       </p>
     );
     actions = <button className="btn btn--sm btn--ghost" onClick={close}>Cancel</button>;
@@ -88,9 +88,9 @@ export function InstallDialog() {
         <dl className="dk-install__facts">
           <dt>Version</dt>
           <dd className="mono">{cap(bot.version, 32)}</dd>
-          <dt>Source</dt>
+          <dt>From</dt>
           <dd className="mono">{cap(bot.source, 40)}</dd>
-          <dt>Publisher</dt>
+          <dt>Made by</dt>
           <dd>
             Actuaria <span className="dk-install__badge">First-party preview</span>
           </dd>
@@ -99,7 +99,7 @@ export function InstallDialog() {
             {v.targets.length === 1 ? (
               HOST[v.targets[0]]
             ) : (
-              <span className="dk-install__targets" role="radiogroup" aria-label="Host">
+              <span className="dk-install__targets" role="radiogroup" aria-label="Install into">
                 {v.targets.map((t) => (
                   <label key={t}>
                     <input type="radio" name="dk-install-target" checked={target === t} onChange={() => setTarget(t)} /> {HOST[t]}
@@ -163,7 +163,7 @@ export function InstallDialog() {
         </header>
         <div className="dk-install__body">{body}</div>
         {actions && <div className="dk-update__actions">{actions}</div>}
-        <p className="dk-install__foot">{APP_NAME} checks the download's SHA-256 against the catalogue before handing it over.</p>
+        <p className="dk-install__foot">{APP_NAME} checks the download against the catalogue (<span style={{ whiteSpace: "nowrap" }}>SHA-256</span>) before it hands it over.</p>
       </section>
     </div>
   );

@@ -183,7 +183,7 @@ export function jsonError(s: string, objectOnly = false): string | undefined {
     const v = JSON.parse(s);
     if (objectOnly && (typeof v !== "object" || v === null || Array.isArray(v))) return "Must be a JSON object, e.g. {\"key\": 1}.";
   } catch (e) {
-    return `Invalid JSON: ${(e as Error).message}`;
+    return `Not valid JSON: ${(e as Error).message}`;
   }
   return undefined;
 }
@@ -207,12 +207,12 @@ export function hasSource(d: Draft): boolean {
 export function versionError(d: Draft): string | undefined {
   const ds = d.dataset;
   if (d.source !== "dataset" || !ds.name.trim() || ds.version.trim() || ds.registry_url.trim() || ds.registry_path.trim()) return undefined;
-  return "Give the version, e.g. 2.0.";
+  return "Give its version, e.g. 2.0.";
 }
 
 export function sourceError(d: Draft): string | undefined {
-  if (d.source === "dataset" && !d.dataset.name.trim() && !d.dataset.registry_path.trim()) return "Name a registry dataset.";
-  if (d.source === "path" && !d.path.trim()) return "Enter a task or dataset folder.";
+  if (d.source === "dataset" && !d.dataset.name.trim() && !d.dataset.registry_path.trim()) return "Name a test set.";
+  if (d.source === "path" && !d.path.trim()) return "Enter a folder of tasks.";
   if (d.source === "git" && (!d.git.git_url.trim() || !d.git.path.trim())) return "A git task needs both the repository URL and the task path.";
   return undefined;
 }

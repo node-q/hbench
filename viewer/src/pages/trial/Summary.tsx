@@ -1,18 +1,25 @@
 // Outcome strip: rewards, phase timing, token mix, exception.
 import * as fmt from "../../lib/fmt";
 import type { StepResult, TimingInfo, TrialResult } from "../../lib/types";
-import { Reward, StackBar } from "../../ui/kit";
+import { Result, Reward, StackBar } from "../../ui/kit";
 
 const PHASES = [
-  { key: "environment_setup", label: "Environment setup", color: "var(--color-phase-env)" },
-  { key: "agent_setup", label: "Agent setup", color: "var(--color-phase-setup)" },
-  { key: "agent_execution", label: "Agent execution", color: "var(--color-phase-agent)" },
-  { key: "verifier", label: "Verifier", color: "var(--color-phase-verify)" },
+  { key: "environment_setup", label: "Setting up the container", color: "var(--color-phase-env)" },
+  { key: "agent_setup", label: "Setting up the agent", color: "var(--color-phase-setup)" },
+  { key: "agent_execution", label: "Agent at work", color: "var(--color-phase-agent)" },
+  { key: "verifier", label: "Checks", color: "var(--color-phase-verify)" },
 ] as const;
 
 function span(t: TimingInfo | null | undefined, now: string | null): number | null {
   return t?.started_at ? fmt.ms(t.started_at, t.finished_at ?? now) : null;
 }
+
+/** "Passed" or "Failed", with the exact score under it. */
+const Graded = ({ value }: { value: number }) => (
+  <span className="trial-summary__result">
+    <Result value={value} /> <span className="faint num">score {fmt.score(value)}</span>
+  </span>
+);
 
 export function Summary({ r, step, running }: { r: TrialResult; step?: StepResult; running: boolean }) {
   const src = step ?? r;
@@ -37,25 +44,35 @@ export function Summary({ r, step, running }: { r: TrialResult; step?: StepResul
   return (
     <section className="trial-summary" aria-label="Outcome">
       <div className="trial-summary__cell">
-        <span className="label">Rewards</span>
-        {rewards.length ? (
+        <span className="label">Result</span>
+        {rewards.length === 1 && rewards[0][0] === "reward" && typeof rewards[0][1] === "number" && fmt.verdict(rewards[0][1]) ? (
+          <Graded value={rewards[0][1]} />
+        ) : rewards.length ? (
           <dl className="kv trial-summary__kv">
             {rewards.map(([k, v]) => (
               <div key={k} style={{ display: "contents" }}>
-                <dt className="mono" title={k}>
-                  {k}
+                <dt className={k === "reward" ? undefined : "mono"} title={k}>
+                  {k === "reward" ? "answer" : k}
                 </dt>
-                <dd>{typeof v === "number" ? <Reward value={v} /> : <span className="mono">{String(v)}</span>}</dd>
+                <dd>
+                  {typeof v !== "number" ? (
+                    <span className="mono">{String(v)}</span>
+                  ) : k === "reward" && fmt.verdict(v) ? (
+                    <Graded value={v} />
+                  ) : (
+                    <Reward value={v} />
+                  )}
+                </dd>
               </div>
             ))}
           </dl>
         ) : (
-          <span className="muted">{running ? "Pending verification" : "No verifier result"}</span>
+          <span className="muted">{running ? "Not checked yet" : "Not checked"}</span>
         )}
       </div>
 
       <div className="trial-summary__cell">
-        <span className="label">Timing</span>
+        <span className="label">Time</span>
         {timed.length ? (
           <>
             <StackBar parts={timed.map((ph) => ({ label: ph.label, value: ph.value!, color: ph.color }))} />
@@ -70,7 +87,7 @@ export function Summary({ r, step, running }: { r: TrialResult; step?: StepResul
             </ul>
           </>
         ) : (
-          <span className="muted">No timing data</span>
+          <span className="muted">No times recorded</span>
         )}
       </div>
 
@@ -81,7 +98,7 @@ export function Summary({ r, step, running }: { r: TrialResult; step?: StepResul
             <StackBar
               parts={[
                 { label: "Cached input", value: cached ?? 0, color: "var(--color-phase-cache)" },
-                { label: "Uncached input", value: uncached ?? 0, color: "var(--color-phase-agent)" },
+                { label: "New input", value: uncached ?? 0, color: "var(--color-phase-agent)" },
                 { label: "Output", value: output ?? 0, color: "var(--color-phase-verify)" },
               ]}
             />
@@ -93,7 +110,7 @@ export function Summary({ r, step, running }: { r: TrialResult; step?: StepResul
               </li>
               <li>
                 <i style={{ background: "var(--color-phase-agent)" }} />
-                <span>Uncached input</span>
+                <span>New input</span>
                 <span className="num ink">{fmt.compact(uncached)}</span>
               </li>
               <li>
@@ -109,7 +126,7 @@ export function Summary({ r, step, running }: { r: TrialResult; step?: StepResul
             </ul>
           </>
         ) : (
-          <span className="muted">No token data</span>
+          <span className="muted">No tokens recorded</span>
         )}
       </div>
 

@@ -29,18 +29,18 @@ export function TrajectoryTab({ t, running }: { t: TrialRef; running: boolean })
   const url = useUrlState();
   const sub = Number(url.get("sub") || 0);
   // A poll can catch the file mid-write; keep showing the last good copy.
-  if (res.error && !res.data) return <ErrorBox error={res.error} title="Couldn't load the trajectory" onRetry={res.reload} />;
+  if (res.error && !res.data) return <ErrorBox error={res.error} title="Couldn't load what the AI did" onRetry={res.reload} />;
   if (res.data === undefined) return <SkeletonRows rows={10} />;
-  if (!res.data?.steps?.length && running) return <Empty title="Waiting for the first step">The trajectory shows up here as the agent works.</Empty>;
-  if (!res.data?.steps?.length) return <Empty title="No trajectory">This agent didn't write agent/trajectory.json for this trial.</Empty>;
+  if (!res.data?.steps?.length && running) return <Empty title="Waiting for the first step">Each step shows up here as the agent works.</Empty>;
+  if (!res.data?.steps?.length) return <Empty title="No steps recorded">The agent didn't write agent/trajectory.json for this attempt.</Empty>;
   const subs: Trajectory[] = res.data.subagent_trajectories ?? [];
   const traj = sub > 0 && subs[sub - 1] ? subs[sub - 1] : res.data;
   return (
     <>
       {subs.length > 0 && (
         <div className="toolbar">
-          <span className="label">Trajectory</span>
-          <select className="select" value={sub} onChange={(e) => url.set({ sub: e.target.value === "0" ? null : e.target.value })} aria-label="Trajectory">
+          <span className="label">Agent</span>
+          <select className="select" value={sub} onChange={(e) => url.set({ sub: e.target.value === "0" ? null : e.target.value })} aria-label="Agent">
             <option value={0}>Main · {res.data.steps.length} steps</option>
             {subs.map((s, i) => (
               <option key={i} value={i + 1}>
@@ -121,11 +121,11 @@ function Steps({ traj, t }: { traj: Trajectory; t: TrialRef }) {
     <div className="traj">
       {fm && (
         <div className="traj__final num">
-          <span className="label">Final</span>
+          <span className="label">In all</span>
           <span>{fmt.int(fm.total_steps ?? steps.length)} steps</span>
-          <span>{fmt.compact(fm.total_prompt_tokens)} prompt</span>
+          <span>{fmt.compact(fm.total_prompt_tokens)} tokens in</span>
           <span>{fmt.compact(fm.total_cached_tokens)} cached</span>
-          <span>{fmt.compact(fm.total_completion_tokens)} completion</span>
+          <span>{fmt.compact(fm.total_completion_tokens)} tokens out</span>
           <span>{fmt.usd(fm.total_cost_usd)}</span>
           {traj.agent?.model_name && <span className="muted">{traj.agent.model_name}</span>}
         </div>
@@ -133,10 +133,10 @@ function Steps({ traj, t }: { traj: Trajectory; t: TrialRef }) {
       <div className="toolbar traj__bar">
         <SearchField value={q} onChange={setQ} placeholder="Search steps, commands, output" width={300} />
         <Seg<SourceFilter>
-          label="Source"
+          label="Steps by"
           value={source}
           onChange={setSource}
-          options={(["all", "agent", "user", "system"] as const).filter((s) => s === "all" || counts[s]).map((s) => ({ id: s, label: `${s} ${counts[s] ?? 0}` }))}
+          options={(["all", "agent", "user", "system"] as const).filter((s) => s === "all" || counts[s]).map((s) => ({ id: s, label: `${fmt.upper(s)} ${counts[s] ?? 0}` }))}
         />
         <span className="toolbar__spacer" />
         <span className="num muted" style={{ fontSize: "var(--text-xs)" }}>
@@ -154,7 +154,7 @@ function Steps({ traj, t }: { traj: Trajectory; t: TrialRef }) {
       </div>
       {traj.notes && <p className="muted traj__notes">{traj.notes}</p>}
       {shown.length === 0 ? (
-        <Empty title="No steps match">Clear the search or the source filter.</Empty>
+        <Empty title="No steps match">Clear the search or show all steps.</Empty>
       ) : (
         <ol className="traj__list">
           {shown.map((i) => (
@@ -191,7 +191,7 @@ const Step = memo(function Step({ i, s, prev, t0, open, onToggle, t, q }: { i: n
           <span className="muted">{preview}</span>
         </span>
         <span className="tstep__meta num">
-          {m?.prompt_tokens != null && <span title="Prompt / completion tokens">{fmt.compact(m.prompt_tokens)}→{fmt.compact(m.completion_tokens)}</span>}
+          {m?.prompt_tokens != null && <span title="Tokens in → tokens out">{fmt.compact(m.prompt_tokens)}→{fmt.compact(m.completion_tokens)}</span>}
           {m?.cost_usd != null && <span>{fmt.usd(m.cost_usd)}</span>}
           {delta != null && <span title={s.timestamp}>+{fmt.duration(delta)}</span>}
           {delta == null && Number.isFinite(ts) && Number.isFinite(t0) && <span title={s.timestamp}>{fmt.duration(ts - t0)}</span>}
@@ -232,9 +232,9 @@ function StepBody({ s, t, q }: { s: TrajectoryStep; t: TrialRef; q: string }) {
       ))}
       {m && Object.keys(m).length > 0 && (
         <div className="tstep__metrics num faint">
-          {m.prompt_tokens != null && <span>prompt {fmt.int(m.prompt_tokens)}</span>}
+          {m.prompt_tokens != null && <span>tokens in {fmt.int(m.prompt_tokens)}</span>}
           {m.cached_tokens != null && <span>cached {fmt.int(m.cached_tokens)}</span>}
-          {m.completion_tokens != null && <span>completion {fmt.int(m.completion_tokens)}</span>}
+          {m.completion_tokens != null && <span>tokens out {fmt.int(m.completion_tokens)}</span>}
           {m.cost_usd != null && <span>{fmt.usd(m.cost_usd)}</span>}
           {s.model_name && <span>{s.model_name}</span>}
           {s.timestamp && <span>{fmt.dateTime(s.timestamp)}</span>}
@@ -276,7 +276,7 @@ function ImagePart({ src, t }: { src: any; t: TrialRef }) {
   if (!url) return <span className="muted">Image unavailable</span>;
   return (
     <a href={url} target="_blank" rel="noreferrer" className="timg">
-      <img src={url} alt={src?.path ?? "Image from the trajectory"} loading="lazy" />
+      <img src={url} alt={src?.path ?? "Image from this step"} loading="lazy" />
     </a>
   );
 }

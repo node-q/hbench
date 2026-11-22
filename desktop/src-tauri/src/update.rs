@@ -174,7 +174,12 @@ async fn check(app: &AppHandle, mut manual: bool) {
         Ok(Some(_)) => {}
         Ok(None) => {
             if manual {
-                message(app, &format!("{APP_NAME} is up to date"), &format!("Version {CURRENT} is the latest."), MessageDialogKind::Info);
+                message(
+                    app,
+                    &format!("{APP_NAME} is up to date"),
+                    &format!("You have the latest version, {CURRENT}."),
+                    MessageDialogKind::Info,
+                );
             }
         }
         Err(e) => {
@@ -330,7 +335,7 @@ async fn install(app: &AppHandle) {
 }
 
 async fn download_and_install(app: &AppHandle) -> Result<(), String> {
-    let update = app.state::<Updates>().update.lock().unwrap().clone().ok_or("No update to install.")?;
+    let update = app.state::<Updates>().update.lock().unwrap().clone().ok_or("There is no update to install.")?;
     let mut got = 0u64;
     let mut shown = -1i64;
     let progress = app.clone();
@@ -349,7 +354,7 @@ async fn download_and_install(app: &AppHandle) -> Result<(), String> {
             || {},
         )
         .await
-        .map_err(|e| format!("Download failed: {e}"))?;
+        .map_err(|e| format!("The download didn't finish: {e}"))?;
     // Swapping the bundle is blocking file work, and may wait on an administrator prompt.
     tauri::async_runtime::spawn_blocking(move || update.install(bytes))
         .await

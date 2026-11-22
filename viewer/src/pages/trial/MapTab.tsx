@@ -24,7 +24,7 @@ const GroupCard = memo(function GroupCard({ data: { g, open } }: NodeProps<WorkN
       <Handle type="target" position={Position.Top} isConnectable={false} />
       <button className={`tmap__node tmap__node--${g.lane}${g.benchmark ? " is-flagged" : ""}`} onClick={() => open(g.from)} title={g.targets.join("\n")}>
         <span className="tmap__head">
-          <span className="tmap__title">{g.benchmark ? "Benchmark source" : g.title}</span>
+          <span className="tmap__title">{g.benchmark ? "Test set's source" : g.title}</span>
           {g.calls > 1 && <span className="num muted">×{g.calls}</span>}
           {g.errors > 0 && <span className="tmap__err">{g.errors} failed</span>}
         </span>
@@ -65,14 +65,14 @@ export function MapTab({ t, running, source }: { t: TrialRef; running: boolean; 
     return { nodes, edges, flagged: groups.filter((g) => g.benchmark), total: groups.length };
   }, [steps, source, url.set]);
 
-  if (res.error && !res.data) return <ErrorBox error={res.error} title="Couldn't load the trajectory" onRetry={res.reload} />;
+  if (res.error && !res.data) return <ErrorBox error={res.error} title="Couldn't load what the AI did" onRetry={res.reload} />;
   if (res.data === undefined) return <SkeletonRows rows={10} />;
-  if (!steps?.length) return <Empty title={running ? "Waiting for the first step" : "No trajectory"}>{running ? "The map grows here as the agent works." : "This trial has no trajectory to map."}</Empty>;
+  if (!steps?.length) return <Empty title={running ? "Waiting for the first step" : "No steps recorded"}>{running ? "The map grows here as the agent works." : "There is nothing to map for this attempt."}</Empty>;
   return (
     <div className="tmap">
       {flagged.length > 0 && (
         <p className="tmap__warn" role="status">
-          This run reached the benchmark's own sources in step {flagged.map((g) => g.from + 1).join(", ")}. A pass may not be the agent's own work. Open the steps to check.
+          The agent reached the test set's own sources in step {flagged.map((g) => g.from + 1).join(", ")}. If it passed, that may not be its own work. Open the steps to check.
         </p>
       )}
       <p className="muted tmap__note">

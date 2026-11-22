@@ -35,6 +35,7 @@ pub(super) fn compare(app: &App, jobs: &[String]) -> Res {
             let cell = json!({
                 "job_name": job, "avg_reward": sm["avg_reward"], "avg_duration_ms": sm["avg_duration_ms"], "avg_cost_usd": sm["avg_cost_usd"],
                 "avg_tokens": sm["avg_tokens"], "n_trials": sm["n_trials"], "n_completed": sm["n_completed"],
+                "n_passed": sm["n_passed"],
             });
             cells.entry(task_key).or_insert_with(|| json!({})).as_object_mut().unwrap().insert(am_key, cell);
         }
