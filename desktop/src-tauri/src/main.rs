@@ -4,6 +4,7 @@
 //! intercepted here and never loaded.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod install;
 mod server;
 mod shell_env;
 mod update;
@@ -206,6 +207,7 @@ fn page_action(app: AppHandle, url: Url) {
                 let _ = app.opener().open_path(log_path(&app).to_string_lossy(), None::<&str>);
             }
             "update" => update::action(&app, param("do").as_deref().unwrap_or_default()),
+            "install" => install::action(&app, param("do").as_deref().unwrap_or_default(), param("nonce"), param("target")),
             "open-external" => {
                 if let Some(u) = param("url").and_then(|u| Url::parse(&u).ok())
                     && matches!(u.scheme(), "http" | "https" | "mailto")
@@ -462,12 +464,14 @@ fn on_menu(app: &AppHandle, id: &str) {
 fn main() {
     let mut builder = tauri::Builder::default();
     if !DEV {
-        // A second launch focuses the running app.
-        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        // A second launch focuses the running app, and hands over its install link (`-- <link>`), which is
+        // parsed only here, in the running instance.
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             if let Some(w) = main_window(app) {
                 let _ = w.unminimize();
                 let _ = w.set_focus();
             }
+            install::from_args(app, &args);
         }));
     }
     builder
@@ -476,6 +480,7 @@ fn main() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_deep_link::init())
         .setup(|app| {
             let handle = app.handle().clone();
             let settings = load_settings(&handle);
@@ -487,6 +492,7 @@ fn main() {
                 recent_menu: Mutex::new(None),
             });
             app.manage(update::Updates::default());
+            app.manage(install::Installs::default());
             let (menu, recent) = build_menu(&handle)?;
             app.set_menu(menu)?;
             *app.state::<AppState>().recent_menu.lock().unwrap() = Some(recent);
@@ -506,6 +512,7 @@ fn main() {
                 .on_page_load(|w, p| {
                     if matches!(p.event(), PageLoadEvent::Finished) {
                         update::push(w.app_handle());
+                        install::push(w.app_handle());
                     }
                 })
                 // The title bar names the open tab, then the folder: "Jobs — my-evals".
@@ -540,6 +547,26 @@ fn main() {
             let folder = app.state::<AppState>().settings.lock().unwrap().folder.clone().filter(|p| p.is_dir());
             let folder = folder.unwrap_or_else(|| default_folder(&handle));
             update::start(&handle);
+            install::setup(&handle);
+            // A link that launched the app: on Windows and Linux in the arguments (after `--`), on macOS as an
+            // Apple event. Either waits for the page's first load to show (install::push on page load).
+            let args: Vec<String> = std::env::args().collect();
+            install::from_args(&handle, &args);
+            #[cfg(target_os = "macos")]
+            {
+                use tauri_plugin_deep_link::DeepLinkExt;
+                if let Ok(Some(urls)) = app.deep_link().get_current() {
+                    for u in urls {
+                        install::on_link(&handle, u.as_str());
+                    }
+                }
+                let h = handle.clone();
+                app.deep_link().on_open_url(move |e| {
+                    for u in e.urls() {
+                        install::on_link(&h, u.as_str());
+                    }
+                });
+            }
             std::thread::spawn(move || open_folder(&handle, folder));
             Ok(())
         })
