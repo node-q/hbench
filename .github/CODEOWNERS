@@ -3,3 +3,6 @@
 # the Release x.y.z pull request included. Nobody can approve their own pull request, so each one's
 # changes need the other's approval.
 * @luiyen @rzonyx
+
+# The install link's allow-list of bot artefacts (docs/REFERENCE.md, "Install links").
+/bots.lock @luiyen @rzonyx

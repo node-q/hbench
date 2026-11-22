@@ -35,6 +35,9 @@
     }
   },
   "plugins": {
+    "deep-link": {
+      "desktop": { "schemes": ["actuaria"] }
+    },
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEY0OTY1OEQ1QUUxMDI2OTkKUldTWkpoQ3UxVmlXOU9DV3l5ZU9MOWp3YWxrMXNzY0xzM0Erb3lhVHVmQ0F1bURIRkpsbW1md3cK",
       "endpoints": [

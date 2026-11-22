@@ -954,3 +954,99 @@ button.dk-status__item:focus-visible {
   background: rgb(255 255 255 / 0.16);
   font-weight: 500;
 }
+
+/* ── Install link ─────────────────────────────────────────────────────────── */
+/* The confirm screen for `actuaria://install/...`: a modal over the window, in the update prompt's style. */
+.dk-install__scrim {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-toast);
+  display: grid;
+  place-items: center;
+  background: rgb(0 0 0 / 0.45);
+}
+.dk-install {
+  width: min(460px, calc(100vw - 2 * var(--space-md)));
+  max-height: calc(100vh - 2 * var(--space-md));
+  overflow: auto;
+  padding: 14px 14px 12px;
+  border: 1px solid var(--color-rule-2);
+  border-radius: var(--radius-lg);
+  background: var(--color-raised);
+  color: var(--color-ink);
+  font-size: var(--text-sm);
+  box-shadow: var(--shadow-pop);
+  animation: dk-update-in 220ms var(--ease-out);
+}
+.dk-install[data-state="error"] .dk-update__icon {
+  background: var(--color-bad-wash);
+  color: var(--color-bad);
+}
+.dk-install__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.dk-install__head strong {
+  flex: 1;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.dk-install__body {
+  margin-top: 10px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.dk-install__body p {
+  margin: 0 0 8px;
+}
+.dk-install__desc {
+  white-space: pre-line;
+}
+.dk-install__muted,
+.dk-install__foot {
+  color: var(--color-ink-2);
+}
+.dk-install__muted .dk-spin {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+}
+.dk-install__facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 12px;
+  margin: 0 0 8px;
+}
+.dk-install__facts dt {
+  color: var(--color-ink-2);
+}
+.dk-install__facts dd {
+  margin: 0;
+}
+.dk-install__badge {
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--color-accent-wash);
+  color: var(--color-accent);
+  font-size: var(--text-xs);
+}
+.dk-install__targets {
+  display: flex;
+  gap: 12px;
+}
+.dk-install__output {
+  max-height: 10em;
+  overflow: auto;
+  margin: 0;
+  padding: 8px;
+  border-radius: var(--radius-md, 6px);
+  background: var(--color-sunken, var(--color-bg));
+  font-size: var(--text-xs);
+  white-space: pre-wrap;
+}
+.dk-install__foot {
+  margin: 10px 0 0;
+  font-size: var(--text-xs);
+}
