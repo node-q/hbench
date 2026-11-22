@@ -51,15 +51,32 @@ Unfinished work stays behind a flag so that master can always ship.
   `X.Y.Z-beta.N` (N is one more than the highest existing beta of that version), opens the "Release X.Y.Z-beta.N" PR
   as for stable (one approval), and tags its merge commit. An exact `version` such as `0.5.0-beta.3` also works.
 - **Publishing:** a `-beta.N` tag is published as a prerelease and is never "latest", so the stable channel never
-  sees it. The publish job also replaces `latest.json` in the fixed release **`beta-channel`**, which is the beta
-  channel's update feed: `https://github.com/node-q/hbench/releases/download/beta-channel/latest.json`. A stable
-  release newer than the beta there replaces it too, so beta users always get the newest of the two. The feed is
-  the release's own signed `latest.json`, signed with the same updater key.
+  sees it. After a beta or stable release is out, the `beta-feed` job puts its `latest.json` in the fixed release
+  **`beta-channel`**, the beta channel's update feed:
+  `https://github.com/node-q/hbench/releases/download/beta-channel/latest.json`. The feed is the release's own
+  `latest.json`, signed with the same updater key, and it only goes up: the job (`scripts/beta-feed.sh`) replaces it
+  only with a newer version (0.5.0 is newer than 0.5.0-beta.10), and stops without touching it when it can't read
+  what is there. Other suffixes (`-rc.1`) leave it alone.
+- **If the `beta-feed` job fails,** the release is out but the feed is behind, possibly behind stable. Re-run that job
+  (Actions → the run → Re-run failed jobs) within 7 days, while the run still has its `dist-updater` artifact; after
+  that, the next release moves the feed on. `latest-next.json` or `latest-prev.json` left in `beta-channel` is from an
+  interrupted update, and the next run cleans it up.
+- **Settings the feed needs:** immutable releases must stay off for `beta-channel` (they are a repository or
+  organization setting), since its file is replaced. The first run creates the release and its `beta-channel` tag. If
+  GitHub refuses the tag (a tag ruleset, say), create the release once by hand, as a prerelease that is not the
+  latest, with no files, and re-run the job.
 - **Essentials:** Help (App menu on macOS) → **Receive Beta Updates**. It is off by default and kept in the app's
-  settings. On the beta channel the app reads the beta feed first, then stable. Updates only ever go up, so turning it
-  off never downgrades: the app stays on its version until stable passes it.
+  settings. On the beta channel the app reads the beta feed and the stable feed separately and offers the higher
+  version, so a beta feed that is behind or unreadable never hides a newer stable. The stable feed never offers a
+  prerelease. Updates only ever go up, so turning it off never downgrades: the app stays on its version until stable
+  passes it. Turning it on or off drops an update that was only offered; a download or an installed update goes on.
+- **`.deb` versions:** to dpkg, `0.5.0-beta.1` sorts above `0.5.0`. The in-app updater compares semver and installs
+  with `dpkg -i`, which allows it, but `apt install ./….deb` of 0.5.0 over the beta counts as a downgrade and needs
+  `--allow-downgrades`. The `.rpm` likely sorts the same way, and the in-app updater's `rpm -U` refuses a downgrade:
+  check beta to stable on an rpm system before the first stable that follows a beta.
 - **CLI:** `curl -fsSL https://github.com/node-q/hbench/releases/latest/download/install.sh | HBENCH_CHANNEL=beta sh`
-  installs the beta channel's version. `HBENCH_VERSION` still pins an exact release.
+  installs the beta feed's version (which can be behind stable, see above); any other `HBENCH_CHANNEL` than
+  `stable` or `beta` is refused. `HBENCH_VERSION` still pins an exact release.
 
 ## What the release build does
 
@@ -71,9 +88,11 @@ is the push to `master`'s, or one the Release workflow starts on the tag when it
 (a merge made with the workflow's token starts no push run). Each `.tar.gz` gets a build provenance
 attestation; check one with `gh attestation verify hbench-v0.2.0-<target>.tar.gz -R node-q/hbench`. A separate publish
 job, in the `release` environment, creates the GitHub release with the archives, the tagged commit's `scripts/install.sh`
-(so `releases/latest/download/install.sh` is always the latest release's), `SHA256SUMS` and generated notes.
+(so `releases/latest/download/install.sh` is always the latest release's), `SHA256SUMS` and generated notes. A
+stable release's notes start from the previous stable release.
 `SHA256SUMS` lists the archives and `install.sh`, and the publish job attests `install.sh` and `SHA256SUMS` too, so
 `gh attestation verify install.sh -R node-q/hbench` checks the script and `sha256sum -c` checks any file against the
 sums. The install script checks the archive it downloads against `SHA256SUMS` before unpacking it. Tags
 with a suffix (`v0.2.0-rc.1`) are published as prereleases, which the install script skips unless `HBENCH_VERSION`
-names one, and which the desktop app never offers as an update (it reads `releases/latest/download/latest.json`).
+names one or `HBENCH_CHANNEL=beta` asks for the beta channel, and which the desktop app offers as an update only on
+the beta channel.

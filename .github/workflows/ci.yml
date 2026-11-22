@@ -127,6 +127,8 @@ jobs:
           components: clippy, rustfmt
       - name: Check formatting
         run: cargo fmt --check
+      - name: Test the beta channel's feed script
+        run: scripts/beta-feed-test.sh
       - name: Run Clippy
         run: cargo clippy --locked --all-targets -- -D warnings
         env:
@@ -223,6 +225,10 @@ jobs:
         run: |
           cargo fmt --check
           cargo clippy --locked
+      - name: Test the app
+        if: runner.os == 'Linux'
+        working-directory: desktop/src-tauri
+        run: cargo test --locked
       - name: Build and bundle the app
         working-directory: desktop
         env:

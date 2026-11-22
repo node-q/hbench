@@ -118,9 +118,9 @@ jobs:
             case "$CHANNEL" in
               stable|"") ;;
               beta)
-                # The next beta of that version: one more than the highest vX.Y.Z-beta.N tag.
+                # The next beta of that version: one more than the highest vX.Y.Z-beta.N tag (10#: 08 is not octal).
                 last=$(git tag -l "v$version-beta.*" | sed -nE "s/^v$version-beta\.([0-9]+)$/\1/p" | sort -n | tail -n1)
-                version="$version-beta.$(( ${last:-0} + 1 ))" ;;
+                version="$version-beta.$(( 10#${last:-0} + 1 ))" ;;
               *) fail "channel must be stable or beta" ;;
             esac
           fi
