@@ -10,7 +10,7 @@ with [Tauri 2](https://tauri.app).
 - The window shows that viewer. The viewer sees `window.__ACTUARIA_DESKTOP__` and swaps its web top bar for the
   desktop chrome in `viewer/src/desktop/`:
   - an activity bar;
-  - an explorer of jobs and their trials;
+  - a side bar of runs and their attempts;
   - editor tabs with breadcrumbs;
   - a status bar.
 
@@ -48,13 +48,13 @@ with [Tauri 2](https://tauri.app).
 | ⌘⇧W | Close window |
 | ⌘⇧] / ⌘⇧[ | Next / previous tab |
 | ⌘[ / ⌘] | Back / forward |
-| ⌘P, ⌘⇧P, ⌘K | Command palette |
-| ⌘1 / ⌘2 / ⌘3 | Jobs / Compare / New run |
+| ⌘P, ⌘⇧P, ⌘K | Search and commands |
+| ⌘1 / ⌘2 / ⌘3 | Runs / Compare / New run |
 | ⌘B | Toggle the side bar |
 | ⌘⇧L | Toggle light / dark |
 | ⌘= / ⌘- / ⌘0 | Zoom in / out / reset |
 
-In the explorer, arrow keys move between rows, Right and Left expand and collapse a job, and Enter opens the row.
+In the side bar, arrow keys move between rows, Right and Left expand and collapse a run, and Enter opens the row.
 
 ## Build
 

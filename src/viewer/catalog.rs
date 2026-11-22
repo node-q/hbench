@@ -75,7 +75,7 @@ fn catalog(registry: &str, datasets: &[Dataset]) -> Value {
         domains.iter().map(|d| json!({"id": d.id, "title": d.title, "description": d.description, "n_datasets": count(&d.id)})).collect();
     if count(OTHER) > 0 {
         tiles.push(
-            json!({"id": OTHER, "title": "Other", "description": "Datasets not filed under a domain yet.", "n_datasets": count(OTHER)}),
+            json!({"id": OTHER, "title": "Other", "description": "Test sets not filed under a field of work yet.", "n_datasets": count(OTHER)}),
         );
     }
     json!({"registry": registry, "domains": tiles, "datasets": entries})

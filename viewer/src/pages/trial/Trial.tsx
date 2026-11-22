@@ -53,18 +53,18 @@ export default function Trial() {
   }, [rootFiles.data, step, r?.exception_info]);
 
   const tabs: TabDef[] = [
-    { id: "trajectory", label: "Trajectory" },
+    { id: "trajectory", label: "What the AI did" },
     { id: "map", label: "Map" },
-    { id: "interaction", label: "Interaction", disabled: has.known && !has.interaction },
-    { id: "verifier", label: "Verifier", disabled: has.known && !has.verifier },
+    { id: "interaction", label: "Conversation", disabled: has.known && !has.interaction },
+    { id: "verifier", label: "Checks", disabled: has.known && !has.verifier },
     { id: "logs", label: "Agent logs", disabled: has.known && !has.logs },
-    { id: "trial-log", label: "Trial log", disabled: has.known && !has.trialLog },
-    { id: "exception", label: "Exception", disabled: has.known && !has.exception },
+    { id: "trial-log", label: "Attempt log", disabled: has.known && !has.trialLog },
+    { id: "exception", label: "Error", disabled: has.known && !has.exception },
     { id: "files", label: "Files" },
-    { id: "artifacts", label: "Artifacts", disabled: has.known && !has.artifacts },
+    { id: "artifacts", label: "Output files", disabled: has.known && !has.artifacts },
     { id: "recording", label: "Recording", disabled: has.known && !has.recording },
     { id: "analysis", label: "Analysis" },
-    { id: "config", label: "Config" },
+    { id: "config", label: "Settings" },
   ];
   const tabParam = url.get("tab");
   const tab = tabs.find((t) => t.id === tabParam && !t.disabled)?.id ?? "trajectory";
@@ -79,10 +79,10 @@ export default function Trial() {
 
   const cmds = useMemo<Command[]>(
     () => [
-      ...tabs.filter((t) => !t.disabled).map((t) => ({ id: `trial:tab:${t.id}`, label: `Show ${String(t.label).toLowerCase()}`, group: "This trial", run: () => setTab(t.id) })),
-      ...(nav?.previous ? [{ id: "trial:prev", label: "Previous trial", hint: nav.previous, group: "This trial", run: () => go(nav.previous) }] : []),
-      ...(nav?.next ? [{ id: "trial:next", label: "Next trial", hint: nav.next, group: "This trial", run: () => go(nav.next) }] : []),
-      { id: "trial:job", label: "Back to job", hint: jobName, group: "This trial", run: () => navigate(jobUrl) },
+      ...tabs.filter((t) => !t.disabled).map((t) => ({ id: `trial:tab:${t.id}`, label: `Show ${fmt.lower(String(t.label))}`, group: "This attempt", run: () => setTab(t.id) })),
+      ...(nav?.previous ? [{ id: "trial:prev", label: "Previous attempt", hint: nav.previous, group: "This attempt", run: () => go(nav.previous) }] : []),
+      ...(nav?.next ? [{ id: "trial:next", label: "Next attempt", hint: nav.next, group: "This attempt", run: () => go(nav.next) }] : []),
+      { id: "trial:job", label: "Back to the run", hint: jobName, group: "This attempt", run: () => navigate(jobUrl) },
     ],
     [tabs.map((t) => `${t.id}${t.disabled}`).join(), nav, jobName],
   );
@@ -92,7 +92,7 @@ export default function Trial() {
   if (res.error && !r)
     return (
       <div className="page">
-        <ErrorBox error={res.error} title={`Couldn't load trial ${trialName}`} onRetry={res.reload} />
+        <ErrorBox error={res.error} title={`Couldn't load the attempt ${trialName}`} onRetry={res.reload} />
       </div>
     );
   if (!r)
@@ -111,9 +111,9 @@ export default function Trial() {
   ) : exc ? (
     <Status kind="bad">{exc.exception_type}</Status>
   ) : typeof reward === "number" ? (
-    <Status kind={reward >= 1 ? "good" : reward > 0 ? "warn" : "bad"}>reward {fmt.score(reward)}</Status>
+    <Status kind={reward >= 1 ? "good" : reward > 0 ? "warn" : "bad"}><span title={`score ${fmt.score(reward)}`}>{fmt.verdict(reward) ?? `score ${fmt.score(reward)}`}</span></Status>
   ) : (
-    <Status kind="plain">no reward</Status>
+    <Status kind="plain">no score</Status>
   );
   const mi = r.agent_info?.model_info;
   const effort = r.config?.agent?.kwargs?.reasoning_effort;
@@ -122,7 +122,7 @@ export default function Trial() {
     <div className="page trial">
       <PageHead
         crumbs={[
-          { to: "/", label: "Jobs" },
+          { to: "/", label: "Runs" },
           { to: jobUrl, label: jobName },
         ]}
         title={
@@ -149,7 +149,7 @@ export default function Trial() {
             )}
             {r.source && (
               <span>
-                source <span className="ink">{r.source}</span>
+                test set <span className="ink">{r.source}</span>
               </span>
             )}
             <span title={fmt.dateTime(r.started_at)}>started {fmt.date(r.started_at)}</span>
@@ -159,13 +159,13 @@ export default function Trial() {
         actions={
           nav && (
             <div className="trial__nav">
-              <button className="btn btn--sm btn--icon" disabled={!nav.previous} onClick={() => go(nav.previous)} title="Previous trial ( [ )" aria-label="Previous trial">
+              <button className="btn btn--sm btn--icon" disabled={!nav.previous} onClick={() => go(nav.previous)} title="Previous attempt ( [ )" aria-label="Previous attempt">
                 <Icon.ArrowLeft size={13} />
               </button>
               <span className="num muted">
-                {nav.index + 1} / {nav.total}
+                {nav.index + 1} of {nav.total}
               </span>
-              <button className="btn btn--sm btn--icon" disabled={!nav.next} onClick={() => go(nav.next)} title="Next trial ( ] )" aria-label="Next trial">
+              <button className="btn btn--sm btn--icon" disabled={!nav.next} onClick={() => go(nav.next)} title="Next attempt ( ] )" aria-label="Next attempt">
                 <Icon.ArrowRight size={13} />
               </button>
             </div>
@@ -177,14 +177,14 @@ export default function Trial() {
         <div className="trial__steps" role="group" aria-label="Step">
           <span className="label">Step</span>
           <button className={`btn btn--sm${!step ? " is-on" : ""}`} onClick={() => url.set({ step: null, path: null })}>
-            Whole trial
+            All steps
           </button>
           {steps.map((s, i) => {
             const rw = s.verifier_result?.rewards?.reward;
             return (
               <button key={s.step_name} className={`btn btn--sm${step === s.step_name ? " is-on" : ""}`} onClick={() => url.set({ step: s.step_name, path: null })} title={s.exception_info?.exception_type ?? undefined}>
                 <span className="faint num">{i + 1}</span> {s.step_name}
-                {s.exception_info ? <span className="dot" style={{ color: "var(--color-bad)" }} /> : typeof rw === "number" ? <span className="num muted">{fmt.score(rw, 2)}</span> : null}
+                {s.exception_info ? <span className="dot" style={{ color: "var(--color-bad)" }} /> : typeof rw === "number" ? <span className="num muted" title={`score ${fmt.score(rw)}`}>{fmt.verdict(rw) ?? fmt.score(rw, 2)}</span> : null}
               </button>
             );
           })}
@@ -194,15 +194,15 @@ export default function Trial() {
       <Summary r={r} step={steps.find((s) => s.step_name === step)} running={running} />
 
       <div className="section">
-        <Tabs tabs={tabs} value={tab} onChange={setTab} label="Trial views" />
+        <Tabs tabs={tabs} value={tab} onChange={setTab} label="Views of this attempt" />
         <div role="tabpanel">
           {tab === "trajectory" && <TrajectoryTab t={ref} running={running} />}
           {tab === "map" && <MapTab t={ref} running={running} source={r.source} />}
           {tab === "interaction" && <InteractionTab t={ref} />}
           {tab === "verifier" && <VerifierTab t={ref} />}
           {tab === "logs" && <AgentLogsTab t={ref} />}
-          {tab === "trial-log" && <TextFileTab t={{ job: jobName, trial: trialName }} path="trial.log" empty="No trial.log in this trial." />}
-          {tab === "exception" && <TextFileTab t={{ job: jobName, trial: trialName }} path="exception.txt" empty="No exception.txt in this trial." fallback={exc?.exception_traceback || exc?.exception_message} />}
+          {tab === "trial-log" && <TextFileTab t={{ job: jobName, trial: trialName }} path="trial.log" empty="This attempt has no trial.log." />}
+          {tab === "exception" && <TextFileTab t={{ job: jobName, trial: trialName }} path="exception.txt" empty="This attempt has no exception.txt." fallback={exc?.exception_traceback || exc?.exception_message} />}
           {tab === "files" && <FilesTab t={ref} source="files" />}
           {tab === "artifacts" && <FilesTab t={ref} source="artifacts" />}
           {tab === "recording" && <RecordingTab t={{ job: jobName, trial: trialName }} />}
@@ -211,7 +211,7 @@ export default function Trial() {
         </div>
       </div>
       <p className="trial__hint label">
-        <kbd>[</kbd> <kbd>]</kbd> previous / next trial · <Link to={jobUrl} className="link">all trials in {jobName}</Link> · <a className="link" href={p("jobs", jobName, "trials", trialName)} target="_blank" rel="noreferrer">raw result.json</a>
+        <kbd>[</kbd> <kbd>]</kbd> previous or next attempt · <Link to={jobUrl} className="link">all attempts in {jobName}</Link> · <a className="link" href={p("jobs", jobName, "trials", trialName)} target="_blank" rel="noreferrer">result.json</a>
       </p>
     </div>
   );

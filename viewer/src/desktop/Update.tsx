@@ -71,7 +71,7 @@ export function useUpdate(): UpdateView {
 }
 
 const pct = (p?: number | null) => (p == null ? "" : `${Math.round(p * 100)}%`);
-const runsNote = (n: number) => `${n === 1 ? "A run is" : `${n} runs are`} in progress: restarting stops ${n === 1 ? "it" : "them"}.`;
+const runsNote = (n: number) => `${n === 1 ? "A run is" : `${n} runs are`} in progress. Restarting stops ${n === 1 ? "it" : "them"}.`;
 
 /** The prompt, bottom right above the status bar. */
 export function UpdatePrompt({ u, nRunning }: { u: UpdateView; nRunning: number }) {
@@ -112,10 +112,10 @@ export function UpdatePrompt({ u, nRunning }: { u: UpdateView; nRunning: number 
     );
   } else if (u.state === "ready") {
     icon = <Icon.Check size={16} />;
-    title = `${APP_NAME} ${v} is ready`;
+    title = `${APP_NAME} ${v} is installed`;
     body = (
       <>
-        Restart to finish updating.
+        Restart the app to use it.
         {nRunning > 0 && <span className="dk-update__warn">{runsNote(nRunning)}</span>}
       </>
     );
@@ -136,7 +136,7 @@ export function UpdatePrompt({ u, nRunning }: { u: UpdateView; nRunning: number 
     actions = (
       <>
         <button className="btn btn--sm btn--ghost" onClick={() => choose("dismiss")}>
-          Dismiss
+          Close
         </button>
         <button className="btn btn--sm btn--primary" onClick={() => choose("install")}>
           Try again
@@ -180,7 +180,7 @@ export function UpdateStatus({ u, nRunning }: { u: UpdateView; nRunning: number 
     );
   if (u.state === "ready")
     return (
-      <button className="dk-status__item dk-status__item--update" title={`Restart to finish updating to ${v}`} onClick={() => choose(nRunning > 0 ? "show" : "restart")}>
+      <button className="dk-status__item dk-status__item--update" title={`Restart to use ${v}`} onClick={() => choose(nRunning > 0 ? "show" : "restart")}>
         <Icon.Refresh size={12} /> Restart to update
       </button>
     );

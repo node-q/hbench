@@ -16,7 +16,7 @@ const secs = (n: number | null) => duration(n == null ? null : n * 1000);
 const FLAGS: [keyof TaskDefinitionSummary, string, string][] = [
   ["has_instruction", "I", "instruction"],
   ["has_environment", "E", "environment"],
-  ["has_tests", "T", "tests"],
+  ["has_tests", "T", "checks"],
   ["has_solution", "S", "solution"],
   ["has_docker_compose", "C", "docker compose"],
 ];
@@ -71,9 +71,9 @@ export default function TaskDefinitions() {
     { id: "difficulty", header: "Difficulty", sort: "difficulty", cell: (t) => (t.metadata?.difficulty ? <span className={`chip diff--${t.metadata.difficulty}`}>{t.metadata.difficulty}</span> : <span className="faint">—</span>) },
     { id: "category", header: "Category", sort: "category", cell: (t) => t.metadata?.category ?? <span className="faint">—</span> },
     { id: "tags", header: "Tags", cell: (t) => <Tags tags={(t.metadata?.tags as string[]) ?? []} /> },
-    { id: "source", header: "Source", sort: "source", hidden: true, cell: (t) => t.source ?? <span className="faint">—</span> },
-    { id: "agent_timeout", header: "Agent timeout", sort: "agent_timeout_sec", align: "right", cell: (t) => <span className="num">{secs(t.agent_timeout_sec)}</span> },
-    { id: "verifier_timeout", header: "Verifier timeout", sort: "verifier_timeout_sec", align: "right", cell: (t) => <span className="num">{secs(t.verifier_timeout_sec)}</span> },
+    { id: "source", header: "Test set", sort: "source", hidden: true, cell: (t) => t.source ?? <span className="faint">—</span> },
+    { id: "agent_timeout", header: "Time limit", sort: "agent_timeout_sec", align: "right", cell: (t) => <span className="num">{secs(t.agent_timeout_sec)}</span> },
+    { id: "verifier_timeout", header: "Checks' time limit", sort: "verifier_timeout_sec", align: "right", cell: (t) => <span className="num">{secs(t.verifier_timeout_sec)}</span> },
     { id: "os", header: "OS", sort: "os", hidden: true, cell: (t) => <span className="mono">{t.os ?? "—"}</span> },
     { id: "cpus", header: "CPUs", sort: "cpus", align: "right", cell: (t) => <span className="num">{int(t.cpus)}</span> },
     { id: "memory", header: "Memory", sort: "memory_mb", align: "right", cell: (t) => <span className="num">{mb(t.memory_mb)}</span> },
@@ -106,7 +106,7 @@ export default function TaskDefinitions() {
         }
       />
       <div className="toolbar">
-        <SearchField value={q} onChange={setQ} placeholder="Search name, source, metadata" />
+        <SearchField value={q} onChange={setQ} placeholder="Search name, test set, tags" />
         <FilterMenu label="Difficulty" options={filters.data?.difficulties} selected={difficulty} onChange={(v) => url.set({ difficulty: v })} />
         <FilterMenu label="Category" options={filters.data?.categories} selected={category} onChange={(v) => url.set({ category: v })} />
         <FilterMenu label="Tag" options={filters.data?.tags} selected={tag} onChange={(v) => url.set({ tag: v })} />
@@ -125,7 +125,7 @@ export default function TaskDefinitions() {
       ) : (
         <>
           <DataTable
-            label="Task definitions"
+            label="Tasks"
             rows={rows}
             columns={visible}
             rowKey={(t) => t.name}
@@ -134,7 +134,7 @@ export default function TaskDefinitions() {
             onSort={(s) => url.set({ sort: s?.by, order: s?.order })}
             empty={
               <Empty
-                title={anyFilter ? "No tasks match those filters" : "No tasks in this folder"}
+                title={anyFilter ? "No tasks match these filters" : "No tasks in this folder"}
                 action={
                   anyFilter ? (
                     <button className="btn btn--sm" onClick={clear}>
@@ -143,7 +143,7 @@ export default function TaskDefinitions() {
                   ) : undefined
                 }
               >
-                {!anyFilter && "Each task is a subdirectory with a task.toml."}
+                {!anyFilter && "A task is a folder with a task.toml file in it."}
               </Empty>
             }
           />

@@ -22,19 +22,19 @@ export function FilesTab({ t, source }: { t: TrialRef; source: "files" | "artifa
     <>
       {manifest != null && (
         <details className="panel tfiles__manifest">
-          <summary className="panel__head label">Artifact manifest</summary>
+          <summary className="panel__head label">List of output files</summary>
           <div className="panel__body">
             <JsonTree value={manifest} open={3} />
           </div>
         </details>
       )}
       {files.length === 0 ? (
-        <Empty title={source === "artifacts" ? "No artifacts collected" : "No files"}>{source === "artifacts" ? "The trial's artifact directories were empty." : "This trial directory is empty."}</Empty>
+        <Empty title={source === "artifacts" ? "No output files" : "No files"}>{source === "artifacts" ? "This attempt left nothing in its output folders." : "This attempt's folder is empty."}</Empty>
       ) : (
         <div className="tfiles">
           <Tree files={files} selected={selected} onSelect={(path) => url.set({ path })} />
           <div className="tfiles__view">
-            {selected ? <FileView t={t} path={prefix + selected} name={selected} /> : <Empty title="Select a file">{fmt.int(files.filter((f) => !f.is_dir).length)} files in this {source === "artifacts" ? "artifact set" : "trial"}.</Empty>}
+            {selected ? <FileView t={t} path={prefix + selected} name={selected} /> : <Empty title="Pick a file to read">{fmt.int(files.filter((f) => !f.is_dir).length)} {source === "artifacts" ? "output files" : "files"} in this attempt.</Empty>}
           </div>
         </div>
       )}
@@ -123,7 +123,7 @@ function TextView({ src, path }: { src: string; path: string }) {
     const st = res.error instanceof ApiError ? res.error.status : 0;
     if (st === 413 || st === 415)
       return (
-        <Empty title={st === 413 ? "Too large to preview" : "Binary file"} action={<a className="link" href={src} download>Download it</a>}>
+        <Empty title={st === 413 ? "Too large to show" : "Not a text file"} action={<a className="link" href={src} download>Download it</a>}>
           {res.error.message}
         </Empty>
       );

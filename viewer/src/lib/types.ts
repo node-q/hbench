@@ -50,6 +50,8 @@ export interface JobSummary {
   total_cached_input_tokens: number | null;
   total_output_tokens: number | null;
   total_cost_usd: number | null;
+  /** Passed trials, of the completed ones; null unless each one scored 1 (passed) or 0 (failed). */
+  n_passed: number | null;
 }
 
 export interface JobFilters {
@@ -103,6 +105,8 @@ export interface TaskSummary {
   n_errors: number;
   exception_types: string[];
   avg_reward: number | null;
+  /** As in JobSummary; null until every trial has finished. */
+  n_passed: number | null;
   evals: Record<string, EvalSummary>;
   avg_duration_ms: number | null;
   avg_tokens: number | null;
@@ -294,6 +298,7 @@ export interface CompareCell {
   avg_tokens: number | null;
   n_trials: number;
   n_completed: number;
+  n_passed: number | null;
 }
 
 export interface KwargSpec {

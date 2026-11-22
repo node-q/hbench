@@ -104,7 +104,7 @@
 }
 .waffle__group {
   display: grid;
-  grid-template-columns: minmax(8rem, 16rem) minmax(0, 1fr) 4ch;
+  grid-template-columns: minmax(8rem, 16rem) minmax(0, 1fr) 15ch;
   align-items: center;
   gap: var(--space-sm);
 }
@@ -215,7 +215,7 @@
     grid-template-columns: minmax(0, 1fr);
   }
   .waffle__group {
-    grid-template-columns: minmax(0, 1fr) 4ch;
+    grid-template-columns: minmax(0, 1fr) auto;
   }
   .waffle__group .waffle__cells {
     grid-column: 1 / -1;

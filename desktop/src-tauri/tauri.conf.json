@@ -19,8 +19,8 @@
     "category": "DeveloperTool",
     "publisher": "NODEQ",
     "copyright": "© 2026 NODEQ",
-    "shortDescription": "Expert-verified AI agent benchmarking studio",
-    "longDescription": "Actuaria.io tests in-house agents and vendor AI products on your own real work. Built on hbench by node-q.",
+    "shortDescription": "Test AI on your own computer",
+    "longDescription": "Pick a test set, choose an AI, and see what it got right. Built on hbench by node-q.",
     "externalBin": ["binaries/hbench"],
     "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"],
     "macOS": {

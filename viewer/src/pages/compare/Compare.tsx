@@ -11,8 +11,8 @@ import "./compare.css";
 
 type Metric = "reward" | "duration" | "cost" | "tokens";
 const METRICS: { id: Metric; label: string; get: (c: CompareCell) => number | null; show: (n: number | null) => string }[] = [
-  { id: "reward", label: "Reward", get: (c) => c.avg_reward, show: (n) => fmt.score(n) },
-  { id: "duration", label: "Duration", get: (c) => c.avg_duration_ms, show: fmt.duration },
+  { id: "reward", label: "Result", get: (c) => c.avg_reward, show: (n) => fmt.score(n) },
+  { id: "duration", label: "Time", get: (c) => c.avg_duration_ms, show: fmt.duration },
   { id: "cost", label: "Cost", get: (c) => c.avg_cost_usd, show: fmt.usd },
   { id: "tokens", label: "Tokens", get: (c) => c.avg_tokens, show: fmt.compact },
 ];
@@ -53,7 +53,7 @@ export default function Compare() {
       sub: a.job_name,
       group: amGroup(a),
     }));
-    const tasks: AxisItem[] = d.tasks.map((t) => ({ key: t.key, label: t.task_name, sub: t.source ?? "", group: rowGroup === "source" ? t.source ?? "(no source)" : "" }));
+    const tasks: AxisItem[] = d.tasks.map((t) => ({ key: t.key, label: t.task_name, sub: t.source ?? "", group: rowGroup === "source" ? t.source ?? "(no test set)" : "" }));
     // Stable grouping: items of a group stay in their server (best-first) order, groups in first-seen order.
     const grouped = (items: AxisItem[]) => {
       const order = [...new Set(items.map((i) => i.group))];
@@ -68,50 +68,58 @@ export default function Compare() {
     // Rewards in [0,1] shade on the absolute scale; everything else min–max across the grid.
     const unit = metric === "reward" && lo >= 0 && hi <= 1;
     const norm = (v: number | null) => (v == null ? null : unit ? v : hi > lo ? (v - lo) / (hi - lo) : 0.5);
-    const meanOf = (cs: (CompareCell | undefined)[]) => avg(cs.map((c) => (c ? m.get(c) : null)).filter((v): v is number => v != null));
+    // A column's or row's summary: how many passed, or the average when some answers are neither passed nor failed.
+    const meanOf = (cs: (CompareCell | undefined)[]) => {
+      const got = cs.filter((c): c is CompareCell => !!c);
+      const v = avg(got.map(m.get).filter((v): v is number => v != null));
+      if (metric !== "reward" || !got.length || got.some((c) => c.n_passed == null)) return { text: m.show(v), short: m.show(v), title: undefined };
+      const n = got.reduce((a, c) => a + c.n_passed!, 0);
+      const of = got.reduce((a, c) => a + c.n_completed, 0);
+      return { text: fmt.passed(n, of), short: of === 1 ? fmt.passed(n, of) : `${n} of ${of}`, title: `${fmt.passed(n, of)}, average score ${m.show(v)}` };
+    };
     return { rows, cols, cell, norm, meanOf };
   }, [data.data, transpose, colGroup, rowGroup, metric, m]);
 
   const jobOptions = (list.data?.items ?? []).map((j) => ({ value: j.name, count: j.n_total_trials }));
-  const colLabel = transpose ? "Tasks" : "Agent · model";
-  const rowLabel = transpose ? "Agent · model" : "Task";
+  const colLabel = transpose ? "Tasks" : "Agent and model";
+  const rowLabel = transpose ? "Agent and model" : "Task";
 
   return (
     <div className="page">
       <PageHead
-        crumbs={[{ to: "/", label: "Jobs" }]}
+        crumbs={[{ to: "/", label: "Runs" }]}
         title="Compare"
-        meta={<span>Average {m.label.toLowerCase()} per task for each agent and model, across the selected jobs.</span>}
+        meta={<span>{metric === "reward" ? "Which tasks each agent and model passed, in the runs you pick." : `Average ${m.label.toLowerCase()} per task for each agent and model, in the runs you pick.`}</span>}
       />
       <div className="toolbar">
-        <FilterMenu label={jobs.length ? `Jobs` : "Pick jobs"} options={jobOptions} selected={jobs} onChange={(v) => url.set({ job: v })} />
-        <SelectMenu label="Colour by" value={metric} options={METRICS.map((x) => ({ id: x.id, label: x.label }))} onChange={(v) => url.set({ color: v === "reward" ? null : v })} />
+        <FilterMenu label={jobs.length ? "Runs" : "Pick runs"} options={jobOptions} selected={jobs} onChange={(v) => url.set({ job: v })} />
+        <SelectMenu label="Show" value={metric} options={METRICS.map((x) => ({ id: x.id, label: x.label }))} onChange={(v) => url.set({ color: v === "reward" ? null : v })} />
         <SelectMenu
-          label="Columns by"
+          label="Group columns by"
           value={colGroup}
           options={[
-            { id: "none", label: "No grouping" },
-            { id: "job", label: "Job" },
-            { id: "agent", label: "Agent" },
-            { id: "model", label: "Model" },
+            { id: "none", label: "nothing" },
+            { id: "job", label: "run" },
+            { id: "agent", label: "agent" },
+            { id: "model", label: "model" },
           ]}
           onChange={(v) => url.set({ cg: v === "none" ? null : v })}
         />
         <SelectMenu
-          label="Rows by"
+          label="Group rows by"
           value={rowGroup}
           options={[
-            { id: "none", label: "No grouping" },
-            { id: "source", label: "Source" },
+            { id: "none", label: "nothing" },
+            { id: "source", label: "test set" },
           ]}
           onChange={(v) => url.set({ rg: v === "none" ? null : v })}
         />
         <Seg
-          label="Orientation"
+          label="Layout"
           value={transpose ? "t" : "n"}
           options={[
-            { id: "n", label: "Tasks as rows" },
-            { id: "t", label: "Tasks as columns" },
+            { id: "n", label: "Tasks down the side" },
+            { id: "t", label: "Tasks across the top" },
           ]}
           onChange={(v) => url.set({ t: v === "t" ? "1" : null })}
         />
@@ -133,13 +141,13 @@ export default function Compare() {
       )}
 
       {!jobs.length ? (
-        <Empty title="Select at least one job to compare">Pick jobs above, or select rows on the Jobs page and choose Compare.</Empty>
+        <Empty title="Pick a run to compare">Pick runs above, or tick them on the Runs page and choose Compare.</Empty>
       ) : data.error && !data.data ? (
         <ErrorBox error={data.error} onRetry={data.reload} />
       ) : !view ? (
         <SkeletonRows />
       ) : !view.rows.length || !view.cols.length ? (
-        <Empty title="Nothing to compare">The selected jobs have no trials yet.</Empty>
+        <Empty title="Nothing to compare">These runs have no results yet.</Empty>
       ) : (
         <>
           <div className="table-wrap cmp-wrap">
@@ -165,14 +173,18 @@ export default function Compare() {
                       <th key={c.key} className="cmp-col" title={`${c.label}\n${c.sub}`}>
                         <span className="cmp-col__label">{c.label}</span>
                         <span className="cmp-col__sub mono">{c.sub}</span>
-                        <span className="cmp-col__mean num">{m.show(mean)}</span>
+                        <span className="cmp-col__mean num" title={mean.title}>
+                          {mean.text}
+                        </span>
                       </th>
                     );
                   })}
                 </tr>
               </thead>
               <tbody>
-                {view.rows.map((r, i) => (
+                {view.rows.map((r, i) => {
+                  const mean = view.meanOf(view.cols.map((c) => view.cell(r, c)));
+                  return (
                   <Fragment key={r.key}>
                     {r.group && r.group !== view.rows[i - 1]?.group && (
                       <tr>
@@ -185,22 +197,25 @@ export default function Compare() {
                       <th className="cmp-row" scope="row" title={r.sub ? `${r.label}\n${r.sub}` : r.label}>
                         <div className="cmp-row__in">
                           <span className="trunc">{r.label}</span>
-                          <span className="num faint">{m.show(view.meanOf(view.cols.map((c) => view.cell(r, c))))}</span>
+                          <span className="num faint" title={mean.title}>
+                            {mean.short}
+                          </span>
                         </div>
                       </th>
                       {view.cols.map((c) => {
                         const cl = view.cell(r, c);
-                        return <Cell key={c.key} cell={cl} norm={cl ? view.norm(m.get(cl)) : null} show={m.show} get={m.get} task={transpose ? c : r} am={transpose ? r : c} />;
+                        return <Cell key={c.key} cell={cl} norm={cl ? view.norm(m.get(cl)) : null} metric={m} task={transpose ? c : r} am={transpose ? r : c} />;
                       })}
                     </tr>
                   </Fragment>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>
           <p className="cmp-legend label">
-            <span className="cmp-swatch" style={{ background: "var(--color-heat-0)" }} /> {metric === "reward" ? "0" : "low"}
-            <span className="cmp-swatch" style={{ background: "var(--color-heat-1)" }} /> {metric === "reward" ? "1" : "high"} · blank = not run · click a cell for its trials
+            <span className="cmp-swatch" style={{ background: "var(--color-heat-0)" }} /> {metric === "reward" ? "failed (0)" : "low"}
+            <span className="cmp-swatch" style={{ background: "var(--color-heat-1)" }} /> {metric === "reward" ? "passed (1)" : "high"} · hatched: not run · click a cell to see its attempts
           </p>
         </>
       )}
@@ -219,7 +234,7 @@ function spans(items: AxisItem[]): [string, number][] {
   return out;
 }
 
-function Cell({ cell, norm, show, get, task, am }: { cell: CompareCell | undefined; norm: number | null; show: (n: number | null) => string; get: (c: CompareCell) => number | null; task: AxisItem; am: AxisItem }) {
+function Cell({ cell, norm, metric, task, am }: { cell: CompareCell | undefined; norm: number | null; metric: (typeof METRICS)[number]; task: AxisItem; am: AxisItem }) {
   if (!cell) return <td className="cmp-cell cmp-cell--none" aria-label="not run" />;
   const pct = norm == null ? 0 : Math.round(Math.max(0, Math.min(1, norm)) * 100);
   // agent_models key = job::agent::provider::model
@@ -227,16 +242,16 @@ function Cell({ cell, norm, show, get, task, am }: { cell: CompareCell | undefin
   const to = `/jobs/${encodeURIComponent(cell.job_name)}${qs({ tab: "trials", task: task.label, agent: agent || null, provider: provider || null, model: model || null })}`;
   const title = [
     `${task.label} · ${am.label}`,
-    `${cell.n_completed}/${cell.n_trials} trials completed`,
-    `reward ${fmt.score(cell.avg_reward)}`,
-    `duration ${fmt.duration(cell.avg_duration_ms)}`,
+    `${cell.n_completed} of ${cell.n_trials} attempts finished`,
+    cell.n_passed != null ? `${fmt.passed(cell.n_passed, cell.n_completed)} (score ${fmt.score(cell.avg_reward)})` : `score ${fmt.score(cell.avg_reward)}`,
+    `time ${fmt.duration(cell.avg_duration_ms)}`,
     `cost ${fmt.usd(cell.avg_cost_usd)}`,
     `tokens ${fmt.compact(cell.avg_tokens)}`,
   ].join("\n");
   return (
     <td className="cmp-cell" style={{ background: `color-mix(in oklch, var(--color-heat-1) ${pct}%, var(--color-heat-0))` }} data-dark={pct > 55 || undefined}>
       <Link to={to} title={title} className="cmp-cell__link num">
-        {show(get(cell))}
+        {metric.id === "reward" && cell.n_passed != null ? fmt.upper(fmt.passed(cell.n_passed, cell.n_completed)) : metric.show(metric.get(cell))}
         {cell.n_completed < cell.n_trials && <span className="cmp-cell__partial">{cell.n_completed}/{cell.n_trials}</span>}
       </Link>
     </td>

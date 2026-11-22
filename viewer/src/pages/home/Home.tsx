@@ -7,7 +7,7 @@ import type { JobFilters, JobSummary, Page } from "../../lib/types";
 import { useAppConfig, useCommands, useTitle, type Command } from "../../shell";
 import { DataTable, sortRows, useColumns, type Column, type SortState } from "../../ui/table";
 import { FilterMenu, SelectMenu } from "../../ui/popover";
-import { CopyButton, Empty, ErrorBox, PageHead, Pagination, Reward, SearchField, SkeletonRows } from "../../ui/kit";
+import { CopyButton, Empty, ErrorBox, PageHead, Pagination, Passed, SearchField, SkeletonRows } from "../../ui/kit";
 import { Dialog, useToast } from "../../ui/overlay";
 import * as Icon from "../../ui/icons";
 import { DomainGrid, useCatalog } from "../run/catalog";
@@ -26,7 +26,7 @@ function sortValue(j: JobSummary, key: string): unknown {
     case "duration":
       return fmt.ms(j.started_at, j.finished_at ?? (j.started_at ? new Date().toISOString() : null));
     case "result":
-      return fmt.firstMetric(j.evals);
+      return j.n_passed != null && j.n_completed_trials ? j.n_passed / j.n_completed_trials : fmt.firstMetric(j.evals);
     case "trials":
       return j.n_completed_trials;
     case "agents":
@@ -42,7 +42,7 @@ function sortValue(j: JobSummary, key: string): unknown {
 
 export default function Home() {
   const config = useAppConfig();
-  useTitle("Jobs");
+  useTitle("Runs");
   const navigate = useNavigate();
   const toast = useToast();
   const url = useUrlState();
@@ -70,7 +70,7 @@ export default function Home() {
   const columns: Column<JobSummary>[] = [
     {
       id: "name",
-      header: "Job",
+      header: "Run",
       fixed: true,
       sort: "name",
       cell: (j) => (
@@ -78,14 +78,15 @@ export default function Home() {
           <Link to={`/jobs/${encodeURIComponent(j.name)}`} className="link mono ink">
             {j.name}
           </Link>
-          {config && <CopyButton text={`${config.folder}/${j.name}`} label="Copy job path" />}
+          {config && <CopyButton text={`${config.folder}/${j.name}`} label="Copy the run's folder path" />}
         </span>
       ),
     },
+    { id: "result", header: "Result", sort: "result", cell: (j) => <Passed n={j.n_passed} of={j.n_completed_trials} average={fmt.firstMetric(j.evals)} /> },
     { id: "started", header: "Started", sort: "started_at", cell: (j) => <span className="muted">{fmt.ago(j.started_at)}</span>, title: (j) => fmt.dateTime(j.started_at) },
     {
       id: "duration",
-      header: "Duration",
+      header: "Time",
       sort: "duration",
       align: "right",
       cell: (j) =>
@@ -99,18 +100,17 @@ export default function Home() {
     },
     {
       id: "trials",
-      header: "Trials",
+      header: "Attempts",
       sort: "trials",
       align: "right",
       cell: (j) => (
         <span className="num">
           {j.n_completed_trials}
           <span className="faint">/{j.n_total_trials}</span>
-          {j.n_errored_trials > 0 && <span className="home-err"> {j.n_errored_trials} err</span>}
+          {j.n_errored_trials > 0 && <span className="home-err"> {j.n_errored_trials} error{j.n_errored_trials === 1 ? "" : "s"}</span>}
         </span>
       ),
     },
-    { id: "result", header: "Result", sort: "result", cell: (j) => <Reward value={fmt.firstMetric(j.evals)} /> },
     { id: "agents", header: "Agent", sort: "agents", cell: (j) => j.agents.join(", ") || <span className="faint">—</span> },
     {
       id: "models",
@@ -118,18 +118,18 @@ export default function Home() {
       sort: "models",
       cell: (j) => <span className="mono">{j.models.map((m) => (j.providers.length === 1 ? `${j.providers[0]}/${m}` : m)).join(", ") || "—"}</span>,
     },
-    { id: "datasets", header: "Source", sort: "datasets", cell: (j) => j.datasets.join(", ") || <span className="faint">—</span> },
+    { id: "datasets", header: "Test set", sort: "datasets", cell: (j) => j.datasets.join(", ") || <span className="faint">—</span> },
     { id: "env", header: "Environment", sort: "environment_type", hidden: true, cell: (j) => <span className="mono">{j.environment_type ?? "—"}</span> },
-    { id: "in", header: "Uncached in", sort: "total_input_tokens", align: "right", hidden: true, cell: (j) => <span className="num">{fmt.compact(j.total_input_tokens)}</span> },
-    { id: "cached", header: "Cached in", sort: "total_cached_input_tokens", align: "right", hidden: true, cell: (j) => <span className="num">{fmt.compact(j.total_cached_input_tokens)}</span> },
-    { id: "out", header: "Output", sort: "total_output_tokens", align: "right", hidden: true, cell: (j) => <span className="num">{fmt.compact(j.total_output_tokens)}</span> },
+    { id: "in", header: "New tokens in", sort: "total_input_tokens", align: "right", hidden: true, cell: (j) => <span className="num">{fmt.compact(j.total_input_tokens)}</span> },
+    { id: "cached", header: "Cached tokens in", sort: "total_cached_input_tokens", align: "right", hidden: true, cell: (j) => <span className="num">{fmt.compact(j.total_cached_input_tokens)}</span> },
+    { id: "out", header: "Tokens out", sort: "total_output_tokens", align: "right", hidden: true, cell: (j) => <span className="num">{fmt.compact(j.total_output_tokens)}</span> },
     { id: "cost", header: "Cost", sort: "total_cost_usd", align: "right", cell: (j) => <span className="num">{fmt.usd(j.total_cost_usd)}</span> },
   ];
   const { visible, picker } = useColumns("jobs", columns);
 
   const compare = () => navigate(`/compare${qs({ job: selected })}`);
   const cmds: Command[] = useMemo(
-    () => (selected.length ? [{ id: "home:compare", label: `Compare ${selected.length} selected job${selected.length > 1 ? "s" : ""}`, group: "This page", run: compare }] : []),
+    () => (selected.length ? [{ id: "home:compare", label: `Compare ${selected.length} selected run${selected.length > 1 ? "s" : ""}`, group: "This page", run: compare }] : []),
     [selected], // eslint-disable-line react-hooks/exhaustive-deps
   );
   useCommands(cmds);
@@ -141,18 +141,18 @@ export default function Home() {
     url.set({ q: null, agent: null, provider: null, model: null, date: null });
   };
   const data = jobs.data;
-  // Nothing to search or filter until the folder has a job.
+  // Nothing to search or filter until the folder has a run.
   const fresh = !!data && data.total === 0 && !anyFilter;
 
   return (
     <div className="page">
       <PageHead
-        title="Jobs"
+        title="Runs"
         meta={
           data && (
             <span className="num">
-              {data.total} job{data.total === 1 ? "" : "s"}
-              {live && " · refreshing every 5s"}
+              {data.total} run{data.total === 1 ? "" : "s"}
+              {live && " · updates every 5 seconds"}
             </span>
           )
         }
@@ -165,7 +165,7 @@ export default function Home() {
 
       {!fresh && (
         <div className="toolbar">
-          <SearchField value={search} onChange={setSearch} placeholder="Search jobs, agents, models" width="min(280px, 100%)" />
+          <SearchField value={search} onChange={setSearch} placeholder="Search runs, agents, models" width="min(280px, 100%)" />
           <FilterMenu label="Agent" options={options.data?.agents} selected={filters.agent} onChange={(v) => url.set({ agent: v })} />
           <FilterMenu label="Provider" options={options.data?.providers} selected={filters.provider} onChange={(v) => url.set({ provider: v })} />
           <FilterMenu label="Model" options={options.data?.models} selected={filters.model} onChange={(v) => url.set({ model: v })} />
@@ -205,7 +205,7 @@ export default function Home() {
       ) : (
         <>
           <DataTable
-            label="Jobs"
+            label="Runs"
             rows={rows}
             columns={visible}
             rowKey={(j) => j.name}
@@ -216,7 +216,7 @@ export default function Home() {
             onSelect={setSelected}
             empty={
               <Empty
-                title="No jobs match those filters"
+                title="No runs match these filters"
                 action={
                   <button className="btn btn--sm" onClick={clearFilters}>
                     Clear filters
@@ -237,25 +237,25 @@ export default function Home() {
           setSelected((s) => s.filter((x) => !gone.includes(x)));
           jobs.reload();
           options.reload();
-          toast({ text: `Deleted ${gone.length === 1 ? gone[0] : `${gone.length} jobs`}` });
+          toast({ text: `Deleted ${gone.length === 1 ? gone[0] : `${gone.length} runs`}` });
         }}
       />
     </div>
   );
 }
 
-/** A folder with no jobs yet: the launcher's first step, so a first run is one tile away. */
+/** A folder with no runs yet: the launcher's first step, so a first run is one tile away. */
 function Start() {
   const catalog = useCatalog();
   return (
     <section className="home-start" aria-labelledby="home-start">
       <div className="home-start__intro">
-        <h2 id="home-start">Benchmark an agent</h2>
-        <p className="muted">No jobs in this folder yet. Pick a domain, choose a dataset, then the agent to run it.</p>
+        <h2 id="home-start">Test an AI</h2>
+        <p className="muted">This folder has no runs yet. Pick a field of work to see its test sets. You choose the agent and model after that.</p>
       </div>
       <DomainGrid catalog={catalog} />
       <p className="home-start__cli faint">
-        Or from the command line: <code>hbench run -d &lt;dataset&gt;@&lt;version&gt; -a &lt;agent&gt;</code>
+        Or start one from the command line: <code>hbench run -d &lt;dataset&gt;@&lt;version&gt; -a &lt;agent&gt;</code>
       </p>
     </section>
   );
@@ -287,7 +287,7 @@ function DeleteDialog({ names, onClose, onDone }: { names: string[] | null; onCl
     <Dialog
       open
       onClose={onClose}
-      title={names.length === 1 ? "Delete job" : `Delete ${names.length} jobs`}
+      title={names.length === 1 ? "Delete this run?" : `Delete ${names.length} runs?`}
       footer={
         <>
           <button className="btn" onClick={onClose} autoFocus>
@@ -302,10 +302,10 @@ function DeleteDialog({ names, onClose, onDone }: { names: string[] | null; onCl
       <p>
         {names.length === 1 ? (
           <>
-            Delete <code className="ink">{names[0]}</code> and every trial in it from disk?
+            Delete <code className="ink">{names[0]}</code> and every attempt in it from disk?
           </>
         ) : (
-          "Delete these jobs and every trial in them from disk?"
+          "Delete these runs and every attempt in them from disk?"
         )}{" "}
         This can't be undone.
       </p>

@@ -33,14 +33,14 @@ export function AnalysisTab({ job, tick, onAnalyze }: { job: string; tick: numbe
   if (!Object.keys(a).length)
     return (
       <Empty
-        title="No analysis yet"
+        title="Nothing analyzed yet"
         action={
           <button className="btn btn--primary" onClick={onAnalyze}>
-            <Icon.Sparkle size={14} /> Analyze trials
+            <Icon.Sparkle size={14} /> Analyze attempts
           </button>
         }
       >
-        An agent reads each trial's trajectory and logs, then writes a summary and pass/fail checks.
+        An agent reads what the AI did in each attempt, and the logs. It writes a summary and a list of pass or fail checks.
       </Empty>
     );
   if (!results && !summary) return <JsonTree value={a} />;
@@ -53,7 +53,7 @@ export function AnalysisTab({ job, tick, onAnalyze }: { job: string; tick: numbe
       {results && (
         <>
           <p className="muted" style={{ fontSize: "var(--text-sm)" }}>
-            {results.length} trials analyzed{cost ? ` · ${fmt.usd(cost)}` : ""}.{" "}
+            {results.length} attempt{results.length === 1 ? "" : "s"} analyzed{cost ? ` · ${fmt.usd(cost)}` : ""}.{" "}
             <button className="btn btn--sm btn--ghost" onClick={onAnalyze}>
               <Icon.Refresh size={13} /> Run again
             </button>
@@ -63,7 +63,7 @@ export function AnalysisTab({ job, tick, onAnalyze }: { job: string; tick: numbe
               <table className="table" aria-label="Analysis checks">
                 <thead>
                   <tr>
-                    <th>Trial</th>
+                    <th>Attempt</th>
                     {checkNames.map((c) => (
                       <th key={c}>{titleCase(c)}</th>
                     ))}
@@ -77,7 +77,7 @@ export function AnalysisTab({ job, tick, onAnalyze }: { job: string; tick: numbe
                         const ch = r.checks?.[c];
                         return (
                           <td key={c} title={ch?.explanation}>
-                            {ch ? <span className={`chip${ch.outcome === "pass" ? " chip--good" : ch.outcome === "fail" ? " chip--bad" : ""}`}>{ch.outcome === "not_applicable" ? "n/a" : ch.outcome}</span> : <span className="faint">—</span>}
+                            {ch ? <span className={`chip${ch.outcome === "pass" ? " chip--good" : ch.outcome === "fail" ? " chip--bad" : ""}`}>{ch.outcome === "not_applicable" ? "n/a" : ch.outcome === "pass" ? "passed" : ch.outcome === "fail" ? "failed" : ch.outcome}</span> : <span className="faint">—</span>}
                           </td>
                         );
                       })}
@@ -117,7 +117,7 @@ export function AnalyzeDialog({ job, open, onClose, onDone }: { job: string; ope
     setError(undefined);
     try {
       const r = await send<{ n_trials_analyzed: number }>("POST", p("jobs", job, "summarize"), { agent, model: model || undefined, environment: env, n_concurrent: n, only_failed: failed });
-      toast({ text: `Analyzed ${r.n_trials_analyzed} trials` });
+      toast({ text: `Analyzed ${r.n_trials_analyzed} attempt${r.n_trials_analyzed === 1 ? "" : "s"}` });
       onClose();
       onDone();
     } catch (e) {
@@ -131,7 +131,7 @@ export function AnalyzeDialog({ job, open, onClose, onDone }: { job: string; ope
     <Dialog
       open={open}
       onClose={() => !busy && onClose()}
-      title="Analyze trials"
+      title="Analyze attempts"
       footer={
         <>
           <button className="btn" onClick={onClose} disabled={busy}>
@@ -144,7 +144,7 @@ export function AnalyzeDialog({ job, open, onClose, onDone }: { job: string; ope
       }
     >
       <p className="muted" style={{ fontSize: "var(--text-sm)" }}>
-        Runs <code>hbench analyze</code> on this job. Each trial is read by the agent below; this can take several minutes.
+        Runs <code>hbench analyze</code> on this run. The agent below reads each attempt. It can take several minutes.
       </p>
       {opts.error && <ErrorBox error={opts.error} title="Couldn't load agents and environments" onRetry={opts.reload} />}
       <div className="analyze-form">
@@ -167,14 +167,14 @@ export function AnalyzeDialog({ job, open, onClose, onDone }: { job: string; ope
         <div className="field analyze-form__wide">
           <label htmlFor="an-model">Model</label>
           <input id="an-model" className="input input--mono" value={model} onChange={(e) => setModel(e.target.value)} placeholder="openai/gpt-6-luna" disabled={busy} />
-          <span className="field__help">Model name or an alias the agent accepts. Empty uses the default shown.</span>
+          <span className="field__help">A model name or an alias the agent knows. Leave it empty to use the one shown.</span>
         </div>
         <div className="field">
-          <label htmlFor="an-n">Concurrent analyses</label>
+          <label htmlFor="an-n">Analyses at once</label>
           <input id="an-n" className="input num" type="number" min={1} value={n} onChange={(e) => setN(Math.max(1, Number(e.target.value) || 1))} disabled={busy} />
         </div>
         <label className="check" style={{ alignSelf: "center" }}>
-          <input type="checkbox" checked={failed} onChange={(e) => setFailed(e.target.checked)} disabled={busy} /> Only failed trials
+          <input type="checkbox" checked={failed} onChange={(e) => setFailed(e.target.checked)} disabled={busy} /> Only failed attempts
         </label>
       </div>
       {error && <ErrorBox error={error} title="Analysis failed" />}

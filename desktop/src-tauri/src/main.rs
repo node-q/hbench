@@ -137,7 +137,7 @@ fn open_folder(app: &AppHandle, folder: PathBuf) {
         Err(e) if first => {
             // Still on the start screen: show the error there, with a way to pick another folder.
             if let Some(w) = main_window(app) {
-                let msg = serde_json::to_string(&format!("Couldn't open {}\n\n{e}", folder.display())).unwrap_or_default();
+                let msg = serde_json::to_string(&format!("{}\n\n{e}", folder.display())).unwrap_or_default();
                 let _ = w.eval(format!("window.showError && window.showError({msg})"));
             }
         }
@@ -147,7 +147,7 @@ fn open_folder(app: &AppHandle, folder: PathBuf) {
 
 fn pick_folder(app: &AppHandle) {
     let current = app.state::<AppState>().settings.lock().unwrap().folder.clone();
-    let mut dialog = app.dialog().file().set_title("Open a jobs or tasks folder");
+    let mut dialog = app.dialog().file().set_title("Open a folder of runs or tasks");
     if let Some(c) = current {
         dialog = dialog.set_directory(c);
     }
@@ -303,7 +303,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<(Menu<Wry>, Submenu<Wry>)> {
         .name(Some(APP_NAME))
         .version(Some(env!("CARGO_PKG_VERSION")))
         .copyright(Some("© 2026 NODEQ"))
-        .comments(Some("Expert-verified AI agent benchmarking studio.\nBuilt on hbench by node-q."))
+        .comments(Some("Test AI on your own computer.\nBuilt on hbench by node-q."))
         .website(Some(SITE_URL))
         .build();
 
@@ -326,14 +326,14 @@ fn build_menu(app: &AppHandle) -> tauri::Result<(Menu<Wry>, Submenu<Wry>)> {
     }
     let edit = SubmenuBuilder::new(app, "Edit").undo().redo().separator().cut().copy().paste().select_all().build()?;
     let view = SubmenuBuilder::new(app, "View")
-        .item(&item("palette", "Command Palette…", Some("CmdOrCtrl+Shift+P"))?)
+        .item(&item("palette", "Search and Commands…", Some("CmdOrCtrl+Shift+P"))?)
         .separator()
-        .item(&item("go:/", "Jobs", Some("CmdOrCtrl+1"))?)
+        .item(&item("go:/", "Runs", Some("CmdOrCtrl+1"))?)
         .item(&item("go:/compare", "Compare", Some("CmdOrCtrl+2"))?)
         .item(&item("go:/run", "New Run", Some("CmdOrCtrl+3"))?)
         .separator()
-        .item(&item("sidebar", "Toggle Side Bar", Some("CmdOrCtrl+B"))?)
-        .item(&item("theme", "Toggle Light / Dark Theme", Some("CmdOrCtrl+Shift+L"))?)
+        .item(&item("sidebar", "Show or Hide Side Bar", Some("CmdOrCtrl+B"))?)
+        .item(&item("theme", "Switch Between Light and Dark", Some("CmdOrCtrl+Shift+L"))?)
         .separator()
         .item(&item("zoom:in", "Zoom In", Some("CmdOrCtrl+="))?)
         .item(&item("zoom:out", "Zoom Out", Some("CmdOrCtrl+-"))?)
@@ -349,14 +349,14 @@ fn build_menu(app: &AppHandle) -> tauri::Result<(Menu<Wry>, Submenu<Wry>)> {
         .item(&item("tab-next", "Next Tab", Some("CmdOrCtrl+Shift+]"))?)
         .item(&item("tab-prev", "Previous Tab", Some("CmdOrCtrl+Shift+["))?)
         .separator()
-        .item(&item("palette", "Go to Job, Trial or Page…", Some("CmdOrCtrl+P"))?)
+        .item(&item("palette", "Find a Run, Attempt or Page…", Some("CmdOrCtrl+P"))?)
         .build()?;
     let window = SubmenuBuilder::new(app, "Window").minimize().maximize().build()?;
     let mut help = SubmenuBuilder::new(app, "Help")
-        .item(&item("help:docs", "hbench Documentation", None)?)
-        .item(&item("help:site", "Actuaria.io Website", None)?)
+        .item(&item("help:docs", "Documentation", None)?)
+        .item(&item("help:site", "Actuaria.io", None)?)
         .separator()
-        .item(&item("help:log", "Show Server Log", None)?);
+        .item(&item("help:log", "Show Log", None)?);
     if cfg!(debug_assertions) {
         help = help.separator().item(&item("devtools", "Toggle Developer Tools", Some("Alt+CmdOrCtrl+I"))?);
     }
@@ -516,7 +516,7 @@ fn main() {
                         install::push(w.app_handle());
                     }
                 })
-                // The title bar names the open tab, then the folder: "Jobs — my-evals".
+                // The title bar names the open tab, then the folder: "Runs — my-evals".
                 .on_document_title_changed(|w, title| {
                     // The viewer titles its pages "<page> · <app name>" (useTitle in viewer/src/shell.tsx).
                     let Some(page) = title.strip_suffix(&format!(" · {APP_NAME}")) else { return };

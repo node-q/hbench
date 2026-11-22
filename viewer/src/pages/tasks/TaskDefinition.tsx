@@ -2,7 +2,7 @@ import { useMemo, useState, type ReactNode } from "react";
 import { useParams } from "react-router";
 import { ApiError, p, useApi } from "../../lib/api";
 import { useUrlState } from "../../lib/state";
-import { bytes, duration } from "../../lib/fmt";
+import { bytes, duration, lower } from "../../lib/fmt";
 import type { FileInfo, Obj, TaskDefinition as TaskDef } from "../../lib/types";
 import { CopyButton, Empty, ErrorBox, PageHead, SkeletonRows, Tabs } from "../../ui/kit";
 import { CodeView, JsonTree, Markdown } from "../../ui/content";
@@ -13,7 +13,7 @@ import "./tasks.css";
 
 const TABS = [
   { id: "instruction", label: "Instruction" },
-  { id: "config", label: "Configuration" },
+  { id: "config", label: "Settings" },
   { id: "files", label: "Files" },
 ];
 
@@ -25,7 +25,7 @@ export default function TaskDefinition() {
   const setTab = (id: string) => url.set({ tab: id === "instruction" ? null : id, file: id === "files" ? url.get("file") : null });
   const task = useApi<TaskDef>(p("task-definitions", taskName));
 
-  const cmds: Command[] = useMemo(() => TABS.map((t) => ({ id: `tab:${t.id}`, label: `Show ${t.label.toLowerCase()}`, group: "This task", run: () => setTab(t.id) })), [url.set]); // eslint-disable-line react-hooks/exhaustive-deps
+  const cmds: Command[] = useMemo(() => TABS.map((t) => ({ id: `tab:${t.id}`, label: `Show ${lower(t.label)}`, group: "This task", run: () => setTab(t.id) })), [url.set]); // eslint-disable-line react-hooks/exhaustive-deps
   useCommands(cmds);
 
   if (task.error instanceof ApiError && task.error.status === 404) return <NotFound what="Task" />;
@@ -46,7 +46,7 @@ export default function TaskDefinition() {
               <Flags t={t} />
               <span className="task-dir mono" title={t.task_dir}>
                 <span className="trunc">{t.task_dir}</span>
-                <CopyButton text={t.task_dir} label="Copy task path" />
+                <CopyButton text={t.task_dir} label="Copy the task's folder path" />
               </span>
             </>
           )
@@ -60,7 +60,7 @@ export default function TaskDefinition() {
         <>
           <Tabs label="Task sections" tabs={TABS} value={tab} onChange={setTab} />
           {tab === "instruction" &&
-            (t.instruction ? <Markdown text={t.instruction} /> : <Empty title="No instruction.md">This task has no instruction file or step instructions.</Empty>)}
+            (t.instruction ? <Markdown text={t.instruction} /> : <Empty title="No instruction">This task has no instruction.md and no instructions for its steps.</Empty>)}
           {tab === "config" && <ConfigView config={t.config} />}
           {tab === "files" && <Files task={taskName} selected={url.get("file")} onSelect={(f) => url.set({ file: f })} />}
         </>
@@ -111,11 +111,11 @@ function ConfigView({ config }: { config: Obj }) {
     <div className="cfg">
       <div className="cfg-grid">
         <Group
-          title="Timeouts"
+          title="Time limits"
           rows={[
             ["Agent", secs(agent.timeout_sec)],
-            ["Verifier", secs(ver.timeout_sec)],
-            ["Environment build", secs(env.build_timeout_sec)],
+            ["Checks", secs(ver.timeout_sec)],
+            ["Container build", secs(env.build_timeout_sec)],
           ]}
         />
         <Group
@@ -132,18 +132,18 @@ function ConfigView({ config }: { config: Obj }) {
         <Group
           title="Network"
           rows={[
-            ["Environment", net(env)],
+            ["Container", net(env)],
             ["Agent", net(agent)],
-            ["Verifier", net(ver)],
-            ["Verifier environment", net(ver.environment)],
+            ["Checks", net(ver)],
+            ["Checks' container", net(ver.environment)],
           ]}
         />
         <Group
           title="Build"
           rows={[
             ["Docker image", env.docker_image],
-            ["Workdir", env.workdir],
-            ["Skills directory", env.skills_dir],
+            ["Working folder", env.workdir],
+            ["Skills folder", env.skills_dir],
             ["MCP servers", env.mcp_servers?.length ? env.mcp_servers.map((s: Obj) => s.name ?? "?").join(", ") : null],
             ["Schema version", config.schema_version],
           ]}
@@ -157,17 +157,17 @@ function ConfigView({ config }: { config: Obj }) {
               <li key={i}>
                 <span className="mono ink">{s.name ?? `step ${i + 1}`}</span>
                 {secs(s.agent?.timeout_sec) && <span className="muted"> · agent {secs(s.agent.timeout_sec)}</span>}
-                {secs(s.verifier?.timeout_sec) && <span className="muted"> · verifier {secs(s.verifier.timeout_sec)}</span>}
+                {secs(s.verifier?.timeout_sec) && <span className="muted"> · checks {secs(s.verifier.timeout_sec)}</span>}
               </li>
             ))}
           </ol>
-          {config.multi_step_reward_strategy && <p className="muted">Reward strategy: {String(config.multi_step_reward_strategy)}</p>}
+          {config.multi_step_reward_strategy && <p className="muted">How steps are scored: {String(config.multi_step_reward_strategy)}</p>}
         </section>
       )}
       <section className="section">
         <div className="section__head">
           <h2>task.toml</h2>
-          <CopyButton text={JSON.stringify(config, null, 2)} label="Copy config as JSON" />
+          <CopyButton text={JSON.stringify(config, null, 2)} label="Copy the settings as JSON" />
         </div>
         <div className="panel panel__body">
           <JsonTree value={config} open={1} />
@@ -186,7 +186,7 @@ function Files({ task, selected, onSelect }: { task: string; selected: string; o
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   if (files.error) return <ErrorBox error={files.error} onRetry={files.reload} />;
   if (!files.data) return <SkeletonRows />;
-  if (!files.data.length) return <Empty title="Empty task directory" />;
+  if (!files.data.length) return <Empty title="This task's folder is empty" />;
   // Hidden = any ancestor directory collapsed.
   const hidden = (path: string) => [...collapsed].some((d) => path.startsWith(d + "/"));
   return (
@@ -220,7 +220,7 @@ function Files({ task, selected, onSelect }: { task: string; selected: string; o
           })}
       </nav>
       <div className="files__view">
-        {selected ? <FileView task={task} path={selected} /> : <Empty title="Select a file">Pick a file on the left to read it.</Empty>}
+        {selected ? <FileView task={task} path={selected} /> : <Empty title="Pick a file to read">They are listed on the left.</Empty>}
       </div>
     </div>
   );
@@ -242,7 +242,7 @@ function FileView({ task, path }: { task: string; path: string }) {
         <img src={src} alt={path} className="file-view__img" />
       ) : text.error ? (
         text.error instanceof ApiError && (text.error.status === 413 || text.error.status === 415) ? (
-          <Empty title={text.error.status === 413 ? "File too large to preview" : "Binary file"}>
+          <Empty title={text.error.status === 413 ? "Too large to show" : "Not a text file"}>
             {text.error.message}. Use Raw to download it.
           </Empty>
         ) : (

@@ -33,6 +33,24 @@ export function usd(n: number | null | undefined): string {
   return `$${Math.round(n).toLocaleString("en-US")}`;
 }
 
+/** A pass-or-fail score in words ("passed", "failed"); null for any other score. */
+export function verdict(n: number | null | undefined): "passed" | "failed" | null {
+  return n === 1 ? "passed" : n === 0 ? "failed" : null;
+}
+
+/** "14 of 16 passed"; just "passed" or "failed" when there is one. */
+export function passed(n: number, of: number): string {
+  return of === 1 ? (n ? "passed" : "failed") : `${n} of ${of} passed`;
+}
+
+/** "passed" → "Passed". Only the first letter: "what the AI did" keeps its AI. */
+export function upper(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+export function lower(s: string): string {
+  return s.charAt(0).toLowerCase() + s.slice(1);
+}
+
 /** Rewards/metrics: up to 3 decimals, trailing zeros kept for column alignment. */
 export function score(n: number | null | undefined, digits = 3): string {
   return isNum(n) ? n.toFixed(digits) : DASH;

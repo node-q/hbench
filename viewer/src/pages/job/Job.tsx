@@ -18,10 +18,10 @@ import "./job.css";
 
 const TABS = [
   { id: "tasks", label: "Tasks" },
-  { id: "trials", label: "Trials" },
+  { id: "trials", label: "Attempts" },
   { id: "charts", label: "Charts" },
   { id: "analysis", label: "Analysis" },
-  { id: "config", label: "Config" },
+  { id: "config", label: "Settings" },
 ];
 
 export default function Job() {
@@ -54,16 +54,16 @@ export default function Job() {
   const setTab = (id: string) => url.set({ tab: id === "tasks" ? null : id, sort: null, order: null });
   const commands = useMemo<Command[]>(
     () => [
-      ...TABS.map((t) => ({ id: `job-tab:${t.id}`, label: `Show ${t.label.toLowerCase()}`, group: "This job", run: () => setTab(t.id) })),
-      { id: "job:analyze", label: "Analyze trials…", group: "This job", run: () => setAnalyze(true) },
-      ...(live ? [{ id: "job:stop", label: "Stop this run…", group: "This job", run: () => setStopAsk(true) }] : []),
-      ...(chart.data ?? []).map((t) => ({ id: `job-trial:${t.name}`, label: t.name, group: "Trials in this job", hint: fmt.score(t.reward), run: () => navigate(trialHref(job, t.name)) })),
+      ...TABS.map((t) => ({ id: `job-tab:${t.id}`, label: `Show ${fmt.lower(t.label)}`, group: "This run", run: () => setTab(t.id) })),
+      { id: "job:analyze", label: "Analyze attempts…", group: "This run", run: () => setAnalyze(true) },
+      ...(live ? [{ id: "job:stop", label: "Stop this run…", group: "This run", run: () => setStopAsk(true) }] : []),
+      ...(chart.data ?? []).map((t) => ({ id: `job-trial:${t.name}`, label: t.name, group: "Attempts in this run", hint: t.error_type ?? ("reward" in t.evals ? fmt.verdict(t.reward) : null) ?? fmt.score(t.reward), run: () => navigate(trialHref(job, t.name)) })),
     ],
     [chart.data, job, live],
   );
   useCommands(commands);
 
-  if (res.error instanceof ApiError && res.error.status === 404) return <NotFound what="Job" />;
+  if (res.error instanceof ApiError && res.error.status === 404) return <NotFound what="Run" />;
   const r = res.data;
   const path = r ? decodeURIComponent(r.job_uri.replace(/^file:\/\//, "")) : "";
   const elapsed = r ? fmt.ms(r.started_at, r.finished_at ?? (live ? new Date().toISOString() : null)) : null;
@@ -71,11 +71,11 @@ export default function Job() {
   return (
     <div className="page">
       <PageHead
-        crumbs={[{ to: "/", label: "Jobs" }]}
+        crumbs={[{ to: "/", label: "Runs" }]}
         title={
           <span className="job-title">
             <span className="trunc">{job}</span>
-            {path && <CopyButton text={path} label="Copy job path" />}
+            {path && <CopyButton text={path} label="Copy the run's folder path" />}
           </span>
         }
         meta={
@@ -90,7 +90,7 @@ export default function Job() {
               )}
               <span title={fmt.dateTime(r.started_at)}>started {fmt.date(r.started_at)}</span>
               <span className="num">{fmt.duration(elapsed)}</span>
-              <span className="num">{r.n_total_trials} trials</span>
+              <span className="num">{r.n_total_trials} attempt{r.n_total_trials === 1 ? "" : "s"}</span>
             </>
           )
         }
@@ -98,7 +98,7 @@ export default function Job() {
           <>
             {live &&
               (stopping ? (
-                <button className="btn btn--danger" disabled={!canForce} onClick={() => setStopAsk(true)} title={canForce ? "Remove the run's containers now" : "Trials in progress are being cancelled"}>
+                <button className="btn btn--danger" disabled={!canForce} onClick={() => setStopAsk(true)} title={canForce ? "Remove the run's containers now" : "Cancelling the attempts in progress"}>
                   {canForce ? <Icon.Stop size={14} /> : <span className="spinner" />} {canForce ? "Force stop" : "Stopping…"}
                 </button>
               ) : (
@@ -112,7 +112,7 @@ export default function Job() {
             <Link className="btn" to={`/compare?job=${encodeURIComponent(job)}`}>
               <Icon.Columns size={14} /> Compare with…
             </Link>
-            <button className="btn btn--danger btn--icon" onClick={() => setDel(true)} aria-label="Delete job" title="Delete job">
+            <button className="btn btn--danger btn--icon" onClick={() => setDel(true)} aria-label="Delete this run" title="Delete this run">
               <Icon.Trash size={14} />
             </button>
           </>
@@ -123,7 +123,7 @@ export default function Job() {
       {r && <StatsStrip job={job} result={r} />}
 
       <div className="section">
-        <Tabs label="Job views" tabs={TABS.map((t) => ({ ...t, count: t.id === "trials" ? (chart.data?.length ?? null) : undefined }))} value={tab} onChange={setTab} />
+        <Tabs label="Views of this run" tabs={TABS.map((t) => ({ ...t, count: t.id === "trials" ? (chart.data?.length ?? null) : undefined }))} value={tab} onChange={setTab} />
         {tab === "tasks" && <TasksTab job={job} poll={listPoll} />}
         {tab === "trials" && <TrialsTab job={job} poll={listPoll} />}
         {tab === "charts" && <Charts job={job} trials={chart.data} error={chart.error} />}
@@ -181,22 +181,22 @@ function DeleteDialog({ job, open, onClose }: { job: string; open: boolean; onCl
     <Dialog
       open={open}
       onClose={close}
-      title="Delete this job?"
+      title="Delete this run?"
       footer={
         <>
           <button className="btn" onClick={close} autoFocus>
-            Keep job
+            Keep it
           </button>
           <button className="btn btn--danger" disabled={busy} data-state={busy ? "loading" : undefined} onClick={run}>
-            {busy && <span className="spinner" />} Delete job
+            {busy && <span className="spinner" />} Delete run
           </button>
         </>
       }
     >
       <p>
-        Delete <code className="ink">{job}</code> and every trial in it from disk? This can't be undone.
+        Delete <code className="ink">{job}</code> and every attempt in it from disk? This can't be undone.
       </p>
-      {error && <ErrorBox error={error} title="Delete failed" />}
+      {error && <ErrorBox error={error} title="Couldn't delete the run" />}
     </Dialog>
   );
 }
@@ -241,8 +241,8 @@ function StopDialog({ job, open, force, onClose, onStopped }: { job: string; ope
     >
       <p>
         {force
-          ? "The run is still tearing down. Force stop removes its containers now; trials in progress end without results."
-          : "Trials in progress are cancelled and their containers removed. Finished trials keep their results."}
+          ? "The run is still stopping. Force stop removes its containers now. Attempts in progress end with no result."
+          : "Attempts in progress are cancelled and their containers removed. Finished ones keep their results."}
       </p>
       {error && <ErrorBox error={error} title="Couldn't stop the run" />}
     </Dialog>

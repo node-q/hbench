@@ -1,5 +1,5 @@
 // The dataset catalog (/api/run/catalog): domain tiles, then a domain's datasets. /run walks through it, and the
-// Jobs page shows the tiles while the folder has no jobs.
+// Runs page shows the tiles while the folder has no runs.
 import { useMemo, useState, type ReactNode } from "react";
 import { Link } from "react-router";
 import "./catalog.css";
@@ -9,7 +9,7 @@ import { enc, useApi, type Resource } from "../../lib/api";
 import type { Catalog, CatalogDataset, CatalogDomain } from "../../lib/types";
 import type { Source } from "./form";
 
-/** The pseudo-domain of tasks the registry's catalog doesn't list: a folder, a git task, a dataset by name. */
+/** The pseudo-domain of tasks the registry's catalog doesn't list: a folder, a git task, a test set by name. */
 export const CUSTOM = "custom";
 
 export const useCatalog = () => useApi<Catalog>("/api/run/catalog");
@@ -34,7 +34,7 @@ const GLYPHS: Record<string, Glyph> = {
 };
 export const domainGlyph = (id: string): Glyph => GLYPHS[id] ?? Icon.Layers;
 
-const CUSTOM_DOMAIN = { id: CUSTOM, title: "Your own tasks", description: "A local folder, a git repository, or a dataset in your own registry." };
+const CUSTOM_DOMAIN = { id: CUSTOM, title: "Your own tasks", description: "A folder on this computer, a git repository, or a test set in your own registry." };
 
 const count = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
 
@@ -43,7 +43,7 @@ export function DomainGrid({ catalog }: { catalog: Resource<Catalog> }) {
   const { data, error } = catalog;
   return (
     <div className="cat-domains">
-      {error && !data && <ErrorBox error={error} title="Couldn't list the registry's datasets" onRetry={catalog.reload} />}
+      {error && !data && <ErrorBox error={error} title="Couldn't get the list of test sets" onRetry={catalog.reload} />}
       <div className="cat-tiles" aria-busy={!data && !error}>
         {data
           ? data.domains.map((d) => <DomainTile key={d.id} domain={d} />)
@@ -74,7 +74,7 @@ function DomainTile({ domain: d }: { domain: CatalogDomain }) {
       <span className="cat-tile__title">{d.title}</span>
       <span className="cat-tile__desc">{d.description}</span>
       <span className="cat-tile__foot">
-        {d.n_datasets ? count(d.n_datasets, "dataset") : "No datasets yet"}
+        {d.n_datasets ? count(d.n_datasets, "test set") : "No test sets yet"}
         <Icon.ArrowRight size={14} />
       </span>
     </Link>
@@ -82,9 +82,9 @@ function DomainTile({ domain: d }: { domain: CatalogDomain }) {
 }
 
 const CUSTOM_SOURCES: { source: Source; title: string; description: string; glyph: Glyph }[] = [
-  { source: "path", title: "Local folder", description: "A task folder, or a folder of tasks, on this machine.", glyph: Icon.Folder },
-  { source: "git", title: "Git repository", description: "One task from a git repository, at a commit you choose.", glyph: Icon.Branch },
-  { source: "dataset", title: "Dataset by name", description: "A registry dataset the catalog doesn't list, or one in your own registry.", glyph: Icon.Layers },
+  { source: "path", title: "Folder", description: "One task, or a folder of tasks, on this computer.", glyph: Icon.Folder },
+  { source: "git", title: "Git repository", description: "One task from a git repository, at the commit you choose.", glyph: Icon.Branch },
+  { source: "dataset", title: "Test set by name", description: "One the list doesn't show, or one in your own registry.", glyph: Icon.Layers },
 ];
 
 /**
@@ -118,14 +118,14 @@ export function DatasetCatalog({
   const Glyph = domainGlyph(domainId);
   const back = (
     <Link to="/run?step=domain" className="btn btn--sm">
-      <Icon.ArrowLeft size={12} /> All domains
+      <Icon.ArrowLeft size={12} /> All fields of work
     </Link>
   );
 
   if (!isCustom && !data) {
     return error ? (
       <div className="cat-list">
-        <ErrorBox error={error} title="Couldn't list the registry's datasets" onRetry={catalog.reload} />
+        <ErrorBox error={error} title="Couldn't get the list of test sets" onRetry={catalog.reload} />
         <div className="toolbar">
           {back}
           <Link to={domainHref(CUSTOM)} className="btn btn--sm">
@@ -143,8 +143,8 @@ export function DatasetCatalog({
   }
   if (!domain) {
     return (
-      <Empty title="No such domain" action={back}>
-        The catalog has no domain called “{domainId}”.
+      <Empty title="We can't find that field of work" action={back}>
+        The list has nothing called “{domainId}”.
       </Empty>
     );
   }
@@ -159,7 +159,7 @@ export function DatasetCatalog({
           <h2>{domain.title}</h2>
           <p className="muted">{domain.description}</p>
         </div>
-        {all.length > 4 && <SearchField value={q} onChange={setQ} placeholder={`Search ${domain.title.toLowerCase()} datasets`} width="min(260px, 100%)" />}
+        {all.length > 4 && <SearchField value={q} onChange={setQ} placeholder={`Search ${domain.title.toLowerCase()} test sets`} width="min(260px, 100%)" />}
       </div>
 
       {isCustom ? (
@@ -183,7 +183,7 @@ export function DatasetCatalog({
         </div>
       ) : !all.length ? (
         <Empty
-          title={`No ${domain.title} datasets yet`}
+          title={`No ${domain.title.toLowerCase()} test sets yet`}
           action={
             <span className="toolbar" style={{ margin: 0 }}>
               <Link to={domainHref(CUSTOM)} className="btn btn--sm btn--primary">
@@ -193,11 +193,11 @@ export function DatasetCatalog({
             </span>
           }
         >
-          The registry has nothing in this domain so far. You can still benchmark an agent on {domain.title.toLowerCase()} tasks of your own.
+          You can still test an AI on {domain.title.toLowerCase()} tasks of your own.
         </Empty>
       ) : !shown.length ? (
         <Empty
-          title="No datasets match"
+          title="No test sets match"
           action={
             <button className="btn btn--sm" onClick={() => setQ("")}>
               Clear search
@@ -229,7 +229,7 @@ export function DatasetCatalog({
       {(isCustom || all.length > 0) && (
         <div className="cat-list__foot">
           {back}
-          {!isCustom && <span className="muted">{count(all.length, "dataset")}</span>}
+          {!isCustom && <span className="muted">{count(all.length, "test set")}</span>}
         </div>
       )}
     </div>

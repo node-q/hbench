@@ -80,7 +80,7 @@ export function ServerPanel({ agent, onChange }: { agent: AgentDraft; onChange: 
       <ServerStatus status={status} />
       <div className="run-row">
         {models.length ? (
-          <Field label="Model" required help={`${models.length} served; the agent asks for ${api.provider}/<model>.`}>
+          <Field label="Model" required help={`${models.length} on this server. The agent asks for ${api.provider}/<model>.`}>
             {(p) => (
               <select {...p} className="select input--mono" value={agent.model} onChange={(e) => onChange({ ...agent, model: e.target.value })}>
                 {!models.includes(agent.model) && <option value={agent.model}>{agent.model || "Pick a model"}</option>}
@@ -115,7 +115,7 @@ export function ServerPanel({ agent, onChange }: { agent: AgentDraft; onChange: 
           placeholder="e.g. vllm, llama.cpp"
           mono
           autoComplete="off"
-          help="Recorded with each trial."
+          help="Saved with each attempt."
           error={server.served_by.trim() && !/^[A-Za-z0-9._\-:+]{1,64}$/.test(server.served_by.trim()) ? "1-64 letters, digits and . _ - : +" : undefined}
         />
       </div>

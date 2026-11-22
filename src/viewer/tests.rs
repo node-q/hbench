@@ -107,6 +107,32 @@ fn task_and_trial_summaries() {
     assert_eq!(get(&app, &format!("/api/jobs/{job}/trials/a__1/files/agent/x.txt")).1, "a\nb");
     let cmp = get(&app, &format!("/api/compare?job={job}")).1;
     assert_eq!(cmp["tasks"][0]["task_name"], "b"); // highest avg reward first
+    // One of a's two trials passed; b has a partial score and c hasn't finished, so they have no count.
+    assert_eq!((&a["n_passed"], &t["items"][1]["n_passed"], &t["items"][0]["n_passed"]), (&json!(1), &json!(null), &json!(null)));
+    let cell = cmp["cells"]["ds::a"].as_object().unwrap().values().next().unwrap();
+    assert_eq!(cell["n_passed"], 1);
+}
+
+#[test]
+fn jobs_count_passes_when_every_trial_passed_or_failed() {
+    let app = fixture();
+    let n_passed = |completed: u64, eval: Value| {
+        let r = json!({"id": "x", "started_at": "2025-01-01T00:00:00Z", "finished_at": null, "n_total_trials": 4,
+            "stats": {"n_completed_trials": completed, "evals": {"k": eval}}});
+        write(&app.folder.join("2025-01-01__00-00-00/result.json"), &r.to_string());
+        get(&app, "/api/jobs").1["items"][1]["n_passed"].clone()
+    };
+    let binary = json!({"reward_stats": {"reward": {"1.0": ["a", "b"], "0.0": ["c"]}, "aux": {"2.0": ["a"]}}});
+    assert_eq!(n_passed(3, binary.clone()), 2);
+    // An error before grading is a fail; one that was still graded counts once.
+    let mut errored = binary.clone();
+    errored["exception_stats"] = json!({"AgentTimeoutError": ["c", "d"]});
+    assert_eq!(n_passed(4, errored), 2);
+    // A partial score, another reward name, or trials the stats don't name: no count.
+    assert_eq!(n_passed(2, json!({"reward_stats": {"reward": {"1.0": ["a"], "0.5": ["b"]}}})), json!(null));
+    assert_eq!(n_passed(1, json!({"reward_stats": {"accuracy": {"1.0": ["a"]}}})), json!(null));
+    assert_eq!(n_passed(4, binary), json!(null));
+    assert_eq!(n_passed(0, json!({})), json!(null));
 }
 
 #[test]

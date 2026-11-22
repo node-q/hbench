@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent a
 import { NavLink, useLocation, useNavigate } from "react-router";
 import * as Icon from "../ui/icons";
 import { useApi, useBusy } from "../lib/api";
+import * as fmt from "../lib/fmt";
 import { useKey } from "../lib/state";
 import type { AppConfig, JobSummary, Page, TaskDefinitionSummary, TrialSummary } from "../lib/types";
 import { useToast } from "../ui/overlay";
@@ -39,9 +40,9 @@ function describe(pathname: string): Where {
   if (seg[0] === "jobs" && seg[1]) {
     const job = seg[1];
     if (seg[2] === "trials" && seg[3]) {
-      return { key: pathname, label: seg[3], icon: Icon.File, crumbs: [{ label: "Jobs", to: "/" }, { label: job, to: jobPath(job) }, { label: seg[3] }] };
+      return { key: pathname, label: seg[3], icon: Icon.File, crumbs: [{ label: "Runs", to: "/" }, { label: job, to: jobPath(job) }, { label: seg[3] }] };
     }
-    return { key: pathname, label: job, icon: Icon.Folder, crumbs: [{ label: "Jobs", to: "/" }, { label: job }] };
+    return { key: pathname, label: job, icon: Icon.Folder, crumbs: [{ label: "Runs", to: "/" }, { label: job }] };
   }
   if (seg[0] === "task-definitions") {
     return seg[1]
@@ -50,7 +51,7 @@ function describe(pathname: string): Where {
   }
   if (seg[0] === "compare") return { key: pathname, label: "Compare", icon: Icon.Columns, crumbs: [{ label: "Compare" }] };
   if (seg[0] === "run") return { key: pathname, label: "New run", icon: Icon.Play, crumbs: [{ label: "New run" }] };
-  if (!seg.length) return { key: "/", label: "Jobs", icon: Icon.List, crumbs: [{ label: "Jobs" }] };
+  if (!seg.length) return { key: "/", label: "Runs", icon: Icon.List, crumbs: [{ label: "Runs" }] };
   return { key: pathname, label: seg[seg.length - 1], icon: Icon.File, crumbs: [{ label: pathname }] };
 }
 
@@ -133,7 +134,8 @@ function useFinishNotices(jobs: JobSummary[] | undefined) {
     for (const name of prev ?? []) {
       const j = jobs.find((x) => x.name === name);
       if (!j || now.has(name)) continue;
-      const summary = `${j.n_completed_trials}/${j.n_total_trials} trials${j.n_errored_trials ? `, ${j.n_errored_trials} errored` : ""}`;
+      const done = j.n_passed != null && j.n_completed_trials ? fmt.upper(fmt.passed(j.n_passed, j.n_completed_trials)) : `${j.n_completed_trials} of ${j.n_total_trials} attempts finished`;
+      const summary = `${done}${j.n_errored_trials ? `, ${j.n_errored_trials} with errors` : ""}`;
       if (document.hasFocus()) toast({ text: `Run finished: ${name} · ${summary}`, action: { label: "Open", run: () => navigate(jobPath(name)) } }, 8000);
       else native("notify", { title: "Run finished", body: `${name}\n${summary}` });
     }
@@ -250,12 +252,12 @@ export function DesktopChrome({
   return (
     <div className="dk" data-side={sideOpen ? "open" : "closed"} data-resizing={resizing} data-empty={empty} style={{ "--dk-side-w": `${sideW}px` } as React.CSSProperties}>
       <nav className="dk-activity" aria-label="Views">
-        <ActivityButton label={`Explorer (${kbd("B")})`} active={sideOpen} kind="view" onClick={toggleSide}>
+        <ActivityButton label={`Side bar (${kbd("B")})`} active={sideOpen} kind="view" onClick={toggleSide}>
           <Icon.Files size={22} />
         </ActivityButton>
         {!tasksMode && (
           <>
-            <ActivityButton label="Compare jobs" active={!empty && loc.pathname === "/compare"} kind="page" onClick={() => navigate("/compare")}>
+            <ActivityButton label="Compare runs" active={!empty && loc.pathname === "/compare"} kind="page" onClick={() => navigate("/compare")}>
               <Icon.Columns size={22} />
             </ActivityButton>
             <ActivityButton label={`New run (${kbd("N")})`} active={!empty && loc.pathname === "/run"} kind="page" onClick={() => navigate("/run")}>
@@ -263,18 +265,18 @@ export function DesktopChrome({
             </ActivityButton>
           </>
         )}
-        <ActivityButton label={`Command palette (${kbd("K")})`} kind="page" onClick={openPalette}>
+        <ActivityButton label={`Search and commands (${kbd("K")})`} kind="page" onClick={openPalette}>
           <Icon.Search size={22} />
         </ActivityButton>
         <div className="dk-activity__spacer" />
-        <ActivityButton label={mode === "dark" ? "Light theme" : "Dark theme"} kind="page" onClick={toggleMode}>
+        <ActivityButton label={mode === "dark" ? "Switch to light mode" : "Switch to dark mode"} kind="page" onClick={toggleMode}>
           {mode === "dark" ? <Icon.Sun size={20} /> : <Icon.Moon size={20} />}
         </ActivityButton>
       </nav>
 
-      <aside className="dk-side" aria-label="Explorer" inert={!sideOpen}>
+      <aside className="dk-side" aria-label="Side bar" inert={!sideOpen}>
         <div className="dk-side__title">
-          <span>Explorer</span>
+          <span>{tasksMode ? "Tasks" : "Runs"}</span>
           <span className="dk-side__actions">
             <button className="dk-icon" title="Open folder…" aria-label="Open folder" onClick={() => native("open-folder")}>
               <Icon.Folder size={14} />
@@ -294,7 +296,6 @@ export function DesktopChrome({
         <div className="dk-side__section" title={folder}>
           <Icon.ChevronDown size={12} />
           <span className="trunc">{folderName || "No folder"}</span>
-          <span className="dk-side__mode">{tasksMode ? "tasks" : "jobs"}</span>
         </div>
         {tasksMode ? <TaskTree /> : <JobTree jobs={jobs.data?.items} loading={jobs.loading && !jobs.data} error={jobs.error} collapseAll={collapseAll} />}
         <Resizer width={sideW} onWidth={setSideW} onDrag={setResizing} />
@@ -305,7 +306,7 @@ export function DesktopChrome({
           <div
             className="dk-tabs"
             role="tablist"
-            aria-label="Open editors"
+            aria-label="Open tabs"
             ref={strip}
             onWheel={(e) => {
               if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) e.currentTarget.scrollLeft += e.deltaY;
@@ -379,23 +380,23 @@ export function DesktopChrome({
         {!tasksMode && (
           <span className="dk-status__item" data-live={nRunning > 0}>
             {nRunning > 0 ? <span className="dk-spin" aria-hidden="true" /> : <Icon.Check size={12} />}
-            {nRunning > 0 ? `${nRunning} running` : "Idle"}
+            {nRunning > 0 ? `${nRunning} running` : "Nothing running"}
           </span>
         )}
         {jobs.error && (
           <span className="dk-status__item dk-status__item--bad">
-            <Icon.Alert size={12} /> Viewer unreachable
+            <Icon.Alert size={12} /> Not responding
           </span>
         )}
         <span className="dk-status__fill" />
         <UpdateStatus u={update} nRunning={nRunning} />
         <button className="dk-status__item" onClick={openPalette}>
-          {kbd("K")} Commands
+          {kbd("K")} Search
         </button>
         <button className="dk-status__item" onClick={toggleMode}>
           {mode === "dark" ? "Dark" : "Light"}
         </button>
-        <button className="dk-status__item" title="Server log" onClick={() => native("server-log")}>
+        <button className="dk-status__item" title="Show the log" onClick={() => native("server-log")}>
           {desktopInfo ? `v${desktopInfo.version}` : "Desktop preview"}
         </button>
       </footer>
@@ -412,12 +413,12 @@ function Welcome({ tasksMode, openPalette }: { tasksMode: boolean; openPalette: 
     ...(tasksMode
       ? [{ label: "Show tasks", keys: kbd("1"), run: () => navigate("/task-definitions") }]
       : [
-          { label: "Show jobs", keys: kbd("1"), run: () => navigate("/") },
-          { label: "Compare jobs", keys: kbd("2"), run: () => navigate("/compare") },
+          { label: "Show runs", keys: kbd("1"), run: () => navigate("/") },
+          { label: "Compare runs", keys: kbd("2"), run: () => navigate("/compare") },
           { label: "Start a new run", keys: kbd("N"), run: () => navigate("/run") },
         ]),
     { label: "Open a folder", keys: kbd("O"), run: () => native("open-folder") },
-    { label: "Go to a job, trial or page", keys: kbd("K"), run: openPalette },
+    { label: "Find a run, an attempt or a page", keys: kbd("K"), run: openPalette },
   ];
   return (
     <div className="dk-welcome">
@@ -525,11 +526,11 @@ function JobTree({ jobs, loading, error, collapseAll }: { jobs: JobSummary[] | u
 
   return (
     <>
-      <Filter value={q} onChange={setQ} placeholder="Filter jobs, agents, models" />
+      <Filter value={q} onChange={setQ} placeholder="Filter runs, agents, models" />
       <div
         className="dk-tree"
         role="tree"
-        aria-label="Jobs"
+        aria-label="Runs"
         onKeyDown={(e) =>
           treeKeys(e, (row, key, focus) => {
             const job = row.dataset.job;
@@ -541,11 +542,11 @@ function JobTree({ jobs, loading, error, collapseAll }: { jobs: JobSummary[] | u
           })
         }
       >
-        {loading && <div className="dk-tree__note">Loading jobs…</div>}
+        {loading && <div className="dk-tree__note">Loading runs…</div>}
         {error && <div className="dk-tree__note dk-tree__note--bad">{error.message}</div>}
         {jobs && !shown.length && (
           <div className="dk-tree__note">
-            {q ? "Nothing matches." : "No jobs in this folder yet."}
+            {q ? "Nothing matches." : "No runs in this folder yet."}
             {!q && (
               <NavLink to="/run" className="dk-tree__cta">
                 Start a run
@@ -599,7 +600,7 @@ function JobTree({ jobs, loading, error, collapseAll }: { jobs: JobSummary[] | u
 
 function JobState({ j }: { j: JobSummary }) {
   if (running(j)) return <span className="dk-spin" title="Running" />;
-  if (j.n_errored_trials > 0) return <span className="dk-dot dk-dot--warn" title={`${j.n_errored_trials} errored`} />;
+  if (j.n_errored_trials > 0) return <span className="dk-dot dk-dot--warn" title={`${j.n_errored_trials} with errors`} />;
   return <span className="dk-dot dk-dot--ok" title="Finished" />;
 }
 
@@ -607,7 +608,7 @@ function TrialRows({ job, live }: { job: string; live: boolean }) {
   const loc = useLocation();
   const trials = useApi<Page<TrialSummary>>(`/api/jobs/${encodeURIComponent(job)}/trials?page_size=100`, { poll: live ? 4000 : undefined });
   if (!trials.data) return <div className="dk-tree__note dk-tree__note--nested">{trials.error ? trials.error.message : "Loading…"}</div>;
-  if (!trials.data.items.length) return <div className="dk-tree__note dk-tree__note--nested">No trials yet.</div>;
+  if (!trials.data.items.length) return <div className="dk-tree__note dk-tree__note--nested">No attempts yet.</div>;
   return (
     <div role="group" className="dk-group">
       {trials.data.items.map((t) => {
@@ -624,7 +625,7 @@ function TrialRows({ job, live }: { job: string; live: boolean }) {
           >
             {state === "run" ? <span className="dk-spin" /> : <span className={`dk-dot dk-dot--${state}`} />}
             <span className="trunc dk-row__label">{t.task_name.split("/").pop()}</span>
-            <span className="dk-row__meta mono">{t.error_type ? "error" : t.reward == null ? "–" : t.reward.toFixed(2)}</span>
+            <span className="dk-row__meta mono">{t.error_type ? "error" : t.reward == null ? "–" : (("reward" in t.evals ? fmt.verdict(t.reward) : null) ?? t.reward.toFixed(2))}</span>
           </NavLink>
         );
       })}

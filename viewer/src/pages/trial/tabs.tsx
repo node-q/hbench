@@ -1,4 +1,4 @@
-// The smaller trial tabs: interaction, verifier, agent logs, text files, recording, analysis, config.
+// The smaller trial tabs: conversation, checks, agent logs, text files, recording, analysis, config.
 import { useMemo, useState } from "react";
 import { ApiError, send, useApi } from "../../lib/api";
 import * as fmt from "../../lib/fmt";
@@ -30,9 +30,9 @@ export function InteractionTab({ t }: { t: TrialRef }) {
   if (res.error) return <ErrorBox error={res.error} onRetry={res.reload} />;
   if (!res.data) return <SkeletonRows />;
   const d = res.data;
-  if (!d.available) return <Empty title="No simulated-user interaction">This trial ran without a user agent.</Empty>;
+  if (!d.available) return <Empty title="No conversation">No simulated user took part in this attempt.</Empty>;
   const userSteps = d.user_trajectory?.steps ?? [];
-  const errors = [...d.user_parse_errors.map((e) => ({ ...e, log: "user runtime" })), ...d.target_parse_errors.map((e) => ({ ...e, log: "target runtime" }))];
+  const errors = [...d.user_parse_errors.map((e) => ({ ...e, log: "user" })), ...d.target_parse_errors.map((e) => ({ ...e, log: "agent" }))];
   return (
     <div className="interaction">
       <Block title="Simulated user" aside={<span className="num muted">{userSteps.length} steps · {d.user_events.length} events</span>}>
@@ -49,11 +49,11 @@ export function InteractionTab({ t }: { t: TrialRef }) {
           <EventList events={d.user_events} />
         )}
       </Block>
-      <Block title="Target agent" aside={<span className="num muted">{d.target_events.length} events</span>}>
-        {d.target_events.length ? <EventList events={d.target_events} /> : d.bridge_trajectory ? <JsonTree value={d.bridge_trajectory} open={1} /> : <span className="muted">No target content</span>}
+      <Block title="Agent" aside={<span className="num muted">{d.target_events.length} events</span>}>
+        {d.target_events.length ? <EventList events={d.target_events} /> : d.bridge_trajectory ? <JsonTree value={d.bridge_trajectory} open={1} /> : <span className="muted">Nothing recorded</span>}
       </Block>
       {errors.length > 0 && (
-        <Block title="Unparsed log lines">
+        <Block title="Log lines we couldn't read">
           <ul className="ilist">
             {errors.map((e, k) => (
               <li key={k} className="ilist__item">
@@ -116,7 +116,7 @@ export function VerifierTab({ t }: { t: TrialRef }) {
   if (res.error) return <ErrorBox error={res.error} onRetry={res.reload} />;
   if (!res.data) return <SkeletonRows />;
   const d = res.data;
-  if (!d.stdout && !d.stderr && !d.ctrf && !d.reward && !d.reward_details) return <Empty title="No verifier output">The verifier didn't run or wrote nothing.</Empty>;
+  if (!d.stdout && !d.stderr && !d.ctrf && !d.reward && !d.reward_details) return <Empty title="No checks to show">The checks didn't run, or wrote nothing.</Empty>;
   const tests = ctrf?.tests.filter((x) => !failOnly || x.status !== "passed") ?? [];
   const passed = ctrf?.tests.filter((x) => x.status === "passed").length ?? 0;
   return (
@@ -134,32 +134,32 @@ export function VerifierTab({ t }: { t: TrialRef }) {
         </Block>
       )}
       {d.reward_details && (
-        <Block title="Reward details">
+        <Block title="Score details">
           <JsonTree value={d.reward_details} open={2} />
         </Block>
       )}
       {ctrf && (
         <Block
-          title="Tests"
+          title="Checks"
           aside={
             <span className="toolbar" style={{ margin: 0 }}>
               <span className="num muted">
-                {passed} / {ctrf.tests.length} passed
+                {passed} of {ctrf.tests.length} passed
               </span>
               <label className="check">
-                <input type="checkbox" checked={failOnly} onChange={(e) => setFailOnly(e.target.checked)} /> Failures only
+                <input type="checkbox" checked={failOnly} onChange={(e) => setFailOnly(e.target.checked)} /> Only failed
               </label>
             </span>
           }
         >
           {tests.length ? (
             <div className="table-wrap">
-              <table className="table" aria-label="Test results">
+              <table className="table" aria-label="Checks">
                 <thead>
                   <tr>
-                    <th>Status</th>
-                    <th>Test</th>
-                    <th data-align="right">Duration</th>
+                    <th>Result</th>
+                    <th>Check</th>
+                    <th data-align="right">Time</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -170,7 +170,7 @@ export function VerifierTab({ t }: { t: TrialRef }) {
               </table>
             </div>
           ) : (
-            <span className="muted">No failing tests.</span>
+            <span className="muted">Nothing failed.</span>
           )}
         </Block>
       )}
@@ -225,7 +225,7 @@ export function AgentLogsTab({ t }: { t: TrialRef }) {
   if (res.error) return <ErrorBox error={res.error} onRetry={res.reload} />;
   if (!res.data) return <SkeletonRows />;
   const d = res.data;
-  if (!d.setup && !d.oracle && !d.commands.length) return <Empty title="No agent logs">No setup output, command output or oracle log in this trial.</Empty>;
+  if (!d.setup && !d.oracle && !d.commands.length) return <Empty title="No agent logs">This attempt has no output from setup, commands or the oracle.</Empty>;
   return (
     <div>
       {d.setup != null && (
@@ -264,7 +264,7 @@ export function TextFileTab({ t, path, empty, fallback }: { t: TrialRef; path: s
       wrap
       maxHeight="72vh"
       actions={
-        <a className="btn btn--sm btn--ghost" href={src} target="_blank" rel="noreferrer" title="Open raw">
+        <a className="btn btn--sm btn--ghost" href={src} target="_blank" rel="noreferrer" title="Open the file">
           <Icon.External size={13} />
         </a>
       }
@@ -278,7 +278,7 @@ export function RecordingTab({ t }: { t: TrialRef }) {
   const res = useApi<Recording>(api(t, "recording"));
   if (res.error) return <ErrorBox error={res.error} onRetry={res.reload} />;
   if (!res.data) return <SkeletonRows />;
-  if (!res.data.available) return <Empty title="No recording">agent/recording.mp4 doesn't exist for this trial.</Empty>;
+  if (!res.data.available) return <Empty title="No recording">This attempt has no agent/recording.mp4.</Empty>;
   const src = api({ job: t.job, trial: t.trial }, "recording/file");
   return (
     <figure className="recording">
@@ -308,7 +308,7 @@ export function AnalysisTab({ t }: { t: TrialRef }) {
       <div className="toolbar">
         <span className="toolbar__spacer" />
         <button className="btn btn--sm" onClick={() => setFormOpen(!formOpen)} aria-expanded={formOpen}>
-          <Icon.Sparkle size={13} /> {text || a ? "Analyze again" : "Analyze this trial"}
+          <Icon.Sparkle size={13} /> {text || a ? "Analyze again" : "Analyze this attempt"}
         </button>
       </div>
       {formOpen && (
@@ -325,7 +325,7 @@ export function AnalysisTab({ t }: { t: TrialRef }) {
           <Markdown text={text} />
         </Block>
       ) : !a && !formOpen ? (
-        <Empty title="No analysis">Run an agent over this trial's logs to explain what happened.</Empty>
+        <Empty title="Nothing analyzed yet">An agent can read this attempt's logs and explain what happened.</Empty>
       ) : null}
       {a && (
         <Block title="analysis.json">
@@ -359,7 +359,7 @@ function AnalyzeForm({ t, onDone }: { t: TrialRef; onDone: (summary: string) => 
       setBusy(false);
     }
   };
-  if (opts.error) return <ErrorBox error={opts.error} title="Couldn't load run options" onRetry={opts.reload} />;
+  if (opts.error) return <ErrorBox error={opts.error} title="Couldn't load the agents and environments" onRetry={opts.reload} />;
   return (
     <form
       className="panel tanalyze-form"

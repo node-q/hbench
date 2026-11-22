@@ -555,3 +555,8 @@
 .tmap__canvas .tmap__revisit .react-flow__edge-path {
   stroke-dasharray: 5 4;
 }
+.trial-summary__result {
+  display: grid;
+  justify-items: start;
+  gap: 4px;
+}

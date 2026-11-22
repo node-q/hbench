@@ -28,8 +28,8 @@ impl fmt::Display for CatalogueError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             CatalogueError::BadIndex(e) => write!(f, "the catalogue couldn't be read ({e})"),
-            CatalogueError::NotListed => f.write_str("this bot isn't in the catalogue"),
-            CatalogueError::BadEntry(e) => write!(f, "the catalogue's entry for this bot isn't valid ({e})"),
+            CatalogueError::NotListed => f.write_str("it isn't in the catalogue"),
+            CatalogueError::BadEntry(e) => write!(f, "the catalogue's entry for it isn't valid ({e})"),
         }
     }
 }
@@ -161,18 +161,18 @@ pub fn lookup(index_json: &[u8], id: &str) -> Result<Offer, CatalogueError> {
     for (t, a) in [(Target::Claude, bot.targets.claude), (Target::Orca, bot.targets.orca)] {
         let Some(a) = a else { continue };
         if !valid_download_url(&a.url, t) {
-            return Err(bad("artefact URL"));
+            return Err(bad("its download address"));
         }
         if !valid_sha256(&a.sha256) {
-            return Err(bad("artefact SHA-256"));
+            return Err(bad("its SHA-256"));
         }
         if a.size == 0 || a.size > MAX_ARTEFACT_BYTES {
-            return Err(bad("artefact size"));
+            return Err(bad("its size"));
         }
         artefacts.insert(t, a);
     }
     if artefacts.is_empty() {
-        return Err(bad("no artefacts"));
+        return Err(bad("no downloads"));
     }
     Ok(Offer { id: bot.id, name, version: bot.version, description, artefacts })
 }

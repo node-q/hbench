@@ -74,12 +74,13 @@ impl App {
                         "datasets": sources, "agents": agents, "providers": providers, "models": models, "environment_type": environment_type, "evals": evals,
                         "total_input_tokens": num_or_null(uncached(st["n_input_tokens"].as_i64(), st["n_cache_tokens"].as_i64())),
                         "total_cached_input_tokens": st["n_cache_tokens"], "total_output_tokens": st["n_output_tokens"], "total_cost_usd": st["cost_usd"],
+                        "n_passed": job_passed(st),
                     })
                 }
                 None => json!({
                     "name": name, "id": null, "started_at": null, "updated_at": null, "finished_at": null, "n_total_trials": 0, "n_completed_trials": 0,
                     "n_errored_trials": 0, "datasets": sources, "agents": agents, "providers": providers, "models": models, "environment_type": environment_type,
-                    "evals": {}, "total_input_tokens": null, "total_cached_input_tokens": null, "total_output_tokens": null, "total_cost_usd": null,
+                    "evals": {}, "total_input_tokens": null, "total_cached_input_tokens": null, "total_output_tokens": null, "total_cost_usd": null, "n_passed": null,
                 }),
             };
             out.push((parse_dt(&summary["started_at"]).map(|d| ts(&d)), summary));
@@ -100,6 +101,9 @@ impl App {
             exception_types: Vec<String>,
             total_reward: f64,
             reward_count: i64,
+            n_passed: i64,
+            /// A trial that is neither a pass nor a fail: a partial score, or nothing graded.
+            ungraded: bool,
             reward_totals: Vec<(String, f64, i64)>,
             total_duration_ms: f64,
             duration_count: i64,
@@ -172,6 +176,10 @@ impl App {
                 let rewards = r["verifier_result"].get("rewards").filter(|v| truthy(v)).cloned().unwrap_or(json!({}));
                 g.total_reward += rewards.get("reward").and_then(Value::as_f64).unwrap_or(0.0);
                 g.reward_count += 1;
+                match passed(&rewards, !r["exception_info"].is_null()) {
+                    Some(p) => g.n_passed += i64::from(p),
+                    None => g.ungraded = true,
+                }
                 for (k, v) in numeric_rewards(&rewards) {
                     match g.reward_totals.iter_mut().find(|x| x.0 == k) {
                         Some(x) => {
@@ -210,12 +218,13 @@ impl App {
                 } else {
                     json!(0.0)
                 };
+                let n_passed = if avg_reward.is_null() || g.ungraded { Value::Null } else { json!(g.n_passed) };
                 g.exception_types.sort();
                 let evals = evals_from_rewards(g.reward_totals.iter().map(|(k, t, n)| (k.clone(), t / *n as f64)).collect());
                 json!({
                     "task_name": task, "source": source, "agent_name": agent, "model_provider": provider, "model_name": model,
                     "n_trials": g.n_trials, "n_completed": g.n_completed, "n_errors": g.n_errors, "exception_types": g.exception_types,
-                    "avg_reward": avg_reward, "evals": evals, "avg_duration_ms": avg(g.total_duration_ms, g.duration_count),
+                    "avg_reward": avg_reward, "n_passed": n_passed, "evals": evals, "avg_duration_ms": avg(g.total_duration_ms, g.duration_count),
                     "avg_tokens": avg(g.total_tokens as f64, g.tokens_count),
                     "avg_input_tokens": avg(g.totals[0].0 as f64, g.totals[0].1), "avg_cached_input_tokens": avg(g.totals[1].0 as f64, g.totals[1].1),
                     "avg_output_tokens": avg(g.totals[2].0 as f64, g.totals[2].1), "avg_cost_usd": avg(g.total_cost, g.cost_count),
@@ -261,6 +270,53 @@ impl App {
         }
         Ok(out)
     }
+}
+
+/// Whether a finished trial passed: 1 is a pass, 0 (or an error before grading) a fail. `None` for any other score,
+/// and for a trial that ran without grading.
+fn passed(rewards: &Value, errored: bool) -> Option<bool> {
+    match rewards.as_object() {
+        Some(m) if !m.is_empty() => match m.get("reward").and_then(Value::as_f64) {
+            Some(1.0) => Some(true),
+            Some(0.0) => Some(false),
+            _ => None,
+        },
+        _ => errored.then_some(false),
+    }
+}
+
+/// How many of a job's finished trials passed, from its stats; null unless each one is a pass or a fail.
+fn job_passed(st: &Value) -> Value {
+    let mut n = 0;
+    let mut seen = 0;
+    for e in st["evals"].as_object().into_iter().flatten().map(|(_, e)| e) {
+        let count = |v: &Value| v.as_array().map_or(0, Vec::len) as u64;
+        let mut graded = 0;
+        if let Some(keys) = e["reward_stats"].as_object().filter(|m| !m.is_empty()) {
+            let Some(by_score) = keys.get("reward").and_then(Value::as_object) else { return Value::Null };
+            for (score, trials) in by_score {
+                match score.parse::<f64>() {
+                    Ok(1.0) => n += count(trials),
+                    Ok(0.0) => {}
+                    _ => return Value::Null,
+                }
+                graded += count(trials);
+            }
+        }
+        // Trials that failed with an error before grading: named there, in no score.
+        let names = |v: &Value| -> HashSet<String> {
+            v.as_object()
+                .into_iter()
+                .flatten()
+                .flat_map(|(_, t)| t.as_array().into_iter().flatten())
+                .filter_map(s)
+                .map(String::from)
+                .collect()
+        };
+        let ungraded = names(&e["exception_stats"]).difference(&names(&e["reward_stats"]["reward"])).count() as u64;
+        seen += graded + ungraded;
+    }
+    if seen > 0 && Some(seen) == st["n_completed_trials"].as_u64() { json!(n) } else { Value::Null }
 }
 
 fn path_label(p: &str) -> String {
