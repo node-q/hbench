@@ -58,6 +58,9 @@ update() {
 
   release=$(read_release) || die "could not read the beta-channel release: the beta channel is unchanged"
   if [ -n "$release" ]; then
+    # Anything else could be "latest", and its latest.json what stable apps read.
+    [ "$(jq -r '.prerelease' <<< "$release")" = true ] ||
+      die "the beta-channel release is not marked as a prerelease: mark it, then re-run this job"
     id=$(jq -er .id <<< "$release") || die "could not read the beta-channel release's id"
     old=$(asset_id "$release" latest.json) || die "could not read the beta-channel release's files"
     prev=$(asset_id "$release" latest-prev.json) || die "could not read the beta-channel release's files"

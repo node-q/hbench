@@ -70,10 +70,20 @@ Unfinished work stays behind a flag so that master can always ship.
   version, so a beta feed that is behind or unreadable never hides a newer stable. The stable feed never offers a
   prerelease. Updates only ever go up, so turning it off never downgrades: the app stays on its version until stable
   passes it. Turning it on or off drops an update that was only offered; a download or an installed update goes on.
-- **`.deb` versions:** to dpkg, `0.5.0-beta.1` sorts above `0.5.0`. The in-app updater compares semver and installs
-  with `dpkg -i`, which allows it, but `apt install ./….deb` of 0.5.0 over the beta counts as a downgrade and needs
-  `--allow-downgrades`. The `.rpm` likely sorts the same way, and the in-app updater's `rpm -U` refuses a downgrade:
-  check beta to stable on an rpm system before the first stable that follows a beta.
+- **Withdrawing a bad beta:** ship the next beta, which replaces it in the feed. Or, to stop offering it at once, delete
+  `latest.json` from the `beta-channel` release (and `latest-prev.json`, if an interrupted update left one: the next run
+  would put it back): `gh release delete-asset beta-channel latest.json -R node-q/hbench`. The app then offers beta users
+  stable only, and `HBENCH_CHANNEL=beta` stops with an error, until the next beta or stable release fills the feed.
+  With no file there is no version to compare with, so don't re-run an older release's `beta-feed` job meanwhile (the
+  bad beta's own would put it back). An app already showing the beta's prompt can still install it unless its packages
+  are deleted from the beta's own release, and one that has installed it stays on it until something newer is offered.
+- **The feed's release** must stay marked as a prerelease: were it "latest", stable apps would read its `latest.json`.
+  `beta-feed.sh` refuses to update it otherwise.
+- **Linux package versions:** the `.rpm` of `0.5.0-beta.1` has version `0.5.0~beta.1`, which sorts below `0.5.0`, so beta
+  to stable is a plain upgrade (it needs `@tauri-apps/cli` 2.12.5 or later; before, the bundler failed on the `-`). The
+  `.deb` keeps `0.5.0-beta.1`, which dpkg sorts above `0.5.0`. The in-app updater compares semver and installs with
+  `dpkg -i`, which allows it, but `apt install ./….deb` of 0.5.0 over the beta counts as a downgrade and needs
+  `--allow-downgrades`. CI checks both versions.
 - **CLI:** `curl -fsSL https://github.com/node-q/hbench/releases/latest/download/install.sh | HBENCH_CHANNEL=beta sh`
   installs the beta feed's version (which can be behind stable, see above); any other `HBENCH_CHANNEL` than
   `stable` or `beta` is refused. `HBENCH_VERSION` still pins an exact release.

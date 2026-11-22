@@ -24,7 +24,7 @@ for bad in "" 0.5 0.5.0-rc.1 0.5.0-beta 0.5.0-beta.01 v0.5.0 null "0.5.0 x" $'0.
   [ -z "$bad" ] || is "feed version '$bad'" fails "$(decide 0.5.0 "$bad" 2> /dev/null || echo fails)"
 done
 
-# The fake gh: $S/release exists when the release does, $S/assets/<id>.<name> are its files, and each line of
+# The fake gh: $S/release exists when the release does (JSON in it is added to what gh says of it), $S/assets/<id>.<name> are its files, and each line of
 # $S/fail names a call to fail (view, read, create, upload, rename:<new name>, delete).
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
@@ -40,7 +40,7 @@ case "$all" in
     fail view
     [ -f "$S/release" ] || { echo '{"message":"Not Found"}'; echo "gh: Not Found (HTTP 404)" >&2; exit 1; }
     for f in "$S"/assets/*; do [ -f "$f" ] && b=${f##*/} && printf '{"id":%s,"name":"%s"}\n' "${b%%.*}" "${b#*.}"; done |
-      jq -s '{id: 7, assets: .}' ;;
+      jq -s --arg pre "$(cat "$S/release")" '{id: 7, assets: .} + ($pre | if . == "" then {prerelease: true} else fromjson end)' ;;
   "api -H Accept: application/octet-stream "*) fail read "Not Found (HTTP 404)"; cat "$(file "${last##*/}")" ;;
   "api -X PATCH "*) fail "rename:${last##*name=}"; id=${4##*/}; f=$(file "$id") || exit 1; mv "$f" "$S/assets/$id.${last##*name=}" ;;
   "api -X DELETE "*) fail delete; f=$(file "${4##*/}") || exit 1; rm "$f" ;;
@@ -83,6 +83,10 @@ scene none; echo view > "$S/fail"; case_ "release unreadable, none there" failed
 is "release unreadable: nothing is written" 1 "$(wc -l < "$S/calls")"
 # A 404 on a file the release lists is a failed read, not "no feed yet".
 scene 0.5.0; echo read > "$S/fail"; case_ "feed unreadable" failed latest.json=0.5.0 0.6.0
+for pre in '{"prerelease":false}' '{"prerelease":null}' '{}'; do
+  scene 0.5.0; echo "$pre" > "$S/release"; case_ "release not a prerelease, $pre" failed latest.json=0.5.0 0.6.0
+  is "release not a prerelease, $pre: nothing is written" 1 "$(wc -l < "$S/calls")"
+done
 scene null; case_ "feed with a broken version" failed latest.json=null 0.6.0
 scene ""; echo "not json" > "$S/assets/1.latest.json"; is "feed not JSON" failed "$(run 0.6.0)"
 is "feed not JSON: kept" "not json" "$(cat "$S/assets/1.latest.json")"
