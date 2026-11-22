@@ -127,6 +127,8 @@ jobs:
           components: clippy, rustfmt
       - name: Check formatting
         run: cargo fmt --check
+      - name: Test the beta channel's feed script
+        run: scripts/beta-feed-test.sh
       - name: Run Clippy
         run: cargo clippy --locked --all-targets -- -D warnings
         env:
@@ -223,12 +225,18 @@ jobs:
         run: |
           cargo fmt --check
           cargo clippy --locked
+      - name: Test the app
+        if: runner.os == 'Linux'
+        working-directory: desktop/src-tauri
+        run: cargo test --locked
       - name: Build and bundle the app
         working-directory: desktop
         env:
           BUNDLES: ${{ matrix.bundles }}
         run: |
           npm ci --ignore-scripts
+          # As a beta on Linux: rpm refuses a version with "-", so the bundler must turn it into "~". This workspace only.
+          if [ "$RUNNER_OS" = Linux ]; then sh scripts/set-version.sh 0.0.0-beta.1; fi
           npx tauri build --debug --bundles "$BUNDLES"
       - name: Package the macOS app unsigned
         if: runner.os == 'macOS'
@@ -267,6 +275,12 @@ jobs:
           # Both the app and the bundled hbench must be in the package.
           dpkg-deb --contents "$deb" | grep -iE 'usr/bin/(actuaria|hbench)$' | wc -l | grep -qx 2
           test -s "$rpm"
+          # A beta sorts below its release in an rpm, but not in a .deb (docs/RELEASING.md, Beta releases).
+          rpm_version=$(rpm -qp --queryformat '%{VERSION}' "$rpm")
+          echo "rpm version: $rpm_version"
+          [ "$rpm_version" = "0.0.0~beta.1" ] || { echo "::error::the rpm's version is $rpm_version, not 0.0.0~beta.1"; exit 1; }
+          deb_version=$(dpkg-deb --field "$deb" Version)
+          [ "$deb_version" = "0.0.0-beta.1" ] || { echo "::error::the .deb's version is $deb_version, not 0.0.0-beta.1: update docs/RELEASING.md"; exit 1; }
 
   e2e:
     # The integrity guarantees (stopping the agent at timeout, the hidden-test scrub, the egress allowlist)

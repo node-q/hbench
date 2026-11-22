@@ -9,6 +9,7 @@ dependencies = [
  "actuaria-install",
  "gtk",
  "rfd",
+ "semver",
  "serde",
  "serde_json",
  "tauri",

@@ -2,6 +2,9 @@ name: Release
 
 # How to release: Actions → Release → Run workflow → pick bump → approve.
 #
+#   channel   stable (default) or beta: a beta is the bumped version plus -beta.N, N one more than the highest
+#             existing beta of that version; it is published as a prerelease and offered only to apps on the
+#             beta channel (release.yml, "beta-channel")
 #   bump      patch, minor or major: the next version after the latest v* tag
 #   version   or an exact version (0.4.0, 0.4.0-rc.1), which wins over bump
 #   dry_run   plan and show the bump, change nothing
@@ -26,6 +29,11 @@ name: Release
 on:
   workflow_dispatch:
     inputs:
+      channel:
+        description: stable, or beta (the bumped version plus -beta.N; ignored when version is set)
+        type: choice
+        options: [stable, beta]
+        default: stable
       bump:
         description: Raise the patch, minor or major version (ignored when version is set)
         type: choice
@@ -83,6 +91,7 @@ jobs:
         working-directory: repo
         env:
           BUMP: ${{ inputs.bump }}
+          CHANNEL: ${{ inputs.channel }}
           VERSION_INPUT: ${{ inputs.version }}
           DRY_RUN: ${{ inputs.dry_run }}
         run: |
@@ -105,6 +114,14 @@ jobs:
               minor) version="$major.$((minor + 1)).0" ;;
               major) version="$((major + 1)).0.0" ;;
               *) fail "bump must be patch, minor or major" ;;
+            esac
+            case "$CHANNEL" in
+              stable|"") ;;
+              beta)
+                # The next beta of that version: one more than the highest vX.Y.Z-beta.N tag (10#: 08 is not octal).
+                last=$(git tag -l "v$version-beta.*" | sed -nE "s/^v$version-beta\.([0-9]+)$/\1/p" | sort -n | tail -n1)
+                version="$version-beta.$(( 10#${last:-0} + 1 ))" ;;
+              *) fail "channel must be stable or beta" ;;
             esac
           fi
           # Newer than the latest release: compare the X.Y.Z part, so 0.4.0-rc.1 may follow 0.3.14.

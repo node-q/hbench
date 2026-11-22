@@ -31,7 +31,9 @@ name: Release build
 # latest.json. It is the only job that sees that key, a secret of the `release` environment:
 #   TAURI_SIGNING_PRIVATE_KEY, TAURI_SIGNING_PRIVATE_KEY_PASSWORD   from `tauri signer generate`
 # Without it the release ships no latest.json, and installed apps see no update. A prerelease is never
-# "latest", so it is never offered.
+# "latest", so apps on the stable channel never see it. Apps on the beta channel read the fixed release
+# `beta-channel`'s latest.json instead, which the beta-feed job replaces after each beta (vX.Y.Z-beta.N) or stable
+# release newer than the version there.
 on:
   push:
     tags: ["v[0-9]+.[0-9]+.[0-9]+*"]
@@ -587,7 +589,15 @@ jobs:
           PRERELEASE: ${{ contains(github.ref_name, '-') }}
         run: |
           flags=(--verify-tag --title "hbench $GITHUB_REF_NAME" --generate-notes)
-          [ "$PRERELEASE" = true ] && flags+=(--prerelease)
+          if [ "$PRERELEASE" = true ]; then
+            flags+=(--prerelease)
+          else
+            # A stable release's notes cover everything since the previous stable release, not since its last beta.
+            stable=$(gh release list -R "$GITHUB_REPOSITORY" --exclude-drafts --exclude-pre-releases --limit 1000 --json tagName --jq '.[].tagName')
+            previous=$(printf '%s\n' "$stable" "$GITHUB_REF_NAME" | grep -Ex 'v[0-9]+\.[0-9]+\.[0-9]+' | sort -uV |
+              awk -v tag="$GITHUB_REF_NAME" '$0 == tag { print last; exit } { last = $0 }')
+            [ -z "$previous" ] || flags+=(--notes-start-tag "$previous")
+          fi
           shopt -s nullglob
           gh release create "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" "${flags[@]}" dist/hbench-*.tar.gz dist/*.zip dist/Actuaria-* dist/latest*.json dist/install.sh dist/SHA256SUMS
       - name: Summarize the release
@@ -597,3 +607,44 @@ jobs:
           gh release view "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --json url,assets --jq \
             '"## hbench \(.url | split("/") | last)\n\n**Release:** \(.url)\n\n| File | Size |\n|---|---:|",
              (.assets[] | "| [\(.name)](\(.url)) | \(.size / 1048576 * 10 | round / 10) MB |")' >> "$GITHUB_STEP_SUMMARY"
+
+  beta-feed:
+    # Apps on the beta channel read https://github.com/node-q/hbench/releases/download/beta-channel/latest.json. A
+    # beta or a stable release newer than what is there replaces it (scripts/beta-feed.sh). The feed is this
+    # release's own signed latest.json, whose URLs point at this release's assets; nothing is re-signed here. A job
+    # of its own, so that it can be re-run alone once the release is out.
+    name: Update the beta channel's feed
+    needs: publish
+    if: ${{ !cancelled() && needs.publish.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    # Only v* tags can deploy to this environment, so no other ref gets this job's write token.
+    environment: release
+    permissions:
+      contents: write
+    # One release at a time reads and replaces the feed. GitHub keeps one waiting run: with three at once the
+    # middle one is cancelled, so re-run it (an older version than the feed's changes nothing).
+    concurrency:
+      group: beta-feed
+      cancel-in-progress: false
+    steps:
+      - name: Check out beta-feed.sh
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts/beta-feed.sh
+          sparse-checkout-cone-mode: false
+          path: src
+      - name: Download latest.json
+        # By pattern: with no such artifact (a release without the updater key) this downloads nothing and passes.
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: dist-updater
+          merge-multiple: true
+          path: dist
+      - name: Update the feed
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [ -f dist/latest.json ] || { echo "::warning::no latest.json: the beta channel is unchanged"; exit 0; }
+          bash src/scripts/beta-feed.sh update dist/latest.json "$GITHUB_REF_NAME"
