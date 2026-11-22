@@ -1,0 +1,13 @@
+# bots.lock: the artefacts Actuaria Studio Essentials may install through an install link
+# (`actuaria://install/actuaria/<id>`, docs/REFERENCE.md "Install links").
+#
+# Essentials installs an artefact only if the catalogue (https://market.actuaria.io/bots/index.json) lists it AND
+# the same id, version, target and SHA-256 appear here. The catalogue alone can't add a bot: this file is the second
+# key, changed only by a reviewed pull request (see .github/CODEOWNERS).
+#
+# One line per artefact:
+#   actuaria/<id> <version> <target> sha256:<64 lowercase hex>
+# <target> is `claude` (a .mcpb for Claude Desktop) or `orca` (a .zip of an Orca plugin).
+# Lines starting with # and blank lines are ignored; any other malformed line makes Essentials refuse every install.
+actuaria/prompt-slim 0.1.0 claude sha256:d6d7975ce7d7ed3eecc46ae07529a1646dfc41adfffc0cb894619ffddbe68eb6
+actuaria/prompt-slim 0.1.0 orca sha256:0bd268554e3413e2b94172aeb6cbfea48201377b06b42ccf6b09124d5f97479a
