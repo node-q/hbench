@@ -13,7 +13,7 @@ use server::Server;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use tauri::menu::{AboutMetadataBuilder, Menu, MenuItemBuilder, Submenu, SubmenuBuilder};
+use tauri::menu::{AboutMetadataBuilder, CheckMenuItemBuilder, Menu, MenuItemBuilder, Submenu, SubmenuBuilder};
 use tauri::webview::{DownloadEvent, PageLoadEvent};
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder, Wry};
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
@@ -36,6 +36,9 @@ struct Settings {
     /// The update the user dismissed: not prompted for again at launch (the status bar still offers it).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     skip_update: Option<String>,
+    /// Receive beta updates (the `beta-channel` feed, see update.rs). Off by default.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    beta_updates: bool,
 }
 
 struct AppState {
@@ -355,7 +358,15 @@ fn build_menu(app: &AppHandle) -> tauri::Result<(Menu<Wry>, Submenu<Wry>)> {
         help = help.separator().item(&item("devtools", "Toggle Developer Tools", Some("Alt+CmdOrCtrl+I"))?);
     }
     if !cfg!(target_os = "macos") {
-        help = help.separator().item(&item("check-update", "Check for Updates…", None)?).about(Some(about.clone()));
+        help = help
+            .separator()
+            .item(&item("check-update", "Check for Updates…", None)?)
+            .item(
+                &CheckMenuItemBuilder::with_id("beta-updates", "Receive Beta Updates")
+                    .checked(app.state::<AppState>().settings.lock().unwrap().beta_updates)
+                    .build(app)?,
+            )
+            .about(Some(about.clone()));
     }
 
     let menu = Menu::new(app)?;
@@ -363,6 +374,11 @@ fn build_menu(app: &AppHandle) -> tauri::Result<(Menu<Wry>, Submenu<Wry>)> {
         let app_menu = SubmenuBuilder::new(app, APP_NAME)
             .about(Some(about))
             .item(&item("check-update", "Check for Updates…", None)?)
+            .item(
+                &CheckMenuItemBuilder::with_id("beta-updates", "Receive Beta Updates")
+                    .checked(app.state::<AppState>().settings.lock().unwrap().beta_updates)
+                    .build(app)?,
+            )
             .separator()
             .services()
             .separator()
@@ -404,6 +420,7 @@ fn on_menu(app: &AppHandle, id: &str) {
             }
         }
         "check-update" => update::check_now(app),
+        "beta-updates" => update::toggle_beta(app),
         "help:docs" => {
             let _ = app.opener().open_url(DOCS_URL, None::<&str>);
         }

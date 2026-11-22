@@ -22,6 +22,10 @@ use tauri_plugin_updater::{Update, UpdaterExt};
 const FIRST_CHECK: Duration = Duration::from_secs(8);
 const EVERY: Duration = Duration::from_secs(4 * 60 * 60);
 const RELEASES: &str = "https://github.com/node-q/hbench/releases";
+/// The beta channel's feed: the fixed release `beta-channel`, whose latest.json release.yml replaces on every beta
+/// and on a stable release newer than the beta there. Its updates are signed with the same key as stable's.
+const BETA_FEED: &str = "https://github.com/node-q/hbench/releases/download/beta-channel/latest.json";
+const STABLE_FEED: &str = "https://github.com/node-q/hbench/releases/latest/download/latest.json";
 const CURRENT: &str = env!("CARGO_PKG_VERSION");
 
 /// What the page shows.
@@ -124,8 +128,13 @@ async fn check(app: &AppHandle, manual: bool) {
             // Windows: the installer takes over and this process exits inside `install`, so stop hbench view
             // first (on Windows nothing else stops it when the app goes away).
             let stopper = app.clone();
-            let updater =
-                app.updater_builder().on_before_exit(move || drop(stopper.state::<AppState>().server.lock().unwrap().take())).build();
+            let beta = app.state::<AppState>().settings.lock().unwrap().beta_updates;
+            let updater = feeds(beta).and_then(|urls| {
+                app.updater_builder()
+                    .endpoints(urls)?
+                    .on_before_exit(move || drop(stopper.state::<AppState>().server.lock().unwrap().take()))
+                    .build()
+            });
             match updater {
                 Ok(u) => match u.check().await {
                     Ok(u) => {
@@ -286,4 +295,36 @@ async fn fake_download(app: &AppHandle) -> Result<(), String> {
         return Err("Couldn't install the update: demo failure".into());
     }
     Ok(())
+}
+
+/// Where to look for updates: the beta feed first on the beta channel (it is never behind stable: a newer stable
+/// release replaces it), then stable. Updates only ever go up, so leaving the beta channel never downgrades.
+fn feeds(beta: bool) -> Result<Vec<url::Url>, tauri_plugin_updater::Error> {
+    let urls = if beta { vec![BETA_FEED, STABLE_FEED] } else { vec![STABLE_FEED] };
+    urls.into_iter().map(|u| url::Url::parse(u).map_err(tauri_plugin_updater::Error::UrlParse)).collect()
+}
+
+/// Help/App menu "Receive Beta Updates": flip the setting, keep it, and check at once on the new channel.
+pub fn toggle_beta(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    let on = {
+        let mut s = state.settings.lock().unwrap();
+        s.beta_updates = !s.beta_updates;
+        save_settings(app, &s);
+        s.beta_updates
+    };
+    if let Some(menu) = app.menu()
+        && let Some(tauri::menu::MenuItemKind::Check(item)) = menu.get("beta-updates").or_else(|| find_in_submenus(&menu, "beta-updates"))
+    {
+        let _ = item.set_checked(on);
+    }
+    eprintln!("updates: beta channel {}", if on { "on" } else { "off" });
+    check_now(app);
+}
+
+fn find_in_submenus(menu: &tauri::menu::Menu<tauri::Wry>, id: &str) -> Option<tauri::menu::MenuItemKind<tauri::Wry>> {
+    menu.items().ok()?.into_iter().find_map(|k| match k {
+        tauri::menu::MenuItemKind::Submenu(sub) => sub.get(id),
+        _ => None,
+    })
 }

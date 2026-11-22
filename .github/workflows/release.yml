@@ -31,7 +31,9 @@ name: Release build
 # latest.json. It is the only job that sees that key, a secret of the `release` environment:
 #   TAURI_SIGNING_PRIVATE_KEY, TAURI_SIGNING_PRIVATE_KEY_PASSWORD   from `tauri signer generate`
 # Without it the release ships no latest.json, and installed apps see no update. A prerelease is never
-# "latest", so it is never offered.
+# "latest", so apps on the stable channel never see it. Apps on the beta channel read the fixed release
+# `beta-channel`'s latest.json instead, which the publish job replaces on every beta (vX.Y.Z-beta.N) and on a
+# stable release newer than the beta there (see "Update the beta channel's feed").
 on:
   push:
     tags: ["v[0-9]+.[0-9]+.[0-9]+*"]
@@ -590,6 +592,32 @@ jobs:
           [ "$PRERELEASE" = true ] && flags+=(--prerelease)
           shopt -s nullglob
           gh release create "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" "${flags[@]}" dist/hbench-*.tar.gz dist/*.zip dist/Actuaria-* dist/latest*.json dist/install.sh dist/SHA256SUMS
+      - name: Update the beta channel's feed
+        # Apps on the beta channel read https://github.com/node-q/hbench/releases/download/beta-channel/latest.json.
+        # A beta always replaces it; a stable release replaces it only when it is newer than the beta there, so beta
+        # users move on to stable and are never offered an older version. The feed is this release's own signed
+        # latest.json (its URLs point at this release's assets); nothing is re-signed here.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PRERELEASE: ${{ contains(github.ref_name, '-') }}
+        run: |
+          [ -f dist/latest.json ] || { echo "::warning::no latest.json: the beta channel is unchanged"; exit 0; }
+          new=$(jq -r .version dist/latest.json)
+          if [ "$PRERELEASE" != true ]; then
+            cur=$(gh release download beta-channel -R "$GITHUB_REPOSITORY" -p latest.json -O - 2>/dev/null | jq -r '.version // empty' || true)
+            if [ -n "$cur" ] && [ "$(printf '%s\n%s\n' "${cur%%-*}" "${new%%-*}" | sort -V | tail -n1)" = "${cur%%-*}" ] \
+               && [ "${cur%%-*}" != "${new%%-*}" ]; then
+              echo "the beta channel is at $cur, ahead of $new: unchanged"; exit 0
+            fi
+          fi
+          [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-beta\.[0-9]+)?$ ]] ||
+            { echo "not a beta or stable tag: the beta channel is unchanged"; exit 0; }
+          if ! gh release view beta-channel -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create beta-channel -R "$GITHUB_REPOSITORY" --prerelease --latest=false --target "$GITHUB_SHA" \
+              --title "Beta channel (update feed)" --notes "The update feed for apps on the beta channel. Not a release: download betas from their own vX.Y.Z-beta.N release."
+          fi
+          gh release upload beta-channel -R "$GITHUB_REPOSITORY" --clobber dist/latest.json
+          echo "beta channel: $new" >> "$GITHUB_STEP_SUMMARY"
       - name: Summarize the release
         env:
           GH_TOKEN: ${{ github.token }}

@@ -42,6 +42,25 @@ desktop app's version files), merge that in a "Release X.Y.Z" pull request, then
 git tag -a vX.Y.Z -m "hbench vX.Y.Z" && git push origin vX.Y.Z
 ```
 
+## Beta releases
+
+Trunk-based: betas and stable releases are both tags on `master` commits; there is no beta or release branch.
+Unfinished work stays behind a flag so that master can always ship.
+
+- **Cut a beta:** Actions → Release → Run workflow → `channel: beta`, then pick the bump. It computes the next
+  `X.Y.Z-beta.N` (N is one more than the highest existing beta of that version), opens the "Release X.Y.Z-beta.N" PR
+  as for stable (one approval), and tags its merge commit. An exact `version` such as `0.5.0-beta.3` also works.
+- **Publishing:** a `-beta.N` tag is published as a prerelease and is never "latest", so the stable channel never
+  sees it. The publish job also replaces `latest.json` in the fixed release **`beta-channel`**, which is the beta
+  channel's update feed: `https://github.com/node-q/hbench/releases/download/beta-channel/latest.json`. A stable
+  release newer than the beta there replaces it too, so beta users always get the newest of the two. The feed is
+  the release's own signed `latest.json`, signed with the same updater key.
+- **Essentials:** Help (App menu on macOS) → **Receive Beta Updates**. It is off by default and kept in the app's
+  settings. On the beta channel the app reads the beta feed first, then stable. Updates only ever go up, so turning it
+  off never downgrades: the app stays on its version until stable passes it.
+- **CLI:** `curl -fsSL https://github.com/node-q/hbench/releases/latest/download/install.sh | HBENCH_CHANNEL=beta sh`
+  installs the beta channel's version. `HBENCH_VERSION` still pins an exact release.
+
 ## What the release build does
 
 `.github/workflows/release.yml` checks the tag against `Cargo.toml` and, on GitHub-hosted runners, builds static
