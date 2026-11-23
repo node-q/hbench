@@ -65,6 +65,15 @@ fn log_path(app: &AppHandle) -> PathBuf {
     app.path().app_log_dir().unwrap_or_else(|_| std::env::temp_dir()).join(name)
 }
 
+/// Add a line to the app's log, the file Help's log item opens (the server's output goes there too). Best effort.
+pub(crate) fn app_log(app: &AppHandle, line: &str) {
+    use std::io::Write;
+    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(log_path(app)) {
+        let _ = writeln!(f, "[essentials {secs}] {line}");
+    }
+}
+
 fn load_settings(app: &AppHandle) -> Settings {
     settings_path(app).and_then(|p| std::fs::read(p).ok()).and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
 }
