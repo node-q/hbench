@@ -28,10 +28,19 @@ pub const DATASET_INDEX_TAG: &str = "latest";
 pub const DATASET_INDEX_ARTIFACT_TYPE: &str = "application/vnd.hbench.dataset-index.v1";
 pub const DATASET_INDEX_MEDIA_TYPE: &str = "application/vnd.hbench.dataset-index.v1+json";
 
+/// A market version's own description (market-platform.md D112): its `listing.json`, carried as one layer of this
+/// media type so the manifest digest covers it. A dataset has at most one, beside its task layers.
+pub const LISTING_MEDIA_TYPE: &str = "application/vnd.actuaria.listing.v1+json";
+/// A market version's cover page (market-platform.md §6.1 item 9): its `COVER.md`, carried like the listing, as at
+/// most one layer of this media type beside the task layers.
+pub const COVER_MEDIA_TYPE: &str = "application/vnd.actuaria.cover.v1+markdown";
+
 const MIB: u64 = 1024 * 1024;
 pub const MAX_MANIFEST_BYTES: u64 = 4 * MIB;
 pub const MAX_CONFIG_BYTES: u64 = 4 * MIB;
 pub const MAX_DATASET_INDEX_BYTES: u64 = 4 * MIB;
+pub const MAX_LISTING_BYTES: u64 = MIB;
+pub const MAX_COVER_BYTES: u64 = MIB;
 
 /// The config blob, as `assets/schemas/dataset-config.v1.json` defines it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -96,6 +105,28 @@ pub struct Layer {
 pub struct Dataset {
     pub config: ConfigBlob,
     pub layers: Vec<Layer>,
+    /// The `listing.json` layer, when the version carries its own listing: (digest, size).
+    pub listing: Option<(String, u64)>,
+    /// The `COVER.md` layer, when the version carries one: (digest, size).
+    pub cover: Option<(String, u64)>,
+}
+
+/// The layers that describe a version rather than hold a task: (media type, what it is, size limit).
+const DESCRIPTION_LAYERS: &[(&str, &str, u64)] =
+    &[(LISTING_MEDIA_TYPE, "listing", MAX_LISTING_BYTES), (COVER_MEDIA_TYPE, "cover", MAX_COVER_BYTES)];
+
+fn has_media_type(layer: &Descriptor, media_type: &str) -> bool {
+    layer.media_type().to_string() == media_type
+}
+
+/// `layer` holds a task: it is neither the listing nor the cover.
+fn is_task_layer(layer: &Descriptor) -> bool {
+    !DESCRIPTION_LAYERS.iter().any(|(media_type, ..)| has_media_type(layer, media_type))
+}
+
+/// The one layer of `media_type` in `manifest`, as (digest, size).
+fn description_layer(manifest: &ImageManifest, media_type: &str) -> Option<(String, u64)> {
+    manifest.layers().iter().find(|l| has_media_type(l, media_type)).map(|l| (l.digest().to_string(), l.size()))
 }
 
 /// The JSON layer of a dataset index, as `assets/schemas/dataset-index.v1.json` defines it.
@@ -178,7 +209,8 @@ fn annotation<'a>(d: &'a Descriptor, key: &str) -> Option<&'a str> {
 }
 
 /// A dataset manifest, refused unless it is an OCI image manifest of the dataset artifact type whose layers
-/// are all task layers with a valid, unique title and a package digest.
+/// are task layers with a valid, unique title and a package digest, beside at most one listing layer and at most
+/// one cover layer.
 pub fn parse_manifest(bytes: &[u8]) -> Result<ImageManifest> {
     let m: ImageManifest = serde_json::from_slice(bytes).context("not an OCI image manifest")?;
     let media_type = m.media_type().as_ref().map(ToString::to_string);
@@ -195,11 +227,21 @@ pub fn parse_manifest(bytes: &[u8]) -> Result<ImageManifest> {
     if m.config().size() > MAX_CONFIG_BYTES {
         bail!("config blob is {} bytes, over the {MAX_CONFIG_BYTES}-byte limit", m.config().size());
     }
-    if m.layers().is_empty() {
+    for (media_type, what, max) in DESCRIPTION_LAYERS {
+        let found: Vec<&Descriptor> = m.layers().iter().filter(|l| has_media_type(l, media_type)).collect();
+        match found.as_slice() {
+            [] => {}
+            [l] if !is_sha256_digest(l.digest().as_ref()) => bail!("the {what} layer's digest {} is not sha256", l.digest()),
+            [l] if l.size() > *max => bail!("the {what} layer is {} bytes, over the {max}-byte limit", l.size()),
+            [_] => {}
+            _ => bail!("a dataset manifest has at most one {media_type} layer"),
+        }
+    }
+    if !m.layers().iter().any(is_task_layer) {
         bail!("a dataset manifest needs at least one task layer");
     }
     let mut names = BTreeSet::new();
-    for (i, layer) in m.layers().iter().enumerate() {
+    for (i, layer) in m.layers().iter().enumerate().filter(|(_, l)| is_task_layer(l)) {
         let title = annotation(layer, TITLE).with_context(|| format!("layer {i} has no {TITLE} annotation"))?;
         if !is_task_name(title) {
             bail!("layer {i}: {title:?} is not a valid task name");
@@ -231,8 +273,9 @@ impl Dataset {
             bail!("config blob does not match the dataset config schema:\n  {}", problems.join("\n  "));
         }
         let config: ConfigBlob = serde_json::from_value(value).context("config blob")?;
-        if config.tasks.len() != manifest.layers().len() {
-            bail!("config lists {} task(s), the manifest {} layer(s)", config.tasks.len(), manifest.layers().len());
+        let task_layers: Vec<&Descriptor> = manifest.layers().iter().filter(|l| is_task_layer(l)).collect();
+        if config.tasks.len() != task_layers.len() {
+            bail!("config lists {} task(s), the manifest {} layer(s)", config.tasks.len(), task_layers.len());
         }
         if let Some(v) = manifest.annotations().as_ref().and_then(|a| a.get(VERSION))
             && *v != config.version
@@ -240,7 +283,7 @@ impl Dataset {
             bail!("manifest {VERSION} is {v}, config version {}", config.version);
         }
         let mut layers = vec![];
-        for (layer, task) in manifest.layers().iter().zip(&config.tasks) {
+        for (layer, task) in task_layers.into_iter().zip(&config.tasks) {
             let layer = Layer {
                 name: annotation(layer, TITLE).unwrap_or_default().to_string(),
                 digest: layer.digest().to_string(),
@@ -262,6 +305,7 @@ impl Dataset {
             }
             layers.push(layer);
         }
-        Ok(Dataset { config, layers })
+        let (listing, cover) = (description_layer(manifest, LISTING_MEDIA_TYPE), description_layer(manifest, COVER_MEDIA_TYPE));
+        Ok(Dataset { config, layers, listing, cover })
     }
 }

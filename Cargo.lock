@@ -653,6 +653,7 @@ dependencies = [
  "flate2",
  "futures-util",
  "http",
+ "http-auth",
  "minijinja",
  "oci-client",
  "oci-spec",

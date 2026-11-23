@@ -7,6 +7,7 @@ use serde_json::Value;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
+mod market;
 mod publish;
 
 /// A temp dir, removed when it goes out of scope.
@@ -390,6 +391,7 @@ fn lock_json_records_oci_tasks() {
         repository: "ns/hello".into(),
         manifest_digest: sha256_digest(b"m"),
         layer_digest: sha256_digest(b"l"),
+        canonical_name: None,
     };
     let t = TaskRef { path: Some("hello-world".into()), source: Some("hello".into()), oci: Some(oci.clone()), ..Default::default() };
     t.validate().unwrap();

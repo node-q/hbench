@@ -19,13 +19,14 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const READ_TIMEOUT: Duration = Duration::from_secs(120);
 const UPLOAD_CHUNK_BYTES: usize = 1024 * 1024;
 const LAYOUT_VERSION: &str = "1.0.0";
+pub(super) const USER_AGENT: &str = concat!("hbench/", env!("CARGO_PKG_VERSION"));
 
 pub enum Store {
     Registry { client: oci_client::Client, registry: String, blobs: PathBuf, auth: RegistryAuth },
     Layout { root: PathBuf },
 }
 
-fn is_loopback(registry: &str) -> bool {
+pub(super) fn is_loopback(registry: &str) -> bool {
     let host = match registry.strip_prefix('[') {
         Some(rest) => rest.split(']').next().unwrap_or_default(),
         None => registry.split(':').next().unwrap_or_default(),
@@ -40,9 +41,25 @@ impl Store {
         Store::open_with_config(registry, cache_root, super::credentials::docker_config_path().as_deref())
     }
 
+    /// The store to pull `repository` from: [`Store::open`], except that the market's registry gets a pull token
+    /// for that one repository from its pinned token endpoint ([`super::market::registry_auth`]).
+    pub async fn open_for(registry: &str, repository: &str, cache_root: &Path) -> Result<Store> {
+        let Some(market) = super::market::endpoint_for(registry) else {
+            return Store::open(registry, cache_root);
+        };
+        // Connect to the market under its one name, whichever spelling of it was asked for.
+        let registry = &market.registry;
+        let auth = super::market::registry_auth(&market, repository, super::market::credentials(registry)?).await?;
+        Store::open_with_auth(registry, cache_root, auth)
+    }
+
     /// [`Store::open`], with the docker config at `docker_config` (anonymous when there is none). An OCI layout
-    /// reads no credentials.
+    /// reads no credentials. The market's registry is opened with [`Store::open_for`] only, since its tokens name
+    /// one repository and its credentials go only to its pinned token endpoint.
     pub fn open_with_config(registry: &str, cache_root: &Path, docker_config: Option<&Path>) -> Result<Store> {
+        if super::market::is_market(registry) {
+            bail!("{registry} is the market's registry: pull one version from it with -d <listing>@<tag>");
+        }
         let auth = if registry.starts_with(LAYOUT_SCHEME) {
             RegistryAuth::Anonymous
         } else {
@@ -52,9 +69,19 @@ impl Store {
     }
 
     /// [`Store::open`], authenticating to a registry with `auth`.
+    ///
+    /// The market's registry is opened only with a registry token, the one [`Store::open_for`] gets from the pinned
+    /// token endpoint. A user name and password would be sent to whatever realm the registry's challenge names
+    /// (registry threat model R-6), and an anonymous client would ask that realm too, so both are refused here,
+    /// before any request, for every command that opens a registry: export, push and convert.
     pub fn open_with_auth(registry: &str, cache_root: &Path, auth: RegistryAuth) -> Result<Store> {
         if let Some(dir) = registry.strip_prefix(LAYOUT_SCHEME) {
             return Ok(Store::Layout { root: PathBuf::from(dir) });
+        }
+        if super::market::is_market(registry) && !matches!(auth, RegistryAuth::Bearer(_)) {
+            bail!(
+                "{registry} is the market's registry: its credentials go only to its pinned token endpoint, so hbench does not open it with a user name and password, or anonymously. Pull a version from it with -d [<publisher>/]<listing>@<tag>; nothing was sent"
+            );
         }
         let _ = rustls::crypto::ring::default_provider().install_default();
         let plain_http = if is_loopback(registry) { vec![registry.to_string()] } else { vec![] };
@@ -63,7 +90,7 @@ impl Store {
             platform_resolver: None,
             connect_timeout: Some(CONNECT_TIMEOUT),
             read_timeout: Some(READ_TIMEOUT),
-            user_agent: concat!("hbench/", env!("CARGO_PKG_VERSION")),
+            user_agent: USER_AGENT,
             use_monolithic_push: true,
             ..Default::default()
         };
