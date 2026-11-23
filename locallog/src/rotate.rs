@@ -47,10 +47,15 @@ impl Rotating {
         if size > 0 && size + line.len() as u64 + 1 > self.max_bytes {
             self.rotate_locked()?;
         }
-        if let Some(dir) = self.path.parent() {
-            fs::create_dir_all(dir)?;
+        if let Some(dir) = self.path.parent().filter(|d| !d.as_os_str().is_empty() && !d.exists()) {
+            private_dir(dir)?;
         }
-        let mut f = OpenOptions::new().create(true).append(true).open(&self.path)?;
+        let mut o = OpenOptions::new();
+        o.create(true).append(true);
+        // Readable by this user only (Unix); a folder made for it, likewise.
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::mode(&mut o, 0o600);
+        let mut f = o.open(&self.path)?;
         f.write_all(format!("{line}\n").as_bytes())
     }
 
@@ -84,6 +89,15 @@ impl Rotating {
     pub fn files(&self) -> Vec<PathBuf> {
         files(&self.path, self.files)
     }
+}
+
+/// Create `dir` (and its missing parents), 0700 on Unix. An existing folder is left as it is.
+fn private_dir(dir: &Path) -> io::Result<()> {
+    let mut b = fs::DirBuilder::new();
+    b.recursive(true);
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut b, 0o700);
+    b.create(dir)
 }
 
 fn numbered(path: &Path, n: usize) -> PathBuf {
@@ -188,6 +202,24 @@ mod tests {
         let want: Vec<String> = (13..20).map(|i| format!("line {i:02}")).collect();
         assert_eq!(got, want);
         assert!(tail(&d.join("missing.log"), 5).is_empty());
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn files_and_the_folder_made_for_them_are_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = dir("perm");
+        let log = Rotating::with_cap(d.join("new/logs/a.log"), 30, 3);
+        for i in 0..5 {
+            log.append(&format!("line {i:02} xxxxxxxxxx")).unwrap();
+        }
+        let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&d.join("new/logs")), 0o700);
+        assert_eq!(mode(&d.join("new")), 0o700);
+        for f in log.files() {
+            assert_eq!(mode(&f), 0o600, "{}", f.display());
+        }
         let _ = fs::remove_dir_all(&d);
     }
 

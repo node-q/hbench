@@ -43,14 +43,24 @@ impl Drop for Server {
     }
 }
 
-/// Copy what hbench prints to its log, a line at a time, each redacted first. Says on `done` when the output ends.
-fn pipe_to_log(from: impl Read + Send + 'static, log: Arc<locallog::Rotating>, home: Option<String>, done: mpsc::Sender<()>) {
+/// Copy what hbench prints to its log (if there is one), a line at a time: the open folder's path written as its
+/// name, then redacted. Says on `done` when the output ends.
+fn pipe_to_log(
+    from: impl Read + Send + 'static,
+    log: Option<Arc<locallog::Rotating>>,
+    folder: PathBuf,
+    home: Option<String>,
+    done: mpsc::Sender<()>,
+) {
     std::thread::spawn(move || {
         let mut r = BufReader::new(from);
         let mut buf = Vec::new();
         while matches!(r.read_until(b'\n', &mut buf), Ok(n) if n > 0) {
-            let line = String::from_utf8_lossy(&buf);
-            let _ = log.append(&locallog::redact(line.trim_end_matches(['\r', '\n']), home.as_deref()));
+            if let Some(log) = &log {
+                let line = String::from_utf8_lossy(&buf);
+                let line = crate::diag::hide_folder(line.trim_end_matches(['\r', '\n']), &folder);
+                let _ = log.append(&locallog::redact(&line, home.as_deref()));
+            }
             buf.clear();
         }
         let _ = done.send(());
@@ -65,7 +75,8 @@ fn command(bin: &Path) -> Command {
     let mut c = Command::new("/bin/sh");
     // Background jobs get /dev/null as stdin, so the lifeline reaches the reader on fd 3.
     // The reader's output goes nowhere, so hbench's ending ends the output the app reads.
-    let script = r#"exec 3<&0; "$0" "$@" </dev/null & child=$!; (read _ <&3; kill "$child" 2>/dev/null) >/dev/null 2>&1 & wait "$child""#;
+    // Once hbench has exited, the reader goes too, so it never kills another process given hbench's PID.
+    let script = r#"exec 3<&0; "$0" "$@" </dev/null & child=$!; (read _ <&3; kill "$child" 2>/dev/null) >/dev/null 2>&1 & reader=$!; wait "$child"; s=$?; kill "$reader" 2>/dev/null; exit $s"#;
     c.arg("-c").arg(script).arg(bin);
     c
 }
@@ -125,15 +136,15 @@ fn drain(done: &mpsc::Receiver<()>) {
 }
 
 /// Start `hbench view <folder>` and wait until it answers. Its output goes to `log` (redacted, size-capped; the
-/// previous start's output becomes `log`.1), and its events, and those of the runs it starts, to `events`.
-pub fn start(folder: &Path, env: &HashMap<String, String>, log: &Path, events: &Path) -> Result<Server, String> {
+/// previous start's output becomes `log`.1), and its events, and those of the runs it starts, to `events`. With no
+/// log folder, neither is written.
+pub fn start(folder: &Path, env: &HashMap<String, String>, log: Option<&Path>, events: Option<&Path>) -> Result<Server, String> {
     let bin = hbench_path()?;
     let port = free_port()?;
-    if let Some(dir) = log.parent() {
-        let _ = std::fs::create_dir_all(dir);
+    let out_log = log.map(|l| Arc::new(locallog::Rotating::new(l)));
+    if let (Some(l), Some(path)) = (&out_log, log) {
+        l.rotate().map_err(|e| format!("starting a new {}: {e}", path.display()))?;
     }
-    let out_log = Arc::new(locallog::Rotating::new(log));
-    out_log.rotate().map_err(|e| format!("starting a new {}: {e}", log.display()))?;
     let home = env.get("HOME").or_else(|| env.get("USERPROFILE")).cloned();
     let mut cmd = command(&bin);
     cmd.arg("view").arg(folder).args(["--port", &port.to_string(), "--host", "127.0.0.1"]);
@@ -145,19 +156,21 @@ pub fn start(folder: &Path, env: &HashMap<String, String>, log: &Path, events: &
     cmd.envs(env)
         // The app updates as a whole; hbench's own update notice would only land in the log.
         .env("HBENCH_NO_UPDATE_CHECK", "1")
-        .env("HBENCH_LOG_FILE", events)
         .current_dir(folder)
         .stdin(if cfg!(unix) { Stdio::piped() } else { Stdio::null() })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    if let Some(events) = events {
+        cmd.env("HBENCH_LOG_FILE", events);
+    }
     let mut child = cmd.spawn().map_err(|e| format!("starting {}: {e}", bin.display()))?;
     let lifeline = child.stdin.take();
     let (done_tx, done) = mpsc::channel();
     if let Some(o) = child.stdout.take() {
-        pipe_to_log(o, out_log.clone(), home.clone(), done_tx.clone());
+        pipe_to_log(o, out_log.clone(), folder.to_path_buf(), home.clone(), done_tx.clone());
     }
     if let Some(e) = child.stderr.take() {
-        pipe_to_log(e, out_log.clone(), home, done_tx);
+        pipe_to_log(e, out_log.clone(), folder.to_path_buf(), home, done_tx);
     }
 
     let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
@@ -165,7 +178,7 @@ pub fn start(folder: &Path, env: &HashMap<String, String>, log: &Path, events: &
     loop {
         if let Ok(Some(status)) = child.try_wait() {
             drain(&done);
-            return Err(format!("hbench view exited ({status}):\n{}", log_tail(log, 2000)));
+            return Err(format!("hbench view exited ({status}):\n{}", log.map(|l| log_tail(l, 2000)).unwrap_or_default()));
         }
         if TcpStream::connect_timeout(&addr, Duration::from_millis(200)).is_ok() {
             break;
@@ -173,7 +186,7 @@ pub fn start(folder: &Path, env: &HashMap<String, String>, log: &Path, events: &
         if Instant::now() > deadline {
             // Dropping the half-started server stops hbench (through its watchdog on Unix).
             drop(Server { child, lifeline, url: String::new(), folder: folder.to_path_buf(), exited: false });
-            return Err(format!("hbench view did not start within 30s:\n{}", log_tail(log, 2000)));
+            return Err(format!("hbench view did not start within 30s:\n{}", log.map(|l| log_tail(l, 2000)).unwrap_or_default()));
         }
         std::thread::sleep(Duration::from_millis(100));
     }
@@ -192,15 +205,16 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let script = dir.join("prog.sh");
-        std::fs::write(&script, "#!/bin/sh\necho \"listening, ANTHROPIC_API_KEY=sk-ant-api03-AbCdEf0123456789_xyz\"\necho \"/home/ann/jobs missing\" >&2\nexit 3\n")
+        std::fs::write(&script, "#!/bin/sh\necho \"listening, ANTHROPIC_API_KEY=sk-ant-api03-AbCdEf0123456789_xyz\"\necho \"Jobs folder: /home/ann/clients/acme\"\necho \"/home/ann/jobs missing\" >&2\nexit 3\n")
             .unwrap();
         std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
         let log = Arc::new(locallog::Rotating::new(dir.join("view.log")));
         let mut child = command(&script).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
         let _lifeline = child.stdin.take();
         let (tx, done) = mpsc::channel();
-        pipe_to_log(child.stdout.take().unwrap(), log.clone(), Some("/home/ann".into()), tx.clone());
-        pipe_to_log(child.stderr.take().unwrap(), log.clone(), Some("/home/ann".into()), tx);
+        let folder = PathBuf::from("/home/ann/clients/acme");
+        pipe_to_log(child.stdout.take().unwrap(), Some(log.clone()), folder.clone(), Some("/home/ann".into()), tx.clone());
+        pipe_to_log(child.stderr.take().unwrap(), Some(log.clone()), folder, Some("/home/ann".into()), tx);
         assert_eq!(child.wait().unwrap().code(), Some(3));
         let started = Instant::now();
         drain(&done);
@@ -208,7 +222,36 @@ mod tests {
         let text = log_tail(&dir.join("view.log"), 2000);
         assert!(text.contains("listening, ANTHROPIC_API_KEY=[REDACTED]"), "{text}");
         assert!(text.contains("~/jobs missing"), "{text}");
+        assert!(text.contains("Jobs folder: …/acme") && !text.contains("clients"), "{text}");
         assert!(!text.contains("sk-ant") && !text.contains("/home/ann"), "{text}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The reader that waits on the lifeline is gone once the program exits, so it can't later kill a process
+    /// that reused the program's PID.
+    #[test]
+    fn the_watchdog_leaves_nothing_behind() {
+        let dir = std::env::temp_dir().join(format!("actuaria-watchdog-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let script = dir.join("quick.sh");
+        std::fs::write(&script, "#!/bin/sh\nexit 4\n").unwrap();
+        std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        let mut c = command(&script);
+        // Its own process group, so whatever it started can be found by group.
+        std::os::unix::process::CommandExt::process_group(&mut c, 0);
+        let mut child = c.stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null()).spawn().unwrap();
+        let _lifeline = child.stdin.take();
+        let group = child.id().to_string();
+        assert_eq!(child.wait().unwrap().code(), Some(4), "the watchdog exits with the program's status");
+        std::thread::sleep(Duration::from_millis(300));
+        let out = Command::new("ps").args(["-e", "-o", "pid=,pgid="]).output().unwrap();
+        let left: Vec<String> = String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter(|l| l.split_whitespace().nth(1) == Some(group.as_str()))
+            .map(str::to_string)
+            .collect();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(left.is_empty(), "still running in its group: {left:?}");
     }
 }

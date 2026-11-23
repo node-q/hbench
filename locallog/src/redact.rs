@@ -9,7 +9,12 @@ pub const MASK: &str = "[REDACTED]";
 pub const EMAIL: &str = "[email]";
 
 struct Rules {
+    encoded_home: Regex,
+    percent: Regex,
     home_generic: Regex,
+    cli_flag: Regex,
+    key_quoted: Regex,
+    key_word: Regex,
     cookie: Regex,
     authorization: Regex,
     bearer: Regex,
@@ -22,17 +27,68 @@ struct Rules {
     opaque: Regex,
 }
 
+/// A secret's name: `api_key`, `ANTHROPIC_KEY`, `x-auth-token`, `"auth"` (Docker's config), `passphrase`, ...
+const KEY: &str = concat!(
+    r"[A-Za-z0-9_.\-]*(?:api[_\-]?key|[_\-]key|secret|token|passw(?:or)?d|passphrase|pwd|credential|auth",
+    r"|session[_\-]?id|private[_\-]?key|access[_\-]?key)[A-Za-z0-9_\-]*|key"
+);
+
+/// Whether a name the key rules matched is a secret's: not `author`, `tokenizer`, `keyboard`, or a count.
+fn secret_key(name: &str) -> bool {
+    let n = name.to_ascii_lowercase();
+    !(n.contains("author") || n.contains("tokenizer") || n.ends_with("tokens") || n.contains("keyboard"))
+}
+
+/// Whether a matched value is one to keep: a number, or already masked.
+fn keep_value(v: &str) -> bool {
+    v.is_empty() || v.bytes().all(|b| b.is_ascii_digit() || b == b'.') || v.starts_with(MASK.trim_end_matches(']')) || v == "~"
+}
+
+/// `s` with `%XX` escapes decoded (invalid UTF-8 kept lossily), so encoded tokens and emails are seen.
+fn percent_decode(s: &str, re: &Regex) -> String {
+    if !re.is_match(s) {
+        return s.to_string();
+    }
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        let hex = |c: u8| (c as char).to_digit(16);
+        if b[i] == b'%'
+            && i + 2 < b.len()
+            && let (Some(h), Some(l)) = (hex(b[i + 1]), hex(b[i + 2]))
+        {
+            out.push((h * 16 + l) as u8);
+            i += 3;
+            continue;
+        }
+        out.push(b[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 fn rules() -> &'static Rules {
     static R: OnceLock<Rules> = OnceLock::new();
     R.get_or_init(|| {
         let re = |s: &str| Regex::new(s).expect("a valid redaction pattern");
         Rules {
-            // Another account's home, or this one's when the caller doesn't know it: the user's name goes.
-            home_generic: re(r#"(?i)(?:^|(?<lead>[\s"'=(:,\[]))(?:/home/|/Users/|[a-z]:\\{1,2}Users\\{1,2}|[a-z]:/Users/)[^/\\\s"']+"#),
+            // A home folder still URL-encoded (`%2Fhome%2Fann`, `C%3A%5CUsers%5CAnn%20Lee`): the user's name goes whole.
+            encoded_home: re(r"(?i)(?:%2F(?:home|Users)%2F|[a-z]%3A(?:%5C|%2F)Users(?:%5C|%2F))(?:[^%\s&\x22'/\\]|%20|%2E|%2D|%5F)+"),
+            percent: re(r"%[0-9A-Fa-f]{2}"),
+            // Another account's home, or this one's when the caller doesn't know it: the user's name goes, whole
+            // when it has spaces and a folder follows (`C:\Users\Ann Lee\x`).
+            home_generic: re(concat!(
+                r#"(?i)(?:^|(?<lead>[\s"'=(:,\[]|//))(?:/home/|/Users/|[a-z]:\\{1,4}Users\\{1,4}|[a-z]:/Users/)"#,
+                r#"(?:[^/\\\s"']+(?: [^/\\\s"']+)*(?<sep>[/\\])|[^/\\\s"']+)"#
+            )),
+            // `--password x`, `--token=x`, `-p x` (docker login).
+            cli_flag: re(r"(?i)(?:^|(?<lead>\s))(?<flag>--(?:password|passphrase|pass|token|api-key|secret|auth)[= ]|-p )\S+"),
             cookie: re(r"(?i)\b((?:set-)?cookie)(\s*[:=]\s*).*"),
             authorization: re(r#"(?i)\b((?:proxy-)?authorization)(["']?\s*[:=]\s*["']?)[^"'\r\n]*"#),
             bearer: re(r"(?i)\b(bearer)\s+[A-Za-z0-9._~+/=\-]{6,}"),
-            url_userinfo: re(r"(?i)\b([a-z][a-z0-9+.\-]*://)[^/\s:@]+:[^/\s@]+@"),
+            // `user:pass@`, `:pass@`, `token@`.
+            url_userinfo: re(r"(?i)\b([a-z][a-z0-9+.\-]*://)[^/\s@]+@"),
             // Keys with a known shape: OpenAI/Anthropic (sk-, sk-ant-, sk-proj-), GitHub, GitLab, Slack, AWS,
             // Google, Hugging Face, Stripe.
             prefixed: re(concat!(
@@ -43,15 +99,17 @@ fn rules() -> &'static Rules {
                 r"|(?:AKIA|ASIA)[0-9A-Z]{16}",
                 r"|AIza[0-9A-Za-z_\-]{30,}",
                 r"|hf_[A-Za-z0-9]{20,}",
-                r"|(?:sk|rk|pk)_(?:live|test)_[A-Za-z0-9]{12,})"
+                r"|(?:sk|rk|pk)_(?:live|test)_[A-Za-z0-9]{12,}",
+                r"|dckr_pat_[A-Za-z0-9_\-]{16,}|glsa_[A-Za-z0-9_]{20,})"
             )),
             jwt: re(r"\beyJ[A-Za-z0-9_\-]{6,}\.[A-Za-z0-9_\-]{6,}\.[A-Za-z0-9_\-]*"),
-            // `api_key=…`, `"token": "…"`, `ANTHROPIC_API_KEY=…`, `?access_token=…`, `password: …`.
-            key_value: re(concat!(
-                r#"(?i)\b([A-Za-z0-9_.\-]*(?:api[_\-]?key|secret|token|passw(?:or)?d|pwd|credential|session[_\-]?id|private[_\-]?key|access[_\-]?key)[A-Za-z0-9_\-]*)"#,
-                r#"(["']?\s*[:=]\s*["']?)([^\s"',;&}\]]+)"#
-            )),
-            email: re(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9\-]+(?:\.[A-Za-z0-9\-]+)*\.[A-Za-z]{2,}\b"),
+            // `"password": "correct horse"`, `{\"api_key\": \"x\"}`, `token: 'x'`: the whole quoted value.
+            key_quoted: re(&format!(r#"(?i)\b({KEY})(\\?["']?\s*[:=]\s*\\?["'])([^"'\r\n]*?)(\\?["'])"#)),
+            // `api_key=…`, `ANTHROPIC_KEY=…`, `?access_token=…`, `password: …`.
+            key_value: re(&format!(r#"(?i)\b({KEY})(\\?["']?\s*[:=]\s*\\?["']?)([^\s"'\\,;&}}\]]+)"#)),
+            // `token abcdef…`: a long run after a secret's name.
+            key_word: re(r"(?i)\b(token|key|secret|password|passphrase|apikey)(\s+)[A-Za-z0-9_]{20,}\b"),
+            email: re(r"[\p{L}\p{N}._%+\-]+@[\p{L}\p{N}\-]+(?:\.[\p{L}\p{N}\-]+)*\.\p{L}{2,}\b"),
             hex: re(r"\b(sha(?:1|224|256|384|512):)?([0-9a-fA-F]{32,})\b"),
             opaque: re(r"[A-Za-z0-9+_\-]{32,}={0,2}"),
         }
@@ -64,7 +122,7 @@ fn home_forms(home: &str) -> Vec<String> {
     if home.len() < 2 {
         return vec![];
     }
-    let mut forms = vec![home.replace('\\', "\\\\"), home.to_string(), home.replace('\\', "/")];
+    let mut forms = vec![home.replace('\\', "\\\\\\\\"), home.replace('\\', "\\\\"), home.to_string(), home.replace('\\', "/")];
     forms.sort_by_key(|f| std::cmp::Reverse(f.len()));
     forms.dedup();
     forms
@@ -96,29 +154,30 @@ fn looks_random(s: &str) -> bool {
 /// Idempotent: redacting a redacted line changes nothing.
 pub fn redact(line: &str, home: Option<&str>) -> String {
     let r = rules();
-    let mut s = line.to_string();
+    let mut s = r.encoded_home.replace_all(line, "~").into_owned();
+    s = percent_decode(&s, &r.percent);
     for form in home.map(home_forms).unwrap_or_default() {
         s = replace_folder(&s, &form);
     }
-    s = r.home_generic.replace_all(&s, |c: &Captures| format!("{}~", c.name("lead").map_or("", |m| m.as_str()))).into_owned();
+    let around = |c: &Captures| format!("{}~{}", c.name("lead").map_or("", |m| m.as_str()), c.name("sep").map_or("", |m| m.as_str()));
+    s = r.home_generic.replace_all(&s, around).into_owned();
+    s = r
+        .cli_flag
+        .replace_all(&s, |c: &Captures| format!("{}{}{MASK}", c.name("lead").map_or("", |m| m.as_str()), &c["flag"]))
+        .into_owned();
     s = r.cookie.replace_all(&s, format!("${{1}}${{2}}{MASK}")).into_owned();
     s = r.authorization.replace_all(&s, format!("${{1}}${{2}}{MASK}")).into_owned();
     s = r.bearer.replace_all(&s, format!("${{1}} {MASK}")).into_owned();
     s = r.url_userinfo.replace_all(&s, format!("${{1}}{MASK}@")).into_owned();
     s = r.prefixed.replace_all(&s, MASK).into_owned();
     s = r.jwt.replace_all(&s, MASK).into_owned();
-    s = r
-        .key_value
-        .replace_all(&s, |c: &Captures| {
-            let v = &c[3];
-            // Token counts (`input_tokens=1200`) and values already masked stay.
-            if v.bytes().all(|b| b.is_ascii_digit() || b == b'.') || v.starts_with(MASK.trim_end_matches(']')) || v == "~" {
-                c[0].to_string()
-            } else {
-                format!("{}{}{MASK}", &c[1], &c[2])
-            }
-        })
-        .into_owned();
+    // Token counts (`input_tokens=1200`) and values already masked stay.
+    let named = |c: &Captures, close: &str| {
+        if !secret_key(&c[1]) || keep_value(&c[3]) { c[0].to_string() } else { format!("{}{}{MASK}{close}", &c[1], &c[2]) }
+    };
+    s = r.key_quoted.replace_all(&s, |c: &Captures| named(c, &c[4])).into_owned();
+    s = r.key_value.replace_all(&s, |c: &Captures| named(c, "")).into_owned();
+    s = r.key_word.replace_all(&s, format!("${{1}}${{2}}{MASK}")).into_owned();
     s = r.email.replace_all(&s, EMAIL).into_owned();
     // A digest (`sha256:…`) names content, not a secret: it stays.
     s = r.hex.replace_all(&s, |c: &Captures| if c.get(1).is_some() { c[0].to_string() } else { MASK.to_string() }).into_owned();
@@ -233,6 +292,50 @@ mod tests {
         ] {
             assert_eq!(redact(line, Some("/home/ann")), line);
         }
+    }
+
+    /// The security review's cases (#131): each `leak` must be gone from the redacted line.
+    pub(crate) const REVIEW: &[(&str, &[&str])] = &[
+        (r#"bad config {"api_key": "hunter2xx", "password": "pw2"}"#, &["hunter2xx", "pw2"]),
+        (r#"HTTP 401 body={"x_api_key":"short"}"#, &["short"]),
+        (r#"auth failed: token: "hunter2xx" rejected"#, &["hunter2xx"]),
+        (r#"escaped {\"api_key\": \"hunter2xx\", \"password\": \"pw2\"}"#, &["hunter2xx", "pw2"]),
+        ("ANTHROPIC_KEY=plainsecret1 AZURE_OPENAI_KEY=plainkey", &["plainsecret1", "plainkey"]),
+        (r#"{"auths": {"r.io": {"auth": "dXNlcjpwYXNzd29yZA=="}}}"#, &["dXNlcjpwYXNzd29yZA"]),
+        ("passphrase=opensesame1", &["opensesame1"]),
+        ("ran docker login --password hunter2xx -u ann", &["hunter2xx"]),
+        ("ran tool --token=abc12345", &["abc12345"]),
+        ("ran docker login -p hunter2xx registry", &["hunter2xx"]),
+        ("connect redis://:onlypass@cache:6379", &["onlypass"]),
+        ("clone https://ghp_short@github.com/x", &["ghp_short"]),
+        (r#"{"password": "correct horse battery"}"#, &["correct", "horse", "battery"]),
+        ("GET /cb?token%3Dabcdef123456&x=1", &["abcdef123456"]),
+        ("GET /cb?user=ann%40example.com", &["ann@", "ann%40"]),
+        ("GET /open?p=%2Fhome%2Fann%2Fjobs", &["ann"]),
+        ("GET /open?p=C%3A%5CUsers%5CAnn%20Lee%5Cjobs", &["Ann", "Lee"]),
+        ("from anné@example.com and josé.garcía@empresa.es", &["anné", "josé", "garcía"]),
+        ("open file:///home/bob/x", &["bob"]),
+        (r"open C:\Users\Ann Lee\x", &["Ann", "Lee"]),
+        ("token abcdefghijklmnopqrstuvwxyz0123", &["abcdefghijklmnopqrstuvwxyz0123"]),
+        ("key abcdefghijklmnopqrstuvwxyz", &["abcdefghijklmnopqrstuvwxyz"]),
+        ("dckr_pat_AbCdEfGhIjKlMnOp12 and glsa_abcdefghijklmnopqrstuvwxyz_12345678", &["dckr_pat_", "glsa_"]),
+    ];
+
+    #[test]
+    fn the_reviews_cases_are_redacted() {
+        for (line, leaks) in REVIEW {
+            let out = redact(line, Some("/home/ann"));
+            for leak in *leaks {
+                assert!(!out.contains(leak), "{leak:?} survived: {line} -> {out}");
+            }
+            assert_eq!(redact(&out, Some("/home/ann")), out, "not idempotent: {line}");
+        }
+        // The whole quoted value goes, the quotes stay.
+        assert_eq!(redact(r#"{"password": "correct horse battery"}"#, None), r#"{"password": "[REDACTED]"}"#);
+        // Doubly escaped home, known.
+        assert_eq!(redact(r"p=C:\\Users\\Ann\\x", Some(r"C:\Users\Ann")), r"p=~\\x");
+        assert_eq!(redact(r"p=C:\\\\Users\\\\Ann\\\\x", Some(r"C:\Users\Ann")), r"p=~\\\\x");
+        assert_eq!(redact(r"p=C:\\\\Users\\\\Bob\\\\x", None), r"p=~\\\\x");
     }
 
     #[test]

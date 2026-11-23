@@ -147,7 +147,24 @@ impl Sink {
 
     /// The line `e` becomes, redacted and cut to [`MAX_LINE`].
     pub fn line(&self, at: SystemTime, e: &Entry) -> String {
-        let mut line = redact(&format_line(at, &self.app, e), self.home.as_deref());
+        let home = self.home.as_deref();
+        // Each part before it is quoted and escaped (a `"` escaped as `\"` would hide `"password": "x"`), then the
+        // whole line again.
+        let clean = |s: &str| {
+            let s = redact(s, home);
+            self.extra.map_or(s.clone(), |f| f(&s))
+        };
+        let e = Entry {
+            event: e.event.clone(),
+            message: clean(&e.message),
+            fields: e
+                .fields
+                .iter()
+                .map(|(k, v)| (k.clone(), clean(&format!("{k}={v}")).split_once('=').map_or_else(String::new, |(_, v)| v.to_string())))
+                .collect(),
+            error: e.error.as_deref().map(clean),
+        };
+        let mut line = redact(&format_line(at, &self.app, &e), home);
         if let Some(f) = self.extra {
             line = f(&line);
         }
@@ -305,6 +322,33 @@ mod tests {
             sink.line(at(0, 0), &Entry { event: "e".into(), message: format!("plainword {}", "y ".repeat(5000)), ..Entry::default() });
         assert!(!line.contains("plainword"));
         assert!(line.len() <= MAX_LINE);
+    }
+
+    /// The review's blocking cases (#131): a named secret in JSON or quotes, in the message, a field or the error,
+    /// survives neither the escaping nor the line.
+    #[test]
+    fn named_secrets_in_json_or_quotes_never_reach_a_line() {
+        let sink = Sink::new(Rotating::new(temp("json").join("x.log")), "essentials/0.5.0", None);
+        let cases = [
+            (r#"bad config {"api_key": "hunter2xx", "password": "pw2"}"#, ["hunter2xx", "pw2"]),
+            (r#"HTTP 401 body={"x_api_key":"short"}"#, ["short", "short"]),
+            (r#"auth failed: token: "hunter2xx" rejected"#, ["hunter2xx", "hunter2xx"]),
+        ];
+        for (text, leaks) in cases {
+            for e in [
+                Entry { event: "e".into(), error: Some(text.into()), ..Entry::default() },
+                Entry { event: "e".into(), message: text.into(), ..Entry::default() },
+                Entry { event: "e".into(), fields: vec![("detail".into(), text.into())], ..Entry::default() },
+            ] {
+                let line = sink.line(at(0, 0), &e);
+                for leak in leaks {
+                    assert!(!line.contains(leak), "{leak} reached the line: {line}");
+                }
+            }
+        }
+        // A field named for a secret is masked whatever its value.
+        let e = Entry { event: "e".into(), fields: vec![("api_key".into(), "plain value".into())], ..Entry::default() };
+        assert!(!sink.line(at(0, 0), &e).contains("plain"));
     }
 
     #[test]

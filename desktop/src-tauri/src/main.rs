@@ -99,8 +99,9 @@ fn page_command(app: &AppHandle, cmd: &str) {
     }
 }
 
-fn show_error(app: &AppHandle, title: &str, message: &str) {
-    diag::shown(title, message);
+/// Show an error, and log it as `logged` (the message with anything that stays out of the log taken out).
+fn show_error(app: &AppHandle, title: &str, message: &str, logged: &str) {
+    diag::shown(title, logged);
     app.dialog().message(message).title(title).kind(MessageDialogKind::Error).blocking_show();
 }
 
@@ -112,7 +113,7 @@ fn open_folder(app: &AppHandle, folder: PathBuf) {
     // Whether it is the default folder, never its path: the user's folder names stay out of the log.
     let default = app.path().home_dir().map(|h| h.join("Actuaria") == folder).unwrap_or(false);
     let started = std::time::Instant::now();
-    match server::start(&folder, &state.env, &diag::view_log(app), &diag::cli_log(app)) {
+    match server::start(&folder, &state.env, diag::view_log(app).as_deref(), diag::cli_log(app).as_deref()) {
         Ok(s) => {
             let url = s.url.clone();
             let port = Url::parse(&url).ok().and_then(|u| u.port()).unwrap_or(0);
@@ -137,18 +138,19 @@ fn open_folder(app: &AppHandle, folder: PathBuf) {
             }
         }
         Err(e) if first => {
-            tracing::warn!(event = "server.start", default_folder = default, error = %e);
+            tracing::warn!(event = "server.start", default_folder = default, error = %diag::hide_folder(&e, &folder));
             // Still on the start screen: show the error there, with a way to pick another folder.
             let text = format!("Couldn't open {}\n\n{e}", folder.display());
-            diag::shown("Couldn't open the folder", &text);
+            diag::shown("Couldn't open the folder", &diag::hide_folder(&text, &folder));
             if let Some(w) = main_window(app) {
                 let msg = serde_json::to_string(&text).unwrap_or_default();
                 let _ = w.eval(format!("window.showError && window.showError({msg})"));
             }
         }
         Err(e) => {
-            tracing::warn!(event = "server.start", default_folder = default, error = %e);
-            show_error(app, "Couldn't open the folder", &format!("{}\n\n{e}", folder.display()))
+            tracing::warn!(event = "server.start", default_folder = default, error = %diag::hide_folder(&e, &folder));
+            let text = format!("{}\n\n{e}", folder.display());
+            show_error(app, "Couldn't open the folder", &text, &diag::hide_folder(&text, &folder))
         }
     }
 }
@@ -213,7 +215,9 @@ fn page_action(app: AppHandle, url: Url) {
                 }
             }
             "server-log" => {
-                let _ = app.opener().open_path(diag::view_log(&app).to_string_lossy(), None::<&str>);
+                if let Some(log) = diag::view_log(&app) {
+                    let _ = app.opener().open_path(log.to_string_lossy(), None::<&str>);
+                }
             }
             "update" => update::action(&app, param("do").as_deref().unwrap_or_default()),
             "install" => install::action(&app, param("do").as_deref().unwrap_or_default(), param("nonce"), param("target")),
@@ -442,8 +446,9 @@ fn on_menu(app: &AppHandle, id: &str) {
             std::thread::spawn(move || diag::save(&app));
         }
         "help:logs" => {
-            let log = diag::app_log(app);
-            let _ = if log.exists() { app.opener().reveal_item_in_dir(log) } else { Ok(()) };
+            if let Some(log) = diag::app_log(app).filter(|l| l.exists()) {
+                let _ = app.opener().reveal_item_in_dir(log);
+            }
         }
         "check-update" => update::check_now(app),
         "beta-updates" => update::toggle_beta(app),

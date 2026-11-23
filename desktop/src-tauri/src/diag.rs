@@ -21,27 +21,36 @@ use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 pub const TAIL_LINES: usize = 200;
 const DOCKER_TIMEOUT: Duration = Duration::from_secs(15);
 
-fn log_dir(app: &AppHandle) -> PathBuf {
-    app.path().app_log_dir().unwrap_or_else(|_| std::env::temp_dir())
+/// The app's log folder. None when the system gives none: then nothing is logged to a file (never to a shared
+/// temporary folder).
+fn log_dir(app: &AppHandle) -> Option<PathBuf> {
+    app.path().app_log_dir().ok()
 }
 
-fn named(app: &AppHandle, stem: &str) -> PathBuf {
-    log_dir(app).join(if crate::DEV { format!("{stem}.dev.log") } else { format!("{stem}.log") })
+fn named(app: &AppHandle, stem: &str) -> Option<PathBuf> {
+    log_dir(app).map(|d| d.join(if crate::DEV { format!("{stem}.dev.log") } else { format!("{stem}.log") }))
 }
 
 /// The app's own events.
-pub fn app_log(app: &AppHandle) -> PathBuf {
+pub fn app_log(app: &AppHandle) -> Option<PathBuf> {
     named(app, "essentials")
 }
 
 /// What `hbench view` prints.
-pub fn view_log(app: &AppHandle) -> PathBuf {
+pub fn view_log(app: &AppHandle) -> Option<PathBuf> {
     named(app, "hbench-view")
 }
 
 /// The events of `hbench view` and the runs it starts.
-pub fn cli_log(app: &AppHandle) -> PathBuf {
+pub fn cli_log(app: &AppHandle) -> Option<PathBuf> {
     named(app, "hbench")
+}
+
+/// `text` with the open folder's path written as its name: folder paths stay out of the logs.
+pub fn hide_folder(text: &str, folder: &Path) -> String {
+    let path = folder.display().to_string();
+    let name = folder.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    if path.len() < 2 { text.to_string() } else { text.replace(&path, &format!("…/{name}")) }
 }
 
 pub fn home(app: &AppHandle) -> Option<String> {
@@ -50,7 +59,8 @@ pub fn home(app: &AppHandle) -> Option<String> {
 
 /// Send the app's events to `essentials.log`, from now on.
 pub fn init(app: &AppHandle) {
-    let sink = locallog::Sink::new(locallog::Rotating::new(app_log(app)), format!("essentials/{}", env!("CARGO_PKG_VERSION")), home(app));
+    let Some(path) = app_log(app) else { return };
+    let sink = locallog::Sink::new(locallog::Rotating::new(path), format!("essentials/{}", env!("CARGO_PKG_VERSION")), home(app));
     locallog::init(sink);
     tracing::info!(event = "app.start", beta = app.state::<crate::AppState>().settings.lock().unwrap().beta_updates);
 }
@@ -147,9 +157,9 @@ fn header(app: &AppHandle, docker: &Docker, at: SystemTime) -> String {
     )
 }
 
-fn logs(app: &AppHandle) -> [(String, PathBuf); 3] {
+fn logs(app: &AppHandle) -> Vec<(String, PathBuf)> {
     let name = |p: &Path| p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    [app_log(app), view_log(app), cli_log(app)].map(|p| (name(&p), p))
+    [app_log(app), view_log(app), cli_log(app)].into_iter().flatten().map(|p| (name(&p), p)).collect()
 }
 
 /// The text "Copy Diagnostics" puts on the clipboard: the header and the last lines of each log, redacted again.
@@ -290,6 +300,29 @@ token ghp_aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789 secret 0123456789abcdef0123456789
         assert!(out.contains("--- hbench-view.log: last 0 lines ---\n(empty)"), "{out}");
         assert!(out.contains("listening at ~/Actuaria"), "{out}");
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// The review's blocking cases (#131), as lines already in a log: named secrets in JSON or quotes.
+    #[test]
+    fn named_secrets_in_json_or_quotes_never_reach_the_diagnostics() {
+        let d = temp("json");
+        let lines = [
+            r#"2026-11-23T08:00:00.000Z essentials/0.5.0 linux-x86_64 ui.error error="bad config {\"api_key\": \"hunter2xx\", \"password\": \"pw2\"}""#,
+            r#"HTTP 401 body={"x_api_key":"short"}"#,
+            r#"auth failed: token: "hunter2xx" rejected"#,
+        ];
+        std::fs::write(d.join("a.log"), lines.join("\n")).unwrap();
+        let out = text("", &[("a.log".into(), d.join("a.log"))], None);
+        for leak in ["hunter2xx", "pw2", "short"] {
+            assert!(!out.contains(leak), "{leak} reached the diagnostics:\n{out}");
+        }
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn the_folder_path_becomes_its_name() {
+        let f = Path::new("/home/ann/clients/acme");
+        assert_eq!(hide_folder("Couldn't open /home/ann/clients/acme\n\nno access", f), "Couldn't open …/acme\n\nno access");
     }
 
     #[test]
