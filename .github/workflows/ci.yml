@@ -37,6 +37,8 @@ jobs:
         run: cargo build --locked --all-targets
       - name: Run unit tests
         run: cargo test --locked
+      - name: Test the local logs (locallog)
+        run: cargo test --locked --manifest-path locallog/Cargo.toml
       - name: Start two local registries, the second taking basic auth
         run: |
           docker run -d --name registry -p 127.0.0.1:5000:5000 "$REGISTRY_IMAGE"
@@ -88,6 +90,8 @@ jobs:
         run: cargo clippy --locked --all-targets
       - name: Run unit tests
         run: cargo test --locked
+      - name: Test the local logs (locallog)
+        run: cargo test --locked --manifest-path locallog/Cargo.toml
 
   musl:
     # Release binaries are static musl builds, made the way release.yml makes them.
@@ -126,11 +130,15 @@ jobs:
         with:
           components: clippy, rustfmt
       - name: Check formatting
-        run: cargo fmt --check
+        run: |
+          cargo fmt --check
+          cargo fmt --check --manifest-path locallog/Cargo.toml
       - name: Test the beta channel's feed script
         run: scripts/beta-feed-test.sh
       - name: Run Clippy
-        run: cargo clippy --locked --all-targets -- -D warnings
+        run: |
+          cargo clippy --locked --all-targets -- -D warnings
+          cargo clippy --locked --all-targets --manifest-path locallog/Cargo.toml -- -D warnings
         env:
           RUSTFLAGS: ""
 

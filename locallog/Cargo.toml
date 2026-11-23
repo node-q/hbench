@@ -1,0 +1,14 @@
+[package]
+name = "locallog"
+version = "0.1.0"
+description = "Local, size-capped, redacted event logs for hbench and Actuaria Studio Essentials. Nothing leaves the machine."
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+
+# Its own workspace, like desktop/install: hbench and the desktop app both depend on it by path.
+[workspace]
+
+[dependencies]
+regex = "1"
+tracing = { version = "0.1", default-features = false, features = ["std"] }
