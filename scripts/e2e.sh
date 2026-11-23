@@ -495,7 +495,9 @@ $BIN datasets push examples/tasks --descriptor "$D/source.yaml" --to "oci://$reg
 expect_fail "the repository's last component is the dataset name" $BIN datasets push examples/tasks --descriptor "$D/source.yaml" --to "oci://$registry_host/e2e/other:1.0"
 expect_fail "has no dataset index" $BIN datasets list --registry "oci://$registry_host/e2e"
 put_index "$registry_host" e2e-examples 1.0 "$push_digest"
-$BIN datasets list --registry "oci://$registry_host/e2e" | check "e2e-examples@1.0  3 tasks"
+# From the index alone the list names the dataset; --details opens it for its task count.
+$BIN datasets list --registry "oci://$registry_host/e2e" | check e2e-examples@1.0
+$BIN datasets list --registry "oci://$registry_host/e2e" --details | check "e2e-examples@1.0  3 tasks"
 HBENCH_REGISTRY="oci://$registry_host/e2e" $BIN datasets list | check e2e-examples@1.0
 $BIN datasets download e2e-examples@1.0 --registry "oci://$registry_host/e2e" -o "$D/dl-registry" | check hello-workdir
 [ "$($BIN datasets export -d e2e-examples@1.0 --registry "oci://$registry_host/e2e" --oci-layout "$D/layout-from-registry" 2>/dev/null)" = "$push_digest" ]
