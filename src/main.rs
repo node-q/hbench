@@ -1516,19 +1516,12 @@ async fn run() -> Result<ExitCode> {
                 if details || spec.starts_with(oci::LAYOUT_SCHEME) {
                     oci::list(&spec).await?.into_iter().map(full).collect()
                 } else {
-                    // The index alone: what it says of each dataset, else what the blob cache has from an earlier --details.
+                    // The index alone, and what it says of each dataset: the same lines on every machine.
                     let index = oci::Indexed::read(&spec).await?.with_context(|| oci::no_index(&spec))?;
                     index
                         .entries
-                        .iter()
-                        .map(|e| match index.cached(e) {
-                            Some(d) => full(d),
-                            None => (
-                                format!("{}@{}", e.name, e.version),
-                                e.n_tasks.map(|n| n as usize),
-                                e.description.clone().unwrap_or_default(),
-                            ),
-                        })
+                        .into_iter()
+                        .map(|e| (format!("{}@{}", e.name, e.version), e.n_tasks.map(|n| n as usize), e.description.unwrap_or_default()))
                         .collect()
                 }
             };
