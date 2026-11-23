@@ -1,5 +1,6 @@
 mod agents;
 mod analyze;
+mod applog;
 mod artifacts;
 mod atif;
 mod authoring;
@@ -47,6 +48,11 @@ use std::process::ExitCode;
 #[derive(Parser)]
 #[command(version)]
 struct Cli {
+    /// Also write a local log of what this command does (and why it failed) to PATH: one line per event,
+    /// redacted, at most 5 files of 1 MB. Runs, sweeps and `datasets list` log to
+    /// <data dir>/hbench/logs/hbench.log without it. Env: HBENCH_LOG_FILE.
+    #[arg(long, global = true, value_name = "PATH")]
+    log_file: Option<PathBuf>,
     #[command(subcommand)]
     cmd: Cmd,
 }
@@ -1079,6 +1085,8 @@ fn preflight_auth(cfg: &JobConfig) -> Result<()> {
         let env = crate::task::resolve_env_vars(&a.env).unwrap_or_default();
         let set = |n: &&str| env.get(*n).or(std::env::var(n).ok().as_ref()).is_some_and(|v| !v.is_empty());
         if !names.iter().any(set) {
+            // The variables' names only, never their values.
+            tracing::warn!(event = "auth.check", agent = %a.name(), outcome = "missing", needs = %names.join(","));
             bail!("agent {} needs credentials: set {} (or one of {}), or pass --skip-preflight", a.name(), names[0], names[1..].join(", "));
         }
     }
@@ -1214,6 +1222,7 @@ async fn force_cleanup(trials: Vec<String>) {
 
 /// Exit 1 if every trial errored (or any did, with `fail_on_error`); else 0.
 fn job_exit_code(s: &job::JobStats, fail_on_error: bool) -> ExitCode {
+    tracing::info!(event = "job.end", trials = s.n_completed_trials, errored = s.n_errored_trials);
     let all = s.n_completed_trials > 0 && s.n_errored_trials == s.n_completed_trials;
     if all || (fail_on_error && s.n_errored_trials > 0) {
         eprintln!("{} of {} trial(s) errored", s.n_errored_trials, s.n_completed_trials);
@@ -1295,12 +1304,17 @@ fn run_init(a: InitArgs) -> Result<()> {
 #[tokio::main]
 async fn main() -> ExitCode {
     match run().await {
-        Ok(code) => code,
+        Ok(code) => {
+            applog::end(&code, None);
+            code
+        }
         Err(e) if e.is::<Cancelled>() => {
+            applog::end(&ExitCode::from(130), Some(&e));
             eprintln!("cancelled");
             ExitCode::from(130)
         }
         Err(e) => {
+            applog::end(&ExitCode::FAILURE, Some(&e));
             eprintln!("Error: {e:?}");
             ExitCode::FAILURE
         }
@@ -1313,6 +1327,7 @@ async fn run() -> Result<ExitCode> {
     let logo = clap::builder::styling::AnsiColor::Cyan.on_default().bold();
     let matches = Cli::command().before_help(format!("{logo}{}{logo:#}", wizard::LOGO)).get_matches();
     let cli = Cli::from_arg_matches(&matches).unwrap_or_else(|e| e.exit());
+    applog::start(&matches, cli.log_file.as_deref());
     if !matches!(cli.cmd, Cmd::Completions { .. } | Cmd::Update) {
         update::notify();
     }
@@ -1525,6 +1540,7 @@ async fn run() -> Result<ExitCode> {
                         .collect()
                 }
             };
+            tracing::info!(event = "datasets.list", datasets = rows.len(), details);
             let terminal_width = dialoguer::console::Term::stdout().size_checked().map(|(_, columns)| usize::from(columns));
             for line in dataset_lines(&rows, terminal_width) {
                 println!("{line}");

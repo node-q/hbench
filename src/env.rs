@@ -1437,6 +1437,16 @@ fn cache_home() -> PathBuf {
 
 /// Fail fast with a readable message when the docker daemon is unreachable.
 pub async fn preflight() -> Result<()> {
+    let r = check_docker().await;
+    match &r {
+        Ok(version) => tracing::info!(event = "docker.check", status = "available", version = %version),
+        Err(e) => tracing::warn!(event = "docker.check", status = "unavailable", error = %format!("{e:#}")),
+    }
+    r.map(|_| ())
+}
+
+/// The docker server's version, once docker and `docker compose` both answer.
+async fn check_docker() -> Result<String> {
     let out = tokio::time::timeout(
         DAEMON_CHECK_TIMEOUT,
         Command::new("docker").args(["version", "--format", "{{.Server.Version}}"]).kill_on_drop(true).output(),
@@ -1447,11 +1457,12 @@ pub async fn preflight() -> Result<()> {
     if !out.status.success() {
         bail!("docker daemon unreachable: {}", String::from_utf8_lossy(&out.stderr).trim());
     }
+    let version = String::from_utf8_lossy(&out.stdout).trim().to_string();
     let out = Command::new("docker").args(["compose", "version"]).output().await?;
     if !out.status.success() {
         bail!("`docker compose` (v2 plugin) is required");
     }
-    Ok(())
+    Ok(version)
 }
 
 #[cfg(test)]

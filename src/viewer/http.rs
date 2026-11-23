@@ -75,12 +75,19 @@ fn write_allowed(req: &Req) -> bool {
 }
 
 pub fn handle(app: &App, req: &Req) -> Resp {
-    route(app, req).unwrap_or_else(|(status, detail)| Resp {
-        status,
-        ctype: "application/json".into(),
-        body: serde_json::to_vec(&json!({"detail": detail})).unwrap(),
-        headers: vec![],
+    route(app, req).unwrap_or_else(|(status, detail)| {
+        // What the page will show as an error, for the local log (the path without its query).
+        if req.url.starts_with("/api/") && status >= 400 && status != 404 {
+            let path = req.url.split_once('?').map_or(req.url, |(p, _)| p);
+            let text: String = detail.as_str().map_or_else(|| detail.to_string(), str::to_string).chars().take(300).collect();
+            tracing::warn!(event = "viewer.error", method = %req.method, path = %path, status, error = %text);
+        }
+        error_response(status, detail)
     })
+}
+
+fn error_response(status: u16, detail: Value) -> Resp {
+    Resp { status, ctype: "application/json".into(), body: serde_json::to_vec(&json!({"detail": detail})).unwrap(), headers: vec![] }
 }
 
 fn route(app: &App, req: &Req) -> Res {

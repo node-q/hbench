@@ -148,11 +148,24 @@ impl App {
         if let Some(l) = listed.as_ref().filter(|l| !refresh && l.registry == registry && l.at.elapsed() < FRESH_FOR) {
             return Ok((registry, l.entries.clone()));
         }
-        let read = block_on(INDEX_TIMEOUT, &format!("Reading {registry}'s dataset index"), Indexed::read(&registry))?;
+        let started = Instant::now();
+        let read = block_on(INDEX_TIMEOUT, &format!("Reading {registry}'s dataset index"), Indexed::read(&registry));
+        let ms = started.elapsed().as_millis() as u64;
         let entries = match read {
-            Ok(Some(index)) => index.entries,
-            Ok(None) => return Err(err(502, crate::oci::no_index(&registry))),
-            Err(e) => return Err(err(502, format!("{e:#}"))),
+            Ok(Ok(Some(index))) => Ok(index.entries),
+            Ok(Ok(None)) => Err(err(502, crate::oci::no_index(&registry))),
+            Ok(Err(e)) => Err(err(502, format!("{e:#}"))),
+            Err(e) => Err(e),
+        };
+        let entries = match entries {
+            Ok(entries) => {
+                tracing::info!(event = "catalogue.load", registry = %registry, datasets = entries.len(), ms);
+                entries
+            }
+            Err((status, detail)) => {
+                tracing::warn!(event = "catalogue.load", registry = %registry, ms, status, error = %detail.as_str().unwrap_or_default());
+                return Err((status, detail));
+            }
         };
         *listed = Some(Listed { registry: registry.clone(), at: Instant::now(), entries: entries.clone() });
         Ok((registry, entries))

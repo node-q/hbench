@@ -108,6 +108,11 @@ With a ChatGPT login (`CODEX_AUTH_JSON_PATH`, `CODEX_FORCE_AUTH_JSON`), codex ta
 Other hbench variables: `DOCKER_CONTEXT`/`DOCKER_HOST` (which daemon), `HBENCH_EGRESS_METHOD=proxy` (see below).
 `HBENCH_NO_UPDATE_CHECK=1` stops the daily check for a newer release, which suggests `hbench update` (also off when `CI` is set or stderr is not a
 terminal); hbench reads the last result from `~/.cache/hbench/latest-release.json` and refreshes it in the background.
+`--log-file <path>` (or `HBENCH_LOG_FILE`) keeps a local log of what a command did and why it failed: one line per event
+(time, version, system, event, error), with keys, tokens, cookies, emails and the home folder taken out, in at most 5 files
+of 1 MB. Runs, sweeps and `datasets list` keep it without the option, in `hbench/logs/hbench.log` under the user's data
+folder (`~/.local/share`, `~/Library/Application Support`, `%LOCALAPPDATA%`). Nothing is sent anywhere; stdout and
+stderr are unchanged.
 While tasks download, a progress line on stderr counts tasks and bytes and ends as a summary:
 
 ```
