@@ -49,8 +49,10 @@ pub fn start(m: &clap::ArgMatches, flag: Option<&Path>) {
     let env = std::env::var_os(ENV).filter(|v| !v.is_empty()).map(PathBuf::from);
     let Some(path) = path_for(&command, flag, env) else { return };
     let home = crate::fsutil::home_dir().map(|h| h.to_string_lossy().into_owned());
-    let sink = locallog::Sink::new(locallog::Rotating::new(path), format!("hbench/{}", env!("CARGO_PKG_VERSION")), home)
-        .with_scrubber(crate::redact::text);
+    // hbench's own folder may be made private; a folder the user named is left as it is.
+    let rotating =
+        if Some(&path) == default_path().as_ref() { locallog::Rotating::new(path).own_folder() } else { locallog::Rotating::new(path) };
+    let sink = locallog::Sink::new(rotating, format!("hbench/{}", env!("CARGO_PKG_VERSION")), home).with_scrubber(crate::redact::text);
     if locallog::init(sink) {
         tracing::info!(event = "command.start", command = %command);
         let _ = STARTED.set(Started { command, at: Instant::now() });

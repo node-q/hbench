@@ -48,9 +48,44 @@ pub fn cli_log(app: &AppHandle) -> Option<PathBuf> {
 
 /// `text` with the open folder's path written as its name: folder paths stay out of the logs.
 pub fn hide_folder(text: &str, folder: &Path) -> String {
-    let path = folder.display().to_string();
-    let name = folder.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    if path.len() < 2 { text.to_string() } else { text.replace(&path, &format!("…/{name}")) }
+    FolderMask::new(folder).apply(text)
+}
+
+/// The ways a folder's path appears in text: as given and resolved (symlinks), without a trailing separator, and
+/// with `\` doubled (JSON on Windows). Each becomes `…/<name>`.
+pub struct FolderMask {
+    forms: Vec<String>,
+    name: String,
+}
+
+impl FolderMask {
+    pub fn new(folder: &Path) -> FolderMask {
+        let trim = |p: &Path| p.display().to_string().trim_end_matches(['/', '\\']).to_string();
+        let mut forms = vec![trim(folder)];
+        if let Ok(real) = folder.canonicalize() {
+            // Windows' verbatim prefix (`\\?\C:\…`) as well as without it.
+            let real = trim(&real);
+            forms.push(real.trim_start_matches(r"\\?\").to_string());
+            forms.push(real);
+        }
+        for f in forms.clone() {
+            forms.push(f.replace('\\', "\\\\"));
+        }
+        forms.retain(|f| f.len() > 1);
+        forms.sort_by_key(|f| std::cmp::Reverse(f.len()));
+        forms.dedup();
+        // The last component, whichever separator the path uses.
+        let name = trim(folder).rsplit(['/', '\\']).next().unwrap_or_default().to_string();
+        FolderMask { forms, name }
+    }
+
+    pub fn apply(&self, text: &str) -> String {
+        let mut s = text.to_string();
+        for f in &self.forms {
+            s = s.replace(f, &format!("…/{}", self.name));
+        }
+        s
+    }
 }
 
 pub fn home(app: &AppHandle) -> Option<String> {
@@ -60,7 +95,8 @@ pub fn home(app: &AppHandle) -> Option<String> {
 /// Send the app's events to `essentials.log`, from now on.
 pub fn init(app: &AppHandle) {
     let Some(path) = app_log(app) else { return };
-    let sink = locallog::Sink::new(locallog::Rotating::new(path), format!("essentials/{}", env!("CARGO_PKG_VERSION")), home(app));
+    let sink =
+        locallog::Sink::new(locallog::Rotating::new(path).own_folder(), format!("essentials/{}", env!("CARGO_PKG_VERSION")), home(app));
     locallog::init(sink);
     tracing::info!(event = "app.start", beta = app.state::<crate::AppState>().settings.lock().unwrap().beta_updates);
 }
@@ -323,6 +359,27 @@ token ghp_aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789 secret 0123456789abcdef0123456789
     fn the_folder_path_becomes_its_name() {
         let f = Path::new("/home/ann/clients/acme");
         assert_eq!(hide_folder("Couldn't open /home/ann/clients/acme\n\nno access", f), "Couldn't open …/acme\n\nno access");
+        // A trailing separator, and the path inside an error chain.
+        assert_eq!(hide_folder("x", Path::new("/home/ann/clients/acme/")), "x");
+        assert_eq!(
+            hide_folder("Error: reading /home/ann/clients/acme/job-1/result.json: caused by: denied", Path::new("/home/ann/clients/acme/")),
+            "Error: reading …/acme/job-1/result.json: caused by: denied"
+        );
+        // JSON-doubled Windows separators.
+        assert_eq!(hide_folder(r#"{"p":"C:\\Users\\Ann\\acme\\x"}"#, Path::new(r"C:\Users\Ann\acme")), r#"{"p":"…/acme\\x"}"#);
+        // Through a symlink: the resolved path goes too.
+        let d = temp("link");
+        let real = d.join("real-client");
+        std::fs::create_dir_all(&real).unwrap();
+        let link = d.join("acme");
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&real, &link).unwrap();
+            let resolved = real.canonicalize().unwrap();
+            let out = hide_folder(&format!("opened {}/x", resolved.display()), &link);
+            assert_eq!(out, "opened …/acme/x");
+        }
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]

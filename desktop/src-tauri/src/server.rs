@@ -53,12 +53,13 @@ fn pipe_to_log(
     done: mpsc::Sender<()>,
 ) {
     std::thread::spawn(move || {
+        let mask = crate::diag::FolderMask::new(&folder);
         let mut r = BufReader::new(from);
         let mut buf = Vec::new();
         while matches!(r.read_until(b'\n', &mut buf), Ok(n) if n > 0) {
             if let Some(log) = &log {
                 let line = String::from_utf8_lossy(&buf);
-                let line = crate::diag::hide_folder(line.trim_end_matches(['\r', '\n']), &folder);
+                let line = mask.apply(line.trim_end_matches(['\r', '\n']));
                 let _ = log.append(&locallog::redact(&line, home.as_deref()));
             }
             buf.clear();
@@ -141,7 +142,7 @@ fn drain(done: &mpsc::Receiver<()>) {
 pub fn start(folder: &Path, env: &HashMap<String, String>, log: Option<&Path>, events: Option<&Path>) -> Result<Server, String> {
     let bin = hbench_path()?;
     let port = free_port()?;
-    let out_log = log.map(|l| Arc::new(locallog::Rotating::new(l)));
+    let out_log = log.map(|l| Arc::new(locallog::Rotating::new(l).own_folder()));
     if let (Some(l), Some(path)) = (&out_log, log) {
         l.rotate().map_err(|e| format!("starting a new {}: {e}", path.display()))?;
     }
@@ -205,7 +206,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let script = dir.join("prog.sh");
-        std::fs::write(&script, "#!/bin/sh\necho \"listening, ANTHROPIC_API_KEY=sk-ant-api03-AbCdEf0123456789_xyz\"\necho \"Jobs folder: /home/ann/clients/acme\"\necho \"/home/ann/jobs missing\" >&2\nexit 3\n")
+        std::fs::write(&script, "#!/bin/sh\necho \"listening, ANTHROPIC_API_KEY=sk-ant-api03-AbCdEf0123456789_xyz\"\necho \"Jobs folder: /home/ann/clients/acme\"\necho \"x %0Aforged line %1B[31m %00\"\nprintf 'esc \\033[31mred\\n'\necho \"/home/ann/jobs missing\" >&2\nexit 3\n")
             .unwrap();
         std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
         let log = Arc::new(locallog::Rotating::new(dir.join("view.log")));
@@ -223,6 +224,10 @@ mod tests {
         assert!(text.contains("listening, ANTHROPIC_API_KEY=[REDACTED]"), "{text}");
         assert!(text.contains("~/jobs missing"), "{text}");
         assert!(text.contains("Jobs folder: …/acme") && !text.contains("clients"), "{text}");
+        // An encoded newline or escape never splits or poisons a line.
+        assert!(!text.lines().any(|l| l.starts_with("forged")), "{text}");
+        assert!(text.contains("x %0Aforged line %1B[31m %00"), "{text}");
+        assert!(text.contains("esc \\u{1b}[31mred") && !text.contains('\u{1b}'), "{text}");
         assert!(!text.contains("sk-ant") && !text.contains("/home/ann"), "{text}");
         let _ = std::fs::remove_dir_all(&dir);
     }

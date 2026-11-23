@@ -19,6 +19,10 @@ pub struct Rotating {
     max_bytes: u64,
     files: usize,
     lock: Mutex<()>,
+    /// The folder is the log's own (the app's log folder, hbench's data folder), so it may be made private.
+    own_folder: bool,
+    /// Whether this process has made the file (and its own folder) private yet.
+    secured: std::sync::atomic::AtomicBool,
 }
 
 impl Rotating {
@@ -28,7 +32,46 @@ impl Rotating {
     }
 
     pub fn with_cap(path: impl Into<PathBuf>, max_bytes: u64, files: usize) -> Rotating {
-        Rotating { path: path.into(), max_bytes: max_bytes.max(2), files: files.max(1), lock: Mutex::new(()) }
+        Rotating {
+            path: path.into(),
+            max_bytes: max_bytes.max(2),
+            files: files.max(1),
+            lock: Mutex::new(()),
+            own_folder: false,
+            secured: Default::default(),
+        }
+    }
+
+    /// The log's folder is its own: make it 0700 on Unix, even when it already exists. Not for a folder the
+    /// user named (`--log-file /tmp/x.log`).
+    pub fn own_folder(mut self) -> Rotating {
+        self.own_folder = true;
+        self
+    }
+
+    /// On the first write of this process: the file 0600, and its own folder 0700, whatever they were before
+    /// (an older build made them 0644 and 0755). Unix only.
+    fn secure(&self) {
+        if self.secured.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            return;
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let set = |p: &Path, mode: u32| {
+                if fs::metadata(p).is_ok_and(|m| m.permissions().mode() & 0o777 != mode) {
+                    let _ = fs::set_permissions(p, fs::Permissions::from_mode(mode));
+                }
+            };
+            if self.own_folder
+                && let Some(dir) = self.path.parent().filter(|d| !d.as_os_str().is_empty())
+            {
+                set(dir, 0o700);
+            }
+            for f in self.files() {
+                set(&f, 0o600);
+            }
+        }
     }
 
     pub fn path(&self) -> &Path {
@@ -56,6 +99,7 @@ impl Rotating {
         #[cfg(unix)]
         std::os::unix::fs::OpenOptionsExt::mode(&mut o, 0o600);
         let mut f = o.open(&self.path)?;
+        self.secure();
         f.write_all(format!("{line}\n").as_bytes())
     }
 
@@ -220,6 +264,33 @@ mod tests {
         for f in log.files() {
             assert_eq!(mode(&f), 0o600, "{}", f.display());
         }
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_older_logs_modes_are_tightened_when_it_is_opened() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = dir("upgrade");
+        let logs = d.join("logs");
+        fs::create_dir_all(&logs).unwrap();
+        fs::set_permissions(&logs, fs::Permissions::from_mode(0o755)).unwrap();
+        fs::write(logs.join("a.log"), "old\n").unwrap();
+        fs::write(logs.join("a.log.1"), "older\n").unwrap();
+        for f in ["a.log", "a.log.1"] {
+            fs::set_permissions(logs.join(f), fs::Permissions::from_mode(0o644)).unwrap();
+        }
+        let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        Rotating::new(logs.join("a.log")).own_folder().append("new").unwrap();
+        assert_eq!(mode(&logs), 0o700);
+        assert_eq!(mode(&logs.join("a.log")), 0o600);
+        assert_eq!(mode(&logs.join("a.log.1")), 0o600);
+        // A folder the user named is left as it is; the file is still private.
+        fs::set_permissions(&logs, fs::Permissions::from_mode(0o755)).unwrap();
+        fs::set_permissions(logs.join("a.log"), fs::Permissions::from_mode(0o644)).unwrap();
+        Rotating::new(logs.join("a.log")).append("again").unwrap();
+        assert_eq!(mode(&logs), 0o755);
+        assert_eq!(mode(&logs.join("a.log")), 0o600);
         let _ = fs::remove_dir_all(&d);
     }
 
