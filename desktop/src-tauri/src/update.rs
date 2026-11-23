@@ -170,6 +170,12 @@ async fn check(app: &AppHandle, mut manual: bool) {
         });
     };
     push(app);
+    let channel = if on_beta(app) { "beta" } else { "stable" };
+    match &found {
+        Ok(Some(v)) => tracing::info!(event = "update.check", channel, manual, outcome = "available", version = %v),
+        Ok(None) => tracing::info!(event = "update.check", channel, manual, outcome = "up-to-date"),
+        Err(e) => tracing::warn!(event = "update.check", channel, manual, outcome = "failed", error = %e),
+    }
     match found {
         Ok(Some(_)) => {}
         Ok(None) => {
@@ -205,6 +211,7 @@ async fn find(app: &AppHandle, beta: bool) -> Result<Option<Found>, tauri_plugin
         let offer = read_feed(app, feed).await;
         if let Err(e) = &offer {
             eprintln!("update check: {}: {e}", feed.url());
+            tracing::warn!(event = "update.feed", feed = feed.url(), error = %e);
         }
         offers.push(offer);
     }
@@ -231,6 +238,7 @@ async fn read_feed(app: &AppHandle, feed: Feed) -> Result<Option<(Version, Updat
         // Nothing to offer.
         Err(tauri_plugin_updater::Error::ReleaseNotFound) => {
             eprintln!("update check: no latest.json at {}", feed.url());
+            tracing::info!(event = "update.feed", feed = feed.url(), outcome = "no-manifest");
             Ok(None)
         }
         Err(e) => Err(e),
@@ -238,6 +246,9 @@ async fn read_feed(app: &AppHandle, feed: Feed) -> Result<Option<(Version, Updat
 }
 
 fn message(app: &AppHandle, title: &str, text: &str, kind: MessageDialogKind) {
+    if kind == MessageDialogKind::Error {
+        crate::diag::shown(title, text);
+    }
     app.dialog().message(text).title(title).kind(kind).show(|_| {});
 }
 
@@ -276,6 +287,7 @@ pub fn action(app: &AppHandle, what: &str) {
             if demo().is_some() {
                 set(app, |v| *v = View::default());
             } else {
+                tracing::info!(event = "update.restart");
                 // The exit handler stops hbench view.
                 app.restart();
             }
@@ -295,6 +307,8 @@ async fn install(app: &AppHandle) {
     if !claimed {
         return;
     }
+    let version = app.state::<Updates>().view.lock().unwrap().version.clone().unwrap_or_default();
+    tracing::info!(event = "update.download", version = %version, beta);
     push(app);
     let result = if demo().is_some() { fake_download(app).await } else { download_and_install(app).await };
     let switched = {
@@ -321,6 +335,11 @@ async fn install(app: &AppHandle) {
         switched
     };
     push(app);
+    match &result {
+        Ok(()) => tracing::info!(event = "update.ready", version = %version),
+        // The page shows this message in the update prompt.
+        Err(e) => tracing::warn!(event = "update.failed", version = %version, error = %e),
+    }
     if let Err(e) = result {
         eprintln!("update failed: {e}");
     }
@@ -457,6 +476,7 @@ pub fn toggle_beta(app: &AppHandle) {
         let _ = item.set_checked(on);
     }
     eprintln!("updates: beta channel {}", if on { "on" } else { "off" });
+    tracing::info!(event = "update.channel", beta = on);
     if then != OnSwitch::Leave {
         push(app);
         check_now(app);

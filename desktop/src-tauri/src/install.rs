@@ -86,18 +86,19 @@ pub fn push(app: &AppHandle) {
         (serde_json::to_string(&i.view).unwrap_or_else(|_| "null".into()), line)
     };
     if let Some(line) = line {
-        crate::app_log(app, &line);
+        // One line per state the dialog shows; an error's message is the one the user reads.
+        tracing::info!(event = "install.state", "{line}");
     }
     if let Some(w) = app.get_webview_window(crate::MAIN) {
         let _ = w.eval(format!("window.__ACTUARIA_INSTALL__ = {json}; window.dispatchEvent(new Event(\"actuaria:install\"));"));
     }
 }
 
-/// The app log's line for a dialog state: the state, the bot's id and the message, with the home folder as `~`.
+/// The app log's message for a dialog state: the state, the bot's id and the message, with the home folder as `~`.
 /// Never the bot's description, nor the host's output.
 fn log_line(v: &View, home: Option<&Path>) -> String {
     let bot = v.bot.as_ref().map(|b| format!(" actuaria/{}@{}", b.id, b.version)).unwrap_or_default();
-    let mut line = format!("install: {}{bot}", v.state);
+    let mut line = format!("{}{bot}", v.state);
     if let Some(m) = v.message.as_deref().filter(|m| !m.is_empty()) {
         line = format!("{line}: {m}");
     }
@@ -137,6 +138,7 @@ pub fn on_link(app: &AppHandle, raw: &str) {
         let st = app.state::<Installs>();
         let mut i = st.0.lock().unwrap();
         if !i.gate.try_open(Instant::now()) {
+            tracing::info!(event = "install.link", outcome = "dropped", "a dialog is open, or too many links this minute");
             return;
         }
         i.seq += 1;
@@ -162,8 +164,12 @@ fn prepare(app: &AppHandle, seq: u64, l: link::Link) {
     let read_at = Instant::now();
     let index = match net::get(catalogue::INDEX_URL, catalogue::MAX_INDEX_BYTES as u64) {
         Ok(b) => b,
-        Err(e) => return error(app, seq, format!("Couldn't reach the catalogue: {e}"), None),
+        Err(e) => {
+            tracing::warn!(event = "catalogue.load", error = %e);
+            return error(app, seq, format!("Couldn't reach the catalogue: {e}"), None);
+        }
     };
+    tracing::info!(event = "catalogue.load", bytes = index.len(), ms = read_at.elapsed().as_millis() as u64);
     let offer = match catalogue::lookup(&index, &l.bot) {
         Ok(o) => o,
         Err(e) => return error(app, seq, format!("Can't install actuaria/{}: {e}.", l.bot), None),
@@ -443,9 +449,9 @@ mod tests {
             ..View::default()
         };
         let line = log_line(&v, Some(Path::new("/home/ann")));
-        assert_eq!(line, "install: error actuaria/prompt-slim@0.1.0: Couldn't make a private folder: ~/.local/share/x: denied");
+        assert_eq!(line, "error actuaria/prompt-slim@0.1.0: Couldn't make a private folder: ~/.local/share/x: denied");
         let none = View { state: "confirm", ..View::default() };
-        assert_eq!(log_line(&none, None), "install: confirm");
+        assert_eq!(log_line(&none, None), "confirm");
     }
 
     #[test]

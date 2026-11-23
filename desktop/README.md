@@ -23,7 +23,12 @@ with [Tauri 2](https://tauri.app).
   startup, the way VS Code does, so hbench finds `docker` and the model API keys you export in `~/.zshrc`.
 - On Unix, hbench runs under a small `sh` watchdog tied to a pipe the app holds. If the app quits, crashes or is
   killed, the server stops.
-- Settings (`settings.json`) live in the app config dir and the server log (`hbench-view.log`) in the app log dir.
+- Settings (`settings.json`) live in the app config dir. The app log dir holds `essentials.log` (the app's own
+  events: install links, updates, the server starting, stopping or crashing, Docker checks, catalogue loads, and
+  every error shown), `hbench-view.log` (what the server prints) and `hbench.log` (the server's and its runs'
+  events). Each line is redacted before it is written, and each log is capped at 5 files of 1 MB. Help → Copy
+  Diagnostics puts the version, system, Docker status and the last 200 lines of each log (redacted again) on the
+  clipboard; Save Diagnostics… writes them to a zip. Nothing is sent.
   On first launch the app opens `~/Actuaria`.
 - When a run finishes, the app shows a toast if its window is focused, or a system notification if it is in
   the background.
