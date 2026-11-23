@@ -19,7 +19,7 @@ const CLAUDE_GRACE: Duration = Duration::from_secs(10 * 60);
 
 const EXPIRED: &str = "This was open for over 5 minutes, so the catalogue may have changed. Open the link again. Nothing was installed.";
 
-#[derive(Serialize, Clone, Default)]
+#[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct View {
     /// none | loading | confirm | working | approval | done | error
@@ -32,6 +32,13 @@ struct View {
     output: Option<String>,
     /// A host to download ("claude" links claude.ai/download).
     get_host: Option<Target>,
+}
+
+/// No dialog. Not derived: a derived default's state would be "", which the page took for an outcome.
+impl Default for View {
+    fn default() -> View {
+        View { state: "none", nonce: String::new(), bot: None, targets: vec![], message: None, output: None, get_host: None }
+    }
 }
 
 #[derive(Serialize, Clone)]
@@ -50,6 +57,8 @@ struct Inner {
     /// The offer, and when the catalogue was read for it.
     offer: Option<(Offer, Instant)>,
     seq: u64,
+    /// The state and message last written to the app's log.
+    logged: (&'static str, Option<String>),
 }
 
 #[derive(Default)]
@@ -64,15 +73,37 @@ fn set_view(app: &AppHandle, f: impl FnOnce(&mut View)) {
     push(app);
 }
 
-/// Send the current state to the page (also on each page load).
+/// Send the current state to the page (also on each page load), and log it when it changed.
 pub fn push(app: &AppHandle) {
-    let json = {
+    let (json, line) = {
         let st = app.state::<Installs>();
-        let i = st.0.lock().unwrap();
-        serde_json::to_string(&i.view).unwrap_or_else(|_| "null".into())
+        let mut i = st.0.lock().unwrap();
+        let now = (i.view.state, i.view.message.clone());
+        // Not the "none" pushed at the first page load.
+        let first = i.logged.0.is_empty() && now.0 == "none";
+        let line = (i.logged != now && !first).then(|| log_line(&i.view, app.path().home_dir().ok().as_deref()));
+        i.logged = now;
+        (serde_json::to_string(&i.view).unwrap_or_else(|_| "null".into()), line)
     };
+    if let Some(line) = line {
+        crate::app_log(app, &line);
+    }
     if let Some(w) = app.get_webview_window(crate::MAIN) {
         let _ = w.eval(format!("window.__ACTUARIA_INSTALL__ = {json}; window.dispatchEvent(new Event(\"actuaria:install\"));"));
+    }
+}
+
+/// The app log's line for a dialog state: the state, the bot's id and the message, with the home folder as `~`.
+/// Never the bot's description, nor the host's output.
+fn log_line(v: &View, home: Option<&Path>) -> String {
+    let bot = v.bot.as_ref().map(|b| format!(" actuaria/{}@{}", b.id, b.version)).unwrap_or_default();
+    let mut line = format!("install: {}{bot}", v.state);
+    if let Some(m) = v.message.as_deref().filter(|m| !m.is_empty()) {
+        line = format!("{line}: {m}");
+    }
+    match home.map(|h| h.to_string_lossy().into_owned()).filter(|h| h.len() > 1) {
+        Some(h) => line.replace(&h, "~"),
+        None => line,
     }
 }
 
@@ -388,5 +419,39 @@ fn register() {
 pub fn from_args(app: &AppHandle, args: &[String]) {
     if let Some(raw) = link::from_args(args) {
         on_link(app, raw);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_log_line_names_the_state_and_reason_but_not_the_bot_or_home() {
+        let bot = BotView {
+            id: "prompt-slim".into(),
+            name: "Prompt Slim".into(),
+            version: "0.1.0".into(),
+            description: "secret description".into(),
+            source: catalogue::DOWNLOAD_HOST,
+        };
+        let v = View {
+            state: "error",
+            bot: Some(bot),
+            message: Some("Couldn't make a private folder: /home/ann/.local/share/x: denied".into()),
+            output: Some("host output".into()),
+            ..View::default()
+        };
+        let line = log_line(&v, Some(Path::new("/home/ann")));
+        assert_eq!(line, "install: error actuaria/prompt-slim@0.1.0: Couldn't make a private folder: ~/.local/share/x: denied");
+        let none = View { state: "confirm", ..View::default() };
+        assert_eq!(log_line(&none, None), "install: confirm");
+    }
+
+    #[test]
+    fn the_default_view_is_no_dialog() {
+        let v = serde_json::to_value(View::default()).unwrap();
+        assert_eq!(v["state"], "none");
+        assert_eq!(serde_json::to_value(Inner::default().view).unwrap()["state"], "none");
     }
 }

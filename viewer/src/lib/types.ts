@@ -322,18 +322,24 @@ export interface CatalogDomain {
   n_datasets: number;
 }
 
-/** A registry dataset, described by its newest version. */
+/** What a catalog card shows of a dataset's newest version besides its name; loaded on demand. */
+export interface CatalogDetails {
+  description: string;
+  n_tasks: number;
+  license: string;
+  upstream_url: string | null;
+  creator: string | null;
+}
+
+/** A registry dataset, as the registry's index lists it, at its newest version. */
 export interface CatalogDataset {
   name: string;
   version: string;
   /** Oldest first. */
   versions: string[];
-  description: string;
-  n_tasks: number;
-  license: string;
   domain: string;
-  upstream_url: string | null;
-  creator: string | null;
+  /** Null until loaded (`/api/run/catalog/details`). */
+  details: CatalogDetails | null;
 }
 
 export interface Catalog {

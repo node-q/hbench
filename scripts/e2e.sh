@@ -495,7 +495,9 @@ $BIN datasets push examples/tasks --descriptor "$D/source.yaml" --to "oci://$reg
 expect_fail "the repository's last component is the dataset name" $BIN datasets push examples/tasks --descriptor "$D/source.yaml" --to "oci://$registry_host/e2e/other:1.0"
 expect_fail "has no dataset index" $BIN datasets list --registry "oci://$registry_host/e2e"
 put_index "$registry_host" e2e-examples 1.0 "$push_digest"
-$BIN datasets list --registry "oci://$registry_host/e2e" | check "e2e-examples@1.0  3 tasks"
+# From the index alone the list names the dataset; --details opens it for its task count.
+$BIN datasets list --registry "oci://$registry_host/e2e" | check e2e-examples@1.0
+$BIN datasets list --registry "oci://$registry_host/e2e" --details | check "e2e-examples@1.0  3 tasks"
 HBENCH_REGISTRY="oci://$registry_host/e2e" $BIN datasets list | check e2e-examples@1.0
 $BIN datasets download e2e-examples@1.0 --registry "oci://$registry_host/e2e" -o "$D/dl-registry" | check hello-workdir
 [ "$($BIN datasets export -d e2e-examples@1.0 --registry "oci://$registry_host/e2e" --oci-layout "$D/layout-from-registry" 2>/dev/null)" = "$push_digest" ]
@@ -532,7 +534,7 @@ sed 's/e2e-examples/e2e-git/; s/Three example tasks./Two tasks, from git./' "$D/
 git_digest=$($BIN datasets convert "http://127.0.0.1:$http_port/registry.json" -d e2e-git@1.0 --to "oci://$registry_host/e2e/e2e-git:1.0" --descriptor "$D/source-git.yaml" | tee "$D/convert-push.txt" | cut -d' ' -f2)
 check "e2e-git@1.0 sha256:" < "$D/convert-push.txt"
 put_index "$registry_host" e2e-examples 1.0 "$push_digest" e2e-git 1.0 "$git_digest"
-$BIN datasets list --registry "oci://$registry_host/e2e" > "$D/list-both.txt"
+$BIN datasets list --registry "oci://$registry_host/e2e" --details > "$D/list-both.txt"
 check "e2e-examples@1.0  3 tasks" < "$D/list-both.txt" && check "e2e-git@1.0       2 tasks  Two tasks, from git." < "$D/list-both.txt"
 $BIN datasets download e2e-git@1.0 --registry "oci://$registry_host/e2e" -o "$D/dl-git-registry" | check hello-alpine
 $BIN run -d e2e-git@1.0 --registry-path "$D/registry.json" -a oracle -l 1 --jobs-dir "$JOBS" --job-name git-run >/dev/null

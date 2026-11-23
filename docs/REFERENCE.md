@@ -23,10 +23,13 @@ For `sweeps run`, every trial means every trial of all its sweeps.
 ## Datasets
 
 `hbench datasets list` lists the datasets of the default registry (`--registry`, `--registry-url` or
-`--registry-path` lists another's):
+`--registry-path` lists another's). An `oci://` registry is listed from its dataset index alone, in about a second,
+with what the index says of each dataset. `--details` opens every dataset for its task count and description,
+eight at a time:
 
 ```bash
 hbench datasets list
+hbench datasets list --details
 ```
 
 Run one:

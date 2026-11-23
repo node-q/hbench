@@ -15,6 +15,7 @@ import type { Catalog, CatalogDataset, KwargSpec, Obj, RunOptions, RunStatus } f
 import { useCommands, useTitle, type Command } from "../../shell";
 import { Area, Check, KvRows, KwargField, Num, Section, Select, ShowAllErrors, Text } from "./fields";
 import { CUSTOM, DatasetCatalog, DomainGrid, domainHref, useCatalog } from "./catalog";
+import { useDetails } from "./details";
 import { draftErrors, emptyDraft, fromConfig, hasSource, jsonError, newAgent, numError, sourceError, sourceLabel, takesServer, toConfig, versionError, type AgentDraft, type Draft, type Source } from "./form";
 import { NEW_SERVER, ServerPanel } from "./server";
 
@@ -65,6 +66,9 @@ export default function Run() {
   );
 
   const entry = catalogEntry(draft, catalog.data);
+  const details = useDetails();
+  // The picked dataset's details load if its domain's list didn't load them.
+  useEffect(() => void (entry && details.load([entry])), [entry, details]);
   // A picked dataset always runs a version the registry has.
   useEffect(() => {
     if (entry && !draft.dataset.version.trim()) up((d) => void (d.dataset.version = entry.version));
@@ -292,6 +296,9 @@ function SourceSection({ draft, up, entry, changeTo, serverError }: { draft: Dra
     }
   };
   const err = serverError ?? sourceError(draft);
+  const details = useDetails();
+  const info = entry && details.state(entry);
+  const nTasks = info?.status === "ready" ? info.details.n_tasks : undefined;
   const filters = [ds.task_names.trim() && `only ${ds.task_names.trim()}`, ds.exclude_task_names.trim() && `not ${ds.exclude_task_names.trim()}`, ds.n_tasks.trim() && `first ${ds.n_tasks.trim()}`].filter(Boolean).join(" · ");
   const download = [ds.registry_url, ds.registry_path, ds.download_dir, ds.overwrite && "re-download"].filter(Boolean).join(" · ");
   return (
@@ -312,7 +319,7 @@ function SourceSection({ draft, up, entry, changeTo, serverError }: { draft: Dra
               <Text label="Version" value={ds.version} onChange={(v) => up((d) => void (d.dataset.version = v))} placeholder="2.0" mono error={versionError(draft)} help="The default registry needs one." />
             </div>
           )}
-          <Section title="Tasks to run" summary={filters || (entry && ds.version === entry.version ? `all ${entry.n_tasks}` : "all")}>
+          <Section title="Tasks to run" summary={filters || (entry && nTasks !== undefined && ds.version === entry.version ? `all ${nTasks}` : "all")}>
             <div className="run-row">
               <Text label="Include tasks" value={ds.task_names} onChange={(v) => up((d) => void (d.dataset.task_names = v))} placeholder="*api*, test_*" mono help="Comma-separated names or globs." />
               <Text label="Exclude tasks" value={ds.exclude_task_names} onChange={(v) => up((d) => void (d.dataset.exclude_task_names = v))} placeholder="slow_*" mono help="Applied after include." />
@@ -363,6 +370,8 @@ function SourceSection({ draft, up, entry, changeTo, serverError }: { draft: Dra
 
 /** The dataset picked from the catalog: what it is, and which of its versions runs. */
 function DatasetSummary({ entry, version, onVersion }: { entry: CatalogDataset; version: string; onVersion: (v: string) => void }) {
+  const details = useDetails();
+  const info = details.state(entry);
   // Newest first; a version the registry no longer lists (an old run's) stays selectable.
   const versions = [...entry.versions].reverse();
   if (version && !versions.includes(version)) versions.push(version);
@@ -382,21 +391,37 @@ function DatasetSummary({ entry, version, onVersion }: { entry: CatalogDataset; 
         ) : (
           <span className="chip">{version || entry.version}</span>
         )}
-        {version === entry.version && (
+        {version === entry.version && info.status === "ready" && (
           <span className="num run-ds__tasks">
-            {entry.n_tasks} task{entry.n_tasks === 1 ? "" : "s"}
+            {info.details.n_tasks} task{info.details.n_tasks === 1 ? "" : "s"}
           </span>
         )}
       </div>
-      {entry.description && <p className="run-ds__desc">{entry.description}</p>}
-      <p className="run-ds__meta">
-        {[entry.creator, entry.license].filter(Boolean).join(" · ")}
-        {entry.upstream_url && (
-          <a className="link" href={entry.upstream_url} target="_blank" rel="noreferrer">
-            Source <Icon.External size={11} />
-          </a>
-        )}
-      </p>
+      {info.status === "ready" ? (
+        <>
+          {info.details.description && <p className="run-ds__desc">{info.details.description}</p>}
+          <p className="run-ds__meta">
+            {[info.details.creator, info.details.license].filter(Boolean).join(" · ")}
+            {info.details.upstream_url && (
+              <a className="link" href={info.details.upstream_url} target="_blank" rel="noreferrer">
+                Source <Icon.External size={11} />
+              </a>
+            )}
+          </p>
+        </>
+      ) : info.status === "error" ? (
+        <p className="run-ds__desc">
+          The details of this set didn't load: <span className="mono">{info.message}</span>{" "}
+          <button type="button" className="btn btn--sm" onClick={() => details.retry(entry)}>
+            <Icon.Refresh size={12} /> Retry
+          </button>
+        </p>
+      ) : (
+        <span className="cat-skel__lines" aria-busy="true">
+          <span className="cat-skel" style={{ width: "100%" }} aria-hidden="true" />
+          <span className="cat-skel" style={{ width: "60%" }} aria-hidden="true" />
+        </span>
+      )}
     </div>
   );
 }
@@ -440,9 +465,12 @@ function Steps({ step, domainId, ready }: { step: Step; domainId?: string; ready
 /** How many trials the draft starts, when the catalog says how many tasks the dataset has. */
 function RunSize({ draft, entry }: { draft: Draft; entry?: CatalogDataset }) {
   const ds = draft.dataset;
-  if (draft.source !== "dataset" || !entry || ds.version !== entry.version) return null;
+  const details = useDetails();
+  const info = entry && details.state(entry);
+  if (draft.source !== "dataset" || !entry || ds.version !== entry.version || info?.status !== "ready") return null;
+  const n = info.details.n_tasks;
   const whole = (s: string, fallback: number) => (Number.isInteger(Number(s)) && Number(s) > 0 ? Number(s) : fallback);
-  const tasks = Math.min(entry.n_tasks, whole(ds.n_tasks, entry.n_tasks));
+  const tasks = Math.min(n, whole(ds.n_tasks, n));
   const runs = draft.agents.length * whole(draft.job.n_attempts, 1);
   const filtered = !!(ds.task_names.trim() || ds.exclude_task_names.trim());
   const trials = tasks * runs;

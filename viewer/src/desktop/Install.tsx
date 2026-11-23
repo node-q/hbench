@@ -5,12 +5,13 @@
 // In the browser preview, `?desktop&install=1` shows a sample so the screen can be tried without the app.
 import { useEffect, useState } from "react";
 import * as Icon from "../ui/icons";
-import { APP_NAME, desktopInfo, native } from "./bridge";
+import { desktopInfo, native } from "./bridge";
+import { outcome, shows, type InstallState } from "./install-view";
 
 type Target = "claude" | "orca";
 
 export interface InstallView {
-  state: "none" | "loading" | "confirm" | "working" | "approval" | "done" | "error";
+  state: InstallState;
   nonce: string;
   bot?: { id: string; name: string; version: string; description: string; source: string } | null;
   targets: Target[];
@@ -65,13 +66,15 @@ export function InstallDialog() {
   const v = useInstall();
   const [target, setTarget] = useState<Target | null>(null);
   useEffect(() => setTarget(v.targets.length === 1 ? v.targets[0] : null), [v.nonce, v.targets]);
-  if (v.state === "none") return null;
+  // "none", an empty state (the app pushes its state on every page load) or one this page doesn't know: no dialog.
+  if (!shows(v.state)) return null;
   const closable = v.state !== "working";
   const close = () => closable && choose(v.state === "confirm" || v.state === "loading" ? "cancel" : "close");
   const bot = v.bot;
   let title = "Install a bot";
   let body: React.ReactNode = null;
   let actions: React.ReactNode = null;
+  let alert = false;
 
   if (v.state === "loading") {
     body = (
@@ -128,16 +131,19 @@ export function InstallDialog() {
       </p>
     );
   } else {
-    title = v.state === "approval" ? "Needs your approval" : v.state === "done" ? "Handed over" : "Couldn't install";
+    // error, approval or done; or a confirm without its bot. Never an empty body.
+    const o = outcome(v.state, v.message);
+    title = o.title;
+    alert = v.state === "error" || !o.known;
     body = (
       <>
-        <p>{cap(v.message, 500)}</p>
-        {v.output && <pre className="dk-install__output mono">{cap(v.output, 4000)}</pre>}
+        <p>{cap(o.text, 500)}</p>
+        {o.known && v.output && <pre className="dk-install__output mono">{cap(v.output, 4000)}</pre>}
       </>
     );
     actions = (
       <>
-        {v.getHost === "claude" && (
+        {o.known && v.getHost === "claude" && (
           <button className="btn btn--sm btn--ghost" onClick={() => choose("get-host")}>
             Install Claude Desktop <Icon.External size={11} />
           </button>
@@ -151,9 +157,9 @@ export function InstallDialog() {
 
   return (
     <div className="dk-install__scrim" onKeyDown={(e) => e.key === "Escape" && close()}>
-      <section className="dk-install" data-state={v.state} role="dialog" aria-modal="true" aria-labelledby="dk-install-title">
+      <section className="dk-install" data-state={v.state} data-alert={alert} role="dialog" aria-modal="true" aria-labelledby="dk-install-title">
         <header className="dk-install__head">
-          <span className="dk-update__icon">{v.state === "error" ? <Icon.Alert size={16} /> : <Icon.Shield size={16} />}</span>
+          <span className="dk-update__icon">{alert ? <Icon.Alert size={16} /> : <Icon.Shield size={16} />}</span>
           <strong id="dk-install-title">{title}</strong>
           {closable && (
             <button className="dk-icon" aria-label="Close" title="Close" onClick={close}>
@@ -163,7 +169,7 @@ export function InstallDialog() {
         </header>
         <div className="dk-install__body">{body}</div>
         {actions && <div className="dk-update__actions">{actions}</div>}
-        <p className="dk-install__foot">{APP_NAME} checks the download's SHA-256 against the catalogue before handing it over.</p>
+        <p className="dk-install__foot">Essentials checks every download against the Market's catalogue before handing it over.</p>
       </section>
     </div>
   );

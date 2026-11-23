@@ -382,48 +382,101 @@ pub async fn versions(spec: &str, name: &str) -> Result<Vec<String>> {
     Ok(tags)
 }
 
+/// How many datasets a listing opens at once (a manifest and a config each) when it needs their details.
+pub const PARALLEL_OPENS: usize = 8;
+
+/// A registry namespace's dataset index, read once, and the datasets it lists, opened on demand with one client.
+pub struct Indexed {
+    location: Location,
+    store: Store,
+    /// `<namespace>/index:latest`, for messages.
+    reference: String,
+    pub entries: Vec<format::IndexEntry>,
+}
+
+impl Indexed {
+    /// The index of `--registry` `spec` (`<namespace>/index:latest`); None when the namespace has none, or none an
+    /// anonymous client can read. Only the index is fetched: no dataset is opened.
+    pub async fn read(spec: &str) -> Result<Option<Indexed>> {
+        let mut indexed = Indexed::with_entries(spec, vec![])?;
+        let (store, repository) = (&indexed.store, indexed.location.repository(format::DATASET_INDEX_REPOSITORY)?);
+        let Some(digest) = store.visible_tag(&repository, format::DATASET_INDEX_TAG).await? else {
+            return Ok(None);
+        };
+        let reference = store.reference(&repository, &digest);
+        let manifest = store.manifest(&repository, &digest).await?;
+        let layer = format::parse_index_manifest(&manifest).with_context(|| reference.clone())?;
+        let bytes = store
+            .blob_bytes(&repository, layer.digest().as_ref(), layer.size(), format::MAX_DATASET_INDEX_BYTES)
+            .await
+            .with_context(|| reference.clone())?;
+        indexed.entries = format::parse_dataset_index(&bytes).with_context(|| reference.clone())?.datasets;
+        Ok(Some(indexed))
+    }
+
+    /// The index of `spec` as read earlier, `entries`, ready to open them with a client of its own.
+    pub fn with_entries(spec: &str, entries: Vec<format::IndexEntry>) -> Result<Indexed> {
+        let location = Location::parse(spec)?;
+        let store = Store::open(&location.registry, &crate::env::cache_root())?;
+        let reference = store.reference(&location.repository(format::DATASET_INDEX_REPOSITORY)?, format::DATASET_INDEX_TAG);
+        Ok(Indexed { location, store, reference, entries })
+    }
+
+    fn check(&self, e: &format::IndexEntry, d: Dataset) -> Result<Dataset> {
+        if (d.config.name.as_str(), d.config.version.as_str()) != (e.name.as_str(), e.version.as_str()) {
+            bail!("{} lists {}@{} at {}, which is {}@{}", self.reference, e.name, e.version, e.digest, d.config.name, d.config.version);
+        }
+        Ok(d)
+    }
+
+    /// The dataset entry `e` names, opened by its digest and checked against the entry.
+    pub async fn open(&self, e: &format::IndexEntry) -> Result<Dataset> {
+        let d = open(&self.store, &self.location.repository(&e.name)?, &e.digest)
+            .await
+            .with_context(|| format!("{} lists {}@{}", self.reference, e.name, e.version))?;
+        self.check(e, d)
+    }
+
+    /// [`Indexed::open`] from the blob cache alone, without the network; None unless its manifest and config are
+    /// both cached (and check out).
+    pub fn cached(&self, e: &format::IndexEntry) -> Option<Dataset> {
+        let manifest_bytes = self.store.cached(&e.digest, format::MAX_MANIFEST_BYTES)?;
+        let manifest = format::parse_manifest(&manifest_bytes).ok()?;
+        let config = self.store.cached(manifest.config().digest().as_ref(), format::MAX_CONFIG_BYTES)?;
+        self.check(e, Dataset::new(&manifest, &config).ok()?).ok()
+    }
+
+    /// Every entry of `entries` opened, at most [`PARALLEL_OPENS`] at a time, each one's result in `entries`' order.
+    pub async fn open_all<'a>(&self, entries: impl IntoIterator<Item = &'a format::IndexEntry>) -> Vec<Result<Dataset>> {
+        futures_util::stream::iter(entries).map(|e| self.open(e)).buffered(PARALLEL_OPENS).collect().await
+    }
+}
+
 /// The datasets `--registry` `spec`'s index lists (`<namespace>/index:latest`), each opened by its digest and
 /// checked against its entry; None when the namespace has no index, or none an anonymous client can read.
 pub async fn indexed(spec: &str) -> Result<Option<Vec<Dataset>>> {
-    let location = Location::parse(spec)?;
-    let store = Store::open(&location.registry, &crate::env::cache_root())?;
-    let repository = location.repository(format::DATASET_INDEX_REPOSITORY)?;
-    let Some(digest) = store.visible_tag(&repository, format::DATASET_INDEX_TAG).await? else {
+    let Some(index) = Indexed::read(spec).await? else {
         return Ok(None);
     };
-    let reference = store.reference(&repository, &digest);
-    let manifest = store.manifest(&repository, &digest).await?;
-    let layer = format::parse_index_manifest(&manifest).with_context(|| reference.clone())?;
-    let bytes = store
-        .blob_bytes(&repository, layer.digest().as_ref(), layer.size(), format::MAX_DATASET_INDEX_BYTES)
-        .await
-        .with_context(|| reference.clone())?;
-    let index = format::parse_dataset_index(&bytes).with_context(|| reference.clone())?;
-    let mut datasets = vec![];
-    for e in index.datasets {
-        let d = open(&store, &location.repository(&e.name)?, &e.digest)
-            .await
-            .with_context(|| format!("{reference} lists {}@{}", e.name, e.version))?;
-        if (d.config.name.as_str(), d.config.version.as_str()) != (e.name.as_str(), e.version.as_str()) {
-            bail!("{reference} lists {}@{} at {}, which is {}@{}", e.name, e.version, e.digest, d.config.name, d.config.version);
-        }
-        datasets.push(d);
-    }
-    Ok(Some(datasets))
+    Ok(Some(index.open_all(&index.entries).await.into_iter().collect::<Result<Vec<_>>>()?))
+}
+
+/// Why `spec` can't be listed: it has no dataset index an anonymous client can read.
+pub fn no_index(spec: &str) -> String {
+    let (registry, repository) = Location::parse(spec)
+        .map(|l| (l.registry.clone(), l.repository(format::DATASET_INDEX_REPOSITORY).unwrap_or_default()))
+        .unwrap_or_default();
+    format!(
+        "{spec} has no dataset index ({registry}/{repository}:{}), or it is not public, so it can't be listed; name a dataset with -d <name>@<version>",
+        format::DATASET_INDEX_TAG
+    )
 }
 
 /// `datasets list`: every dataset a registry's index lists, or every tagged dataset in an OCI layout dir, verified.
 pub async fn list(spec: &str) -> Result<Vec<Dataset>> {
     let location = Location::parse(spec)?;
     let Some(dir) = location.registry.strip_prefix(LAYOUT_SCHEME) else {
-        return indexed(spec).await?.with_context(|| {
-            format!(
-                "{spec} has no dataset index ({}/{}:{}), or it is not public, so it can't be listed; name a dataset with -d <name>@<version>",
-                location.registry,
-                location.repository(format::DATASET_INDEX_REPOSITORY).unwrap_or_default(),
-                format::DATASET_INDEX_TAG
-            )
-        });
+        return indexed(spec).await?.with_context(|| no_index(spec));
     };
     let store = Store::open(&location.registry, &crate::env::cache_root())?;
     let mut names: Vec<String> = std::fs::read_dir(dir)
