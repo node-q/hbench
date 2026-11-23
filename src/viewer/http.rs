@@ -75,12 +75,57 @@ fn write_allowed(req: &Req) -> bool {
 }
 
 pub fn handle(app: &App, req: &Req) -> Resp {
-    route(app, req).unwrap_or_else(|(status, detail)| Resp {
-        status,
-        ctype: "application/json".into(),
-        body: serde_json::to_vec(&json!({"detail": detail})).unwrap(),
-        headers: vec![],
+    route(app, req).unwrap_or_else(|(status, detail)| {
+        // What the page will show as an error, for the local log: the route's shape and the status, never names.
+        if req.url.starts_with("/api/") && status >= 400 && status != 404 {
+            tracing::warn!(event = "viewer.error", method = %req.method, route = %route_shape(req.url), status);
+        }
+        error_response(status, detail)
     })
+}
+
+/// Words the viewer's routes use; any other path segment is a job, trial, task or file name.
+const ROUTE_WORDS: &[&str] = &[
+    "agent-logs",
+    "analysis",
+    "artifacts",
+    "catalog",
+    "chart-trials",
+    "compare",
+    "config",
+    "details",
+    "file",
+    "files",
+    "filters",
+    "health",
+    "history",
+    "interaction",
+    "jobs",
+    "models",
+    "navigation",
+    "options",
+    "pricing",
+    "recording",
+    "run",
+    "status",
+    "summary",
+    "task-definitions",
+    "tasks",
+    "trajectory",
+    "trials",
+    "verifier-output",
+];
+
+/// `/api/jobs/my-job/trials/t1` → `/api/jobs/:id/trials/:id`; no query.
+fn route_shape(url: &str) -> String {
+    let path = url.split_once('?').map_or(url, |(p, _)| p);
+    let api = path.strip_prefix("/api/").unwrap_or_default();
+    let segs: Vec<&str> = api.split('/').map(|s| if ROUTE_WORDS.contains(&s) { s } else { ":id" }).collect();
+    format!("/api/{}", segs.join("/"))
+}
+
+fn error_response(status: u16, detail: Value) -> Resp {
+    Resp { status, ctype: "application/json".into(), body: serde_json::to_vec(&json!({"detail": detail})).unwrap(), headers: vec![] }
 }
 
 fn route(app: &App, req: &Req) -> Res {
@@ -202,4 +247,14 @@ pub fn serve(folder: &Path, mode: Option<Mode>, host: &str, ports: (u16, u16)) -
         let _ = w.join();
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod route_shape_tests {
+    #[test]
+    fn a_logged_route_keeps_its_words_and_drops_names() {
+        assert_eq!(super::route_shape("/api/jobs/acme-secret-job/trials/t-1/trajectory?step=3"), "/api/jobs/:id/trials/:id/trajectory");
+        assert_eq!(super::route_shape("/api/run/catalog"), "/api/run/catalog");
+        assert_eq!(super::route_shape("/api/tasks/fix%20the%20bug/files"), "/api/tasks/:id/files");
+    }
 }

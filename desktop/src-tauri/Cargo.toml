@@ -25,6 +25,12 @@ tauri-plugin-window-state = "2"
 tauri-plugin-single-instance = "2"
 tauri-plugin-deep-link = "2"
 actuaria-install = { path = "../install" }
+# The local logs (essentials.log, hbench.log): line format, redaction, size cap. Shared with hbench.
+locallog = { path = "../../locallog" }
+tracing = { version = "0.1", default-features = false, features = ["std"] }
+# Help → Copy Diagnostics / Save Diagnostics…; called from Rust only, no permission is granted to the page.
+tauri-plugin-clipboard-manager = "2"
+zip = { version = "9", default-features = false, features = ["deflate"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 url = "2"

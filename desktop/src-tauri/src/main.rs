@@ -5,6 +5,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod confirm;
+mod diag;
 mod install;
 mod server;
 mod shell_env;
@@ -60,20 +61,6 @@ fn settings_path(app: &AppHandle) -> Option<PathBuf> {
     app.path().app_config_dir().ok().map(|d| d.join(name))
 }
 
-fn log_path(app: &AppHandle) -> PathBuf {
-    let name = if DEV { "hbench-view.dev.log" } else { "hbench-view.log" };
-    app.path().app_log_dir().unwrap_or_else(|_| std::env::temp_dir()).join(name)
-}
-
-/// Add a line to the app's log, the file Help's log item opens (the server's output goes there too). Best effort.
-pub(crate) fn app_log(app: &AppHandle, line: &str) {
-    use std::io::Write;
-    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(log_path(app)) {
-        let _ = writeln!(f, "[essentials {secs}] {line}");
-    }
-}
-
 fn load_settings(app: &AppHandle) -> Settings {
     settings_path(app).and_then(|p| std::fs::read(p).ok()).and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
 }
@@ -112,7 +99,9 @@ fn page_command(app: &AppHandle, cmd: &str) {
     }
 }
 
-fn show_error(app: &AppHandle, title: &str, message: &str) {
+/// Show an error, and log it as `logged` (the message with anything that stays out of the log taken out).
+fn show_error(app: &AppHandle, title: &str, message: &str, logged: &str) {
+    diag::shown(title, logged);
     app.dialog().message(message).title(title).kind(MessageDialogKind::Error).blocking_show();
 }
 
@@ -121,9 +110,14 @@ fn show_error(app: &AppHandle, title: &str, message: &str) {
 fn open_folder(app: &AppHandle, folder: PathBuf) {
     let state = app.state::<AppState>();
     let first = state.server.lock().unwrap().is_none();
-    match server::start(&folder, &state.env, &log_path(app)) {
+    // Whether it is the default folder, never its path: the user's folder names stay out of the log.
+    let default = app.path().home_dir().map(|h| h.join("Actuaria") == folder).unwrap_or(false);
+    let started = std::time::Instant::now();
+    match server::start(&folder, &state.env, diag::view_log(app).as_deref(), diag::cli_log(app).as_deref()) {
         Ok(s) => {
             let url = s.url.clone();
+            let port = Url::parse(&url).ok().and_then(|u| u.port()).unwrap_or(0);
+            tracing::info!(event = "server.start", port, default_folder = default, ms = started.elapsed().as_millis() as u64);
             // Dropping the previous server stops it.
             *state.server.lock().unwrap() = Some(s);
             {
@@ -144,13 +138,20 @@ fn open_folder(app: &AppHandle, folder: PathBuf) {
             }
         }
         Err(e) if first => {
+            tracing::warn!(event = "server.start", default_folder = default, error = %diag::hide_folder(&e, &folder));
             // Still on the start screen: show the error there, with a way to pick another folder.
+            let text = format!("Couldn't open {}\n\n{e}", folder.display());
+            diag::shown("Couldn't open the folder", &diag::hide_folder(&text, &folder));
             if let Some(w) = main_window(app) {
-                let msg = serde_json::to_string(&format!("Couldn't open {}\n\n{e}", folder.display())).unwrap_or_default();
+                let msg = serde_json::to_string(&text).unwrap_or_default();
                 let _ = w.eval(format!("window.showError && window.showError({msg})"));
             }
         }
-        Err(e) => show_error(app, "Couldn't open the folder", &format!("{}\n\n{e}", folder.display())),
+        Err(e) => {
+            tracing::warn!(event = "server.start", default_folder = default, error = %diag::hide_folder(&e, &folder));
+            let text = format!("{}\n\n{e}", folder.display());
+            show_error(app, "Couldn't open the folder", &text, &diag::hide_folder(&text, &folder))
+        }
     }
 }
 
@@ -214,7 +215,9 @@ fn page_action(app: AppHandle, url: Url) {
                 }
             }
             "server-log" => {
-                let _ = app.opener().open_path(log_path(&app).to_string_lossy(), None::<&str>);
+                if let Some(log) = diag::view_log(&app) {
+                    let _ = app.opener().open_path(log.to_string_lossy(), None::<&str>);
+                }
             }
             "update" => update::action(&app, param("do").as_deref().unwrap_or_default()),
             "install" => install::action(&app, param("do").as_deref().unwrap_or_default(), param("nonce"), param("target")),
@@ -365,6 +368,9 @@ fn build_menu(app: &AppHandle) -> tauri::Result<(Menu<Wry>, Submenu<Wry>)> {
         .item(&item("help:docs", "hbench Documentation", None)?)
         .item(&item("help:site", "Actuaria.io Website", None)?)
         .separator()
+        .item(&item("help:copy-diagnostics", "Copy Diagnostics", None)?)
+        .item(&item("help:save-diagnostics", "Save Diagnostics…", None)?)
+        .item(&item("help:logs", "Show Logs Folder", None)?)
         .item(&item("help:log", "Show Server Log", None)?);
     if cfg!(debug_assertions) {
         help = help.separator().item(&item("devtools", "Toggle Developer Tools", Some("Alt+CmdOrCtrl+I"))?);
@@ -431,6 +437,19 @@ fn on_menu(app: &AppHandle, id: &str) {
                 page_action(app.clone(), u);
             }
         }
+        "help:copy-diagnostics" => {
+            let app = app.clone();
+            std::thread::spawn(move || diag::copy(&app));
+        }
+        "help:save-diagnostics" => {
+            let app = app.clone();
+            std::thread::spawn(move || diag::save(&app));
+        }
+        "help:logs" => {
+            if let Some(log) = diag::app_log(app).filter(|l| l.exists()) {
+                let _ = app.opener().reveal_item_in_dir(log);
+            }
+        }
         "check-update" => update::check_now(app),
         "beta-updates" => update::toggle_beta(app),
         "help:docs" => {
@@ -471,6 +490,17 @@ fn on_menu(app: &AppHandle, id: &str) {
     }
 }
 
+/// Log it when `hbench view` stops without the app asking (the page then can't reach it). Runs for good.
+fn watch_server(app: &AppHandle) {
+    loop {
+        std::thread::sleep(std::time::Duration::from_secs(3));
+        let status = app.state::<AppState>().server.lock().unwrap().as_mut().and_then(|s| s.exited_on_its_own());
+        if let Some(status) = status {
+            tracing::error!(event = "server.crash", error = %format!("hbench view exited ({status})"));
+        }
+    }
+}
+
 fn main() {
     let mut builder = tauri::Builder::default();
     if !DEV {
@@ -491,6 +521,8 @@ fn main() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_deep_link::init())
+        // Rust-side only (Help → Copy Diagnostics): the page gets no clipboard permission.
+        .plugin(tauri_plugin_clipboard_manager::init())
         .setup(|app| {
             let handle = app.handle().clone();
             let settings = load_settings(&handle);
@@ -503,6 +535,7 @@ fn main() {
             });
             app.manage(update::Updates::default());
             app.manage(install::Installs::default());
+            diag::init(&handle);
             let (menu, recent) = build_menu(&handle)?;
             app.set_menu(menu)?;
             *app.state::<AppState>().recent_menu.lock().unwrap() = Some(recent);
@@ -577,6 +610,11 @@ fn main() {
                     }
                 });
             }
+            let checks = handle.clone();
+            std::thread::spawn(move || {
+                diag::check_docker(&checks);
+                watch_server(&checks);
+            });
             std::thread::spawn(move || open_folder(&handle, folder));
             Ok(())
         })
@@ -586,6 +624,7 @@ fn main() {
             if let tauri::RunEvent::Exit = event {
                 // Stop hbench view with the app.
                 app.state::<AppState>().server.lock().unwrap().take();
+                tracing::info!(event = "app.exit");
             }
         });
 }

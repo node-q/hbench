@@ -1,0 +1,308 @@
+//! A log file capped by size: `name.log` takes lines until the next one would pass the cap, then becomes
+//! `name.log.1` (the older ones move up, the oldest goes) and a new `name.log` starts. At most `files` files of
+//! at most `max_bytes` each, so never more than `files × max_bytes` on disk.
+//!
+//! tracing-appender rotates by time only, hence this. Each line is appended through a fresh open, so other
+//! processes writing the same file (runs the viewer starts) see its current size; two of them rotating at the
+//! same moment can lose a file's worth of lines, never pass the cap.
+
+use std::fs::{self, OpenOptions};
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+
+pub const MAX_BYTES: u64 = 1024 * 1024;
+pub const FILES: usize = 5;
+
+pub struct Rotating {
+    path: PathBuf,
+    max_bytes: u64,
+    files: usize,
+    lock: Mutex<()>,
+    /// The folder is the log's own (the app's log folder, hbench's data folder), so it may be made private.
+    own_folder: bool,
+    /// Whether this process has made the file (and its own folder) private yet.
+    secured: std::sync::atomic::AtomicBool,
+}
+
+impl Rotating {
+    /// 5 files of 1 MB.
+    pub fn new(path: impl Into<PathBuf>) -> Rotating {
+        Rotating::with_cap(path, MAX_BYTES, FILES)
+    }
+
+    pub fn with_cap(path: impl Into<PathBuf>, max_bytes: u64, files: usize) -> Rotating {
+        Rotating {
+            path: path.into(),
+            max_bytes: max_bytes.max(2),
+            files: files.max(1),
+            lock: Mutex::new(()),
+            own_folder: false,
+            secured: Default::default(),
+        }
+    }
+
+    /// The log's folder is its own: make it 0700 on Unix, even when it already exists. Not for a folder the
+    /// user named (`--log-file /tmp/x.log`).
+    pub fn own_folder(mut self) -> Rotating {
+        self.own_folder = true;
+        self
+    }
+
+    /// On the first write of this process: the file 0600, and its own folder 0700, whatever they were before
+    /// (an older build made them 0644 and 0755). Unix only.
+    fn secure(&self) {
+        if self.secured.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            return;
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let set = |p: &Path, mode: u32| {
+                if fs::metadata(p).is_ok_and(|m| m.permissions().mode() & 0o777 != mode) {
+                    let _ = fs::set_permissions(p, fs::Permissions::from_mode(mode));
+                }
+            };
+            if self.own_folder
+                && let Some(dir) = self.path.parent().filter(|d| !d.as_os_str().is_empty())
+            {
+                set(dir, 0o700);
+            }
+            for f in self.files() {
+                set(&f, 0o600);
+            }
+        }
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    fn numbered(&self, n: usize) -> PathBuf {
+        numbered(&self.path, n)
+    }
+
+    /// Append one line (a newline is added; a line too long for a file is cut).
+    pub fn append(&self, line: &str) -> io::Result<()> {
+        let _held = self.lock.lock().unwrap_or_else(|e| e.into_inner());
+        let line = cut(line, (self.max_bytes - 1) as usize);
+        let size = fs::metadata(&self.path).map(|m| m.len()).unwrap_or(0);
+        if size > 0 && size + line.len() as u64 + 1 > self.max_bytes {
+            self.rotate_locked()?;
+        }
+        if let Some(dir) = self.path.parent().filter(|d| !d.as_os_str().is_empty() && !d.exists()) {
+            private_dir(dir)?;
+        }
+        let mut o = OpenOptions::new();
+        o.create(true).append(true);
+        // Readable by this user only (Unix); a folder made for it, likewise.
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::mode(&mut o, 0o600);
+        let mut f = o.open(&self.path)?;
+        self.secure();
+        f.write_all(format!("{line}\n").as_bytes())
+    }
+
+    /// Start a new file now (the current one becomes `.1`).
+    pub fn rotate(&self) -> io::Result<()> {
+        let _held = self.lock.lock().unwrap_or_else(|e| e.into_inner());
+        self.rotate_locked()
+    }
+
+    fn rotate_locked(&self) -> io::Result<()> {
+        if self.files == 1 {
+            return match fs::remove_file(&self.path) {
+                Err(e) if e.kind() != io::ErrorKind::NotFound => Err(e),
+                _ => Ok(()),
+            };
+        }
+        let _ = fs::remove_file(self.numbered(self.files - 1));
+        for n in (1..self.files - 1).rev() {
+            let from = self.numbered(n);
+            if from.exists() {
+                fs::rename(&from, self.numbered(n + 1))?;
+            }
+        }
+        match fs::rename(&self.path, self.numbered(1)) {
+            Err(e) if e.kind() != io::ErrorKind::NotFound => Err(e),
+            _ => Ok(()),
+        }
+    }
+
+    /// The files there are, oldest first.
+    pub fn files(&self) -> Vec<PathBuf> {
+        files(&self.path, self.files)
+    }
+}
+
+/// Create `dir` (and its missing parents), 0700 on Unix. An existing folder is left as it is.
+fn private_dir(dir: &Path) -> io::Result<()> {
+    let mut b = fs::DirBuilder::new();
+    b.recursive(true);
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut b, 0o700);
+    b.create(dir)
+}
+
+fn numbered(path: &Path, n: usize) -> PathBuf {
+    if n == 0 {
+        return path.to_path_buf();
+    }
+    let mut s = path.as_os_str().to_owned();
+    s.push(format!(".{n}"));
+    PathBuf::from(s)
+}
+
+/// `path` and its rotated files that exist, oldest first.
+pub fn files(path: &Path, max: usize) -> Vec<PathBuf> {
+    (0..max.max(1)).rev().map(|n| numbered(path, n)).filter(|p| p.is_file()).collect()
+}
+
+/// At most `max` bytes of `s`, on a character boundary.
+fn cut(s: &str, max: usize) -> &str {
+    if s.len() <= max {
+        return s;
+    }
+    let mut end = max;
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
+/// The last `n` lines of a log and its rotated files.
+pub fn tail(path: &Path, n: usize) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for f in files(path, FILES).iter().rev() {
+        if out.len() >= n {
+            break;
+        }
+        let Ok(bytes) = fs::read(f) else { continue };
+        let text = String::from_utf8_lossy(&bytes);
+        let mut lines: Vec<String> = text.lines().map(str::to_string).collect();
+        let take = lines.len().min(n - out.len());
+        let mut newer = std::mem::take(&mut out);
+        out = lines.split_off(lines.len() - take);
+        out.append(&mut newer);
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn dir(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("locallog-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn the_files_never_pass_the_cap() {
+        let d = dir("cap");
+        let log = Rotating::with_cap(d.join("a.log"), 200, 5);
+        for i in 0..1000 {
+            log.append(&format!("line {i} {}", "x".repeat(i % 50))).unwrap();
+        }
+        let files = log.files();
+        assert_eq!(files.len(), 5);
+        let mut total = 0;
+        for f in &files {
+            let len = fs::metadata(f).unwrap().len();
+            assert!(len <= 200, "{} is {len} bytes", f.display());
+            total += len;
+        }
+        assert!(total <= 5 * 200);
+        assert_eq!(fs::read_dir(&d).unwrap().count(), 5, "no sixth file");
+        // The newest line is last in the current file, and lines stay whole.
+        let last = tail(&d.join("a.log"), 1);
+        assert_eq!(last, vec![format!("line 999 {}", "x".repeat(999 % 50))]);
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_line_longer_than_a_file_is_cut_to_fit() {
+        let d = dir("long");
+        let log = Rotating::with_cap(d.join("a.log"), 64, 2);
+        log.append(&"é".repeat(100)).unwrap();
+        log.append("next").unwrap();
+        for f in log.files() {
+            assert!(fs::metadata(&f).unwrap().len() <= 64);
+        }
+        assert_eq!(tail(&d.join("a.log"), 5).last().map(String::as_str), Some("next"));
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn tail_reads_across_rotated_files_in_order() {
+        let d = dir("tail");
+        let log = Rotating::with_cap(d.join("a.log"), 30, 5);
+        for i in 0..20 {
+            log.append(&format!("line {i:02}")).unwrap();
+        }
+        let got = tail(&d.join("a.log"), 7);
+        let want: Vec<String> = (13..20).map(|i| format!("line {i:02}")).collect();
+        assert_eq!(got, want);
+        assert!(tail(&d.join("missing.log"), 5).is_empty());
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn files_and_the_folder_made_for_them_are_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = dir("perm");
+        let log = Rotating::with_cap(d.join("new/logs/a.log"), 30, 3);
+        for i in 0..5 {
+            log.append(&format!("line {i:02} xxxxxxxxxx")).unwrap();
+        }
+        let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&d.join("new/logs")), 0o700);
+        assert_eq!(mode(&d.join("new")), 0o700);
+        for f in log.files() {
+            assert_eq!(mode(&f), 0o600, "{}", f.display());
+        }
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_older_logs_modes_are_tightened_when_it_is_opened() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = dir("upgrade");
+        let logs = d.join("logs");
+        fs::create_dir_all(&logs).unwrap();
+        fs::set_permissions(&logs, fs::Permissions::from_mode(0o755)).unwrap();
+        fs::write(logs.join("a.log"), "old\n").unwrap();
+        fs::write(logs.join("a.log.1"), "older\n").unwrap();
+        for f in ["a.log", "a.log.1"] {
+            fs::set_permissions(logs.join(f), fs::Permissions::from_mode(0o644)).unwrap();
+        }
+        let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        Rotating::new(logs.join("a.log")).own_folder().append("new").unwrap();
+        assert_eq!(mode(&logs), 0o700);
+        assert_eq!(mode(&logs.join("a.log")), 0o600);
+        assert_eq!(mode(&logs.join("a.log.1")), 0o600);
+        // A folder the user named is left as it is; the file is still private.
+        fs::set_permissions(&logs, fs::Permissions::from_mode(0o755)).unwrap();
+        fs::set_permissions(logs.join("a.log"), fs::Permissions::from_mode(0o644)).unwrap();
+        Rotating::new(logs.join("a.log")).append("again").unwrap();
+        assert_eq!(mode(&logs), 0o755);
+        assert_eq!(mode(&logs.join("a.log")), 0o600);
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn rotate_starts_a_new_file() {
+        let d = dir("rotate");
+        let log = Rotating::with_cap(d.join("a.log"), 1000, 3);
+        log.append("old").unwrap();
+        log.rotate().unwrap();
+        log.append("new").unwrap();
+        assert_eq!(fs::read_to_string(d.join("a.log")).unwrap(), "new\n");
+        assert_eq!(fs::read_to_string(d.join("a.log.1")).unwrap(), "old\n");
+        let _ = fs::remove_dir_all(&d);
+    }
+}
