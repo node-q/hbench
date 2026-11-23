@@ -19,7 +19,7 @@ const CLAUDE_GRACE: Duration = Duration::from_secs(10 * 60);
 
 const EXPIRED: &str = "This was open for over 5 minutes, so the catalogue may have changed. Open the link again. Nothing was installed.";
 
-#[derive(Serialize, Clone, Default)]
+#[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct View {
     /// none | loading | confirm | working | approval | done | error
@@ -32,6 +32,13 @@ struct View {
     output: Option<String>,
     /// A host to download ("claude" links claude.ai/download).
     get_host: Option<Target>,
+}
+
+/// No dialog. Not derived: a derived default's state would be "", which the page took for an outcome.
+impl Default for View {
+    fn default() -> View {
+        View { state: "none", nonce: String::new(), bot: None, targets: vec![], message: None, output: None, get_host: None }
+    }
 }
 
 #[derive(Serialize, Clone)]
@@ -72,7 +79,9 @@ pub fn push(app: &AppHandle) {
         let st = app.state::<Installs>();
         let mut i = st.0.lock().unwrap();
         let now = (i.view.state, i.view.message.clone());
-        let line = (i.logged != now).then(|| log_line(&i.view, app.path().home_dir().ok().as_deref()));
+        // Not the "none" pushed at the first page load.
+        let first = i.logged.0.is_empty() && now.0 == "none";
+        let line = (i.logged != now && !first).then(|| log_line(&i.view, app.path().home_dir().ok().as_deref()));
         i.logged = now;
         (serde_json::to_string(&i.view).unwrap_or_else(|_| "null".into()), line)
     };
@@ -437,5 +446,12 @@ mod tests {
         assert_eq!(line, "install: error actuaria/prompt-slim@0.1.0: Couldn't make a private folder: ~/.local/share/x: denied");
         let none = View { state: "confirm", ..View::default() };
         assert_eq!(log_line(&none, None), "install: confirm");
+    }
+
+    #[test]
+    fn the_default_view_is_no_dialog() {
+        let v = serde_json::to_value(View::default()).unwrap();
+        assert_eq!(v["state"], "none");
+        assert_eq!(serde_json::to_value(Inner::default().view).unwrap()["state"], "none");
     }
 }

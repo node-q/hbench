@@ -1,8 +1,13 @@
-// What the install dialog says once the app has an answer (desktop/src-tauri/src/install.rs sends the state).
-// Only an error says "Couldn't install"; a state the page doesn't expect (a confirm without its bot, or a state
-// added later) says the link went wrong, and no state shows an empty body.
+// What the install dialog says (desktop/src-tauri/src/install.rs sends the state). The app pushes its state on
+// every page load, so a state that is empty, missing or unknown means no dialog. Only an error says
+// "Couldn't install"; a confirm without its bot says the link went wrong; no screen has an empty body.
 
 export type InstallState = "none" | "loading" | "confirm" | "working" | "approval" | "done" | "error";
+
+const SHOWN: readonly string[] = ["loading", "confirm", "working", "approval", "done", "error"];
+
+/** Whether `state` opens the dialog: "none", "" and states this page doesn't know don't. */
+export const shows = (state: unknown): state is Exclude<InstallState, "none"> => typeof state === "string" && SHOWN.includes(state);
 
 const FALLBACK: Partial<Record<string, string>> = {
   error: "Nothing was installed. Open the link again.",
@@ -15,7 +20,10 @@ export const LINK_WENT_WRONG = {
   text: "Nothing was installed. Open the install link again from market.actuaria.io; if it keeps happening, send us the app's log.",
 };
 
-/** The title and text of an outcome screen for `state`, with the app's `message` when it has one. */
+/**
+ * The title and text of the screen after the confirm step (error, approval, done), with the app's `message`
+ * when it has one. A confirm without its bot gets [`LINK_WENT_WRONG`].
+ */
 export function outcome(state: string, message: string | null | undefined): { title: string; text: string; known: boolean } {
   const fallback = FALLBACK[state];
   if (!fallback) return { ...LINK_WENT_WRONG, known: false };

@@ -6,7 +6,7 @@
 import { useEffect, useState } from "react";
 import * as Icon from "../ui/icons";
 import { desktopInfo, native } from "./bridge";
-import { outcome, type InstallState } from "./install-view";
+import { outcome, shows, type InstallState } from "./install-view";
 
 type Target = "claude" | "orca";
 
@@ -66,7 +66,8 @@ export function InstallDialog() {
   const v = useInstall();
   const [target, setTarget] = useState<Target | null>(null);
   useEffect(() => setTarget(v.targets.length === 1 ? v.targets[0] : null), [v.nonce, v.targets]);
-  if (v.state === "none") return null;
+  // "none", an empty state (the app pushes its state on every page load) or one this page doesn't know: no dialog.
+  if (!shows(v.state)) return null;
   const closable = v.state !== "working";
   const close = () => closable && choose(v.state === "confirm" || v.state === "loading" ? "cancel" : "close");
   const bot = v.bot;
@@ -130,7 +131,7 @@ export function InstallDialog() {
       </p>
     );
   } else {
-    // An outcome, or a state this page doesn't expect (a confirm without its bot): never an empty body.
+    // error, approval or done; or a confirm without its bot. Never an empty body.
     const o = outcome(v.state, v.message);
     title = o.title;
     alert = v.state === "error" || !o.known;
