@@ -400,6 +400,7 @@ impl App {
                 }))
             }
             ["run", "catalog"] => self.catalog(q.get("refresh").is_some_and(|r| r == "1")),
+            ["run", "catalog", "details"] => self.catalog_details(&q.all("name")),
             ["run", "history"] => {
                 let limit = q.int("limit", 50, None, None)?;
                 let mut items: Vec<(std::time::SystemTime, String, Value)> = vec![];

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/node-q/hbench/blob/master/assets/schemas/dataset-index.v1.json",
   "title": "hbench dataset index, v1",
-  "description": "The one layer (media type application/vnd.hbench.dataset-index.v1+json) of a registry's dataset index: an OCI image manifest with artifactType application/vnd.hbench.dataset-index.v1, tagged latest in <namespace>/index. It lists the dataset versions under <namespace>, so that `hbench datasets list --registry oci://<registry>/<namespace>` can name them; hbench opens each one by its digest and checks its name and version.",
+  "description": "The one layer (media type application/vnd.hbench.dataset-index.v1+json) of a registry's dataset index: an OCI image manifest with artifactType application/vnd.hbench.dataset-index.v1, tagged latest in <namespace>/index. It lists the dataset versions under <namespace>, so that `hbench datasets list --registry oci://<registry>/<namespace>` can name them; hbench opens each one by its digest and checks its name and version. Entries may also carry what a catalog shows (domain, description, n_tasks, license), so a list needs no dataset opened. hbench 0.5 refuses any field but name, version and digest, so an index with them breaks 0.5's listing; later versions ignore fields they don't know.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "datasets"],
@@ -33,6 +33,26 @@
             "description": "The digest of the dataset's manifest, which the tag names.",
             "type": "string",
             "pattern": "^sha256:[0-9a-f]{64}$"
+          },
+          "domain": {
+            "description": "Optional. The listing's domain (e.g. \"Employment law\"): the catalog files the dataset under the app domain it maps to when its name doesn't place it.",
+            "type": "string",
+            "maxLength": 80
+          },
+          "description": {
+            "description": "Optional. A sentence or two on what the tasks ask, shown in the catalog before the dataset is opened.",
+            "type": "string",
+            "maxLength": 2000
+          },
+          "n_tasks": {
+            "description": "Optional. How many tasks the version holds (the manifest's layers).",
+            "type": "integer",
+            "minimum": 0
+          },
+          "license": {
+            "description": "Optional. The licence: an SPDX expression or a name.",
+            "type": "string",
+            "maxLength": 200
           }
         }
       }

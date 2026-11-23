@@ -441,8 +441,14 @@ enum TrialsCmd {
 #[derive(Subcommand)]
 enum DatasetsCmd {
     /// List the datasets in a registry: the default OCI registry, or the one --registry, --registry-url or
-    /// --registry-path names. An oci:// registry is listed from its dataset index.
-    List(RegistryArgs),
+    /// --registry-path names. An oci:// registry is listed from its dataset index alone, unless --details.
+    List {
+        #[command(flatten)]
+        registry: RegistryArgs,
+        /// Open every dataset an oci:// index lists, for its task count and description (a few requests each).
+        #[arg(long)]
+        details: bool,
+    },
     /// Download a registry dataset's tasks into the cache (or --output-dir), from the default OCI registry unless
     /// --registry, --registry-url or --registry-path names another.
     Download {
@@ -897,18 +903,21 @@ fn kwarg_value(v: &str) -> Value {
     serde_json::from_str(v).unwrap_or_else(|_| Value::String(v.to_string()))
 }
 
-/// A dataset's `name@version`, task count and description.
-type DatasetRow = (String, usize, String);
+/// A dataset's `name@version`, task count (when known) and description.
+type DatasetRow = (String, Option<usize>, String);
 
 /// One line per dataset, in aligned columns; a description that would run past `terminal_width` is cut with `…`.
 fn dataset_lines(rows: &[DatasetRow], terminal_width: Option<usize>) -> Vec<String> {
     let id_width = rows.iter().map(|(id, ..)| id.chars().count()).max().unwrap_or(0);
-    let count_width = rows.iter().map(|(_, tasks, _)| tasks.to_string().len()).max().unwrap_or(0);
+    let count_width = rows.iter().filter_map(|(_, tasks, _)| tasks.map(|n| n.to_string().len())).max().unwrap_or(0);
     rows.iter()
         .map(|(id, tasks, description)| {
-            let noun = if *tasks == 1 { "task " } else { "tasks" };
-            let line =
-                format!("{id:<id_width$}  {tasks:>count_width$} {noun}  {}", description.split_whitespace().collect::<Vec<_>>().join(" "));
+            let count = match tasks {
+                Some(1) => format!("{:>count_width$} task ", 1),
+                Some(n) => format!("{n:>count_width$} tasks"),
+                None => " ".repeat(count_width + 6),
+            };
+            let line = format!("{id:<id_width$}  {count}  {}", description.split_whitespace().collect::<Vec<_>>().join(" "));
             match terminal_width {
                 Some(width) if line.chars().count() > width => line.chars().take(width.saturating_sub(1)).chain(['…']).collect(),
                 _ => line.trim_end().to_string(),
@@ -1494,19 +1503,34 @@ async fn run() -> Result<ExitCode> {
             }
             Ok(if r.exception_info.is_some() { ExitCode::FAILURE } else { ExitCode::SUCCESS })
         }
-        Cmd::Datasets { cmd: DatasetsCmd::List(r) } => {
-            let rows: Vec<DatasetRow> = if r.registry_url.is_none() && r.registry_path.is_none() {
-                let spec = r.registry.unwrap_or_else(registry::default_registry);
-                oci::list(&spec)
-                    .await?
-                    .into_iter()
-                    .map(|d| (format!("{}@{}", d.config.name, d.config.version), d.layers.len(), d.config.description))
-                    .collect()
-            } else {
+        Cmd::Datasets { cmd: DatasetsCmd::List { registry: r, details } } => {
+            let full =
+                |d: oci::format::Dataset| (format!("{}@{}", d.config.name, d.config.version), Some(d.layers.len()), d.config.description);
+            let rows: Vec<DatasetRow> = if r.registry_url.is_some() || r.registry_path.is_some() {
                 registry::load(r.registry_url.as_deref(), r.registry_path.as_deref())?
                     .into_iter()
-                    .map(|d| (format!("{}@{}", d.name, d.version), d.tasks.len(), d.description))
+                    .map(|d| (format!("{}@{}", d.name, d.version), Some(d.tasks.len()), d.description))
                     .collect()
+            } else {
+                let spec = r.registry.unwrap_or_else(registry::default_registry);
+                if details || spec.starts_with(oci::LAYOUT_SCHEME) {
+                    oci::list(&spec).await?.into_iter().map(full).collect()
+                } else {
+                    // The index alone: what it says of each dataset, else what the blob cache has from an earlier --details.
+                    let index = oci::Indexed::read(&spec).await?.with_context(|| oci::no_index(&spec))?;
+                    index
+                        .entries
+                        .iter()
+                        .map(|e| match index.cached(e) {
+                            Some(d) => full(d),
+                            None => (
+                                format!("{}@{}", e.name, e.version),
+                                e.n_tasks.map(|n| n as usize),
+                                e.description.clone().unwrap_or_default(),
+                            ),
+                        })
+                        .collect()
+                }
             };
             let terminal_width = dialoguer::console::Term::stdout().size_checked().map(|(_, columns)| usize::from(columns));
             for line in dataset_lines(&rows, terminal_width) {
@@ -1827,9 +1851,10 @@ mod tests {
     #[test]
     fn datasets_list_one_line_per_dataset() {
         let rows: Vec<DatasetRow> = vec![
-            ("terminal-bench@2.0.1".into(), 89, "89 hard tasks\nin a terminal.".into()),
-            ("cruxeval-input@1.0".into(), 800, "800 Python problems.".into()),
-            ("hello@1.0".into(), 1, String::new()),
+            ("terminal-bench@2.0.1".into(), Some(89), "89 hard tasks\nin a terminal.".into()),
+            ("cruxeval-input@1.0".into(), Some(800), "800 Python problems.".into()),
+            ("hello@1.0".into(), Some(1), String::new()),
+            ("unopened@1.0".into(), None, String::new()),
         ];
         assert_eq!(
             dataset_lines(&rows, None),
@@ -1837,6 +1862,7 @@ mod tests {
                 "terminal-bench@2.0.1   89 tasks  89 hard tasks in a terminal.",
                 "cruxeval-input@1.0    800 tasks  800 Python problems.",
                 "hello@1.0               1 task",
+                "unopened@1.0",
             ]
         );
         assert_eq!(dataset_lines(&rows[..1], Some(40)), ["terminal-bench@2.0.1  89 tasks  89 hard…"]);

@@ -98,21 +98,32 @@ pub struct Dataset {
     pub layers: Vec<Layer>,
 }
 
-/// The JSON layer of a dataset index, as `assets/schemas/dataset-index.v1.json` defines it.
+/// The JSON layer of a dataset index, as `assets/schemas/dataset-index.v1.json` defines it. Fields this version
+/// doesn't know are ignored, so an index can add some without breaking it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct DatasetIndex {
     pub schema_version: u32,
     pub datasets: Vec<IndexEntry>,
 }
 
-/// A dataset version an index lists: `<namespace>/<name>@<digest>`, tagged `<version>`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+/// A dataset version an index lists: `<namespace>/<name>@<digest>`, tagged `<version>`, with what a catalog shows
+/// of it when the index carries that (so a list can be drawn without opening the dataset).
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct IndexEntry {
     pub name: String,
     pub version: String,
     pub digest: String,
+    /// The listing's domain, e.g. "Employment law".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub domain: Option<String>,
+    /// A sentence or two on what the tasks ask.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub n_tasks: Option<u64>,
+    /// SPDX expression or licence name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub license: Option<String>,
 }
 
 /// The layer that holds a dataset index, refused unless `bytes` is an OCI image manifest of the index artifact
