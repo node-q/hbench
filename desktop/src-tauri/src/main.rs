@@ -6,6 +6,7 @@
 
 mod confirm;
 mod install;
+mod run_link;
 mod server;
 mod shell_env;
 mod update;
@@ -15,6 +16,7 @@ use server::Server;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::menu::{AboutMetadataBuilder, CheckMenuItemBuilder, Menu, MenuItemBuilder, Submenu, SubmenuBuilder};
 use tauri::webview::{DownloadEvent, PageLoadEvent};
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder, Wry};
@@ -119,6 +121,83 @@ fn show_error(app: &AppHandle, title: &str, message: &str) {
 /// Open `folder`: start a viewer for it, then swap it in, so a folder that fails leaves the current one up.
 /// Blocks; call off the main thread.
 fn open_folder(app: &AppHandle, folder: PathBuf) {
+    let _one_at_a_time = FOLDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    open_folder_now(app, folder, Remember::Yes);
+}
+
+/// Folder opens run one at a time, so a run link's default folder can't replace a folder the user picked.
+static FOLDER_LOCK: Mutex<()> = Mutex::new(());
+
+/// Whether the folder opened at start has been tried: until then, that open is the one a run link waits for.
+static STARTED: AtomicBool = AtomicBool::new(false);
+
+/// Whether an open goes into the settings (the folder reopened at the next start, and Open Recent).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Remember {
+    Yes,
+    No,
+}
+
+/// Under `lock`, call `open` unless `is_open` says a folder is open by then. Whether it called it.
+fn open_unless_open(lock: &Mutex<()>, is_open: impl Fn() -> bool, open: impl FnOnce()) -> bool {
+    let _one_at_a_time = lock.lock().unwrap_or_else(|e| e.into_inner());
+    if is_open() {
+        return false;
+    }
+    open();
+    true
+}
+
+/// A run link needs New run: with no folder open, open the default one (~/Actuaria), as the first launch does,
+/// without saving it as the folder to reopen. Nothing while the folder opened at start is still being tried.
+pub(crate) fn ensure_folder(app: &AppHandle) {
+    if !STARTED.load(Ordering::SeqCst) || current_folder(app).is_some() {
+        return;
+    }
+    let app = app.clone();
+    std::thread::spawn(move || {
+        open_unless_open(&FOLDER_LOCK, || current_folder(&app).is_some(), || open_folder_now(&app, default_folder(&app), Remember::No));
+    });
+}
+
+/// An `actuaria:` link from the OS, normalised as macOS hands links over (`link::normalise`), so every OS reads
+/// the same link the same way: a run link opens New run, anything else goes to the install dialog (which says
+/// "This link is not valid" when it isn't an install link either).
+fn open_link(app: &AppHandle, raw: &str) {
+    let raw = actuaria_install::link::normalise(raw);
+    if actuaria_install::run::is_run_link(&raw) {
+        run_link::on_link(app, &raw);
+    } else {
+        install::on_link(app, &raw);
+    }
+}
+
+/// The per-minute budget install and run links share (`rate::Budget`).
+#[derive(Default)]
+pub(crate) struct LinkBudget(pub(crate) Mutex<actuaria_install::rate::Budget>);
+
+/// The link in a launch's arguments (after `--`), if any.
+fn link_from_args(app: &AppHandle, args: &[String]) {
+    if let Some(raw) = actuaria_install::link::from_args(args) {
+        open_link(app, raw);
+    }
+}
+
+/// Record an opened folder in the settings (reopened at the next start, first in Open Recent), unless the open
+/// isn't to be remembered. Whether the settings changed.
+fn remember_folder(st: &mut Settings, folder: &Path, remember: Remember) -> bool {
+    if remember == Remember::No {
+        return false;
+    }
+    st.folder = Some(folder.to_path_buf());
+    st.recent.retain(|p| p != folder);
+    st.recent.insert(0, folder.to_path_buf());
+    st.recent.truncate(MAX_RECENT);
+    true
+}
+
+/// Open a folder; call with `FOLDER_LOCK` held.
+fn open_folder_now(app: &AppHandle, folder: PathBuf, remember: Remember) {
     let state = app.state::<AppState>();
     let first = state.server.lock().unwrap().is_none();
     match server::start(&folder, &state.env, &log_path(app)) {
@@ -126,16 +205,18 @@ fn open_folder(app: &AppHandle, folder: PathBuf) {
             let url = s.url.clone();
             // Dropping the previous server stops it.
             *state.server.lock().unwrap() = Some(s);
-            {
+            let remembered = {
                 let mut st = state.settings.lock().unwrap();
-                st.folder = Some(folder.clone());
-                st.recent.retain(|p| p != &folder);
-                st.recent.insert(0, folder.clone());
-                st.recent.truncate(MAX_RECENT);
-                save_settings(app, &st);
+                let changed = remember_folder(&mut st, &folder, remember);
+                if changed {
+                    save_settings(app, &st);
+                }
+                changed
+            };
+            if remembered {
+                let handle = app.clone();
+                let _ = app.run_on_main_thread(move || rebuild_recent(&handle));
             }
-            let handle = app.clone();
-            let _ = app.run_on_main_thread(move || rebuild_recent(&handle));
             if let Some(w) = main_window(app) {
                 let _ = w.set_title(&format!("{} — {APP_NAME}", folder_name(&folder)));
                 if let Ok(u) = Url::parse(&url) {
@@ -217,6 +298,7 @@ fn page_action(app: AppHandle, url: Url) {
                 let _ = app.opener().open_path(log_path(&app).to_string_lossy(), None::<&str>);
             }
             "update" => update::action(&app, param("do").as_deref().unwrap_or_default()),
+            "run-link" => run_link::action(&app, param("do").as_deref().unwrap_or_default(), param("nonce")),
             "install" => install::action(&app, param("do").as_deref().unwrap_or_default(), param("nonce"), param("target")),
             "open-external" => {
                 if let Some(u) = param("url").and_then(|u| Url::parse(&u).ok())
@@ -474,14 +556,14 @@ fn on_menu(app: &AppHandle, id: &str) {
 fn main() {
     let mut builder = tauri::Builder::default();
     if !DEV {
-        // A second launch focuses the running app, and hands over its install link (`-- <link>`), which is
+        // A second launch focuses the running app, and hands over its `actuaria:` link (`-- <link>`), which is
         // parsed only here, in the running instance.
         builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             if let Some(w) = main_window(app) {
                 let _ = w.unminimize();
                 let _ = w.set_focus();
             }
-            install::from_args(app, &args);
+            link_from_args(app, &args);
         }));
     }
     builder
@@ -503,6 +585,8 @@ fn main() {
             });
             app.manage(update::Updates::default());
             app.manage(install::Installs::default());
+            app.manage(run_link::RunLinks::default());
+            app.manage(LinkBudget::default());
             let (menu, recent) = build_menu(&handle)?;
             app.set_menu(menu)?;
             *app.state::<AppState>().recent_menu.lock().unwrap() = Some(recent);
@@ -523,6 +607,7 @@ fn main() {
                     if matches!(p.event(), PageLoadEvent::Finished) {
                         update::push(w.app_handle());
                         install::push(w.app_handle());
+                        run_link::push(w.app_handle());
                     }
                 })
                 // The title bar names the open tab, then the folder: "Jobs — my-evals".
@@ -559,25 +644,33 @@ fn main() {
             update::start(&handle);
             install::setup(&handle);
             // A link that launched the app: on Windows and Linux in the arguments (after `--`), on macOS as an
-            // Apple event. Either waits for the page's first load to show (install::push on page load).
+            // Apple event. Either waits for the page's first load to show (install::push and run_link::push on page load).
             let args: Vec<String> = std::env::args().collect();
-            install::from_args(&handle, &args);
+            link_from_args(&handle, &args);
             #[cfg(target_os = "macos")]
             {
                 use tauri_plugin_deep_link::DeepLinkExt;
                 if let Ok(Some(urls)) = app.deep_link().get_current() {
                     for u in urls {
-                        install::on_link(&handle, u.as_str());
+                        open_link(&handle, u.as_str());
                     }
                 }
                 let h = handle.clone();
                 app.deep_link().on_open_url(move |e| {
                     for u in e.urls() {
-                        install::on_link(&h, u.as_str());
+                        open_link(&h, u.as_str());
                     }
                 });
             }
-            std::thread::spawn(move || open_folder(&handle, folder));
+            // A run link that came meanwhile waits for this open (ensure_folder); if it failed, the link opens the
+            // default folder instead.
+            std::thread::spawn(move || {
+                open_folder(&handle, folder);
+                STARTED.store(true, Ordering::SeqCst);
+                if run_link::waiting(&handle) {
+                    ensure_folder(&handle);
+                }
+            });
             Ok(())
         })
         .build(tauri::generate_context!())
@@ -588,4 +681,49 @@ fn main() {
                 app.state::<AppState>().server.lock().unwrap().take();
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    #[test]
+    fn a_link_open_is_not_remembered_and_the_users_pick_stays() {
+        let mut st = Settings::default();
+        let mine = PathBuf::from("/home/ann/evals");
+        assert!(remember_folder(&mut st, &mine, Remember::Yes));
+        assert_eq!(st.folder.as_deref(), Some(mine.as_path()));
+        assert_eq!(st.recent, vec![mine.clone()]);
+        // A run link's default folder opens with Remember::No: the saved folder and Open Recent stay the user's,
+        // and nothing is saved.
+        let before = serde_json::to_string(&st).unwrap();
+        assert!(!remember_folder(&mut st, Path::new("/home/ann/Actuaria"), Remember::No));
+        assert_eq!(serde_json::to_string(&st).unwrap(), before);
+        // Reopening keeps one entry per folder, newest first.
+        remember_folder(&mut st, Path::new("/b"), Remember::Yes);
+        remember_folder(&mut st, &mine, Remember::Yes);
+        assert_eq!(st.recent, vec![mine.clone(), PathBuf::from("/b")]);
+    }
+
+    #[test]
+    fn a_link_open_waits_for_the_users_pick_and_then_does_nothing() {
+        let lock = Arc::new(Mutex::new(()));
+        let current: Arc<Mutex<Option<&str>>> = Arc::new(Mutex::new(None));
+        // The user's pick holds the lock while its viewer starts.
+        let guard = lock.lock().unwrap();
+        let (l, c) = (lock.clone(), current.clone());
+        let link =
+            std::thread::spawn(move || open_unless_open(&l, || c.lock().unwrap().is_some(), || *c.lock().unwrap() = Some("~/Actuaria")));
+        std::thread::sleep(Duration::from_millis(50));
+        *current.lock().unwrap() = Some("/home/ann/evals");
+        drop(guard);
+        assert!(!link.join().unwrap(), "the link's open saw the user's folder and did nothing");
+        assert_eq!(*current.lock().unwrap(), Some("/home/ann/evals"));
+        // With nothing open, the link opens the default.
+        let c = Arc::new(Mutex::new(None::<&str>));
+        assert!(open_unless_open(&lock, || c.lock().unwrap().is_some(), || *c.lock().unwrap() = Some("~/Actuaria")));
+        assert_eq!(*c.lock().unwrap(), Some("~/Actuaria"));
+    }
 }

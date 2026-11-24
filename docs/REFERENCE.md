@@ -450,13 +450,25 @@ actuaria://install/actuaria/<bot-id>?target=claude
 actuaria://install/actuaria/<bot-id>?target=orca
 ```
 
-**The link.** `<bot-id>` matches `^[a-z][a-z0-9-]{0,62}$`, and the publisher is always `actuaria`. The link is
-accepted only in exactly this form: at most 105 bytes of printable ASCII, no other host or path, no user info,
-port, fragment or percent-encoding, and no parameter but one `target`. Anything else shows "This link is not
+**The link.** `<bot-id>` matches `^[a-z][a-z0-9-]{0,62}$`, and the publisher is always `actuaria`. The link, once
+normalised (below), is accepted only in exactly this form: at most 105 bytes of printable ASCII, no other host or
+path, no user info, port, fragment or remaining percent-encoding, and no parameter but one `target`. Anything else shows "This link is not
 valid". The link never carries a host, URL or digest. The OS hands it over as `<app> -- <link>` (Windows and Linux
 register that form at each start, and their installers register nothing; macOS uses an Apple event), and a second launch passes it to the running app,
-which parses it. One install dialog is open at a time (a link that arrives while one is open is dropped), and at
-most 5 open in a minute.
+which parses it. Before parsing, every OS normalises the link as a URL parser does, because that is the form macOS
+hands over. All of this happens before the strict check:
+- control characters (0x00 to 0x1f) and spaces at the start and end are removed;
+- a tab, carriage return or newline anywhere is removed;
+- the scheme is lowercased (`ACTUARIA:` → `actuaria:`); the host and path keep their case;
+- `.` and `..` path segments are resolved, including percent-encoded ones (`%2e`, `%2E`): for example
+  `actuaria://run/actuaria/%2e%2e/actuaria/terminal-bench` becomes `actuaria://run/actuaria/terminal-bench` and is
+  accepted;
+- non-ASCII, and other characters a URL can't hold as they are (DEL, for one), are percent-encoded.
+
+The exact form above is then checked on the normalised link, so "no percent-encoding" applies to what is left after
+normalising: a `%` that remains, as any percent-encoding other than a dot segment does, is refused. One install dialog is open at a time (a link
+that arrives while one is open is dropped), and at most 5 `actuaria:` links are acted on in a minute, install and
+run links together.
 
 **What Essentials checks.**
 1. It fetches `https://market.actuaria.io/bots/index.json` (HTTPS, no redirects, at most 64 KB):
@@ -484,6 +496,48 @@ which file is installed and its hash. The founder accepted this in chat on 2026-
 (market.actuaria.io), "First-party preview", and the host to install into (only hosts found on the computer; a
 choice when the link has no `target`), with Install and Cancel. Text from the catalogue is shown as plain text,
 shortened. If no host is installed, the screen says so and, for Claude, links https://claude.ai/download.
+
+## Run links
+
+A test set's page on the Marketplace has "Open in Actuaria Studio", which opens Essentials on New run with that
+test set already picked:
+
+```
+actuaria://run/actuaria/<dataset>
+actuaria://run/actuaria/<dataset>?version=<x.y>
+actuaria://run/actuaria/<dataset>?version=<x.y.z>
+```
+
+**The link.** `<dataset>` is the test set's name in the dataset index: lowercase letters, digits, `.`, `_` and `-`,
+1 to 64 bytes, starting and ending with a letter or digit, and no `..`. The publisher is always `actuaria`. The
+version is two or three numbers of 1 to 6 digits each, separated by dots; without it, the newest version is picked.
+As with install links, the link is normalised first (on every OS, as macOS does; see "Install links": control
+characters and spaces at the ends and tabs or newlines anywhere are removed, and `.`, `..`, `%2e` and `%2E` path
+segments are resolved), and the normalised link is then accepted only in exactly this form: at most 117 bytes of
+printable ASCII, no other host or path, no user info, port, fragment or remaining percent-encoding, and no parameter
+but one `version`. Anything else
+shows "This link is not valid: …" on New run. The same `actuaria:` handler receives both kinds of link (nothing in
+the macOS Info.plist, the Linux `.desktop` file or the Windows registry filters by path), and the app sends a link
+that starts with `actuaria://run/` here, anything else to the install dialog.
+
+**What Essentials does.** It brings its window forward, opens New run, and looks the name up in the catalogue New run already loads (the dataset index above).
+If the test set is there, it is picked at the link's version, the domain's list is shown with its card selected and
+scrolled into view, and a line says "Opened from the Marketplace: <name> <version>". If it isn't, the line says
+"<name> isn't in the catalogue. Update the app or open the Marketplace." Agents, the environment and the job's
+settings stay as they were (picking the test set already picked keeps its task filters). It never starts a run and
+never downloads anything by itself: the user still chooses the agent and presses Run. Nothing in the link is fetched.
+
+If no folder is open (the one opened at start failed), the link opens the default folder, `~/Actuaria`, without
+saving it: the folder Essentials reopens at the next start and Open Recent stay as they were. Folder opens run one at
+a time, and the link's open does nothing if a folder is open by its turn, so it never replaces a folder the user
+picked. While the folder opened at start is still loading, the link waits for it.
+
+**Limits.** One run link at a time: a link that arrives while the last one hasn't been applied yet is dropped
+(after 2 minutes the waiting one gives way), and at most 5 `actuaria:` links in a minute, install and run links
+together; a link dropped because one of its kind is waiting doesn't count. A link that arrives before the window
+has loaded waits, and is applied once New run can show it. The page can't make a run link itself: once New run has
+applied the link the app handed it (or shown why it couldn't), it answers `/__actuaria/run-link?do=taken` with
+that link's nonce, and only then can the next run link come.
 
 ## Development
 

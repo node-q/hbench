@@ -175,6 +175,12 @@ jobs:
         run: npm ci
       - name: Type-check and build bundle
         run: npm run build
+      - name: Run the desktop link checks
+        run: |
+          for check in install-view run-link; do
+            npx --no-install rolldown "src/desktop/$check.check.ts" --platform node --format esm --file "$RUNNER_TEMP/$check.check.mjs"
+            node "$RUNNER_TEMP/$check.check.mjs"
+          done
       - name: Verify committed bundle is up to date
         run: |
           git status --porcelain -- dist
@@ -225,6 +231,8 @@ jobs:
         run: |
           cargo fmt --check
           cargo clippy --locked
+      - name: Test the link checks (desktop/install)
+        run: cargo test --locked --manifest-path desktop/install/Cargo.toml
       - name: Test the app
         if: runner.os == 'Linux'
         working-directory: desktop/src-tauri
