@@ -60,6 +60,9 @@ pub enum LinkError {
     NotAnInstallLink,
     BadBotId,
     BadQuery,
+    NotARunLink,
+    BadDatasetName,
+    BadVersion,
 }
 
 impl fmt::Display for LinkError {
@@ -70,6 +73,9 @@ impl fmt::Display for LinkError {
             LinkError::NotAnInstallLink => "it isn't an Actuaria install link",
             LinkError::BadBotId => "the bot name isn't valid",
             LinkError::BadQuery => "the link has parameters that aren't allowed",
+            LinkError::NotARunLink => "it isn't an Actuaria link to a test set",
+            LinkError::BadDatasetName => "the test set's name isn't valid",
+            LinkError::BadVersion => "the version isn't valid",
         })
     }
 }
@@ -83,14 +89,20 @@ pub fn valid_bot_id(s: &str) -> bool {
         && b.iter().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || *c == b'-')
 }
 
-pub fn parse(raw: &str) -> Result<Link, LinkError> {
-    if raw.len() > MAX_LINK_BYTES {
+/// The checks every `actuaria:` link passes first: at most `max` bytes of printable ASCII (no spaces, controls
+/// or non-ASCII), and no percent-encoding, fragment or backslash at all.
+pub(crate) fn check_raw(raw: &str, max: usize) -> Result<(), LinkError> {
+    if raw.len() > max {
         return Err(LinkError::TooLong);
     }
-    // Printable ASCII only: no spaces, controls or non-ASCII; and no percent-encoding or fragment at all.
     if !raw.bytes().all(|c| (0x21..=0x7e).contains(&c)) || raw.contains(['%', '#', '\\']) {
         return Err(LinkError::BadCharacter);
     }
+    Ok(())
+}
+
+pub fn parse(raw: &str) -> Result<Link, LinkError> {
+    check_raw(raw, MAX_LINK_BYTES)?;
     let rest = raw.strip_prefix(PREFIX).ok_or(LinkError::NotAnInstallLink)?;
     let (id, query) = match rest.split_once('?') {
         Some((id, q)) => (id, Some(q)),
@@ -105,6 +117,29 @@ pub fn parse(raw: &str) -> Result<Link, LinkError> {
         Some(q) => Some(q.strip_prefix("target=").and_then(Target::from_name).ok_or(LinkError::BadQuery)?),
     };
     Ok(Link { bot: id.to_string(), target })
+}
+
+/// Inputs longer than this aren't normalised: they're far over every link's cap either way.
+const MAX_NORMALISE_BYTES: usize = 1024;
+
+/// The link as a URL parser writes it, which is how macOS hands links over (the deep-link plugin passes
+/// `Url::as_str()`). The app normalises every link this way on every OS before the strict parse, so a link is
+/// accepted, or refused, the same everywhere. Normalising:
+/// - removes control characters (0x00 to 0x1f) and spaces at the start and end;
+/// - removes a tab, carriage return or newline anywhere;
+/// - lowercases the scheme (not the host: `actuaria:` isn't a scheme the parser knows);
+/// - resolves `.` and `..` path segments, percent-encoded ones (`%2e`, `%2E`) included, so
+///   `actuaria://run/actuaria/%2e%2e/actuaria/terminal-bench` becomes `actuaria://run/actuaria/terminal-bench`
+///   and is accepted;
+/// - percent-encodes non-ASCII and the other characters a URL can't hold as they are (DEL, for one).
+///
+/// The strict parse's "no `%`" applies to what is left: any other percent-encoding stays, and is refused. A link
+/// the parser refuses is kept as it is, for the strict parse to refuse with its reason.
+pub fn normalise(raw: &str) -> String {
+    if raw.len() > MAX_NORMALISE_BYTES {
+        return raw.to_string();
+    }
+    url::Url::parse(raw).map(|u| u.as_str().to_string()).unwrap_or_else(|_| raw.to_string())
 }
 
 /// The link from a launch's arguments. The OS handler is registered as `<app> -- <link>`, so the link is the
@@ -217,6 +252,47 @@ mod tests {
         assert_eq!(from_args(&["/app", "--"]), None);
         assert_eq!(from_args(&["/app", "--", link, "--x"]), None);
         assert_eq!(from_args::<&str>(&[]), None);
+    }
+
+    #[test]
+    fn normalising_matches_what_macos_hands_over() {
+        let same = [
+            "actuaria://install/actuaria/prompt-slim",
+            "actuaria://install/actuaria/prompt-slim?target=orca",
+            "actuaria://run/actuaria/terminal-bench?version=2.0",
+        ];
+        for raw in same {
+            assert_eq!(normalise(raw), raw);
+        }
+        let changed = [
+            ("ACTUARIA://install/actuaria/prompt-slim", "actuaria://install/actuaria/prompt-slim"),
+            ("actuaria://install/actuaria/x/../prompt-slim", "actuaria://install/actuaria/prompt-slim"),
+            ("actuaria://install/actuaria/./prompt-slim", "actuaria://install/actuaria/prompt-slim"),
+            ("actuaria://install/actuaria/prompt-\tslim", "actuaria://install/actuaria/prompt-slim"),
+            (" actuaria://run/actuaria/x\n", "actuaria://run/actuaria/x"),
+        ];
+        for (raw, want) in changed {
+            assert_eq!(normalise(raw), want, "{raw:?}");
+            assert!(parse(want).is_ok() || crate::run::parse(want).is_ok(), "{want}");
+        }
+        // Still refused after normalising: what the parser keeps or encodes, the strict parse refuses.
+        for raw in [
+            "actuaria://install/actuaria/bøt",
+            "actuaria://install/actuaria/bot#x",
+            "actuaria://user@install/actuaria/bot",
+            "actuaria://install:80/actuaria/bot",
+            "actuaria://install/actuaria/bot?target=claude&x=1",
+            "actuaria://install/actuaria/a%2fb",
+            "actuaria://install/acme/bot",
+            "actuaria://INSTALL/actuaria/bot",
+            "actuaria:install/actuaria/bot",
+        ] {
+            let n = normalise(raw);
+            assert!(parse(&n).is_err() && crate::run::parse(&n).is_err(), "{raw:?} -> {n:?}");
+        }
+        let huge = "x".repeat(5000);
+        assert_eq!(normalise(&huge), huge);
+        assert_eq!(normalise("not a url"), "not a url");
     }
 
     proptest! {

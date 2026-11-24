@@ -136,9 +136,12 @@ pub fn on_link(app: &AppHandle, raw: &str) {
     let seq = {
         let st = app.state::<Installs>();
         let mut i = st.0.lock().unwrap();
-        if !i.gate.try_open(Instant::now()) {
+        let budget = app.state::<crate::LinkBudget>();
+        let mut budget = budget.0.lock().unwrap();
+        if !i.gate.try_open(&mut budget, Instant::now()) {
             return;
         }
+        drop(budget);
         i.seq += 1;
         i.offer = None;
         i.view = View { state: "loading", nonce: nonce(i.seq), ..View::default() };
@@ -412,13 +415,6 @@ fn register() {
         let _ = std::process::Command::new("xdg-mime")
             .args(["default", actuaria_install::register::LINUX_DESKTOP_FILE, "x-scheme-handler/actuaria"])
             .output();
-    }
-}
-
-/// The link in a launch's arguments (after `--`), if any.
-pub fn from_args(app: &AppHandle, args: &[String]) {
-    if let Some(raw) = link::from_args(args) {
-        on_link(app, raw);
     }
 }
 

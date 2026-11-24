@@ -10,6 +10,7 @@ import { useToast } from "../ui/overlay";
 import { APP_NAME, desktopInfo, isMac, native, onCommand } from "./bridge";
 import { UpdatePrompt, UpdateStatus, useUpdate } from "./Update";
 import { InstallDialog } from "./Install";
+import { RunLinkListener } from "./RunLink";
 
 const SIDE_KEY = "hb:dk-side";
 const TABS_KEY = "hb:dk-tabs";
@@ -401,6 +402,7 @@ export function DesktopChrome({
       </footer>
       <UpdatePrompt u={update} nRunning={nRunning} />
       <InstallDialog />
+      <RunLinkListener />
     </div>
   );
 }
