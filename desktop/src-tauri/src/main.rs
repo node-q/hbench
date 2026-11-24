@@ -6,6 +6,7 @@
 
 mod confirm;
 mod install;
+mod run_link;
 mod server;
 mod shell_env;
 mod update;
@@ -15,6 +16,7 @@ use server::Server;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::menu::{AboutMetadataBuilder, CheckMenuItemBuilder, Menu, MenuItemBuilder, Submenu, SubmenuBuilder};
 use tauri::webview::{DownloadEvent, PageLoadEvent};
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder, Wry};
@@ -119,6 +121,44 @@ fn show_error(app: &AppHandle, title: &str, message: &str) {
 /// Open `folder`: start a viewer for it, then swap it in, so a folder that fails leaves the current one up.
 /// Blocks; call off the main thread.
 fn open_folder(app: &AppHandle, folder: PathBuf) {
+    OPENING.store(true, Ordering::SeqCst);
+    open_folder_now(app, folder);
+    OPENING.store(false, Ordering::SeqCst);
+}
+
+/// Whether a folder is being opened (the first one at start, or one the user picked).
+static OPENING: AtomicBool = AtomicBool::new(false);
+
+/// Open the default folder if none is open nor opening, as the first launch does: a run link needs New run.
+pub(crate) fn ensure_folder(app: &AppHandle) {
+    if current_folder(app).is_some() || OPENING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let folder = default_folder(&app);
+        open_folder(&app, folder);
+    });
+}
+
+/// An `actuaria:` link from the OS: a run link opens New run, anything else goes to the install dialog (which
+/// says "This link is not valid" when it isn't an install link either).
+fn open_link(app: &AppHandle, raw: &str) {
+    if actuaria_install::run::is_run_link(raw) {
+        run_link::on_link(app, raw);
+    } else {
+        install::on_link(app, raw);
+    }
+}
+
+/// The link in a launch's arguments (after `--`), if any.
+fn link_from_args(app: &AppHandle, args: &[String]) {
+    if let Some(raw) = actuaria_install::link::from_args(args) {
+        open_link(app, raw);
+    }
+}
+
+fn open_folder_now(app: &AppHandle, folder: PathBuf) {
     let state = app.state::<AppState>();
     let first = state.server.lock().unwrap().is_none();
     match server::start(&folder, &state.env, &log_path(app)) {
@@ -217,6 +257,7 @@ fn page_action(app: AppHandle, url: Url) {
                 let _ = app.opener().open_path(log_path(&app).to_string_lossy(), None::<&str>);
             }
             "update" => update::action(&app, param("do").as_deref().unwrap_or_default()),
+            "run-link" => run_link::action(&app, param("do").as_deref().unwrap_or_default(), param("nonce")),
             "install" => install::action(&app, param("do").as_deref().unwrap_or_default(), param("nonce"), param("target")),
             "open-external" => {
                 if let Some(u) = param("url").and_then(|u| Url::parse(&u).ok())
@@ -474,14 +515,14 @@ fn on_menu(app: &AppHandle, id: &str) {
 fn main() {
     let mut builder = tauri::Builder::default();
     if !DEV {
-        // A second launch focuses the running app, and hands over its install link (`-- <link>`), which is
+        // A second launch focuses the running app, and hands over its `actuaria:` link (`-- <link>`), which is
         // parsed only here, in the running instance.
         builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             if let Some(w) = main_window(app) {
                 let _ = w.unminimize();
                 let _ = w.set_focus();
             }
-            install::from_args(app, &args);
+            link_from_args(app, &args);
         }));
     }
     builder
@@ -503,6 +544,7 @@ fn main() {
             });
             app.manage(update::Updates::default());
             app.manage(install::Installs::default());
+            app.manage(run_link::RunLinks::default());
             let (menu, recent) = build_menu(&handle)?;
             app.set_menu(menu)?;
             *app.state::<AppState>().recent_menu.lock().unwrap() = Some(recent);
@@ -523,6 +565,7 @@ fn main() {
                     if matches!(p.event(), PageLoadEvent::Finished) {
                         update::push(w.app_handle());
                         install::push(w.app_handle());
+                        run_link::push(w.app_handle());
                     }
                 })
                 // The title bar names the open tab, then the folder: "Jobs — my-evals".
@@ -556,24 +599,26 @@ fn main() {
 
             let folder = app.state::<AppState>().settings.lock().unwrap().folder.clone().filter(|p| p.is_dir());
             let folder = folder.unwrap_or_else(|| default_folder(&handle));
+            // Opened below, after the launch's link: a run link must not open the default folder meanwhile.
+            OPENING.store(true, Ordering::SeqCst);
             update::start(&handle);
             install::setup(&handle);
             // A link that launched the app: on Windows and Linux in the arguments (after `--`), on macOS as an
-            // Apple event. Either waits for the page's first load to show (install::push on page load).
+            // Apple event. Either waits for the page's first load to show (install::push and run_link::push on page load).
             let args: Vec<String> = std::env::args().collect();
-            install::from_args(&handle, &args);
+            link_from_args(&handle, &args);
             #[cfg(target_os = "macos")]
             {
                 use tauri_plugin_deep_link::DeepLinkExt;
                 if let Ok(Some(urls)) = app.deep_link().get_current() {
                     for u in urls {
-                        install::on_link(&handle, u.as_str());
+                        open_link(&handle, u.as_str());
                     }
                 }
                 let h = handle.clone();
                 app.deep_link().on_open_url(move |e| {
                     for u in e.urls() {
-                        install::on_link(&h, u.as_str());
+                        open_link(&h, u.as_str());
                     }
                 });
             }

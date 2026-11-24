@@ -415,13 +415,6 @@ fn register() {
     }
 }
 
-/// The link in a launch's arguments (after `--`), if any.
-pub fn from_args(app: &AppHandle, args: &[String]) {
-    if let Some(raw) = link::from_args(args) {
-        on_link(app, raw);
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

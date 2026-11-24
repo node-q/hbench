@@ -60,6 +60,9 @@ pub enum LinkError {
     NotAnInstallLink,
     BadBotId,
     BadQuery,
+    NotARunLink,
+    BadDatasetName,
+    BadVersion,
 }
 
 impl fmt::Display for LinkError {
@@ -70,6 +73,9 @@ impl fmt::Display for LinkError {
             LinkError::NotAnInstallLink => "it isn't an Actuaria install link",
             LinkError::BadBotId => "the bot name isn't valid",
             LinkError::BadQuery => "the link has parameters that aren't allowed",
+            LinkError::NotARunLink => "it isn't an Actuaria link to a test set",
+            LinkError::BadDatasetName => "the test set's name isn't valid",
+            LinkError::BadVersion => "the version isn't valid",
         })
     }
 }
@@ -83,14 +89,20 @@ pub fn valid_bot_id(s: &str) -> bool {
         && b.iter().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || *c == b'-')
 }
 
-pub fn parse(raw: &str) -> Result<Link, LinkError> {
-    if raw.len() > MAX_LINK_BYTES {
+/// The checks every `actuaria:` link passes first: at most `max` bytes of printable ASCII (no spaces, controls
+/// or non-ASCII), and no percent-encoding, fragment or backslash at all.
+pub(crate) fn check_raw(raw: &str, max: usize) -> Result<(), LinkError> {
+    if raw.len() > max {
         return Err(LinkError::TooLong);
     }
-    // Printable ASCII only: no spaces, controls or non-ASCII; and no percent-encoding or fragment at all.
     if !raw.bytes().all(|c| (0x21..=0x7e).contains(&c)) || raw.contains(['%', '#', '\\']) {
         return Err(LinkError::BadCharacter);
     }
+    Ok(())
+}
+
+pub fn parse(raw: &str) -> Result<Link, LinkError> {
+    check_raw(raw, MAX_LINK_BYTES)?;
     let rest = raw.strip_prefix(PREFIX).ok_or(LinkError::NotAnInstallLink)?;
     let (id, query) = match rest.split_once('?') {
         Some((id, q)) => (id, Some(q)),

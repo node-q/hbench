@@ -485,6 +485,40 @@ which file is installed and its hash. The founder accepted this in chat on 2026-
 choice when the link has no `target`), with Install and Cancel. Text from the catalogue is shown as plain text,
 shortened. If no host is installed, the screen says so and, for Claude, links https://claude.ai/download.
 
+## Run links
+
+A test set's page on the Marketplace has "Open in Actuaria Studio", which opens Essentials on New run with that
+test set already picked:
+
+```
+actuaria://run/actuaria/<dataset>
+actuaria://run/actuaria/<dataset>?version=<x.y>
+actuaria://run/actuaria/<dataset>?version=<x.y.z>
+```
+
+**The link.** `<dataset>` is the test set's name in the dataset index: lowercase letters, digits, `.`, `_` and `-`,
+1 to 64 bytes, starting and ending with a letter or digit, and no `..`. The publisher is always `actuaria`. The
+version is two or three numbers of 1 to 6 digits each, separated by dots; without it, the newest version is picked.
+As with install links, the link is accepted only in exactly this form: at most 117 bytes of printable ASCII, no other
+host or path, no user info, port, fragment or percent-encoding, and no parameter but one `version`. Anything else
+shows "This link is not valid: …" on New run. The same `actuaria:` handler receives both kinds of link (nothing in
+the macOS Info.plist, the Linux `.desktop` file or the Windows registry filters by path), and the app sends a link
+that starts with `actuaria://run/` here, anything else to the install dialog.
+
+**What Essentials does.** It brings its window forward, opens New run (opening the default folder, `~/Actuaria`,
+first if no folder is open), and looks the name up in the catalogue New run already loads (the dataset index above).
+If the test set is there, it is picked at the link's version, the domain's list is shown with its card selected and
+scrolled into view, and a line says "Opened from the Marketplace: <name> <version>". If it isn't, the line says
+"<name> isn't in the catalogue. Update the app or open the Marketplace." Agents, the environment and the job's
+settings stay as they were (picking the test set already picked keeps its task filters). It never starts a run and
+never downloads anything by itself: the user still chooses the agent and presses Run. Nothing in the link is fetched.
+
+**Limits.** One run link at a time: a link that arrives while the last one hasn't reached New run yet is dropped
+(after 2 minutes the waiting one gives way), and at most 5 run links in a minute; install links keep their own,
+equal, limits. A link that arrives before the window has loaded waits, and is applied once New run can show it.
+The page can't make a run link itself: it only answers `/__actuaria/run-link?do=taken` for the one the app handed
+it, so the next can come.
+
 ## Development
 
 ### Viewer

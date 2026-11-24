@@ -293,7 +293,7 @@ function DatasetCard({ d, state, picked, onPick, onRetry }: { d: CatalogDataset;
   if (state.status === "error") {
     // Two controls, so the card is a group rather than one button.
     return (
-      <div className="cat-card cat-card--failed" role="group" aria-label={d.name}>
+      <div className="cat-card cat-card--failed" role="group" aria-label={d.name} data-dataset={d.name} tabIndex={-1}>
         {head}
         <span className="cat-card__desc cat-card__err">
           The details of this set didn't load. <span className="mono">{state.message}</span>
@@ -310,7 +310,7 @@ function DatasetCard({ d, state, picked, onPick, onRetry }: { d: CatalogDataset;
     );
   }
   return (
-    <button type="button" className="cat-card" aria-pressed={picked} aria-busy={!ready} onClick={onPick}>
+    <button type="button" className="cat-card" aria-pressed={picked} aria-busy={!ready} onClick={onPick} data-dataset={d.name}>
       {head}
       {ready ? (
         <span className="cat-card__desc">{ready.description}</span>

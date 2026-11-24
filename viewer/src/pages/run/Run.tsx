@@ -18,6 +18,7 @@ import { CUSTOM, DatasetCatalog, DomainGrid, domainHref, useCatalog } from "./ca
 import { useDetails } from "./details";
 import { draftErrors, emptyDraft, fromConfig, hasSource, jsonError, newAgent, numError, sourceError, sourceLabel, takesServer, toConfig, versionError, type AgentDraft, type Draft, type Source } from "./form";
 import { NEW_SERVER, ServerPanel } from "./server";
+import { openedNotice, pickFromLink, resolve, settle, useRunRequest } from "../../desktop/run-link";
 
 type History = { job_name: string; config: Obj }[];
 type Step = "domain" | "dataset" | "configure";
@@ -74,6 +75,47 @@ export default function Run() {
     if (entry && !draft.dataset.version.trim()) up((d) => void (d.dataset.version = entry.version));
   }, [entry, draft.dataset.version, up]);
 
+  // A run link from the Marketplace (desktop app): pick its test set once the catalogue is here, show it in its
+  // domain's list, and say where it came from. Nothing starts: the user still presses Run.
+  const request = useRunRequest();
+  const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null);
+  const [reveal, setReveal] = useState<string | null>(null);
+  useEffect(() => {
+    if (!request) return;
+    if ("error" in request) {
+      settle();
+      setNotice({ ok: false, text: request.error });
+      return;
+    }
+    if (!catalog.data) {
+      if (!catalog.error) return;
+      settle();
+      setNotice({ ok: false, text: `The catalogue didn't load, so ${request.dataset} wasn't picked. Open the link again.` });
+      return;
+    }
+    settle();
+    const r = resolve(catalog.data, request.dataset, request.version);
+    if ("error" in r) {
+      setNotice({ ok: false, text: r.error });
+      return;
+    }
+    setDraft(pickFromLink(draft, r.entry, r.version, entry));
+    setSubmitted(false);
+    setSubmitError(null);
+    setNotice({ ok: true, text: openedNotice(r.entry, r.version) });
+    setReveal(r.entry.name);
+    navigate(domainHref(r.entry.domain));
+  }, [request, catalog.data, catalog.error, draft, entry, setDraft, navigate]);
+  // Once its card is drawn, bring the picked set into view and give it focus.
+  useEffect(() => {
+    if (!reveal) return;
+    const card = document.querySelector<HTMLElement>(`[data-dataset="${CSS.escape(reveal)}"]`);
+    if (!card) return;
+    setReveal(null);
+    card.scrollIntoView({ block: "center" });
+    card.focus({ preventScroll: true });
+  });
+
   const domainParam = params.get("domain");
   const stepParam = params.get("step");
   const step: Step = domainParam ? "dataset" : stepParam === "configure" ? "configure" : stepParam === "domain" ? "domain" : hasSource(draft) ? "configure" : "domain";
@@ -88,6 +130,7 @@ export default function Run() {
       x.source = "dataset";
     });
     setSubmitted(false);
+    setNotice(null);
     navigate(CONFIGURE);
   };
   const pickCustom = (source: Source) => {
@@ -100,6 +143,7 @@ export default function Run() {
       x.source = source;
     });
     setSubmitted(false);
+    setNotice(null);
     navigate(CONFIGURE);
   };
 
@@ -149,6 +193,15 @@ export default function Run() {
         }
       />
       <Steps step={step} domainId={domainId} ready={hasSource(draft)} />
+      {notice && (
+        <div className={`run-linknote${notice.ok ? "" : " run-linknote--bad"}`} role={notice.ok ? "status" : "alert"}>
+          {notice.ok ? <Icon.Check size={14} /> : <Icon.Alert size={14} />}
+          <span className="trunc">{notice.text}</span>
+          <button type="button" className="btn btn--sm btn--ghost" aria-label="Dismiss" onClick={() => setNotice(null)}>
+            <Icon.Close size={12} />
+          </button>
+        </div>
+      )}
       {launched && <LaunchPanel job={launched} onDismiss={() => setLaunched(null)} />}
     </>
   );
