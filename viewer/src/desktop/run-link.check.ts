@@ -1,6 +1,6 @@
 // Check of the run link's handling in the page (not bundled into the app): from viewer/,
 // `npx rolldown src/desktop/run-link.check.ts --platform node --format esm --file /tmp/run-link.check.mjs && node /tmp/run-link.check.mjs`.
-import { accept, notInCatalogue, offer, openedNotice, pickFromLink, resolve, settle } from "./run-link";
+import { accept, notInCatalogue, offer, openedNotice, pickFromLink, resolve, settle, whenTaken } from "./run-link";
 import { emptyDraft, newAgent } from "../pages/run/form";
 import type { Catalog, CatalogDataset } from "../lib/types";
 
@@ -69,8 +69,19 @@ if ("entry" in r2) {
   }
 }
 
+// The app hears "taken" only once New run has settled the link, never when the page merely receives it.
+const taken: string[] = [];
+whenTaken((nonce) => taken.push(nonce));
 offer({ nonce: "x", dataset: "terminal-bench", version: null });
+check(taken.length === 0, "receiving a link doesn't tell the app it was taken");
 settle();
+check(JSON.stringify(taken) === JSON.stringify(["x"]), "settling it does, with its nonce");
+settle();
+check(taken.length === 1, "settling with nothing pending tells the app nothing");
+offer({ nonce: "y", error: "This link is not valid: the version isn't valid." });
+check(taken.length === 1, "an invalid link isn't taken until its notice is shown");
+settle();
+check(taken[1] === "y", "then it is");
 check(fetches === 0, "nothing was fetched and no run was started");
 if (failed.length) throw new Error(`run-link.check failed: ${failed.join("; ")}`);
 console.log("run-link.check: ok");

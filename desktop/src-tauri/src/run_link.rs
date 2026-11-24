@@ -2,8 +2,8 @@
 //! Marketplace page's "Open in Actuaria Studio". The link is parsed in the `actuaria-install` crate
 //! (desktop/install/src/run.rs); this brings the window forward and hands the page the test set's name as
 //! `window.__ACTUARIA_RUN__` with an `actuaria:run` event, as install.rs does for its dialog. The page looks the
-//! name up in the catalogue it already has, opens New run with it picked, and answers `/__actuaria/run-link?do=taken`
-//! so the next link may come. Nothing here starts a run, changes a setting or fetches anything; the page can't
+//! name up in the catalogue it already has, opens New run with it picked, and once New run has applied it (or said why not)
+//! answers `/__actuaria/run-link?do=taken`, so the next link may come. Nothing here starts a run, changes a setting or fetches anything; the page can't
 //! make a run link of its own either: it only takes the one the OS handed over.
 
 use actuaria_install::rate::Gate;
@@ -73,9 +73,12 @@ pub fn on_link(app: &AppHandle, raw: &str) {
         let mut i = st.0.lock().unwrap();
         let now = Instant::now();
         i.gate.expire(now, PENDING_TTL);
-        if !i.gate.try_open(now) {
+        let budget = app.state::<crate::LinkBudget>();
+        let mut budget = budget.0.lock().unwrap();
+        if !i.gate.try_open(&mut budget, now) {
             return;
         }
+        drop(budget);
         i.seq += 1;
         let nonce = nonce(i.seq);
         i.view = match run::parse(raw) {
@@ -98,7 +101,12 @@ pub fn on_link(app: &AppHandle, raw: &str) {
     push(app);
 }
 
-/// `/__actuaria/run-link?do=taken&nonce=..` from the page: it has applied the link (or shown why not).
+/// Whether a link waits for the page.
+pub fn waiting(app: &AppHandle) -> bool {
+    app.state::<RunLinks>().0.lock().unwrap().view.state != "none"
+}
+
+/// `/__actuaria/run-link?do=taken&nonce=..` from New run: it has applied the link (or shown why not).
 pub fn action(app: &AppHandle, what: &str, nonce: Option<String>) {
     {
         let st = app.state::<RunLinks>();

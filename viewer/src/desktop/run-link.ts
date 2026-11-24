@@ -48,15 +48,23 @@ let pending: RunRequest | null = null;
 const subscribers = new Set<() => void>();
 const notify = () => subscribers.forEach((f) => f());
 
+// Tells the app a link was applied, so the next may come (RunLink.tsx sets it to the native route).
+let onTaken: (nonce: string) => void = () => {};
+export function whenTaken(f: (nonce: string) => void) {
+  onTaken = f;
+}
+
 export function offer(r: RunRequest) {
   pending = r;
   notify();
 }
 
-/** New run has applied the request (or shown why it couldn't). */
+/** New run has applied the request (or shown why it couldn't): only now is the app told it was taken. */
 export function settle() {
+  const done = pending;
   pending = null;
   notify();
+  if (done) onTaken(done.nonce);
 }
 
 export function useRunRequest(): RunRequest | null {

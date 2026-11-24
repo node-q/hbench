@@ -455,8 +455,12 @@ accepted only in exactly this form: at most 105 bytes of printable ASCII, no oth
 port, fragment or percent-encoding, and no parameter but one `target`. Anything else shows "This link is not
 valid". The link never carries a host, URL or digest. The OS hands it over as `<app> -- <link>` (Windows and Linux
 register that form at each start, and their installers register nothing; macOS uses an Apple event), and a second launch passes it to the running app,
-which parses it. One install dialog is open at a time (a link that arrives while one is open is dropped), and at
-most 5 open in a minute.
+which parses it. Before parsing, every OS normalises the link as a URL parser does, because that is the form macOS
+hands over: the scheme lowercased (`ACTUARIA:` → `actuaria:`), `.` and `..` path segments resolved, tabs, newlines
+and leading or trailing spaces removed, and non-ASCII percent-encoded (so refused). The host and path keep their
+case. The exact form above is then checked on the normalised link. One install dialog is open at a time (a link
+that arrives while one is open is dropped), and at most 5 `actuaria:` links are acted on in a minute, install and
+run links together.
 
 **What Essentials checks.**
 1. It fetches `https://market.actuaria.io/bots/index.json` (HTTPS, no redirects, at most 64 KB):
@@ -499,25 +503,31 @@ actuaria://run/actuaria/<dataset>?version=<x.y.z>
 **The link.** `<dataset>` is the test set's name in the dataset index: lowercase letters, digits, `.`, `_` and `-`,
 1 to 64 bytes, starting and ending with a letter or digit, and no `..`. The publisher is always `actuaria`. The
 version is two or three numbers of 1 to 6 digits each, separated by dots; without it, the newest version is picked.
-As with install links, the link is accepted only in exactly this form: at most 117 bytes of printable ASCII, no other
-host or path, no user info, port, fragment or percent-encoding, and no parameter but one `version`. Anything else
+As with install links, the link is normalised first (on every OS, as macOS does; see "Install links") and is then
+accepted only in exactly this form: at most 117 bytes of printable ASCII, no other host or path, no user info, port,
+fragment or percent-encoding, and no parameter but one `version`. Anything else
 shows "This link is not valid: …" on New run. The same `actuaria:` handler receives both kinds of link (nothing in
 the macOS Info.plist, the Linux `.desktop` file or the Windows registry filters by path), and the app sends a link
 that starts with `actuaria://run/` here, anything else to the install dialog.
 
-**What Essentials does.** It brings its window forward, opens New run (opening the default folder, `~/Actuaria`,
-first if no folder is open), and looks the name up in the catalogue New run already loads (the dataset index above).
+**What Essentials does.** It brings its window forward, opens New run, and looks the name up in the catalogue New run already loads (the dataset index above).
 If the test set is there, it is picked at the link's version, the domain's list is shown with its card selected and
 scrolled into view, and a line says "Opened from the Marketplace: <name> <version>". If it isn't, the line says
 "<name> isn't in the catalogue. Update the app or open the Marketplace." Agents, the environment and the job's
 settings stay as they were (picking the test set already picked keeps its task filters). It never starts a run and
 never downloads anything by itself: the user still chooses the agent and presses Run. Nothing in the link is fetched.
 
-**Limits.** One run link at a time: a link that arrives while the last one hasn't reached New run yet is dropped
-(after 2 minutes the waiting one gives way), and at most 5 run links in a minute; install links keep their own,
-equal, limits. A link that arrives before the window has loaded waits, and is applied once New run can show it.
-The page can't make a run link itself: it only answers `/__actuaria/run-link?do=taken` for the one the app handed
-it, so the next can come.
+If no folder is open (the one opened at start failed), the link opens the default folder, `~/Actuaria`, without
+saving it: the folder Essentials reopens at the next start and Open Recent stay as they were. Folder opens run one at
+a time, and the link's open does nothing if a folder is open by its turn, so it never replaces a folder the user
+picked. While the folder opened at start is still loading, the link waits for it.
+
+**Limits.** One run link at a time: a link that arrives while the last one hasn't been applied yet is dropped
+(after 2 minutes the waiting one gives way), and at most 5 `actuaria:` links in a minute, install and run links
+together; a link dropped because one of its kind is waiting doesn't count. A link that arrives before the window
+has loaded waits, and is applied once New run can show it. The page can't make a run link itself: once New run has
+applied the link the app handed it (or shown why it couldn't), it answers `/__actuaria/run-link?do=taken` with
+that link's nonce, and only then can the next run link come.
 
 ## Development
 

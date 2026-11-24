@@ -82,22 +82,20 @@ export default function Run() {
   const [reveal, setReveal] = useState<string | null>(null);
   useEffect(() => {
     if (!request) return;
+    // Each way out shows its outcome first, then settles: only then is the app told the link was taken.
     if ("error" in request) {
-      settle();
       setNotice({ ok: false, text: request.error });
-      return;
+      return settle();
     }
     if (!catalog.data) {
       if (!catalog.error) return;
-      settle();
       setNotice({ ok: false, text: `The catalogue didn't load, so ${request.dataset} wasn't picked. Open the link again.` });
-      return;
+      return settle();
     }
-    settle();
     const r = resolve(catalog.data, request.dataset, request.version);
     if ("error" in r) {
       setNotice({ ok: false, text: r.error });
-      return;
+      return settle();
     }
     setDraft(pickFromLink(draft, r.entry, r.version, entry));
     setSubmitted(false);
@@ -105,6 +103,7 @@ export default function Run() {
     setNotice({ ok: true, text: openedNotice(r.entry, r.version) });
     setReveal(r.entry.name);
     navigate(domainHref(r.entry.domain));
+    settle();
   }, [request, catalog.data, catalog.error, draft, entry, setDraft, navigate]);
   // Once its card is drawn, bring the picked set into view and give it focus.
   useEffect(() => {
