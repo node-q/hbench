@@ -88,7 +88,9 @@ pub fn start(folder: &Path, env: &HashMap<String, String>, log: &Path) -> Result
     if let Some(dir) = log.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
-    let out = File::create(log).map_err(|e| format!("creating {}: {e}", log.display()))?;
+    File::create(log).map_err(|e| format!("creating {}: {e}", log.display()))?;
+    // Appending, so the lines the app adds (crate::app_log) and the server's output don't overwrite each other.
+    let out = std::fs::OpenOptions::new().append(true).open(log).map_err(|e| format!("opening {}: {e}", log.display()))?;
     let err = out.try_clone().map_err(|e| e.to_string())?;
     let mut cmd = command(&bin);
     cmd.arg("view").arg(folder).args(["--port", &port.to_string(), "--host", "127.0.0.1"]);

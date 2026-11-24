@@ -502,8 +502,13 @@ fn dataset_indexes_are_checked_entry_by_entry() {
     assert!(refused(index(serde_json::json!([{"name": "x", "version": "1.0", "digest": "sha256:12"}]))).contains("not a sha256 digest"));
     let twice = serde_json::json!([{"name": "x", "version": "1.0", "digest": digest}, {"name": "x", "version": "1.0", "digest": digest}]);
     assert!(refused(index(twice)).contains("lists x@1.0 twice"));
-    assert!(
-        refused(index(serde_json::json!([{"name": "x", "version": "1.0", "digest": digest, "extra": 1}]))).contains("not a dataset index")
+    // Fields this version doesn't know are ignored; the ones a catalog shows are read when there.
+    let richer = serde_json::json!({"schema_version": 1, "later": true, "datasets": [
+        {"name": "x", "version": "1.0", "digest": digest, "domain": "Finance", "n_tasks": 3, "extra": 1}]});
+    let parsed = format::parse_dataset_index(&serde_json::to_vec(&richer).unwrap()).unwrap();
+    assert_eq!(
+        (parsed.datasets[0].domain.as_deref(), parsed.datasets[0].n_tasks, parsed.datasets[0].license.as_deref()),
+        (Some("Finance"), Some(3), None)
     );
 }
 

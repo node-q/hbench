@@ -3,72 +3,181 @@
     "id": "coding",
     "title": "Coding",
     "description": "Resolve GitHub issues, work in a terminal, and write, fix and reason about code.",
-    "datasets": ["swebench*", "terminal-bench*", "humaneval*", "mbpp*", "cruxeval*"]
+    "datasets": [
+      "swebench*",
+      "terminal-bench*",
+      "humaneval*",
+      "mbpp*",
+      "cruxeval*",
+      "bigcodebench*",
+      "exercism*",
+      "multi-swe-bench*"
+    ],
+    "listing_domains": [
+      "Coding",
+      "Software engineering",
+      "Terminal work"
+    ]
   },
   {
     "id": "data-analysis",
     "title": "Data analysis",
     "description": "Query, clean and model data, and report what it shows.",
-    "datasets": ["data-analysis*"]
+    "datasets": [
+      "data-analysis*",
+      "noaa-storm-events*",
+      "usgs-earthquakes*"
+    ],
+    "listing_domains": [
+      "Data analysis",
+      "Natural hazards"
+    ]
   },
   {
     "id": "finance",
     "title": "Finance",
     "description": "Read filings, build models, and close the books.",
-    "datasets": ["finance*"]
+    "datasets": [
+      "finance*",
+      "escrow-accounts*",
+      "fdic-banking*",
+      "federal-grants*",
+      "irs-inflation-adjustments*",
+      "treasury-auctions*"
+    ],
+    "listing_domains": [
+      "Finance",
+      "Banking",
+      "Tax"
+    ]
   },
   {
     "id": "legal",
     "title": "Legal",
     "description": "Review contracts, research the law, and draft.",
-    "datasets": ["legal*"]
+    "datasets": [
+      "legal*",
+      "flsa-overtime*",
+      "fmla-leave*",
+      "osha-recordkeeping*",
+      "flight-duty*",
+      "hours-of-service*"
+    ],
+    "listing_domains": [
+      "Legal",
+      "Employment law",
+      "Transport"
+    ]
   },
   {
     "id": "healthcare",
     "title": "Healthcare",
     "description": "Clinical reasoning, coding and documentation.",
-    "datasets": ["healthcare*"]
+    "datasets": [
+      "healthcare*",
+      "hipaa-breach*",
+      "icd10cm-coding*",
+      "food-labeling*"
+    ],
+    "listing_domains": [
+      "Healthcare",
+      "Health compliance"
+    ]
   },
   {
     "id": "customer-support",
     "title": "Customer support",
     "description": "Resolve customer requests with the right tools and policies.",
-    "datasets": ["customer-support*"]
+    "datasets": [
+      "customer-support*",
+      "air-passenger-rights*"
+    ],
+    "listing_domains": [
+      "Customer support"
+    ]
   },
   {
     "id": "security",
     "title": "Security",
     "description": "Find, exploit and fix vulnerabilities.",
-    "datasets": ["security*"]
+    "datasets": [
+      "security*",
+      "nist-800-53*"
+    ],
+    "listing_domains": [
+      "Security",
+      "Security compliance"
+    ]
   },
   {
     "id": "research",
     "title": "Research",
     "description": "Find sources, read them, and answer hard questions.",
-    "datasets": ["research*"]
+    "datasets": [
+      "research*"
+    ],
+    "listing_domains": [
+      "Research"
+    ]
   },
   {
     "id": "computer-use",
     "title": "Computer use",
     "description": "Operate browsers and desktop apps to get office work done.",
-    "datasets": ["computer-use*"]
+    "datasets": [
+      "computer-use*"
+    ],
+    "listing_domains": [
+      "Computer use"
+    ]
   },
   {
     "id": "underwriting",
     "title": "Underwriting",
     "description": "Assess submissions and risks, apply guidelines, and decide terms.",
-    "datasets": ["underwriting*"]
+    "datasets": [
+      "underwriting*",
+      "aca-*",
+      "cp-oh*",
+      "eo-oh*",
+      "farm-oh*",
+      "gl-oh*",
+      "medicare-oh*",
+      "medmal-oh*",
+      "personal-auto-oh*",
+      "pet-oh*",
+      "surety-oh*",
+      "title-oh*"
+    ],
+    "listing_domains": [
+      "Underwriting",
+      "Insurance"
+    ]
   },
   {
     "id": "claims",
     "title": "Claims",
     "description": "Triage, investigate and settle claims against policy wording.",
-    "datasets": ["claims*"]
+    "datasets": [
+      "claims*",
+      "nfip-*"
+    ],
+    "listing_domains": [
+      "Claims"
+    ]
   },
   {
     "id": "actuarial",
     "title": "Actuarial",
     "description": "Pricing, reserving and capital work on real portfolios.",
-    "datasets": ["actuarial*"]
+    "datasets": [
+      "actuarial*",
+      "ratemaking-*",
+      "us-life-tables*",
+      "medsupp-oh*"
+    ],
+    "listing_domains": [
+      "Actuarial"
+    ]
   }
 ]

@@ -252,6 +252,16 @@ impl Store {
         Ok(body.to_vec())
     }
 
+    /// The manifest or blob with `digest` (at most `max` bytes) if the layout or the blob cache holds it, checked
+    /// against its digest; never fetched.
+    pub fn cached(&self, digest: &str, max: u64) -> Option<Vec<u8>> {
+        let path = match self {
+            Store::Layout { .. } => return None,
+            Store::Registry { blobs, .. } => blobs.join(hex(digest).ok()?),
+        };
+        read_limited(&path, max).ok().filter(|bytes| sha256_digest(bytes) == digest)
+    }
+
     /// A small blob (at most `max` bytes) as bytes, checked against its digest and size.
     pub async fn blob_bytes(&self, repository: &str, digest: &str, size: u64, max: u64) -> Result<Vec<u8>> {
         if size > max {

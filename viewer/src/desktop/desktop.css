@@ -978,7 +978,8 @@ button.dk-status__item:focus-visible {
   box-shadow: var(--shadow-pop);
   animation: dk-update-in 220ms var(--ease-out);
 }
-.dk-install[data-state="error"] .dk-update__icon {
+.dk-install[data-state="error"] .dk-update__icon,
+.dk-install[data-alert="true"] .dk-update__icon {
   background: var(--color-bad-wash);
   color: var(--color-bad);
 }

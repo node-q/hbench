@@ -1,17 +1,15 @@
-//! The catalogue (`index.json` on market.actuaria.io) and `bots.lock` (in node-q/hbench). A bot is offered only
-//! for the targets whose artefact is valid in the catalogue and whose id, version, target and SHA-256 are also
-//! in `bots.lock`. Any invalid entry for the bot refuses the bot.
+//! The catalogue (`index.json` on market.actuaria.io), and the one place it is checked: `lookup`. It is the only
+//! source of trust for which file is installed (docs/REFERENCE.md, "Install links"). Any invalid entry for the bot
+//! refuses the bot.
 
 use crate::link::{Target, valid_bot_id};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 use std::fmt;
 use url::Url;
 
 pub const INDEX_URL: &str = "https://market.actuaria.io/bots/index.json";
-pub const LOCK_URL: &str = "https://raw.githubusercontent.com/node-q/hbench/master/bots.lock";
 pub const MAX_INDEX_BYTES: usize = 64 * 1024;
-pub const MAX_LOCK_BYTES: usize = 64 * 1024;
 pub const MAX_ARTEFACT_BYTES: u64 = 5 * 1024 * 1024;
 pub const DOWNLOAD_HOST: &str = "market.actuaria.io";
 const DOWNLOAD_PATH: &str = "/downloads/";
@@ -24,9 +22,6 @@ pub enum CatalogueError {
     BadIndex(String),
     NotListed,
     BadEntry(String),
-    BadLock(usize),
-    LockUnavailable,
-    NotLocked,
 }
 
 impl fmt::Display for CatalogueError {
@@ -35,9 +30,6 @@ impl fmt::Display for CatalogueError {
             CatalogueError::BadIndex(e) => write!(f, "the catalogue couldn't be read ({e})"),
             CatalogueError::NotListed => f.write_str("this bot isn't in the catalogue"),
             CatalogueError::BadEntry(e) => write!(f, "the catalogue's entry for this bot isn't valid ({e})"),
-            CatalogueError::BadLock(line) => write!(f, "bots.lock isn't valid (line {line})"),
-            CatalogueError::LockUnavailable => f.write_str("bots.lock couldn't be fetched, so nothing can be installed now"),
-            CatalogueError::NotLocked => f.write_str("this version isn't in bots.lock, so it can't be installed"),
         }
     }
 }
@@ -70,7 +62,7 @@ pub struct Artefact {
     pub size: u64,
 }
 
-/// A bot the user may install, already checked against the catalogue's rules and `bots.lock`.
+/// A bot the user may install, already checked against the catalogue's rules.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Offer {
     pub id: String,
@@ -78,38 +70,6 @@ pub struct Offer {
     pub version: String,
     pub description: String,
     pub artefacts: BTreeMap<Target, Artefact>,
-}
-
-/// `bots.lock`: one line per artefact, `actuaria/<id> <version> <target> sha256:<hex>`; `#` comments and blank
-/// lines are ignored. Any other line makes the whole file invalid.
-#[derive(Debug, Default)]
-pub struct Lock(HashSet<(String, String, Target, String)>);
-
-impl Lock {
-    pub fn parse(text: &str) -> Result<Lock, CatalogueError> {
-        let mut set = HashSet::new();
-        for (n, line) in text.lines().enumerate() {
-            let line = line.trim();
-            if line.is_empty() || line.starts_with('#') {
-                continue;
-            }
-            let bad = || CatalogueError::BadLock(n + 1);
-            let f: Vec<&str> = line.split_ascii_whitespace().collect();
-            let [name, version, target, digest] = f[..] else { return Err(bad()) };
-            let id = name.strip_prefix("actuaria/").filter(|id| valid_bot_id(id)).ok_or_else(bad)?;
-            let target = Target::from_name(target).ok_or_else(bad)?;
-            let hex = digest.strip_prefix("sha256:").filter(|h| valid_sha256(h)).ok_or_else(bad)?;
-            if !valid_version(version) {
-                return Err(bad());
-            }
-            set.insert((id.to_string(), version.to_string(), target, hex.to_string()));
-        }
-        Ok(Lock(set))
-    }
-
-    pub fn contains(&self, id: &str, version: &str, target: Target, sha256: &str) -> bool {
-        self.0.contains(&(id.to_string(), version.to_string(), target, sha256.to_string()))
-    }
 }
 
 pub fn valid_sha256(s: &str) -> bool {
@@ -174,9 +134,8 @@ pub fn plain_text(s: &str, max: usize) -> String {
     }
 }
 
-/// Look `id` up in the catalogue and check it against `bots.lock`. With no lock (it couldn't be fetched),
-/// nothing is offered.
-pub fn lookup(index_json: &[u8], lock: Option<&Lock>, id: &str) -> Result<Offer, CatalogueError> {
+/// Look `id` up in the catalogue and check its entry. Every check of the catalogue is here.
+pub fn lookup(index_json: &[u8], id: &str) -> Result<Offer, CatalogueError> {
     if index_json.len() > MAX_INDEX_BYTES {
         return Err(CatalogueError::BadIndex("too large".into()));
     }
@@ -198,7 +157,7 @@ pub fn lookup(index_json: &[u8], lock: Option<&Lock>, id: &str) -> Result<Offer,
         return Err(bad("name"));
     }
     let description = plain_text(&bot.description, MAX_DESCRIPTION_CHARS);
-    let mut listed = BTreeMap::new();
+    let mut artefacts = BTreeMap::new();
     for (t, a) in [(Target::Claude, bot.targets.claude), (Target::Orca, bot.targets.orca)] {
         let Some(a) = a else { continue };
         if !valid_download_url(&a.url, t) {
@@ -210,16 +169,10 @@ pub fn lookup(index_json: &[u8], lock: Option<&Lock>, id: &str) -> Result<Offer,
         if a.size == 0 || a.size > MAX_ARTEFACT_BYTES {
             return Err(bad("artefact size"));
         }
-        listed.insert(t, a);
+        artefacts.insert(t, a);
     }
-    if listed.is_empty() {
-        return Err(bad("no artefacts"));
-    }
-    let lock = lock.ok_or(CatalogueError::LockUnavailable)?;
-    let artefacts: BTreeMap<Target, Artefact> =
-        listed.into_iter().filter(|(t, a)| lock.contains(&bot.id, &bot.version, *t, &a.sha256)).collect();
     if artefacts.is_empty() {
-        return Err(CatalogueError::NotLocked);
+        return Err(bad("no artefacts"));
     }
     Ok(Offer { id: bot.id, name, version: bot.version, description, artefacts })
 }
@@ -240,41 +193,20 @@ mod tests {
     }
     const GOOD_URL: &str = "https://market.actuaria.io/downloads/prompt-slim-0.1.0.mcpb";
 
-    fn lock() -> Lock {
-        Lock::parse(&format!(
-            "# bots.lock\n\nactuaria/prompt-slim 0.1.0 claude sha256:{SHA_A}\nactuaria/prompt-slim 0.1.0 orca sha256:{SHA_B}\n"
-        ))
-        .unwrap()
-    }
-
     #[test]
-    fn offers_locked_targets() {
-        let o = lookup(index(GOOD_URL, "").as_bytes(), Some(&lock()), "prompt-slim").unwrap();
+    fn offers_listed_targets() {
+        let i = index(GOOD_URL, "");
+        let o = lookup(i.as_bytes(), "prompt-slim").unwrap();
         assert_eq!(o.version, "0.1.0");
         assert_eq!(o.artefacts.keys().copied().collect::<Vec<_>>(), vec![Target::Claude, Target::Orca]);
-        // Only the claude line locked: only claude offered.
-        let l = Lock::parse(&format!("actuaria/prompt-slim 0.1.0 claude sha256:{SHA_A}")).unwrap();
-        let o = lookup(index(GOOD_URL, "").as_bytes(), Some(&l), "prompt-slim").unwrap();
-        assert_eq!(o.artefacts.keys().copied().collect::<Vec<_>>(), vec![Target::Claude]);
-    }
-
-    #[test]
-    fn refuses_without_or_outside_the_lock() {
-        let i = index(GOOD_URL, "");
-        assert_eq!(lookup(i.as_bytes(), None, "prompt-slim"), Err(CatalogueError::LockUnavailable));
-        assert_eq!(lookup(i.as_bytes(), Some(&Lock::default()), "prompt-slim"), Err(CatalogueError::NotLocked));
-        // Same digest, other version: not locked.
-        let l = Lock::parse(&format!("actuaria/prompt-slim 0.1.1 claude sha256:{SHA_A}")).unwrap();
-        assert_eq!(lookup(i.as_bytes(), Some(&l), "prompt-slim"), Err(CatalogueError::NotLocked));
-        // Same version, other target.
-        let l = Lock::parse(&format!("actuaria/prompt-slim 0.1.0 orca sha256:{SHA_A}")).unwrap();
-        assert_eq!(lookup(i.as_bytes(), Some(&l), "prompt-slim"), Err(CatalogueError::NotLocked));
-        assert_eq!(lookup(i.as_bytes(), Some(&lock()), "other"), Err(CatalogueError::NotListed));
+        assert_eq!(o.artefacts[&Target::Claude].sha256, SHA_A);
+        assert_eq!(lookup(i.as_bytes(), "other"), Err(CatalogueError::NotListed));
+        let none = r#"{"bots":[{"id":"b","name":"B","version":"1.0.0","description":"","targets":{}}]}"#;
+        assert!(matches!(lookup(none.as_bytes(), "b"), Err(CatalogueError::BadEntry(_))));
     }
 
     #[test]
     fn refuses_bad_index() {
-        let l = lock();
         for url in [
             "http://market.actuaria.io/downloads/x.mcpb",
             "https://market.actuaria.io.evil.com/downloads/x.mcpb",
@@ -290,19 +222,19 @@ mod tests {
             "https://MARKET.actuaria.io/downloads/x.mcpb",
             "https://market.actuaria.io/downloads/x.exe",
         ] {
-            assert!(matches!(lookup(index(url, "").as_bytes(), Some(&l), "prompt-slim"), Err(CatalogueError::BadEntry(_))), "{url}");
+            assert!(matches!(lookup(index(url, "").as_bytes(), "prompt-slim"), Err(CatalogueError::BadEntry(_))), "{url}");
         }
         let dup = index(GOOD_URL, r#",{"id":"prompt-slim","name":"x","version":"9.9.9","description":"","targets":{}}"#);
-        assert!(matches!(lookup(dup.as_bytes(), Some(&l), "prompt-slim"), Err(CatalogueError::BadEntry(_))));
+        assert!(matches!(lookup(dup.as_bytes(), "prompt-slim"), Err(CatalogueError::BadEntry(_))));
         let big = vec![b' '; MAX_INDEX_BYTES + 1];
-        assert!(matches!(lookup(&big, Some(&l), "prompt-slim"), Err(CatalogueError::BadIndex(_))));
-        assert!(matches!(lookup(b"[]", Some(&l), "prompt-slim"), Err(CatalogueError::BadIndex(_))));
+        assert!(matches!(lookup(&big, "prompt-slim"), Err(CatalogueError::BadIndex(_))));
+        assert!(matches!(lookup(b"[]", "prompt-slim"), Err(CatalogueError::BadIndex(_))));
         let i = index(GOOD_URL, "").replace("398242", "6000000");
-        assert!(matches!(lookup(i.as_bytes(), Some(&l), "prompt-slim"), Err(CatalogueError::BadEntry(_))));
+        assert!(matches!(lookup(i.as_bytes(), "prompt-slim"), Err(CatalogueError::BadEntry(_))));
         let i = index(GOOD_URL, "").replace("\"0.1.0\"", "\"latest\"");
-        assert!(matches!(lookup(i.as_bytes(), Some(&l), "prompt-slim"), Err(CatalogueError::BadEntry(_))));
+        assert!(matches!(lookup(i.as_bytes(), "prompt-slim"), Err(CatalogueError::BadEntry(_))));
         let i = index(GOOD_URL, "").replace(SHA_A, &SHA_A.to_uppercase());
-        assert!(matches!(lookup(i.as_bytes(), Some(&l), "prompt-slim"), Err(CatalogueError::BadEntry(_))));
+        assert!(matches!(lookup(i.as_bytes(), "prompt-slim"), Err(CatalogueError::BadEntry(_))));
     }
 
     #[test]
@@ -310,27 +242,10 @@ mod tests {
         let i = index(GOOD_URL, "")
             .replace("Prompt Slim", "Prompt\\u202e Slim\\u0007 <b>x</b>")
             .replace("Slims prompts.", &"long ".repeat(200));
-        let o = lookup(i.as_bytes(), Some(&lock()), "prompt-slim").unwrap();
+        let o = lookup(i.as_bytes(), "prompt-slim").unwrap();
         assert_eq!(o.name, "Prompt Slim <b>x</b>");
         assert_eq!(o.description.chars().count(), MAX_DESCRIPTION_CHARS);
         assert!(o.description.ends_with('…'));
-    }
-
-    #[test]
-    fn lock_parsing() {
-        assert!(Lock::parse("# only a header\n\n").is_ok());
-        for bad in [
-            "actuaria/prompt-slim 0.1.0 claude",
-            format!("acme/prompt-slim 0.1.0 claude sha256:{SHA_A}").as_str(),
-            format!("actuaria/prompt-slim 0.1.0 vscode sha256:{SHA_A}").as_str(),
-            format!("actuaria/prompt-slim 0.1.0 claude sha512:{SHA_A}").as_str(),
-            "actuaria/prompt-slim 0.1.0 claude sha256:abc",
-            format!("actuaria/prompt-slim v0.1.0 claude sha256:{SHA_A}").as_str(),
-            format!("actuaria/prompt-slim 0.1.0 claude sha256:{SHA_A} extra").as_str(),
-            "<html>captive portal</html>",
-        ] {
-            assert!(Lock::parse(bad).is_err(), "{bad}");
-        }
     }
 
     #[test]

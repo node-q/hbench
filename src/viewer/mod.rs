@@ -60,12 +60,21 @@ pub struct App {
     /// request gives, so they must not be reachable from the network.
     bound_to_loopback: bool,
     runs: Mutex<HashMap<String, LaunchedRun>>,
-    /// The dataset catalog as last listed.
+    /// The dataset index as last read.
     catalog_cache: Mutex<Option<catalog::Listed>>,
+    /// The catalog details of each dataset opened this session, by manifest digest.
+    catalog_details: Mutex<HashMap<String, serde_json::Value>>,
 }
 
 impl App {
     pub fn new(folder: PathBuf, mode: Mode, bound_to_loopback: bool) -> App {
-        App { folder, mode, bound_to_loopback, runs: Mutex::new(HashMap::new()), catalog_cache: Mutex::new(None) }
+        App {
+            folder,
+            mode,
+            bound_to_loopback,
+            runs: Mutex::new(HashMap::new()),
+            catalog_cache: Mutex::new(None),
+            catalog_details: Mutex::new(HashMap::new()),
+        }
     }
 }

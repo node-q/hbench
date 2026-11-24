@@ -214,3 +214,65 @@ a.cat-tile:active {
     transition: none;
   }
 }
+
+/* Loading: bars in the shape of what is coming, so nothing moves when it arrives. A slow sweep, still when motion
+   is reduced. */
+.cat-tile--skeleton,
+.cat-card--skeleton {
+  cursor: default;
+}
+.cat-tile--skeleton {
+  border-color: var(--color-rule);
+}
+.cat-card--skeleton {
+  min-height: 8.5rem;
+}
+.cat-skel {
+  display: block;
+  height: 0.75em;
+  max-width: 100%;
+  border-radius: var(--radius-sm);
+  background: linear-gradient(90deg, var(--color-paper-3) 0%, var(--color-paper-2) 50%, var(--color-paper-3) 100%) 0 0 / 200% 100%;
+  animation: cat-shimmer 1.6s var(--ease-in-out) infinite;
+}
+.cat-card__head .cat-skel:last-child {
+  margin-left: auto;
+}
+/* One bar per line of text, at the text's line height. */
+.cat-skel__lines {
+  display: grid;
+  align-content: start;
+  gap: calc(1.45em - 0.8em);
+  padding-top: 0.32em;
+  font-size: var(--text-sm);
+}
+.cat-skel__lines .cat-skel {
+  height: 0.8em;
+}
+@keyframes cat-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -100% 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cat-skel {
+    animation: none !important;
+  }
+}
+
+/* A card whose details didn't load: its own note and Retry. */
+.cat-card--failed {
+  cursor: default;
+}
+.cat-card__err {
+  color: var(--color-ink-2);
+}
+.cat-card__err .mono {
+  display: block;
+  margin-top: var(--space-3xs);
+  color: var(--color-muted);
+  font-size: var(--text-xs);
+}
