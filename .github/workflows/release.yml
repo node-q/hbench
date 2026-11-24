@@ -8,7 +8,8 @@ name: Release build
 # Each build job builds one binary on a GitHub-hosted runner, with no secrets and a read-only
 # token, and attests its archive's build provenance. The ci job waits for ci.yml's run on the
 # tagged commit, so only a commit that passed CI on master is released. Only the publish job
-# can write: it attests install.sh and SHA256SUMS and creates this repo's release, with the tagged
+# can write (besides beta-feed, to the beta channel's release, and report, to issues only): it attests
+# install.sh and SHA256SUMS and creates this repo's release, with the tagged
 # commit's scripts/install.sh beside the archives, so `curl -fsSL https://github.com/node-q/hbench/releases/latest/download/install.sh | sh` installs the latest release.
 #
 # Windows gets hbench.exe in a .zip (build-windows) and the app's installer (desktop-windows). Both
@@ -88,6 +89,8 @@ jobs:
   build:
     name: Build (${{ matrix.target }})
     strategy:
+      # Publish still needs every target; one that fails just doesn't cancel the others.
+      fail-fast: false
       matrix:
         include:
           - target: x86_64-unknown-linux-musl
@@ -146,6 +149,19 @@ jobs:
           cp "target/$TARGET/release/hbench" README.md LICENSE "dist/$name/"
           tar -C dist -czf "dist/$name.tar.gz" "$name"
       - name: Attest build provenance
+        id: attest
+        timeout-minutes: 5  # a hung Sigstore call fails, and is retried
+        # Sigstore's log fails now and then, so it gets one retry, which is the one that can fail the job. If the first
+        # try did store its attestation, the file has two: both are valid and `gh attestation verify` takes either.
+        continue-on-error: true
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/*.tar.gz
+      - name: Wait before attesting again
+        if: steps.attest.outcome == 'failure'
+        run: sleep 30
+      - name: Attest build provenance (retry)
+        if: steps.attest.outcome == 'failure'
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: dist/*.tar.gz
@@ -576,8 +592,24 @@ jobs:
           [ -f latest.json ] || echo "::warning::latest.json is missing: installed apps will not be offered this release"
           # *.tar.gz would list the macOS update payloads twice.
           archives=(hbench-*.tar.gz)
+          # The 2 Linux and 2 macOS targets install.sh serves: never release without one (an expired artifact, say).
+          [ "${#archives[@]}" -eq 4 ] || { echo "::error::expected 4 hbench archives, found ${#archives[@]} (${archives[*]})"; exit 1; }
           sha256sum -- "${archives[@]}" "${zips[@]}" "${apps[@]}" "${updates[@]}" install.sh | tee SHA256SUMS
       - name: Attest install.sh and SHA256SUMS
+        id: attest
+        timeout-minutes: 5  # a hung Sigstore call fails, and is retried
+        # One retry, as in the build job.
+        continue-on-error: true
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            dist/install.sh
+            dist/SHA256SUMS
+      - name: Wait before attesting again
+        if: steps.attest.outcome == 'failure'
+        run: sleep 30
+      - name: Attest install.sh and SHA256SUMS (retry)
+        if: steps.attest.outcome == 'failure'
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: |
@@ -648,3 +680,40 @@ jobs:
         run: |
           [ -f dist/latest.json ] || { echo "::warning::no latest.json: the beta channel is unchanged"; exit 0; }
           bash src/scripts/beta-feed.sh update dist/latest.json "$GITHUB_REF_NAME"
+
+  report:
+    # A tag whose build failed has no release, and nothing else says so. This opens one issue per tag, comments on it
+    # when a re-run fails too, and closes it once the release is out.
+    name: Report a failed release
+    needs: publish
+    # Not for a cancelled run: someone stopped it, or it was a duplicate.
+    if: ${{ !cancelled() && startsWith(github.ref, 'refs/tags/v') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    # Failing to file or close the issue doesn't turn a published release's run red.
+    continue-on-error: true
+    permissions:
+      contents: read # see whether the release exists
+      issues: write
+    steps:
+      - name: Open, update or close the tag's issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PUBLISH: ${{ needs.publish.result }}
+          TITLE: Release ${{ github.ref_name }} failed
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}
+        run: |
+          # Only an issue this workflow's token opened: anyone can open one with the same title.
+          issues=$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues?state=open&creator=github-actions%5Bbot%5D&per_page=100" \
+            --jq '.[] | select(.title == env.TITLE and (has("pull_request") | not)) | .number')
+          issue=${issues%%$'\n'*}
+          # A duplicate run of a released tag fails to publish, but the release is there.
+          if [ "$PUBLISH" = success ] || gh api "repos/$GITHUB_REPOSITORY/releases/tags/$GITHUB_REF_NAME" --silent; then
+            [ -z "$issue" ] || gh issue close "$issue" -R "$GITHUB_REPOSITORY" --comment "Released: $RUN_URL"
+          elif [ -n "$issue" ]; then
+            gh issue comment "$issue" -R "$GITHUB_REPOSITORY" --body "Failed again (publish: $PUBLISH): $RUN_URL"
+          else
+            gh issue create -R "$GITHUB_REPOSITORY" --title "$TITLE" --body "The tag exists but its release was not published (publish: $PUBLISH): $RUN_URL
+
+          What to do: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/blob/master/docs/RELEASING.md#when-a-release-fails"
+          fi

@@ -42,6 +42,35 @@ desktop app's version files), merge that in a "Release X.Y.Z" pull request, then
 git tag -a vX.Y.Z -m "hbench vX.Y.Z" && git push origin vX.Y.Z
 ```
 
+## When a release fails
+
+A tag whose build fails has no release. The run's `report` job then opens an issue, **Release vX.Y.Z failed**, comments
+on it if a re-run fails too, and closes it once the release is out. A cancelled run reports nothing, and neither does
+one that is still waiting, say for a macOS runner.
+
+**If there is no release yet,** open its Release build run and use **Re-run all jobs** (GitHub allows it for 30 days).
+**Re-run failed jobs** can work too, and is how v0.4.0 came out, but a full re-run is the safe choice:
+
+- A failed-jobs re-run keeps the earlier attempts' artifacts; a full one starts with none. Names don't collide
+  (`dist-<target>`, `dist-desktop-<target>`, `dist-updater` and so on may each exist once per attempt), and a download
+  takes the newest. But if a job that uploaded something before fails this time, publish takes its older artifact.
+- `desktop-updater` is where that matters. It runs even when the builds failed, with whatever packages there are: in
+  v0.4.1's first attempt it succeeded with only the Windows installer. A failed-jobs re-run normally runs it again, as it
+  depends on the jobs that failed. If that second run fails, publish goes ahead anyway and the release ships the old
+  `latest.json`, which offers the update to Windows only; publish warns only when there is none.
+- Artifacts last 7 days. After that a failed-jobs re-run no longer has the archives of the builds that passed, and
+  publish refuses to release without all four.
+
+A re-run uses the workflow file of its tag. Tags cut before this section was written (v0.4.1 and earlier) have no retry
+and no `report` job.
+
+The re-run builds the files again, so they differ from the first attempt's. That is fine, as nothing was published; the
+first attempt's attestations stay, for files nobody has.
+
+**If the release is out but incomplete** (a desktop package or the Windows build is missing), no re-run adds to it:
+publish stops because the release exists. Ship the next patch version. Only the `beta-feed` job can be re-run alone
+(below).
+
 ## Beta releases
 
 Trunk-based: betas and stable releases are both tags on `master` commits; there is no beta or release branch.
