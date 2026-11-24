@@ -442,7 +442,7 @@ hbench jobs upload -p jobs/<job> --url https://example.com/api/uploads --token-e
 
 ## Install links
 
-Actuaria Studio Essentials (the desktop app) installs Actuaria bots from a link on the Market Place:
+Actuaria Studio Essentials (the desktop app) installs Actuaria bots from a link on the Marketplace:
 
 ```
 actuaria://install/actuaria/<bot-id>

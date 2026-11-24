@@ -169,7 +169,7 @@ export function InstallDialog() {
         </header>
         <div className="dk-install__body">{body}</div>
         {actions && <div className="dk-update__actions">{actions}</div>}
-        <p className="dk-install__foot">Essentials checks every download against the Market's catalogue before handing it over.</p>
+        <p className="dk-install__foot">Essentials checks every download against the Marketplace's catalogue before handing it over.</p>
       </section>
     </div>
   );
