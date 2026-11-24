@@ -123,10 +123,18 @@ pub fn parse(raw: &str) -> Result<Link, LinkError> {
 const MAX_NORMALISE_BYTES: usize = 1024;
 
 /// The link as a URL parser writes it, which is how macOS hands links over (the deep-link plugin passes
-/// `Url::as_str()`): the scheme lowercased (not the host: `actuaria:` isn't a scheme the parser knows), `.` and `..` path segments resolved, tabs, newlines and
-/// leading or trailing spaces removed, and non-ASCII percent-encoded. The app normalises every link this way on
-/// every OS before the strict parse, so a link is accepted, or refused, the same everywhere. A link the parser
-/// refuses is kept as it is, for the strict parse to refuse with its reason.
+/// `Url::as_str()`). The app normalises every link this way on every OS before the strict parse, so a link is
+/// accepted, or refused, the same everywhere. Normalising:
+/// - removes control characters (0x00 to 0x1f) and spaces at the start and end;
+/// - removes a tab, carriage return or newline anywhere;
+/// - lowercases the scheme (not the host: `actuaria:` isn't a scheme the parser knows);
+/// - resolves `.` and `..` path segments, percent-encoded ones (`%2e`, `%2E`) included, so
+///   `actuaria://run/actuaria/%2e%2e/actuaria/terminal-bench` becomes `actuaria://run/actuaria/terminal-bench`
+///   and is accepted;
+/// - percent-encodes non-ASCII and the other characters a URL can't hold as they are (DEL, for one).
+///
+/// The strict parse's "no `%`" applies to what is left: any other percent-encoding stays, and is refused. A link
+/// the parser refuses is kept as it is, for the strict parse to refuse with its reason.
 pub fn normalise(raw: &str) -> String {
     if raw.len() > MAX_NORMALISE_BYTES {
         return raw.to_string();

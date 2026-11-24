@@ -450,15 +450,23 @@ actuaria://install/actuaria/<bot-id>?target=claude
 actuaria://install/actuaria/<bot-id>?target=orca
 ```
 
-**The link.** `<bot-id>` matches `^[a-z][a-z0-9-]{0,62}$`, and the publisher is always `actuaria`. The link is
-accepted only in exactly this form: at most 105 bytes of printable ASCII, no other host or path, no user info,
-port, fragment or percent-encoding, and no parameter but one `target`. Anything else shows "This link is not
+**The link.** `<bot-id>` matches `^[a-z][a-z0-9-]{0,62}$`, and the publisher is always `actuaria`. The link, once
+normalised (below), is accepted only in exactly this form: at most 105 bytes of printable ASCII, no other host or
+path, no user info, port, fragment or remaining percent-encoding, and no parameter but one `target`. Anything else shows "This link is not
 valid". The link never carries a host, URL or digest. The OS hands it over as `<app> -- <link>` (Windows and Linux
 register that form at each start, and their installers register nothing; macOS uses an Apple event), and a second launch passes it to the running app,
 which parses it. Before parsing, every OS normalises the link as a URL parser does, because that is the form macOS
-hands over: the scheme lowercased (`ACTUARIA:` → `actuaria:`), `.` and `..` path segments resolved, tabs, newlines
-and leading or trailing spaces removed, and non-ASCII percent-encoded (so refused). The host and path keep their
-case. The exact form above is then checked on the normalised link. One install dialog is open at a time (a link
+hands over. All of this happens before the strict check:
+- control characters (0x00 to 0x1f) and spaces at the start and end are removed;
+- a tab, carriage return or newline anywhere is removed;
+- the scheme is lowercased (`ACTUARIA:` → `actuaria:`); the host and path keep their case;
+- `.` and `..` path segments are resolved, including percent-encoded ones (`%2e`, `%2E`): for example
+  `actuaria://run/actuaria/%2e%2e/actuaria/terminal-bench` becomes `actuaria://run/actuaria/terminal-bench` and is
+  accepted;
+- non-ASCII, and other characters a URL can't hold as they are (DEL, for one), are percent-encoded.
+
+The exact form above is then checked on the normalised link, so "no percent-encoding" applies to what is left after
+normalising: a `%` that remains, as any percent-encoding other than a dot segment does, is refused. One install dialog is open at a time (a link
 that arrives while one is open is dropped), and at most 5 `actuaria:` links are acted on in a minute, install and
 run links together.
 
@@ -503,9 +511,11 @@ actuaria://run/actuaria/<dataset>?version=<x.y.z>
 **The link.** `<dataset>` is the test set's name in the dataset index: lowercase letters, digits, `.`, `_` and `-`,
 1 to 64 bytes, starting and ending with a letter or digit, and no `..`. The publisher is always `actuaria`. The
 version is two or three numbers of 1 to 6 digits each, separated by dots; without it, the newest version is picked.
-As with install links, the link is normalised first (on every OS, as macOS does; see "Install links") and is then
-accepted only in exactly this form: at most 117 bytes of printable ASCII, no other host or path, no user info, port,
-fragment or percent-encoding, and no parameter but one `version`. Anything else
+As with install links, the link is normalised first (on every OS, as macOS does; see "Install links": control
+characters and spaces at the ends and tabs or newlines anywhere are removed, and `.`, `..`, `%2e` and `%2E` path
+segments are resolved), and the normalised link is then accepted only in exactly this form: at most 117 bytes of
+printable ASCII, no other host or path, no user info, port, fragment or remaining percent-encoding, and no parameter
+but one `version`. Anything else
 shows "This link is not valid: …" on New run. The same `actuaria:` handler receives both kinds of link (nothing in
 the macOS Info.plist, the Linux `.desktop` file or the Windows registry filters by path), and the app sends a link
 that starts with `actuaria://run/` here, anything else to the install dialog.
