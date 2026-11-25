@@ -3,7 +3,7 @@
 import { BATCH, IN_FLIGHT, detailsStore, type DetailsAnswer } from "./details";
 import type { CatalogDataset } from "../../lib/types";
 
-const ds = (name: string, details: CatalogDataset["details"] = null): CatalogDataset => ({ name, version: "1.0", versions: ["1.0"], domain: "legal", details });
+const ds = (name: string, details: CatalogDataset["details"] = null): CatalogDataset => ({ name, version: "1.0", versions: ["1.0"], domain: "law-compliance", details });
 const info = { description: "d", n_tasks: 3, license: "MIT", upstream_url: null, creator: null };
 const failed: string[] = [];
 const fail = (what: string) => void failed.push(what);

@@ -292,8 +292,8 @@ mod tests {
         let tiles: Vec<(&str, u64)> =
             c["domains"].as_array().unwrap().iter().map(|d| (d["id"].as_str().unwrap(), d["n_datasets"].as_u64().unwrap())).collect();
         // Tiles follow the vendored order, with Other last; only the domains that claim a dataset count any.
-        assert_eq!((tiles[0], tiles[tiles.len() - 1]), (("coding", 2), ("other", 1)));
-        assert!(tiles[1..tiles.len() - 1].iter().all(|t| t.1 == 0) && tiles.iter().any(|t| t.0 == "underwriting"));
+        assert_eq!((tiles[0], tiles[1], tiles[tiles.len() - 1]), (("insurance", 0), ("coding", 2), ("other", 1)));
+        assert!(tiles[2..tiles.len() - 1].iter().all(|t| t.1 == 0) && tiles.len() == 7);
         // With every dataset claimed there is no Other tile.
         let c = catalog("oci://r/ns", &listed[..5], |_| None);
         assert!(c["domains"].as_array().unwrap().iter().all(|d| d["id"] != OTHER));
@@ -314,61 +314,69 @@ mod tests {
     #[test]
     fn every_published_dataset_has_a_domain() {
         let domains = domains();
-        // The registry's index on 2026-11-25, and the domain each version's listing gives.
+        // The registry's index on 2026-11-25, every version (52), and the domain each version's listing gives. Each
+        // lands in one of the six groups, the same as the Marketplace's, and none in Other.
         let published = [
-            ("aca-fl", "Insurance", "underwriting"),
-            ("aca-oh", "Insurance", "underwriting"),
-            ("aca-tx", "Insurance", "underwriting"),
-            ("air-passenger-rights", "Transport", "customer-support"),
-            ("bigcodebench", "Coding", "coding"),
-            ("computer-use-browser", "Computer use", "computer-use"),
-            ("cp-oh", "Insurance", "underwriting"),
-            ("cruxeval-input", "Coding", "coding"),
-            ("eo-oh", "Insurance", "underwriting"),
-            ("escrow-accounts", "Finance", "finance"),
-            ("exercism-polyglot", "Coding", "coding"),
-            ("farm-oh", "Insurance", "underwriting"),
-            ("fdic-banking", "Finance", "finance"),
-            ("federal-grants", "Finance", "finance"),
-            ("federal-register", "Regulatory research", "research"),
-            ("flight-duty", "Transport", "legal"),
-            ("flsa-overtime", "Employment law", "legal"),
-            ("fmla-leave", "Employment law", "legal"),
-            ("food-labeling", "Health compliance", "healthcare"),
-            ("gl-oh", "Insurance", "underwriting"),
-            ("hipaa-breach", "Health compliance", "healthcare"),
-            ("hours-of-service", "Transport", "legal"),
-            ("humaneval-plus", "Coding", "coding"),
-            ("humanevalfix", "Coding", "coding"),
-            ("icd10cm-coding", "Health compliance", "healthcare"),
-            ("irs-inflation-adjustments", "Finance", "finance"),
-            ("mbpp-plus", "Coding", "coding"),
-            ("medicare-oh", "Insurance", "underwriting"),
-            ("medmal-oh", "Insurance", "underwriting"),
-            ("medsupp-oh", "Insurance", "actuarial"),
-            ("multi-swe-bench", "Software engineering", "coding"),
-            ("nfip-fl", "Insurance", "claims"),
-            ("nfip-la", "Insurance", "claims"),
-            ("nfip-oh", "Insurance", "claims"),
-            ("nfip-tx", "Insurance", "claims"),
-            ("nist-800-53", "Security compliance", "security"),
-            ("noaa-storm-events", "Natural hazards", "data-analysis"),
-            ("osha-recordkeeping", "Employment law", "legal"),
-            ("personal-auto-oh", "Insurance", "underwriting"),
-            ("pet-oh", "Insurance", "underwriting"),
-            ("ratemaking-oh", "Insurance", "actuarial"),
-            ("surety-oh", "Insurance", "underwriting"),
-            ("swebench-lite", "Software engineering", "coding"),
-            ("swebench-multilingual", "Software engineering", "coding"),
-            ("swebench-verified", "Software engineering", "coding"),
-            ("terminal-bench", "Terminal work", "coding"),
-            ("title-oh", "Insurance", "underwriting"),
-            ("treasury-auctions", "Finance", "finance"),
-            ("underwriting-starter", "Insurance", "underwriting"),
-            ("us-life-tables", "Insurance", "actuarial"),
-            ("usgs-earthquakes", "Natural hazards", "data-analysis"),
+            ("aca-fl@1.0.1", "Insurance", "insurance"),
+            ("aca-oh@1.0.1", "Insurance", "insurance"),
+            ("aca-tx@1.0.1", "Insurance", "insurance"),
+            ("air-passenger-rights@1.0.1", "Transport", "law-compliance"),
+            ("bigcodebench@1.0", "Coding", "coding"),
+            ("computer-use-browser@1.0", "Computer use", "computer-use"),
+            ("cp-oh@1.0.1", "Insurance", "insurance"),
+            ("cruxeval-input@1.0", "Coding", "coding"),
+            ("eo-oh@1.0.1", "Insurance", "insurance"),
+            ("escrow-accounts@1.0.1", "Finance", "finance"),
+            ("exercism-polyglot@1.0", "Coding", "coding"),
+            ("farm-oh@1.0.1", "Insurance", "insurance"),
+            ("fdic-banking@1.0.1", "Finance", "finance"),
+            ("federal-grants@1.0.1", "Finance", "finance"),
+            ("federal-register@1.0", "Regulatory research", "research-data"),
+            ("flight-duty@1.0.1", "Transport", "law-compliance"),
+            ("flsa-overtime@1.0.1", "Employment law", "law-compliance"),
+            ("fmla-leave@1.0.1", "Employment law", "law-compliance"),
+            ("food-labeling@1.0.1", "Health compliance", "law-compliance"),
+            ("gl-oh@1.0.1", "Insurance", "insurance"),
+            ("hipaa-breach@1.0.1", "Health compliance", "law-compliance"),
+            ("hours-of-service@1.0.1", "Transport", "law-compliance"),
+            ("humaneval-plus@1.0", "Coding", "coding"),
+            ("humanevalfix@1.0", "Coding", "coding"),
+            ("icd10cm-coding@1.0.1", "Health compliance", "law-compliance"),
+            ("irs-inflation-adjustments@1.0.1", "Finance", "finance"),
+            ("mbpp-plus@1.0", "Coding", "coding"),
+            ("medicare-oh@1.0.1", "Insurance", "insurance"),
+            ("medmal-oh@1.0.1", "Insurance", "insurance"),
+            ("medsupp-oh@1.0.1", "Insurance", "insurance"),
+            ("multi-swe-bench@1.0", "Software engineering", "coding"),
+            ("nfip-fl@1.0.1", "Insurance", "insurance"),
+            ("nfip-la@1.0.1", "Insurance", "insurance"),
+            ("nfip-oh@1.0.1", "Insurance", "insurance"),
+            ("nfip-tx@1.0.1", "Insurance", "insurance"),
+            ("nist-800-53@1.0.1", "Security compliance", "law-compliance"),
+            ("noaa-storm-events@1.0.1", "Natural hazards", "research-data"),
+            ("osha-recordkeeping@1.0.1", "Employment law", "law-compliance"),
+            ("personal-auto-oh@1.0.1", "Insurance", "insurance"),
+            ("pet-oh@1.0.1", "Insurance", "insurance"),
+            ("ratemaking-oh@1.0.1", "Insurance", "insurance"),
+            ("surety-oh@1.0.1", "Insurance", "insurance"),
+            ("swebench-lite@1.0", "Software engineering", "coding"),
+            ("swebench-multilingual@1.0", "Software engineering", "coding"),
+            ("swebench-verified@1.0", "Software engineering", "coding"),
+            ("terminal-bench@2.0", "Terminal work", "coding"),
+            ("terminal-bench@2.0.1", "Terminal work", "coding"),
+            ("title-oh@1.0.1", "Insurance", "insurance"),
+            ("treasury-auctions@1.0.1", "Finance", "finance"),
+            ("underwriting-starter@1.0.1", "Insurance", "insurance"),
+            ("us-life-tables@1.0.1", "Insurance", "insurance"),
+            ("usgs-earthquakes@1.0.1", "Natural hazards", "research-data"),
         ];
-        for (name, listing, want) in published {
+        assert_eq!(published.len(), 52);
+        let six = ["insurance", "coding", "finance", "law-compliance", "research-data", "computer-use"];
+        assert_eq!(domains.iter().map(|d| d.id.as_str()).collect::<Vec<_>>(), six);
+        assert!(six.iter().all(|id| published.iter().any(|p| p.2 == *id)), "every group holds a set");
+        assert_eq!(published.iter().filter(|p| p.2 == "insurance").count(), 21);
+        for (at, listing, want) in published {
+            let name = at.split_once('@').unwrap().0;
             assert_eq!(domain_of(&domains, name, None), want, "{name}");
             assert_eq!(domain_of(&domains, name, Some(listing)), want, "{name}");
         }
@@ -383,9 +391,12 @@ mod tests {
             "Software engineering",
             "Regulatory research",
             "Computer use",
+            "Coding",
+            "Terminal work",
+            "Finance",
         ];
         assert!(unclaimed.iter().all(|l| domain_of(&domains, "new-set", Some(l)) != OTHER));
-        assert_eq!(domain_of(&domains, "new-set", Some("employment LAW ")), "legal");
+        assert_eq!(domain_of(&domains, "new-set", Some("employment LAW ")), "law-compliance");
         assert_eq!(domain_of(&domains, "new-set", Some("Astrology")), OTHER);
         assert_eq!(domain_of(&domains, "new-set", None), OTHER);
     }

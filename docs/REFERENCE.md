@@ -556,7 +556,9 @@ launched, and for any other run leaves `stop-requested` in the job dir, which ev
 New run walks through three steps: a domain, a dataset from that domain's catalog, then the agent. The catalog is
 the default registry's dataset index (`$HBENCH_REGISTRY`, else `oci://ghcr.io/node-q/hbench-datasets`), listed by
 `GET /api/run/catalog` and kept for ten minutes. `assets/catalog/domains.json` names the domains, in tile order,
-and the dataset names (globs) each one claims; a dataset none claims is filed under Other. A local folder, a git
+and the dataset names (globs) each one claims; a dataset none claims is filed under Other. There are six:
+Insurance, Coding, Finance and tax, Law and compliance, Research and data and Computer use, the same groups, titles,
+order and descriptions as the Marketplace's (node-q/hbench-studio `market/build.py`, `GROUPS`): change both together. A local folder, a git
 task and a dataset named by hand are under "Your own tasks". While a folder has no jobs, the Jobs page shows the
 domain tiles.
 

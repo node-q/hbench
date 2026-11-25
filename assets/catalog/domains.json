@@ -1,8 +1,40 @@
 [
   {
+    "id": "insurance",
+    "title": "Insurance",
+    "description": "Rate policies from filed manuals, and work with health plan files, flood claims and life tables.",
+    "datasets": [
+      "insurance*",
+      "underwriting*",
+      "claims*",
+      "actuarial*",
+      "aca-*",
+      "cp-oh*",
+      "eo-oh*",
+      "farm-oh*",
+      "gl-oh*",
+      "medicare-oh*",
+      "medmal-oh*",
+      "medsupp-oh*",
+      "nfip-*",
+      "personal-auto-oh*",
+      "pet-oh*",
+      "ratemaking-*",
+      "surety-oh*",
+      "title-oh*",
+      "us-life-tables*"
+    ],
+    "listing_domains": [
+      "Insurance",
+      "Underwriting",
+      "Claims",
+      "Actuarial"
+    ]
+  },
+  {
     "id": "coding",
     "title": "Coding",
-    "description": "Resolve GitHub issues, work in a terminal, and write, fix and reason about code.",
+    "description": "Write and fix code, resolve real GitHub issues, and get work done in a terminal.",
     "datasets": [
       "swebench*",
       "terminal-bench*",
@@ -20,23 +52,9 @@
     ]
   },
   {
-    "id": "data-analysis",
-    "title": "Data analysis",
-    "description": "Query, clean and model data, and report what it shows.",
-    "datasets": [
-      "data-analysis*",
-      "noaa-storm-events*",
-      "usgs-earthquakes*"
-    ],
-    "listing_domains": [
-      "Data analysis",
-      "Natural hazards"
-    ]
-  },
-  {
     "id": "finance",
-    "title": "Finance",
-    "description": "Read filings, build models, and close the books.",
+    "title": "Finance and tax",
+    "description": "Work out tax, mortgage escrow, bank ratios, Treasury auctions and grant costs from the rules and records.",
     "datasets": [
       "finance*",
       "escrow-accounts*",
@@ -47,139 +65,71 @@
     ],
     "listing_domains": [
       "Finance",
+      "Finance and tax",
       "Banking",
       "Tax"
     ]
   },
   {
-    "id": "legal",
-    "title": "Legal",
-    "description": "Review contracts, research the law, and draft.",
+    "id": "law-compliance",
+    "title": "Law and compliance",
+    "description": "Apply a regulation to the facts given: overtime and leave, a driver's or pilot's hours, a data breach, a food label.",
     "datasets": [
       "legal*",
+      "healthcare*",
+      "security*",
+      "customer-support*",
       "flsa-overtime*",
       "fmla-leave*",
       "osha-recordkeeping*",
+      "air-passenger-rights*",
+      "hours-of-service*",
       "flight-duty*",
-      "hours-of-service*"
+      "hipaa-breach*",
+      "food-labeling*",
+      "icd10cm-coding*",
+      "nist-800-53*"
     ],
     "listing_domains": [
+      "Law and compliance",
       "Legal",
       "Employment law",
-      "Transport"
-    ]
-  },
-  {
-    "id": "healthcare",
-    "title": "Healthcare",
-    "description": "Clinical reasoning, coding and documentation.",
-    "datasets": [
-      "healthcare*",
-      "hipaa-breach*",
-      "icd10cm-coding*",
-      "food-labeling*"
-    ],
-    "listing_domains": [
+      "Transport",
       "Healthcare",
-      "Health compliance"
-    ]
-  },
-  {
-    "id": "customer-support",
-    "title": "Customer support",
-    "description": "Resolve customer requests with the right tools and policies.",
-    "datasets": [
-      "customer-support*",
-      "air-passenger-rights*"
-    ],
-    "listing_domains": [
+      "Health compliance",
+      "Security",
+      "Security compliance",
       "Customer support"
     ]
   },
   {
-    "id": "security",
-    "title": "Security",
-    "description": "Find, exploit and fix vulnerabilities.",
-    "datasets": [
-      "security*",
-      "nist-800-53*"
-    ],
-    "listing_domains": [
-      "Security",
-      "Security compliance"
-    ]
-  },
-  {
-    "id": "research",
-    "title": "Research",
-    "description": "Find sources, read them, and answer hard questions.",
+    "id": "research-data",
+    "title": "Research and data",
+    "description": "Find the records that fit in public data, such as rules, earthquakes and storms, then count and check them.",
     "datasets": [
       "research*",
-      "federal-register*"
+      "data-analysis*",
+      "federal-register*",
+      "usgs-earthquakes*",
+      "noaa-storm-events*"
     ],
     "listing_domains": [
+      "Research and data",
       "Research",
-      "Regulatory research"
+      "Regulatory research",
+      "Data analysis",
+      "Natural hazards"
     ]
   },
   {
     "id": "computer-use",
     "title": "Computer use",
-    "description": "Operate browsers and desktop apps to get office work done.",
+    "description": "Work a desktop the way a person does, from screenshots, the mouse and the keyboard.",
     "datasets": [
       "computer-use*"
     ],
     "listing_domains": [
       "Computer use"
-    ]
-  },
-  {
-    "id": "underwriting",
-    "title": "Underwriting",
-    "description": "Assess submissions and risks, apply guidelines, and decide terms.",
-    "datasets": [
-      "underwriting*",
-      "aca-*",
-      "cp-oh*",
-      "eo-oh*",
-      "farm-oh*",
-      "gl-oh*",
-      "medicare-oh*",
-      "medmal-oh*",
-      "personal-auto-oh*",
-      "pet-oh*",
-      "surety-oh*",
-      "title-oh*"
-    ],
-    "listing_domains": [
-      "Underwriting",
-      "Insurance"
-    ]
-  },
-  {
-    "id": "claims",
-    "title": "Claims",
-    "description": "Triage, investigate and settle claims against policy wording.",
-    "datasets": [
-      "claims*",
-      "nfip-*"
-    ],
-    "listing_domains": [
-      "Claims"
-    ]
-  },
-  {
-    "id": "actuarial",
-    "title": "Actuarial",
-    "description": "Pricing, reserving and capital work on real portfolios.",
-    "datasets": [
-      "actuarial*",
-      "ratemaking-*",
-      "us-life-tables*",
-      "medsupp-oh*"
-    ],
-    "listing_domains": [
-      "Actuarial"
     ]
   }
 ]
