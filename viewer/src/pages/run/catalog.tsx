@@ -17,19 +17,14 @@ export const useCatalog = () => useApi<Catalog>("/api/run/catalog");
 export const domainHref = (id: string) => `/run?domain=${enc(id)}`;
 
 type Glyph = (p: { size?: number }) => ReactNode;
+// The six groups of assets/catalog/domains.json, the same as the Marketplace's, then Other and your own source.
 const GLYPHS: Record<string, Glyph> = {
+  insurance: Icon.Shield,
   coding: Icon.Code,
-  "data-analysis": Icon.Bars,
   finance: Icon.Coin,
-  legal: Icon.Scales,
-  healthcare: Icon.Cross,
-  "customer-support": Icon.Chat,
-  security: Icon.Lock,
-  research: Icon.Book,
+  "law-compliance": Icon.Scales,
+  "research-data": Icon.Bars,
   "computer-use": Icon.Monitor,
-  underwriting: Icon.Shield,
-  claims: Icon.Clipboard,
-  actuarial: Icon.Chart,
   other: Icon.Grid,
   [CUSTOM]: Icon.Folder,
 };
