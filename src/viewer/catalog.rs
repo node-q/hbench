@@ -314,13 +314,14 @@ mod tests {
     #[test]
     fn every_published_dataset_has_a_domain() {
         let domains = domains();
-        // The registry's index on 2026-11-23, and the domain each version's listing gives.
+        // The registry's index on 2026-11-25, and the domain each version's listing gives.
         let published = [
             ("aca-fl", "Insurance", "underwriting"),
             ("aca-oh", "Insurance", "underwriting"),
             ("aca-tx", "Insurance", "underwriting"),
             ("air-passenger-rights", "Transport", "customer-support"),
             ("bigcodebench", "Coding", "coding"),
+            ("computer-use-browser", "Computer use", "computer-use"),
             ("cp-oh", "Insurance", "underwriting"),
             ("cruxeval-input", "Coding", "coding"),
             ("eo-oh", "Insurance", "underwriting"),
@@ -329,6 +330,7 @@ mod tests {
             ("farm-oh", "Insurance", "underwriting"),
             ("fdic-banking", "Finance", "finance"),
             ("federal-grants", "Finance", "finance"),
+            ("federal-register", "Regulatory research", "research"),
             ("flight-duty", "Transport", "legal"),
             ("flsa-overtime", "Employment law", "legal"),
             ("fmla-leave", "Employment law", "legal"),
@@ -379,6 +381,8 @@ mod tests {
             "Natural hazards",
             "Security compliance",
             "Software engineering",
+            "Regulatory research",
+            "Computer use",
         ];
         assert!(unclaimed.iter().all(|l| domain_of(&domains, "new-set", Some(l)) != OTHER));
         assert_eq!(domain_of(&domains, "new-set", Some("employment LAW ")), "legal");
