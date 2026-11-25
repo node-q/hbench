@@ -114,10 +114,12 @@
     "title": "Research",
     "description": "Find sources, read them, and answer hard questions.",
     "datasets": [
-      "research*"
+      "research*",
+      "federal-register*"
     ],
     "listing_domains": [
-      "Research"
+      "Research",
+      "Regulatory research"
     ]
   },
   {
