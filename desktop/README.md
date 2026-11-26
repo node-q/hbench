@@ -73,8 +73,8 @@ run beside an installed copy of the app without handing over to it. Quit the pac
 replaces it.
 
 `npm run sidecar` builds hbench and copies it to `src-tauri/binaries/hbench-<target triple>`, where Tauri picks
-it up. hbench embeds the viewer from `viewer/dist`. After changing `viewer/src`, run `npm run build` in `viewer/`
-first.
+it up. hbench embeds the viewer from `viewer/dist`, which is not committed: hbench's `build.rs` builds it with npm
+when it is missing or older than `viewer/`'s sources.
 
 Building the `.dmg` arranges its window through Finder. If that step times out (no automation permission, e.g.
 over SSH), build with `CI=true npm run build`, which skips the cosmetic layout.

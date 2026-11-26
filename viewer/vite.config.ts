@@ -4,7 +4,7 @@ import react from "@vitejs/plugin-react";
 // `npm run dev` proxies the API to a running `hbench view <folder> --port 8091`.
 export default defineConfig({
   plugins: [react()],
-  // Stable file names: the server sends no cache headers, so content hashes only churn git.
+  // Stable file names: the server sends no cache headers, so content hashes would buy nothing.
   build: {
     outDir: "dist",
     emptyOutDir: true,

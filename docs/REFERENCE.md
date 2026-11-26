@@ -545,8 +545,11 @@ that link's nonce, and only then can the next run link come.
 
 `hbench view` serves its own web UI (`viewer/`, React + Vite) for browsing jobs and tasks. A trial's Map tab draws its trajectory as groups of similar work in lanes, and flags steps that fetched the benchmark's own sources: a keyword match on the command or URL, so check the steps it points to. It listens on 127.0.0.1 by
 default; with `--host` set to any non-loopback address it is read-only, because starting runs and deleting jobs would be
-open to anyone who can reach it. The built bundle (`viewer/dist`) is committed and embedded at compile time, so
-`cargo build` doesn't need Node.
+open to anyone who can reach it. The built bundle (`viewer/dist`) is embedded at compile time and is not committed:
+`build.rs` builds it with npm (`npm ci && npm run build` in `viewer/`) when it is missing or older than the viewer's
+sources, so `cargo build` needs Node 22+ and npm on the `PATH` (CI's version is in `.node-version`). CI and the
+release build it in a step of their own first and set `HBENCH_VIEWER_PREBUILT=1`, which makes a missing or stale
+bundle a build error instead.
 
 A running job's page has a Stop button. It cancels the run as Ctrl-C does: trials in progress stop and their
 containers are torn down, finished trials keep their results; if the run is still tearing down 20 seconds later,
@@ -572,7 +575,7 @@ shows the server again.
 After changing the UI:
 
 ```bash
-cd viewer && npm install && npm run build      # type-check + rebuild viewer/dist
+cd viewer && npm ci && npm run build           # type-check + rebuild viewer/dist (cargo build also does this when it is stale)
 npm run dev                                    # hot reload; proxies /api to `hbench view <folder> --port 8091`
 ```
 
@@ -593,7 +596,8 @@ npm run dev                                    # hot reload; proxies /api to `hb
 - `scripts/install-matrix.sh`: installs every installed agent into a real container (`install_only`).
 
 CI (`.github/workflows/ci.yml`) runs on GitHub-hosted runners: build + `cargo test` on Linux and Windows, `cargo fmt
---check` and clippy, `cargo audit`, a check that the committed `viewer/dist` matches `viewer/src`, `scripts/e2e.sh`
+--check` and clippy, `cargo audit`, a check that the viewer builds from its lockfile and its checks pass (every job that compiles
+hbench builds `viewer/dist` first, with `.github/actions/build-viewer`), `scripts/e2e.sh`
 against a real Docker daemon (its three parts in parallel jobs), and the example tasks through
 [node-q/hbench-action](https://github.com/node-q/hbench-action) with the latest release: every one must score 1 with
 the oracle and 0 with `nop`. On Linux it also runs the OCI tests against two local `registry:3` containers

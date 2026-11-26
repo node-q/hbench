@@ -1,0 +1,37 @@
+name: Build the viewer
+description: >-
+  Builds viewer/dist, which build.rs embeds, with the Node pinned in .node-version and viewer/package-lock.json:
+  `npm ci && npm run build` in viewer/. Run it before anything that compiles hbench.
+inputs:
+  cache-node-modules:
+    description: >-
+      "true" restores viewer/node_modules from a cache keyed by the OS, the Node version and the lockfile's hash,
+      and skips `npm ci` on an exact hit. "false" (release builds) always runs a clean `npm ci`, from npm's own
+      cache, whose packages npm checks against the lockfile's integrity hashes.
+    default: "true"
+runs:
+  using: composite
+  steps:
+    - name: Set up Node.js
+      id: node
+      uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      with:
+        node-version-file: .node-version
+        cache: ${{ inputs.cache-node-modules != 'true' && 'npm' || '' }}
+        cache-dependency-path: viewer/package-lock.json
+    - name: Restore viewer/node_modules
+      id: modules
+      if: inputs.cache-node-modules == 'true'
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: viewer/node_modules
+        key: viewer-node-modules-${{ runner.os }}-${{ runner.arch }}-node${{ steps.node.outputs.node-version }}-${{ hashFiles('viewer/package-lock.json') }}
+    - name: Install the viewer's dependencies
+      if: steps.modules.outputs.cache-hit != 'true'
+      shell: bash
+      working-directory: viewer
+      run: npm ci
+    - name: Type-check and build the viewer
+      shell: bash
+      working-directory: viewer
+      run: npm run build

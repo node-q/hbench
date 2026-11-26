@@ -52,7 +52,7 @@ sh install.sh
 
 The release archives verify the same way: `gh attestation verify hbench-<version>-<target>.tar.gz --repo node-q/hbench`.
 
-Or build from source:
+Or build from source, with Rust and Node 22+ (the build compiles the web viewer with npm):
 
 ```bash
 cargo install --path .

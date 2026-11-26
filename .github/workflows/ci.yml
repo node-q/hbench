@@ -16,6 +16,9 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
+  # viewer/dist is not committed: each job that compiles hbench builds it first (.github/actions/build-viewer),
+  # and with this set build.rs fails on a missing or stale bundle instead of running npm itself.
+  HBENCH_VIEWER_PREBUILT: "1"
 
 # GitHub-hosted runners. Linux runs the full suite, including the e2e job against a real
 # Docker daemon; macOS and Windows build and run the unit tests, since releases ship their binaries.
@@ -33,6 +36,8 @@ jobs:
           persist-credentials: false
       - name: Set up Rust toolchain
         uses: ./.github/actions/setup-rust
+      - name: Build the viewer
+        uses: ./.github/actions/build-viewer
       - name: Build all targets
         run: cargo build --locked --all-targets
       - name: Run unit tests
@@ -84,6 +89,8 @@ jobs:
           persist-credentials: false
       - name: Set up Rust toolchain
         uses: ./.github/actions/setup-rust
+      - name: Build the viewer
+        uses: ./.github/actions/build-viewer
       - name: Lint
         run: cargo clippy --locked --all-targets
       - name: Run unit tests
@@ -108,6 +115,8 @@ jobs:
         with:
           components: llvm-tools
           targets: x86_64-unknown-linux-musl,aarch64-unknown-linux-musl
+      - name: Build the viewer
+        uses: ./.github/actions/build-viewer
       - name: Put the toolchain's llvm-ar on PATH
         run: echo "$(rustc --print sysroot)/lib/rustlib/$(rustc --print host-tuple)/bin" >> "$GITHUB_PATH"
       - name: Check both musl targets
@@ -125,6 +134,8 @@ jobs:
         uses: ./.github/actions/setup-rust
         with:
           components: clippy, rustfmt
+      - name: Build the viewer
+        uses: ./.github/actions/build-viewer
       - name: Check formatting
         run: cargo fmt --check
       - name: Test the beta channel's feed script
@@ -154,37 +165,24 @@ jobs:
         run: cargo audit
 
   viewer:
-    # viewer/dist is committed and embedded by build.rs, so it must match viewer/src.
-    name: Viewer Bundle
+    # viewer/dist is built, not committed: this checks that the viewer type-checks and builds from the lockfile,
+    # and that its checks pass.
+    name: Viewer (build and checks)
     runs-on: ubuntu-24.04
-    defaults:
-      run:
-        working-directory: viewer
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Set up Node.js
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: viewer/package-lock.json
-      - name: Install dependencies
-        run: npm ci
-      - name: Type-check and build bundle
-        run: npm run build
+      - name: Build the viewer
+        uses: ./.github/actions/build-viewer
       - name: Run the desktop link checks
+        working-directory: viewer
         run: |
           for check in install-view run-link; do
             npx --no-install rolldown "src/desktop/$check.check.ts" --platform node --format esm --file "$RUNNER_TEMP/$check.check.mjs"
             node "$RUNNER_TEMP/$check.check.mjs"
           done
-      - name: Verify committed bundle is up to date
-        run: |
-          git status --porcelain -- dist
-          test -z "$(git status --porcelain -- dist)" || { echo "::error::viewer/dist is stale; run 'npm run build' in viewer/ and commit"; exit 1; }
 
   desktop:
     # The release builds the desktop app (desktop/) the same way; this keeps that build working.
@@ -221,9 +219,11 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version-file: .node-version
           cache: npm
           cache-dependency-path: desktop/package-lock.json
+      - name: Build the viewer
+        uses: ./.github/actions/build-viewer
       - name: Build hbench as the app's sidecar
         run: sh desktop/scripts/sidecar.sh debug
       - name: Lint the app
@@ -308,6 +308,8 @@ jobs:
           persist-credentials: false
       - name: Set up Rust toolchain
         uses: ./.github/actions/setup-rust
+      - name: Build the viewer
+        uses: ./.github/actions/build-viewer
       - name: Run the e2e suite
         # Its own timeout, below the job's, so a hang still leaves time to upload the job dirs.
         timeout-minutes: 30
