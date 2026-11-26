@@ -47,6 +47,9 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # build.rs fails on a missing or stale viewer/dist instead of building it: the build jobs build it from the
+  # tag's own checkout in a step of their own (.github/actions/build-viewer), with a clean `npm ci`.
+  HBENCH_VIEWER_PREBUILT: "1"
 
 jobs:
   ci:
@@ -131,6 +134,11 @@ jobs:
         with:
           components: llvm-tools
           targets: ${{ matrix.target }}
+      - name: Build the viewer from this tag
+        uses: ./.github/actions/build-viewer
+        with:
+          # No restored node_modules in a release: a clean `npm ci` against the tag's lockfile.
+          cache-node-modules: "false"
       - name: Put the toolchain's llvm-ar on PATH
         run: echo "$(rustc --print sysroot)/lib/rustlib/$(rustc --print host-tuple)/bin" >> "$GITHUB_PATH"
       - name: Build the release binary
@@ -182,6 +190,11 @@ jobs:
           [ "v$v" = "$GITHUB_REF_NAME" ] || { echo "::error::tag $GITHUB_REF_NAME != Cargo.toml version v$v"; exit 1; }
       - name: Set up Rust toolchain
         uses: ./.github/actions/setup-rust
+      - name: Build the viewer from this tag
+        uses: ./.github/actions/build-viewer
+        with:
+          # No restored node_modules in a release: a clean `npm ci` against the tag's lockfile.
+          cache-node-modules: "false"
       - name: Build the release binary
         run: cargo build --release --locked --target "$TARGET"
       - name: Package the release archive
@@ -227,7 +240,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version-file: .node-version
           cache: npm
           cache-dependency-path: desktop/package-lock.json
       - name: Download this release's hbench
@@ -289,7 +302,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version-file: .node-version
           cache: npm
           cache-dependency-path: desktop/package-lock.json
       - name: Download this release's hbench
@@ -361,7 +374,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version-file: .node-version
           cache: npm
           cache-dependency-path: desktop/package-lock.json
       - name: Download this release's hbench
@@ -485,7 +498,7 @@ jobs:
         if: env.HAS_KEY == 'true'
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version-file: .node-version
       - name: Install the Tauri CLI
         if: env.HAS_KEY == 'true'
         # The same locked CLI that built the app (and so already shapes what users run) does the signing.

@@ -91,7 +91,10 @@ Unfinished work stays behind a flag so that master can always ship.
 ## What the release build does
 
 `.github/workflows/release.yml` checks the tag against `Cargo.toml` and, on GitHub-hosted runners, builds static
-x86_64/aarch64 Linux (musl) and x86_64/arm64 macOS binaries, one per job. It publishes only once `ci.yml` has passed
+x86_64/aarch64 Linux (musl) and x86_64/arm64 macOS binaries, one per job. Each job first builds the viewer that
+the binary embeds (`viewer/dist`, which is not committed) from the tag's own checkout, with a clean `npm ci` against
+its lockfile and the Node in `.node-version`; `HBENCH_VIEWER_PREBUILT=1` makes the build fail rather than embed
+anything else. It publishes only once `ci.yml` has passed
 on the tagged commit (unit tests on Linux and Windows, E2E, lint, audit), waiting for that run if it is still going,
 so a tag on a commit that is not on `master`, that CI never ran on, or that CI failed, publishes nothing. The CI run
 is the push to `master`'s, or one the Release workflow starts on the tag when it merged the pull request itself
